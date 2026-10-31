@@ -1,0 +1,2143 @@
+{
+  "features": {
+    "enum_value/json_return_value": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_base64": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_duration": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_duration=DURATION_TYPE_NON_NEGATIVE": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_duration=DURATION_TYPE_POSITIVE": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_duration_max": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_duration_min": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_element_max_size": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_email": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_enc_type": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_enc_type=ENC_TYPE_KEY_PRIVATE_RSA": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_enc_type=ENC_TYPE_KEY_PUBLIC_RSA": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_enc_type=ENC_TYPE_X509_CERT_ANY": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_enum_defined": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_file_path": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_file_path=PATH_ABSOLUTE": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_file_path=PATH_DIR": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/assert_float": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_float.epsilon": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_float.ge": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_float.gt": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_float.le": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_fqdn": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_ge": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_gt": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_host": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_ipaddr_type": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_ipaddr_type=IP_ADDR_TYPE_IP_ANY": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_le": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_listen_addr": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_lt": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_max_size": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_min_size": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_net_port": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_numeric": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_numeric.ge": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_numeric.gt": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_numeric.in": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_numeric.le": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_numeric.multiple_of": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_numeric.ne": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_required": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_semver": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/assert_url": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_url=URL_SCHEME_HTTPS": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/assert_url=URL_SCHEME_HTTP_OR_HTTPS": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/bool": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/boundary_callers": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/bytes": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/command": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/default_bool": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/default_float": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/default_host": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/default_host.host": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/default_host.port": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/default_int": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/default_string": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/deleted_flag": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/double": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/enum": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/epoch_expiration": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/fixed32": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/fixed64": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/float": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/identity_spiffe_actor": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/identity_spiffe_subject": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/indexed": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/int32": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/int64": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/json_aliases": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/json_key": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "field/map\u003cbool,string\u003e": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/map\u003cint32,int64\u003e": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/map\u003cint64,string\u003e": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/map\u003cstring,bool\u003e": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/map\u003cstring,bytes\u003e": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/map\u003cstring,double\u003e": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/map\u003cstring,enum\u003e": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/map\u003cstring,int64\u003e": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/map\u003cstring,message\u003e": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/map\u003cstring,string\u003e": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/map\u003cuint32,string\u003e": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/map\u003cuint64,string\u003e": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/message": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/min_durable_copies": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/namespace": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/oneof": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/optional bool": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/optional bytes": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/optional double": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/optional enum": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/optional fixed32": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/optional fixed64": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/optional float": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/optional int32": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/optional int64": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/optional sfixed32": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/optional sfixed64": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/optional sint32": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/optional sint64": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/optional string": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/optional uint32": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/optional uint64": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/persistence": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/principal": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/private": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/query_field": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/query_field.op": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/query_field.op=QUERY_OP_EQ": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/query_field.op=QUERY_OP_RANGE": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/quorum_write": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/redact": [
+      "java"
+    ],
+    "field/redact.mode": [
+      "java"
+    ],
+    "field/redact.mode=REDACT_MODE_DROP": [
+      "java"
+    ],
+    "field/redact.mode=REDACT_MODE_MAY_REDACT": [
+      "java"
+    ],
+    "field/redact.mode=REDACT_MODE_PSEUDONYMIZE": [
+      "java"
+    ],
+    "field/repeated bool": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/repeated bytes": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/repeated double": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/repeated enum": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/repeated fixed32": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/repeated fixed64": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/repeated float": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/repeated int32": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/repeated int64": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/repeated message": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/repeated sfixed32": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/repeated sfixed64": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/repeated sint32": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/repeated sint64": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/repeated string": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/repeated uint32": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/repeated uint64": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/required_if_eq": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/required_if_eq.field": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/required_if_eq.value": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/required_if_false": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/required_if_true": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/sfixed32": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/sfixed64": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/sint32": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/sint64": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/store_epoch": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/store_key": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/store_namespace": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/store_principal": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/string": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/topic": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "field/uint32": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/uint64": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "field/view_member": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/bool_const": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "file/bool_const.name": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "file/bool_const.value": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "file/float_const": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "file/float_const.name": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "file/float_const.value": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "file/generate_user_api": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "file/grpc_c2s_client": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "file/grpc_c2s_client.service": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "file/grpc_s2s_client": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "file/grpc_s2s_client.service": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "file/grpc_w2s_client": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "file/grpc_w2s_client.service": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "file/int_const": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "file/int_const.name": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "file/int_const.value": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "file/opa_import": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/opa_import.service": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/opa_import.source": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/record_read": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/record_read.c2s": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/record_read.c2s.exposure": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/record_read.c2s.exposure=RPC_EXPOSURE_EXTERNAL": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/record_read.c2s.scope": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/record_read.c2s.scope=C2S_SCOPE_PRINCIPAL": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/record_read.c2s{exposure=RPC_EXPOSURE_EXTERNAL,scope=C2S_SCOPE_PRINCIPAL}": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/record_read.record": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/record_store": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/record_store.no_bus_ingest": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/service": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "file/service.config_store": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/service.gateway": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/service.name": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "file/service.pinned_tenant": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/service.rest_dispatch": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/service.store": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/service.tenant_owned": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/state_imports": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/state_imports.source": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/string_const": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "file/string_const.name": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "file/string_const.value": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "file/timeseries_store": [
+      "java"
+    ],
+    "file/trait": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/trait.auth_services": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/trait.c2s_service": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/trait.host": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/trait.name": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/trait.s2s_service": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/vservice": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/vservice.id": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "file/vservice.name": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/config_slice": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/config_slice.scope": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/config_slice.scope=CONFIG_SLICE_SCOPE_TENANT": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/config_slice.service_name": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/event": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/event.s2s": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/event.s2s.auth_services": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/event.s2s_subscribe": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/event.s2s_subscribe.auth_services": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/event_publish": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/event_publish.method_s2s": [
+      "java"
+    ],
+    "message/event_publish.method_s2s.auth_services": [
+      "java"
+    ],
+    "message/event_publish.topic_ref": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/event_watch": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/event_watch.method_s2s": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/event_watch.method_s2s.auth_services": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/event_watch.topic_ref": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/grpc_config": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/grpc_config.service_name": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/opa_eval": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/opa_eval.entry_point": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/opa_eval.result": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/owner_default": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/owner_default.read": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.c2s_read": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.c2s_read.auth_services": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.durability": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.durability=DURABILITY_LOCAL": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.durability=DURABILITY_REMOTE": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.key": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.mutability": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.mutability=MUTABILITY_APPEND_ONLY": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.owner": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.private": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.residency": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.residency.deleted_max_age_seconds": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.residency.idle_seconds": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.s2s": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.s2s.auth_services": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.s2s_read": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.s2s_read.auth_services": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.s2s_subscribe": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.s2s_subscribe.auth_services": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.s2s_subscribe.routing_only_services": [
+      "java"
+    ],
+    "message/record.s2s_write": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/record.s2s_write.auth_services": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/service_event": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/service_event.label": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/service_health": [
+      "java"
+    ],
+    "message/service_state": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "message/service_state.auto_tls": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/service_state.auto_tls=TLS_KEY_TYPE_ECDSA": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/service_state.auto_tls=TLS_KEY_TYPE_ED25519": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/service_state.export": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/service_state.identity_snapshot": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/service_state.label": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "message/service_state.name": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "message/service_store": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/service_store.label": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/subscribe": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/subscribe.source": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "message/transformation": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "message/transformation.dedup": [
+      "java"
+    ],
+    "message/transformation.dedup.key_fields": [
+      "java"
+    ],
+    "message/transformation.dedup.strategy": [
+      "java"
+    ],
+    "message/transformation.dedup.strategy=DEDUP_LATEST_BY_VERSION": [
+      "java"
+    ],
+    "message/transformation.dedup.version_field": [
+      "java"
+    ],
+    "message/transformation.field": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "message/transformation.field.cardinality_hint": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "message/transformation.field.cardinality_hint=CARDINALITY_LOW": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "message/transformation.field.order_key": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "message/transformation.field.partition_key": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "message/transformation.field.source": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "message/transformation.name": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "method/method_collection": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/method_collection.default_page_size": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/method_collection.max_items": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/method_collection.mode": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/method_collection.mode=COLLECTION_MODE_PAGE": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/method_collection.mode=COLLECTION_MODE_SNAPSHOT": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/method_collection.mode=COLLECTION_MODE_WATCH": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/method_collection.order_by": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/rest_browser": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/rest_browser.form_body": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/rest_browser.redirect_field": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/rest_method": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/rest_method.methods": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/rest_method.methods=REST_METHOD_GET": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/rest_path": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/rpc": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "method/rpc.auth_services": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "method/rpc.exposure": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "method/rpc.exposure=RPC_EXPOSURE_EXTERNAL": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "method/rpc.flags": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "method/rpc.flags=RPC_FLAG_ANY_TENANT": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/rpc.flags=RPC_FLAG_AUTH_ANY_USER": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "method/rpc.flags=RPC_FLAG_AUTH_ENTITLED_USERS": [
+      "csharp",
+      "go",
+      "java",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "method/rpc.flags=RPC_FLAG_MINTS_CREDENTIAL": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/rpc.flags=RPC_FLAG_PUBLIC_NO_AUTH": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "method/rpc.flags=RPC_FLAG_SELF_AUTHENTICATES": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/rpc.principal": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "method/rpc.principal=RPC_PRINCIPAL_SERVICE": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "method/rpc.principal=RPC_PRINCIPAL_USER": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "method/rpc.requires_device": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "method/rpc.requires_device_when": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "method/rpc.requires_device_when.equals": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "method/rpc.requires_device_when.field": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "method/rpc.route_field": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/rpc.target_namespace_field": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "method/rpc{exposure=RPC_EXPOSURE_EXTERNAL,principal=RPC_PRINCIPAL_USER}": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "method/streaming=bidi": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "method/streaming=client": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "method/streaming=server": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "service/approval_broker": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "service/member_port": [
+      "java"
+    ],
+    "service/service_c2d": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "service/service_c2d.socket_path": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "service/service_c2s": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "service/service_c2s.auth_entitled_users": [
+      "csharp",
+      "go",
+      "java",
+      "python",
+      "rust",
+      "swift",
+      "typescript"
+    ],
+    "service/service_s2s": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "service/service_s2s.auth_services": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "service/service_s2s.auth_services_from_fleet": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "service/service_s2s.label": [
+      "go",
+      "java",
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "service/smb": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "service/smb_authority": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "service/token_minter": [
+      "go",
+      "java",
+      "rust"
+    ],
+    "service/token_minter.proxy": [
+      "go",
+      "java",
+      "rust"
+    ]
+  }
+}

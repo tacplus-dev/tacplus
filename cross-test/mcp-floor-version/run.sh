@@ -19,6 +19,9 @@
 # EXACT version the constant declares — pinned with `cargo update --precise`,
 # not left to `^3.x` resolution, because resolving to the newest 3.x is exactly
 # what hides a too-low floor.
+# --allow-uncovered: this fixture is not a kitchensink member in every language
+# this gate generates (cross-test/kitchensink/members.yaml); it tests a
+# behaviour, not a release's coverage (tacplus#196).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -52,7 +55,7 @@ output-dir: "tacplus"
 EOF2
 
 echo "==> Generating MCP fixture (rust)"
-(cd "$WORK" && "$TACPLUS_BIN" build --config tacplus.yaml --src "$PROTO_SRC") \
+(cd "$WORK" && "$TACPLUS_BIN" build --config tacplus.yaml --src "$PROTO_SRC" --allow-uncovered) \
   || die "generation failed"
 
 OUT="$WORK/tacplus/model"

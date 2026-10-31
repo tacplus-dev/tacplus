@@ -2195,7 +2195,9 @@ extend google.protobuf.FieldOptions {
 
   // assert_invariant declares a formal invariant for this field.
   // The expression is a boolean predicate in the target language's syntax.
-  // For Rust: used as kani::assume() in proof harnesses and debug_assert! in validate().
+  // For Rust: a debug_assert! in validate(). No proof harness is generated
+  // into a service (tacplus#196): the generator is verified once per release,
+  // on the kitchensink.
   // For Java: emitted as //@ invariant ... (JML).
   // Use for cross-field relationships that can't be expressed as single-field constraints.
   // Example: string token = 1 [(spec.assert_invariant) = "self.ttl > 0 && self.ttl <= 86400"];

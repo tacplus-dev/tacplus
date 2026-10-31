@@ -426,6 +426,12 @@ assert_no_legacy_fixture_output() {
     die "generated output contains fmt formatter artifacts"
   fi
 
+  # tacplus#196: a service's generated code carries no proof harness; the
+  # generator is verified once per release, on cross-test/kitchensink.
+  if find "$output" -type f -name 'Proof.java' -print -quit | grep -q . || rg -n -g '*.rs' -g '*.java' 'kani::proof|cfg\(kani\)|org\.cprover' "$output"; then
+    die "generated output carries a proof harness"
+  fi
+
   if rg -n '^import org\.apache\.commons\.compress' "$output"; then
     die "Java generated source must not require commons-compress at compile time"
   fi

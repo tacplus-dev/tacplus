@@ -718,8 +718,11 @@ func writeFromJsonMapField(b *strings.Builder, field model.Field, javaName, elVa
 			}
 			fmt.Fprintf(b, "try { builder.put%s(%s, %s(val.toString())); } catch (Exception e) {}\n", javaName, keyExpr, fromFunc)
 		}
+	} else if field.MapValueIsEnum {
+		parseFunc := enumParseFunc(model.Field{Type: field.MapValueType, TypePackage: field.MapValueTypePackage}, crossHelpers)
+		fmt.Fprintf(b, "try { builder.put%s(%s, %s(val.getAsString())); } catch (Exception e) {}\n", javaName, keyExpr, parseFunc)
 	} else {
-		// Scalar or enum map values
+		// Scalar map values
 		switch field.MapValueType {
 		case "string":
 			fmt.Fprintf(b, "builder.put%s(%s, val.getAsString());\n", javaName, keyExpr)
@@ -733,6 +736,8 @@ func writeFromJsonMapField(b *strings.Builder, field model.Field, javaName, elVa
 			fmt.Fprintf(b, "builder.put%s(%s, val.getAsFloat());\n", javaName, keyExpr)
 		case "double":
 			fmt.Fprintf(b, "builder.put%s(%s, val.getAsDouble());\n", javaName, keyExpr)
+		case "bytes":
+			fmt.Fprintf(b, "builder.put%s(%s, com.google.protobuf.ByteString.copyFrom(Base64.getDecoder().decode(val.getAsString())));\n", javaName, keyExpr)
 		default:
 			fmt.Fprintf(b, "builder.put%s(%s, val.getAsString());\n", javaName, keyExpr)
 		}

@@ -36,6 +36,9 @@ type Params struct {
 	SrcExplicit bool
 	Verbose     bool
 	Config      *tacplusyaml.Config
+	// AllowUncovered downgrades the kitchensink coverage check (tacplus#196)
+	// from refusing the build to a warning: --allow-uncovered.
+	AllowUncovered bool
 }
 
 // depsYAML represents the structure of dependencies.yaml
@@ -93,14 +96,20 @@ func Build(p Params) error {
 	zap.L().Info("Building", zap.String("language", rc.config.Language),
 		zap.String("proto-dir", rc.config.ProtoDir), zap.String("proto-tag", rc.tag))
 
+	rc.config.Coverage = tactype.CoverageEnforce
+	if p.AllowUncovered {
+		rc.config.Coverage = tactype.CoverageWarn
+	}
 	b := builder.NewBuilder(rc.config)
 	defer b.Close()
 	if err := b.BuildLanguage(context.Background()); err != nil {
 		return err
 	}
 
-	// Write .hash.json after successful generation.
-	if currentHash != nil {
+	// Write .hash.json after successful generation. Not after an
+	// --allow-uncovered build: a cache hit would skip the coverage check, so
+	// the next build without the flag must regenerate and run it.
+	if currentHash != nil && !p.AllowUncovered {
 		if err := writeHashFile(rc.config.OutputDir, currentHash); err != nil {
 			zap.L().Warn("Failed to write build hash", zap.Error(err))
 		}

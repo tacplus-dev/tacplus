@@ -49,6 +49,7 @@ func processProtoFiles(protocDir, outputDir string, config *tactype.Config) ([]m
 		if err != nil {
 			return fmt.Errorf("failed to parse %s: %w", path, err)
 		}
+		optionalBytesAsSlice(&protoFile)
 
 		if len(protoFile.Enums) > 0 || len(protoFile.Constants) > 0 || len(protoFile.Messages) > 0 {
 			protoFiles = append(protoFiles, protoFile)
@@ -119,4 +120,20 @@ func generateAllHelpers(pf model.ProtoFile, baseDir, subdir string, config *tact
 	}
 
 	return nil
+}
+
+// optionalBytesAsSlice clears IsOptional on proto3 `optional bytes` fields.
+// protoc-gen-go emits them as a plain []byte, nil when absent, not as the
+// pointer every other optional scalar gets, so the helpers must treat them as
+// the non-optional bytes field they are in Go (found by the kitchensink,
+// tacplus#196: the pointer forms did not compile).
+func optionalBytesAsSlice(pf *model.ProtoFile) {
+	for i := range pf.Messages {
+		for j := range pf.Messages[i].Fields {
+			f := &pf.Messages[i].Fields[j]
+			if f.IsOptional && f.Type == "bytes" && !f.IsRepeated && !f.IsMap {
+				f.IsOptional = false
+			}
+		}
+	}
 }

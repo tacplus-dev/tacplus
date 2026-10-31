@@ -4,6 +4,21 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Coverage-guided Java fuzzing** (2026-10-31, #196): the kitchensink fuzzes the generated Java with a seeded
+  mutation loop (`cross-test/kitchensink/fuzz/java`), not a coverage-guided engine, because the build image has none.
+  Jazzer in the build image (as cargo-fuzz is for Rust) would find deeper bugs, and services could fuzz their own Java
+  the same way.
+- **More of the kitchensink under Kani** (2026-10-31, #196): the Rust harnesses prove the numeric, size and nesting
+  validators (`cross-test/kitchensink/verify/rust`). The string-format validators (`assert_email`, `assert_fqdn`,
+  `assert_semver`) use `regex`, on which Kani 0.68 panics (#211, point 2); they are fuzzed only. A regex-free
+  validator, or a Kani stub for `Regex::is_match`, would let Kani prove the rest.
+- **Coverage across options** (2026-10-31, #196): the coverage manifest records each option, its enum values, and
+  the combination of enum values inside one option (an RPC's principal and exposure). Combinations across options
+  (a record that is also tenant-owned and REMOTE-durable, say) are not recorded; if the generator grows behaviour
+  that depends on such pairs, `pkg/coverage` should name them too.
+- **Run the fleet's protos against the coverage manifest before a release** (2026-10-31, #196): this run checked
+  every fleet service's `proto/` against the manifest by hand and covered the gaps (`proto-service`). A nightly job
+  doing the same against the fleet repos would show a gap before a release turns it into a failed service build.
 - **Refuse a `contribute.webapp` from the gateway itself** (2026-10-31, #195): the gateway's own webapp is the base at
   `/`, not a contribution, but the fleet build does not know which listed service is the gateway until
   `tacplus fleet gateway` requires one (part 3). It should then refuse a `webapp` contribution from it by name.

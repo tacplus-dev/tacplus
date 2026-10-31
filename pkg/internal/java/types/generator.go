@@ -582,13 +582,6 @@ func generateModule(module *ModuleInfo, protoDir string, config *tactype.Config,
 		}
 	}
 
-	// Generate JBMC proof harnesses in a separate proof/ directory (not in src/main/java)
-	// so that mvn compile doesn't try to compile them — CProver is not a Maven dependency.
-	proofBaseDir := filepath.Join(parentDir, "proof", "java")
-	if err := writeJbmcProofHarnesses(mergedProto, proofBaseDir, helperSubdir, defaultOuterClass); err != nil {
-		return fmt.Errorf("failed to generate JBMC proof harnesses: %w", err)
-	}
-
 	return nil
 }
 
@@ -600,8 +593,10 @@ func Generate(config *tactype.Config) error {
 	}
 
 	// Clean generated subdirectories while preserving hand-maintained files
-	// (pom.xml, etc.) that are tracked in git but not regenerated.
-	for _, sub := range []string{"src", "proto", "proto-annotated", "registry.json", "registry.schema.json", "AGENT.md"} {
+	// (pom.xml, etc.) that are tracked in git but not regenerated. proof/ held
+	// the JBMC harnesses tacplus generated before 2.6 (tacplus#196); it goes so
+	// that `tacplus verify` does not re-prove a stale copy.
+	for _, sub := range []string{"src", "proto", "proto-annotated", "proof", "registry.json", "registry.schema.json", "AGENT.md"} {
 		p := filepath.Join(config.OutputDir, sub)
 		if _, err := os.Stat(p); err == nil {
 			if err := os.RemoveAll(p); err != nil {

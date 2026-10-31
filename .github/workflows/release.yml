@@ -1,7 +1,8 @@
 name: Release
 
-# On a version tag (v1.2.3): build the tacplus binary for every supported
-# platform, write checksums.txt, and publish a GitHub release. `tacplus upgrade`
+# On a version tag (v1.2.3): run the kitchensink release gate, then build the
+# tacplus binary for every supported platform, write checksums.txt, and publish
+# a GitHub release. `tacplus upgrade`
 # reads exactly this layout.
 
 on:
@@ -37,8 +38,30 @@ jobs:
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
           echo "$ref"
 
-  release:
+  # The kitchensink release gate (tacplus#196): the generator of this tag,
+  # generated in every language, compiled, formally verified (Rust: Kani) and
+  # fuzzed (Go, Rust, Java), in the build image. Every service built with the
+  # release inherits it; a failure publishes nothing.
+  kitchensink:
     needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: ${{ needs.image.outputs.ref }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: just generate
+      - run: just kitchensink
+
+  release:
+    needs: [image, kitchensink]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # A container job defaults to sh; the steps below are bash (here-strings,

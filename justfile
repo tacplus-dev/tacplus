@@ -219,6 +219,28 @@ gates-container:
 tacplus-script: generate
   {{lock}} bash images/tacplus_test.sh
 
+# The kitchensink (tacplus#196), the release gate: its own members
+# (cross-test/kitchensink/proto, proto-service) generated and compiled, the
+# Rust validators proved with Kani through `tacplus verify`, and the Go, Rust
+# and Java fuzzed (KITCHENSINK_FUZZ_SECONDS a target). Needs the build image's
+# tools: `just kitchensink-container` runs it there. The other members are the
+# mandatory gates' fixtures. Not in `gates`: the Release workflow runs it.
+kitchensink:
+  {{lock}} bash cross-test/kitchensink/run.sh
+
+kitchensink-container:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd {{justfile_directory()}}
+  image="${TACPLUS_BUILD_IMAGE:-ghcr.io/tacplus-dev/tacplus/build:latest}"
+  docker run --rm -v "$PWD:/workspace" -w /workspace "$image" \
+    bash -c 'git config --global --add safe.directory /workspace && just generate && just kitchensink'
+
+# Rewrite pkg/coverage/kitchensink.json, the coverage manifest `tacplus build`
+# checks a service against, from cross-test/kitchensink/members.yaml.
+kitchensink-manifest: generate
+  {{lock}} go run ./cmd/kitchensinkmanifest
+
 # The generated member port (tacplus#212): Java's memberport-peer and
 # Hazelcast tests over real sockets; Go and Rust must refuse (spec.member_port)
 # until they generate it (#236, #237). MEMBERPORT_SOAK=1 adds the soak.

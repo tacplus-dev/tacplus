@@ -241,9 +241,6 @@ func processProtoFiles(protocDir, outputDir string) ([]model.ProtoFile, error) {
 			}
 		}
 		writePublicView(&b, pf)
-		if len(pf.Messages) > 0 {
-			writeProofHarnesses(&b, pf)
-		}
 		if hasParamMapMessages(pf) {
 			if err := writeFromMap(&b, pf); err != nil {
 				return nil, fmt.Errorf("writeFromMap %s: %w", pf.RelPath, err)

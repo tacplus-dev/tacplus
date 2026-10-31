@@ -1,0 +1,17 @@
+# Kani harnesses over the generated Rust validate() of the kitchensink member
+# (tacplus#196). cross-test/kitchensink/run.sh copies this crate to
+# <work>/verify/rust/proof and runs `tacplus verify` in <work>/verify/rust; the
+# path below is the generated types crate, relative to that copy.
+[package]
+name = "kitchensink-proof"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+kitchensink-model-types = { path = "../../../gen/proto/rust/model/types" }
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(kani)'] }
+
+[workspace]

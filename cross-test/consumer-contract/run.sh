@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# --allow-uncovered: this fixture is not a kitchensink member in every language
+# this gate generates (cross-test/kitchensink/members.yaml); it tests a
+# behaviour, not a release's coverage (tacplus#196).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -8567,7 +8570,7 @@ run_generation_case() {
   if [[ "$language" == swift && "$case_name" == disabled ]]; then
     echo "==> $language/$case_name: expecting swift no-client-surface rejection"
     write_config "$dir" "$language" "$case_name" "$proto_src"
-    if (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$proto_src" --tag latest >"$log" 2>&1); then
+    if (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$proto_src" --tag latest --allow-uncovered >"$log" 2>&1); then
       die "swift unexpectedly accepted $case_name (no client surface declared)"
     fi
     rg -n 'swift lite found no service_c2d services' "$log" >/dev/null || {
@@ -8583,7 +8586,7 @@ run_generation_case() {
   if [[ "$language" == csharp && "$case_name" == disabled ]]; then
     echo "==> $language/$case_name: expecting csharp no-client-surface rejection"
     write_config "$dir" "$language" "$case_name" "$proto_src"
-    if (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$proto_src" --tag latest >"$log" 2>&1); then
+    if (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$proto_src" --tag latest --allow-uncovered >"$log" 2>&1); then
       die "csharp unexpectedly accepted $case_name (no client surface declared)"
     fi
     rg -n 'csharp lite found no service_c2d services' "$log" >/dev/null || {
@@ -8596,7 +8599,7 @@ run_generation_case() {
   if is_python_typescript_client_only "$language" && ! is_positive_client_case "$language" "$case_name"; then
     echo "==> $language/$case_name: expecting client-only rejection"
     write_config "$dir" "$language" "$case_name" "$proto_src"
-    if (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$proto_src" --tag latest >"$log" 2>&1); then
+    if (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$proto_src" --tag latest --allow-uncovered >"$log" 2>&1); then
       die "$language unexpectedly accepted service-side case $case_name"
     fi
     # python and typescript are full-client targets: they reject service-side/runtime
@@ -8612,7 +8615,7 @@ run_generation_case() {
 
   echo "==> $language/$case_name: generating"
   write_config "$dir" "$language" "$case_name" "$proto_src"
-  if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$proto_src" --tag latest >"$log" 2>&1); then
+  if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$proto_src" --tag latest --allow-uncovered >"$log" 2>&1); then
     cat "$log" >&2
     die "generation failed for $language/$case_name"
   fi
@@ -8669,7 +8672,7 @@ run_second_token_minter_case() {
   echo "==> $language/second-token-minter: expecting S2S generation rejection"
   prepare_second_token_minter_proto "$proto_src"
   write_config "$dir" "$language" both "$proto_src"
-  if (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$proto_src" --tag latest >"$log" 2>&1); then
+  if (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$proto_src" --tag latest --allow-uncovered >"$log" 2>&1); then
     die "$language unexpectedly accepted a second authoritative token minter beside the sys minter.Minter"
   fi
   rg -n 'multiple authoritative \(spec\.token_minter\) services declared' "$log" >/dev/null || {

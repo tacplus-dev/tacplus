@@ -11,10 +11,11 @@ import (
 )
 
 var (
-	protoTag    string
-	verbose     bool
-	protoSrcs   []string
-	configFiles []string
+	protoTag       string
+	verbose        bool
+	allowUncovered bool
+	protoSrcs      []string
+	configFiles    []string
 )
 
 var rootCmd = &cobra.Command{
@@ -87,6 +88,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
 	rootCmd.Flags().StringArrayVar(&protoSrcs, "src", nil, "Proto source: local directory path or git repo URL. Repeatable — pass --src multiple times to merge several proto source trees into one generation (e.g. a shared base plus a reusable service's protos).")
 	rootCmd.Flags().StringSliceVarP(&configFiles, "config", "c", nil, "Config file(s) to use (can specify multiple, merged left-to-right)")
+	rootCmd.Flags().BoolVar(&allowUncovered, "allow-uncovered", false, "Build even if the protos use a feature the kitchensink of this release does not cover in the language (warn instead of failing; see docs/USER.md, Verification)")
 }
 
 // GetRootCmd returns the root command for use as a subcommand.
@@ -100,6 +102,8 @@ func runBuild(cmd *cobra.Command, args []string) error {
 		ProtoSrcs:   protoSrcs,
 		SrcExplicit: cmd.Flags().Changed("src"),
 		Verbose:     verbose,
+
+		AllowUncovered: allowUncovered,
 	}
 
 	// Load and merge config files if --config was specified

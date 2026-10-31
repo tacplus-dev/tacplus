@@ -1,0 +1,47 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// The kitchensink's service member (tacplus#196): the state-root features the
+// fleet's token authority uses, and its OPA evaluation import.
+
+syntax = "proto3";
+
+package kskernel;
+
+import "sys/spec.proto";
+import "sys/jwk.proto";
+
+option (spec.service) = {name: "kskernel"};
+
+// (spec.opa_import): a typed OpaEval client for kseval.KsEvalInput, served by ksopa.
+option (spec.opa_import) = {source: "kseval.KsEvalInput", service: "ksopa"};
+
+// Identity is a kernel-labelled, exported identity snapshot
+// ((spec.service_state).identity_snapshot), which is what admits
+// (spec.persistence) on a kernel-labelled root; its keys are a view member.
+message Identity {
+  option (spec.service_state) = {label: ["kernel"], export: true, identity_snapshot: true};
+
+  repeated jwk.Jwk verifying_keys = 1 [
+    (spec.persistence) = true,
+    (spec.view_member) = "KsVerifyingKeysView",
+    (spec.assert_max_size) = 128
+  ];
+}
+
+message SetLevelRequest {
+  string level = 1 [(spec.assert_max_size) = 16];
+}
+
+message ConfigDump {
+  string text = 1 [(spec.assert_max_size) = 4096];
+}
+
+// Admin carries commands ((spec.command), with (spec.boundary_callers)) and a
+// private field ((spec.private)).
+message Admin {
+  option (spec.service_state) = {label: ["kernel"]};
+
+  SetLevelRequest set_level = 1 [(spec.command) = true];
+  SetLevelRequest reload = 2 [(spec.command) = true, (spec.boundary_callers) = "ksgateway"];
+  ConfigDump dump = 3 [(spec.private) = true];
+}

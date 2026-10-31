@@ -12,7 +12,7 @@ Reference for developers using tacplus to build services — writing proto files
 4. [CLI Commands](#cli-commands)
 5. [Annotation Reference](#annotation-reference)
 6. [Conditional Requirements](#conditional-requirements)
-7. [Formal Verification Annotations](#formal-verification-annotations)
+7. [Verification](#verification)
 8. [REST Method Control](#rest-method-control)
 9. [Governed RPC Verbs](#governed-rpc-verbs)
 10. [Tags](#tags)
@@ -364,7 +364,7 @@ own implementation of, say, kernel under the same name and id.
 |---------|---------|
 | `tacplus build` | Generate proto types and services for a single language |
 | `tacplus validate` | Validate proto files |
-| `tacplus verify` | Run formal verification on Rust or Java code |
+| `tacplus verify` | Run formal verification (Kani for Rust, JBMC for Java) on the harnesses you wrote; tacplus generates none (see [Verification](#verification)) |
 | `tacplus registry` | Update the service / vservice / trait registry from proto definitions |
 | `tacplus fleet build` | Build a fleet from a deployment repo's `fleet.yaml`: resolve every service's release line to its exact release and image, check ids and dependencies against the registries, merge the protos, run the whole-fleet checks, write `fleet.lock`; `--check` lists newer patches and minors (see [Fleet Build](#fleet-build)) |
 | `tacplus upgrade` | Upgrade tacplus to the latest patch release |
@@ -419,7 +419,7 @@ parsing.
 | `assert_numeric` | Complex numeric constraints (in, not_in, multiple_of) |
 | `assert_float` | Float constraints with epsilon tolerance |
 | `assert_sql` | Valid SQL statement of permitted type (SELECT, etc.), rejects injection patterns |
-| `assert_invariant` | Formal invariant (constrains a `#[kani::proof]` harness via `kani::assume()` in Rust, a JBMC harness via `CProver.assume()` in Java) |
+| `assert_invariant` | Cross-field invariant: a `debug_assert!` in Rust's `validate()`, a comment in Go and Java (see [Verification](#verification)) |
 | `assert_min_size` | Minimum byte length (string/bytes) or element count (repeated/map) |
 
 ### gRPC Client Dependency Annotations
@@ -534,19 +534,79 @@ string redirect_url = 3 [(spec.required_if_eq) = {field: "action", value: "ACTIO
 
 ---
 
-## Formal Verification Annotations
+## Verification
 
-A field can carry a formal invariant via `(spec.assert_invariant)`, which is
-emitted into a generated proof harness:
+tacplus verifies its generator once per release, not once per service
+(tacplus#196; decision: tacplus-dev/roadmap `decisions/kitchensink-verification-2026-10-27.md`).
 
-```protobuf
-string token = 1 [(spec.assert_invariant) = "self.ttl > 0 && self.ttl <= 86400"];
+**The kitchensink.** `cross-test/kitchensink` is a set of proto trees that
+together use every generator feature: every field kind and cardinality, every
+`spec` option and assertion, every auth mode, records, state, streaming,
+tenant routing, MCP carriers, and edge cases (empty messages, deep nesting,
+size bounds at their limits, keyword-like names). `members.yaml` lists them:
+the kitchensink's own members, and the fixtures of the gates every landing on
+main runs. Before a release is published, its release gate (`just kitchensink`,
+run in the build image by the Release workflow) generates the kitchensink in
+every language, compiles it, proves the generated Rust validators with Kani,
+and fuzzes the generated Go, Rust and Java. A failure blocks the release. The
+generated Java is not formally verified yet: JBMC cannot model the protobuf-java
+runtime its validators run on (#257).
+
+**No proof harness in your service.** Since 2.6, tacplus generates no Kani or
+JBMC harness into a service, and a rebuild removes the `proof/` tree older
+Java builds wrote. `tacplus verify` in a service runs Kani (Rust) or JBMC
+(Java) on the harnesses *you* write, over your hand-written code; with none it
+reports that it found none. Go is not formally verified, by design.
+
+**The coverage check.** The release ships a coverage manifest
+(`pkg/coverage/kitchensink.json`): which features the kitchensink uses, in
+which languages. `tacplus build` compares what your protos use with it and
+fails, naming each feature the kitchensink does not cover in your language,
+because this release's verification and fuzzing do not vouch for it:
+
+```
+coverage: this build uses 1 feature(s) the kitchensink of this tacplus release does not cover in go, ...
+  field/assert_sql
 ```
 
-In Rust the harness is a `#[kani::proof]` that constrains the field with
-`kani::assume(...)`; in Java it is a JBMC harness that constrains it with
-`CProver.assume(...)`. The `tacplus verify` command runs these proofs (Rust or
-Java only).
+A feature is a spec option at the level it is set (`field/assert_sql`), with
+the enum values it picks (`method/rpc.flags=RPC_FLAG_PUBLIC_NO_AUTH`), the
+combination of enum values set together in one option
+(`method/rpc{exposure=RPC_EXPOSURE_EXTERNAL,principal=RPC_PRINCIPAL_USER}`, an
+RPC's call surface), or a shape the generator emits differently
+(`field/optional bytes`, `field/map<int32,int64>`, `method/streaming=bidi`).
+The protos tacplus adds itself (`sys/`, `generated/`) are not counted.
+
+`tacplus build --allow-uncovered` builds anyway and logs the uncovered
+features as a warning, while the gap is being added. Such a build is not
+cached (no `.hash.json`), so the next build without the flag checks again.
+
+**Adding a gap.** Open an issue or pull request on tacplus that adds the
+feature to a kitchensink member: to `cross-test/kitchensink/proto` (every
+language) or `cross-test/kitchensink/proto-service` (Go, Java, Rust) if no
+fixture fits, with a verify harness (`cross-test/kitchensink/verify`) or a fuzz
+property (`cross-test/kitchensink/{testdata/go,fuzz}`) when the feature
+validates input. Then `just kitchensink-manifest` rewrites the manifest and
+`just kitchensink` must pass. The next release covers it.
+
+**Fuzz your own code.** Your hand-written handlers are yours to test. Fuzz
+what parses or validates outside input, feeding it the generated types:
+
+- Go: a `FuzzXxx(f *testing.F)` in a `_test.go` file, run with
+  `go test -run '^$' -fuzz '^FuzzXxx$' -fuzztime 30s ./...`.
+- Rust: `cargo fuzz init` in your crate, a `fuzz_target!` that decodes the
+  generated message with `prost::Message::decode` and calls your code, run
+  with `cargo +nightly fuzz run <target>` (the build image carries
+  cargo-fuzz and `$RUST_NIGHTLY`).
+- Java: a JUnit test that feeds `parseFrom` of mutated bytes to your code, or
+  Jazzer if you add it to your build.
+
+The build image's `images/smoke-pipeline.sh` and the kitchensink's harnesses
+under `cross-test/kitchensink` are worked examples.
+
+`(spec.assert_invariant)` declares a cross-field invariant. Rust's
+`validate()` carries it as a `debug_assert!`; Go and Java carry it as a
+comment (Java: a JML `//@ invariant`). No harness is generated from it.
 
 > `(spec.proof_requires)` / `(spec.proof_ensures)` exist and are parsed, but no
 > generator consumes them yet — they emit nothing today.

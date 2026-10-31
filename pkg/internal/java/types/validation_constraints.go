@@ -55,44 +55,53 @@ func writeJavaNumericConstraintValidation(b *strings.Builder, msg model.Message,
 	if field.IsRepeated {
 		listGetter := getterName + "List"
 		fmt.Fprintf(b, "for (int i = 0; i < msg.%s().size(); i++) {\n", listGetter)
-		fmt.Fprintf(b, "long val = msg.%s().get(i);\n", listGetter)
-		writeJavaNumericConstraintChecks(b, javaFieldName, "val", "i", constraint)
+		fmt.Fprintf(b, "long val = %s;\n", javaUnsignedAsLong(field.Type, fmt.Sprintf("msg.%s().get(i)", listGetter)))
+		writeJavaNumericConstraintChecks(b, javaFieldName, "val", "i", constraint, isJavaUnsigned64(field.Type))
 		b.WriteString("}\n")
 		return nil
 	}
 	if field.IsOptional {
 		fmt.Fprintf(b, "if (msg.has%s()) {\n", javaFieldNameUpper(field.Name))
-		fmt.Fprintf(b, "long val = msg.%s();\n", getterName)
-		writeJavaNumericConstraintChecks(b, javaFieldName, "val", "", constraint)
+		fmt.Fprintf(b, "long val = %s;\n", javaUnsignedAsLong(field.Type, "msg."+getterName+"()"))
+		writeJavaNumericConstraintChecks(b, javaFieldName, "val", "", constraint, isJavaUnsigned64(field.Type))
 		b.WriteString("}\n")
 		return nil
 	}
 
 	b.WriteString("{\n")
-	fmt.Fprintf(b, "long val = msg.%s();\n", getterName)
-	writeJavaNumericConstraintChecks(b, javaFieldName, "val", "", constraint)
+	fmt.Fprintf(b, "long val = %s;\n", javaUnsignedAsLong(field.Type, "msg."+getterName+"()"))
+	writeJavaNumericConstraintChecks(b, javaFieldName, "val", "", constraint, isJavaUnsigned64(field.Type))
 	b.WriteString("}\n")
 	return nil
 }
 
-func writeJavaNumericConstraintChecks(b *strings.Builder, fieldName, valueExpr, indexExpr string, constraint *model.NumericConstraint) {
+// writeJavaNumericConstraintChecks emits the assert_numeric checks on
+// valueExpr, a long. unsigned64 marks a uint64/fixed64 field, whose long holds
+// the value's bits: it is ordered and divided as unsigned.
+func writeJavaNumericConstraintChecks(b *strings.Builder, fieldName, valueExpr, indexExpr string, constraint *model.NumericConstraint, unsigned64 bool) {
+	cmp := func(op string, bound int64) string {
+		if unsigned64 {
+			return fmt.Sprintf("Long.compareUnsigned(%s, %s) %s 0", valueExpr, javaLongLiteral(bound), op)
+		}
+		return fmt.Sprintf("%s %s %s", valueExpr, op, javaLongLiteral(bound))
+	}
 	if constraint.Gt != nil {
-		fmt.Fprintf(b, "if (%s <= %s) {\n", valueExpr, javaLongLiteral(*constraint.Gt))
+		fmt.Fprintf(b, "if (%s) {\n", cmp("<=", *constraint.Gt))
 		writeJavaConstraintThrow(b, fieldName, indexExpr, fmt.Sprintf("must be > %d", *constraint.Gt), valueExpr)
 		b.WriteString("}\n")
 	}
 	if constraint.Ge != nil {
-		fmt.Fprintf(b, "if (%s < %s) {\n", valueExpr, javaLongLiteral(*constraint.Ge))
+		fmt.Fprintf(b, "if (%s) {\n", cmp("<", *constraint.Ge))
 		writeJavaConstraintThrow(b, fieldName, indexExpr, fmt.Sprintf("must be >= %d", *constraint.Ge), valueExpr)
 		b.WriteString("}\n")
 	}
 	if constraint.Lt != nil {
-		fmt.Fprintf(b, "if (%s >= %s) {\n", valueExpr, javaLongLiteral(*constraint.Lt))
+		fmt.Fprintf(b, "if (%s) {\n", cmp(">=", *constraint.Lt))
 		writeJavaConstraintThrow(b, fieldName, indexExpr, fmt.Sprintf("must be < %d", *constraint.Lt), valueExpr)
 		b.WriteString("}\n")
 	}
 	if constraint.Le != nil {
-		fmt.Fprintf(b, "if (%s > %s) {\n", valueExpr, javaLongLiteral(*constraint.Le))
+		fmt.Fprintf(b, "if (%s) {\n", cmp(">", *constraint.Le))
 		writeJavaConstraintThrow(b, fieldName, indexExpr, fmt.Sprintf("must be <= %d", *constraint.Le), valueExpr)
 		b.WriteString("}\n")
 	}
@@ -119,7 +128,11 @@ func writeJavaNumericConstraintChecks(b *strings.Builder, fieldName, valueExpr, 
 		b.WriteString("}\n")
 	}
 	if constraint.MultipleOf != nil {
-		fmt.Fprintf(b, "if (%s %% %s != 0L) {\n", valueExpr, javaLongLiteral(*constraint.MultipleOf))
+		if unsigned64 {
+			fmt.Fprintf(b, "if (Long.remainderUnsigned(%s, %s) != 0L) {\n", valueExpr, javaLongLiteral(*constraint.MultipleOf))
+		} else {
+			fmt.Fprintf(b, "if (%s %% %s != 0L) {\n", valueExpr, javaLongLiteral(*constraint.MultipleOf))
+		}
 		writeJavaConstraintThrow(b, fieldName, indexExpr, fmt.Sprintf("must be a multiple of %d", *constraint.MultipleOf), valueExpr)
 		b.WriteString("}\n")
 	}
@@ -360,4 +373,32 @@ func writeJavaRequiredIfEq(b *strings.Builder, msg model.Message, field model.Fi
 	fmt.Fprintf(b, "if (%s && %s) {\n", condExpr, javaRequiredZeroCheck(field, javaFieldName, getterName))
 	writeJavaValidationThrow(b, fmt.Sprintf("field %s is required when %s is %s", javaFieldName, condFieldName, condValue))
 	b.WriteString("}\n")
+}
+
+// isJavaUnsigned64 reports a proto type Java holds in a signed long although
+// its values are unsigned.
+func isJavaUnsigned64(protoType string) bool {
+	return protoType == "uint64" || protoType == "fixed64"
+}
+
+// javaUnsignedAsLong reads expr, a field value, as the long it denotes: a
+// uint32/fixed32 is a Java int holding the value's bits, so it is widened
+// unsigned (tacplus#196: compared as a signed int, 4000000000 passed "< 100").
+func javaUnsignedAsLong(protoType, expr string) string {
+	if protoType == "uint32" || protoType == "fixed32" {
+		return "Integer.toUnsignedLong(" + expr + ")"
+	}
+	return expr
+}
+
+// javaIntBoundCheck is the condition under which valueExpr, a scalar integer
+// field of protoType, is op bound, ordered as the proto type orders it.
+func javaIntBoundCheck(protoType, valueExpr, op string, bound int64) string {
+	switch {
+	case isJavaUnsigned64(protoType):
+		return fmt.Sprintf("Long.compareUnsigned(%s, %s) %s 0", valueExpr, javaLongLiteral(bound), op)
+	case protoType == "uint32" || protoType == "fixed32":
+		return fmt.Sprintf("%s %s %s", javaUnsignedAsLong(protoType, valueExpr), op, javaLongLiteral(bound))
+	}
+	return fmt.Sprintf("%s %s %s", valueExpr, op, formatIntLiteral(bound, protoType))
 }

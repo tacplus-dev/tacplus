@@ -1,0 +1,91 @@
+# The kitchensink (tacplus#196): the proto sets that cover every generator
+# feature tacplus releases. pkg/coverage/kitchensink.json, the coverage
+# manifest shipped with the release, is computed from this list by
+# `just kitchensink-manifest`; `tacplus build` refuses a service that uses a
+# feature, in its language, that no member here covers (docs/USER.md,
+# Verification).
+#
+# Each member names the languages it is generated in and the gate that does
+# it: a member may claim a language only if that gate generates it there. The
+# kitchensink's own member (kitchensink/proto) is generated in every language
+# and formally verified and fuzzed by `just kitchensink`, the release gate; the
+# others are the fixtures of the mandatory gates (`just gates`), which every
+# landing on main runs.
+#
+# To cover a feature: add it to a member whose gate exercises it (the
+# kitchensink's own member if no fixture fits, with a verify or fuzz harness
+# when it validates input), run `just kitchensink-manifest`, and commit both.
+members:
+  - path: cross-test/kitchensink/proto
+    # Not python: it hosts no C2S service that owns MCP tools (MCP-6).
+    languages: [go, java, rust, typescript, swift, csharp]
+    gate: kitchensink
+  - path: cross-test/kitchensink/proto-service
+    languages: [go, java, rust]
+    gate: kitchensink
+  - path: cross-test/proto
+    languages: [go, java, rust, python, typescript]
+    gate: current-generation, determinism
+  - path: cross-test/consumer-contract/proto
+    languages: [java]
+    gate: claims-provenance
+  - path: cross-test/proto-accounting-sink
+    languages: [go, java, rust]
+    gate: current-generation
+  - path: cross-test/proto-c2sonly
+    languages: [go, java, rust]
+    gate: current-generation
+  - path: cross-test/proto-epochload
+    languages: [go, java, rust]
+    gate: current-generation
+  - path: cross-test/proto-eventbus-backpressure
+    languages: [go, java, rust]
+    gate: current-generation
+  - path: cross-test/proto-healthonly
+    languages: [go, java, rust]
+    gate: current-generation
+  - path: cross-test/proto-ownerdefault
+    languages: [go, java, rust]
+    gate: current-generation
+  - path: cross-test/proto-quorumwrite
+    languages: [go, java, rust]
+    gate: current-generation
+  - path: cross-test/proto-recordegress
+    languages: [go, java, rust]
+    gate: current-generation
+  - path: cross-test/proto-redo/caller
+    languages: [go, java, rust]
+    gate: current-generation
+  - path: cross-test/proto-redo/host
+    languages: [go, java, rust]
+    gate: current-generation
+  - path: cross-test/proto-requiresdevice
+    languages: [go, java, rust, python, typescript]
+    gate: current-generation, determinism
+  - path: cross-test/proto-tenantrecord
+    languages: [go, java, rust]
+    gate: current-generation
+  - path: cross-test/proto-tenantroute
+    languages: [go, java, rust]
+    gate: current-generation
+  - path: cross-test/proto-tenantslice
+    languages: [go, java, rust]
+    gate: current-generation
+  - path: cross-test/proto-zerorpc
+    languages: [go, java, rust]
+    gate: current-generation, zero-rpc-s2s
+  - path: cross-test/c2d-server/proto
+    languages: [go, java, rust]
+    gate: c2d-server
+  - path: cross-test/cert-stream/proto
+    languages: [go, java, rust]
+    gate: cert-stream
+  - path: cross-test/w2s-validate/proto
+    languages: [go, java, rust]
+    gate: w2s-validate
+  - path: cross-test/jwk-alg/proto
+    languages: [go, java, rust, python, typescript]
+    gate: jwk-alg
+  - path: cross-test/memberport/proto
+    languages: [java]
+    gate: memberport

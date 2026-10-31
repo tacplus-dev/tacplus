@@ -27,6 +27,11 @@ type Config struct {
 	// files such as pom.xml are kept). It is set when the inputs changed and runs
 	// only after validation has passed, so a refused build leaves the output as it was.
 	ClearOutput bool
+	// Coverage is the kitchensink coverage check (tacplus#196): CoverageEnforce
+	// refuses a build that uses a feature the release's coverage manifest does
+	// not cover in Language, CoverageWarn logs it and builds. The zero value
+	// skips the check; `tacplus build` always sets one of the two.
+	Coverage CoverageMode
 	// OutputName is the name of the generated-output package/dir segment — the
 	// trailing segment appended to the package base (e.g. "<pkg>-model",
 	// "<pkg>_model", ".model", "/model") and the conventional output subdir.
@@ -500,3 +505,11 @@ func (c *Config) resolveLanguagePlugin() error {
 
 	return nil
 }
+
+// CoverageMode is how a build treats a feature the kitchensink does not cover.
+type CoverageMode string
+
+const (
+	CoverageEnforce CoverageMode = "enforce"
+	CoverageWarn    CoverageMode = "warn"
+)

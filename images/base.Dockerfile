@@ -6,14 +6,18 @@
 # Debian trixie, because it is the release that packages jbmc (the build
 # image's Java verifier); Swift comes from swift.org's Debian 12 tarball,
 # which runs on trixie. Pins in one place:
-ARG GO_VERSION=1.26
+# Which line each SDK follows (#255): Go the newest release, Node the newest
+# LTS, Swift the newest release (a full x.y.z: swift.org has no line alias).
+# The nightly scan flags a pin that falls behind its line. Go, Node and Swift
+# are pinned in both base.Dockerfile and build.Dockerfile; move them together.
+ARG GO_VERSION=1.27
 ARG RUST_VERSION=1
 ARG JDK_VERSION=25
 ARG MAVEN_VERSION=3.9
-ARG NODE_VERSION=24
+ARG NODE_VERSION=26
 ARG NPM_VERSION=11.21.1
 ARG NPM_UNDICI_VERSION=6.29.1
-ARG SWIFT_VERSION=6.1.3
+ARG SWIFT_VERSION=6.4.2
 ARG DOTNET_CHANNEL=10.0
 
 FROM golang:${GO_VERSION}-trixie AS go

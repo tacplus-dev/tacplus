@@ -4,6 +4,10 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **`just gates-container` in a git worktree** (2026-10-31, #255): it mounts only the checkout at `/workspace`, and a
+  worktree's `.git` is a file pointing at the main checkout's `.git/worktrees/<name>`, so the first git call in the
+  gates fails (`fatal: not a git repository`, exit 128). Mounting `$(git rev-parse --git-common-dir)` at its own path
+  (and marking it a safe directory) would let loopers, which each work in a worktree, run it as written.
 - **Refuse a `contribute.webapp` from the gateway itself** (2026-10-31, #195): the gateway's own webapp is the base at
   `/`, not a contribution, but the fleet build does not know which listed service is the gateway until
   `tacplus fleet gateway` requires one (part 3). It should then refuse a `webapp` contribution from it by name.

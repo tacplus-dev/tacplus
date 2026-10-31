@@ -502,7 +502,7 @@ fn build_signed_cert(
     use der::asn1::{BitString, Ia5String};
     use der::{Decode as _, Encode};
     use spki::SubjectPublicKeyInfoOwned;
-    use x509_cert::builder::{Builder, CertificateBuilder, Profile};
+    use x509_cert::builder::{Builder, CertificateBuilder};
     use x509_cert::der::flagset::FlagSet;
     use x509_cert::ext::pkix::name::GeneralName;
     use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage, KeyUsage, SubjectAltName};
@@ -538,7 +538,7 @@ fn build_signed_cert(
         .map_err(|e| AuthError::x509(format!("invalid subject name: {}", e)))?;
     let issuer_name = match issuer {
         IssuerSource::SameAsSubject => subject_name.clone(),
-        IssuerSource::FromLeafSubject(leaf) => leaf.tbs_certificate.subject.clone(),
+        IssuerSource::FromLeafSubject(leaf) => leaf.tbs_certificate().subject().clone(),
     };
 
     // Validity: NotBefore = now, NotAfter = exp.
@@ -548,10 +548,11 @@ fn build_signed_cert(
 
     let serial = generate_serial_number();
 
-    // Profile::Manual opts out of x509-cert's default extension set so the cert
+    // ManualProfile opts out of x509-cert's default extension set so the cert
     // shape is fully controlled here (parity with Go/Java).
-    let profile = Profile::Manual {
-        issuer: Some(issuer_name),
+    let profile = ManualProfile {
+        issuer: issuer_name,
+        subject: subject_name,
     };
 
     // x509-cert's CertificateBuilder takes the issuer as a Keypair +
@@ -559,14 +560,7 @@ fn build_signed_cert(
     // identifier only; the TBS is signed below via finalize()/assemble(), by
     // aws-lc-rs (RSA, ECDSA) or ed25519-dalek.
     let issuer_key = IssuerKey::of(signer)?;
-    let mut builder = CertificateBuilder::new(
-        profile,
-        serial,
-        validity,
-        subject_name,
-        spki,
-        &issuer_key,
-    )
+    let mut builder = CertificateBuilder::new(profile, serial, validity, spki)
     .map_err(|e| AuthError::x509(format!("cert builder error: {}", e)))?;
 
     // KeyUsage (critical, like Go/Java).
@@ -644,13 +638,13 @@ fn build_signed_cert(
     }
 
     let tbs = builder
-        .finalize()
+        .finalize(&issuer_key)
         .map_err(|e| AuthError::x509(format!("tbs encode error: {}", e)))?;
     let sig_bytes = sign_tbs(signer, &tbs)?;
     let bitstring = BitString::from_bytes(&sig_bytes)
         .map_err(|e| AuthError::x509(format!("signature encode error: {}", e)))?;
     let cert: Certificate = builder
-        .assemble(bitstring)
+        .assemble(bitstring, &issuer_key)
         .map_err(|e| AuthError::x509(format!("cert assemble error: {}", e)))?;
 
     // Encode to PEM and wrap as ImmutableCert, with id = signing key id
@@ -665,6 +659,33 @@ fn build_signed_cert(
     let pem_str = pem::encode(&pem_block);
     let base64_pem = base64_utils::encode_base64_url(pem_str.as_bytes());
     ImmutableCert::from_pem(signer.id().to_string(), &base64_pem)
+}
+
+/// The certificate profile `build_signed_cert` uses: the given issuer and
+/// subject, and none of x509-cert's default extensions (what x509-cert 0.2's
+/// `Profile::Manual` was).
+struct ManualProfile {
+    issuer: x509_cert::name::Name,
+    subject: x509_cert::name::Name,
+}
+
+impl x509_cert::builder::profile::BuilderProfile for ManualProfile {
+    fn get_issuer(&self, _subject: &x509_cert::name::Name) -> x509_cert::name::Name {
+        self.issuer.clone()
+    }
+
+    fn get_subject(&self) -> x509_cert::name::Name {
+        self.subject.clone()
+    }
+
+    fn build_extensions(
+        &self,
+        _spk: spki::SubjectPublicKeyInfoRef<'_>,
+        _issuer_spk: spki::SubjectPublicKeyInfoRef<'_>,
+        _tbs: &x509_cert::TbsCertificate,
+    ) -> x509_cert::builder::Result<Vec<x509_cert::ext::Extension>> {
+        Ok(Vec::new())
+    }
 }
 
 /// Maps a single `X509KeyUsage` to the x509-cert `KeyUsages` flag, mirroring
@@ -870,8 +891,8 @@ impl der::Encode for MetadataExtension {
     }
 }
 
-impl x509_cert::ext::AsExtension for MetadataExtension {
-    fn critical(&self, _subject: &x509_cert::name::Name, _exts: &[x509_cert::ext::Extension]) -> bool {
+impl x509_cert::ext::Criticality for MetadataExtension {
+    fn criticality(&self, _subject: &x509_cert::name::Name, _exts: &[x509_cert::ext::Extension]) -> bool {
         false
     }
 }
@@ -903,7 +924,7 @@ pub fn verify_service_name(cert_der: &[u8], service_name: &str, trust_domain: &s
         Err(_) => return false,
     };
 
-    if let Some(exts) = &cert.tbs_certificate.extensions {
+    if let Some(exts) = cert.tbs_certificate().extensions() {
         for ext in exts.iter() {
             if ext.extn_id == OID_SAN {
                 if let Ok(san) =
@@ -1226,13 +1247,13 @@ mod tests {
                 .expect("self_sign");
             let parsed = Certificate::from_der(cert_to_der(&cert).expect("cert DER").as_ref())
                 .expect("parse cert");
-            assert_eq!(parsed.signature_algorithm.oid.to_string(), oid);
-            assert_eq!(parsed.signature_algorithm.parameters.is_some(), null_parameters, "{}", oid);
-            assert_eq!(parsed.tbs_certificate.signature, parsed.signature_algorithm);
-            let tbs = parsed.tbs_certificate.to_der().expect("tbs DER");
+            assert_eq!(parsed.signature_algorithm().oid.to_string(), oid);
+            assert_eq!(parsed.signature_algorithm().parameters.is_some(), null_parameters, "{}", oid);
+            assert_eq!(parsed.tbs_certificate().signature(), parsed.signature_algorithm());
+            let tbs = parsed.tbs_certificate().to_der().expect("tbs DER");
             aws::ParsedPublicKey::new(algorithm, &spki)
                 .expect("issuer key")
-                .verify_sig(&tbs, parsed.signature.raw_bytes())
+                .verify_sig(&tbs, parsed.signature().raw_bytes())
                 .unwrap_or_else(|_| panic!("{} signature verifies", oid));
         }
     }

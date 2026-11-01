@@ -8,6 +8,7 @@ Latest release: v2.4.1 (2026-10-27). 2.4 is the line with the global registry an
 Release lines with branches: 2.0 through 2.4.
 
 ## Next
+- Chassis reads config, not env: token file and audience and config path from config; the ge (#262) (Jody, 2026-11-01)
 - Sign-in config in proto: providers, tenant OIDC IdP and domains, join mode, durations (#224)
 - Release v2.6.0 (build image #193, record-plane tenant routing #207) once #207 closes (#213)
 - Generated member port: Hazelcast member traffic over server TLS plus framed bearer tokens, no mTLS (#212); moves onto gRPC with #259

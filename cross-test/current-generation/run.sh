@@ -563,8 +563,10 @@ run_java_generated_self_tests() {
 # Issue #186: the generated chassis must not lock a crate with an open RustSec
 # advisory on its key handling: `rsa` (RUSTSEC-2023-0071, Marvin, no fixed
 # release) at all, nor the elliptic-curve 0.13 line, whose crypto-bigint 0.5 is
-# RUSTSEC-2026-0387 (fixed in 0.7.6). Checked on the lockfile, so it needs
-# neither cargo-audit nor the advisory database.
+# RUSTSEC-2026-0387 (fixed in 0.7.6). Issue #215: nor block-buffer below
+# 0.12.1 (GHSA-qwgh-2vcv-g2f7, the digest 0.10 line; a GitHub advisory with no
+# RUSTSEC id, so cargo-audit would not report it). Checked on the lockfile, so
+# it needs neither cargo-audit nor the advisory database.
 assert_rust_lock_advisory_free() {
   local lock="$1"
   [[ -f "$lock" ]] || die "missing generated Rust Cargo.lock: $lock"
@@ -582,6 +584,8 @@ for name, ver in re.findall(r'\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"
         bad.append(f"crypto-bigint {ver} (RUSTSEC-2026-0387)")
     elif name == "elliptic-curve" and version(ver) < (0, 14, 0):
         bad.append(f"elliptic-curve {ver} (crypto-bigint 0.5, RUSTSEC-2026-0387)")
+    elif name == "block-buffer" and version(ver) < (0, 12, 1):
+        bad.append(f"block-buffer {ver} (GHSA-qwgh-2vcv-g2f7)")
 for b in bad:
     print(f"advised crate in the generated lock: {b}", file=sys.stderr)
 sys.exit(1 if bad else 0)

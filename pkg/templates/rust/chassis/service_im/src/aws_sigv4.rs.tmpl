@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::time::Duration;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Sha256, Digest};
 use {{.CrateBasePathUnderscore}}_types::sys::cloudvendor::cloudvendor::CloudVendor;
 use {{.CrateBasePathUnderscore}}_types::sys::cloudidentity::cloudidentity::{CloudIdentityProof, PresignedHttpRequest};

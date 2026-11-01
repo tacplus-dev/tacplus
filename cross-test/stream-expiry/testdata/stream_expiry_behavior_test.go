@@ -27,6 +27,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -121,13 +122,22 @@ func testSigningKey(t *testing.T) (*keylib.ImmutableKey, *wrapperJwk.ImmutableJw
 	return key, jwk
 }
 
-// serviceToken mints a service token for caller-svc, audience streamexpiry,
+// testAudience is the audience the generated Authorizer accepts, its service
+// label, which run.sh reads from the generated code.
+func testAudience() string {
+	if aud := os.Getenv("STREAM_EXPIRY_AUDIENCE"); aud != "" {
+		return aud
+	}
+	return "streamexpiry"
+}
+
+// serviceToken mints a service token for caller-svc, audience testAudience(),
 // expiring at exp.
 func serviceToken(t *testing.T, key *keylib.ImmutableKey, exp time.Time) string {
 	t.Helper()
 	tok := tokenlib.NewImmutableToken(nil).
 		SetIssuer("test-issuer").
-		SetAudience("streamexpiry").
+		SetAudience(testAudience()).
 		SetExpiration(exp.Unix()).
 		SetNamespace("/system").
 		SetSubType("service").

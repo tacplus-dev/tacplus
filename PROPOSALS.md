@@ -23,6 +23,17 @@ the looper then marks it `promoted` or `declined` here with the date.
   on device`. Pruning each fixture's build output once it passes, or a `CARGO_TARGET_DIR` per gate cleaned at its
   end, would keep a looper's gates inside its share of the disk; current-generation alone also takes ~2h15m in the
   image, which leaves little of a 4h run for the rest.
+- **Memberport's stalled-mint expiry check is wall-clock bound** (2026-11-01, #255): `MemberPortBehaviorTest.
+  stalledMintDropsTheConnectionAtExpiry` (`cross-test/memberport/testdata`) asserts the drop within 8s of real time.
+  With two gate runs on one 8-CPU runner it took 10010ms and failed `memberport-java`; the same image, uncontended,
+  passed it. A shorter token lifetime with a bound relative to it, or an injected clock, would keep it from
+  flaking on a loaded runner.
+- **Cargo's retried network errors fail the clean-log check** (2026-11-01, #255): `assert_clean_log` in
+  `cross-test/current-generation/run.sh` (and its copies in the other cross-tests) fails on any `warning:` line, so
+  cargo's `warning: spurious network error (3 tries remaining): [16] Error in the HTTP2 framing layer`, which cargo
+  then retries successfully, failed `current-generation` and the land of #255. Pre-fetching the crates
+  (`cargo fetch`) before the checked build, or not counting cargo's retry warnings, would keep a network blip from
+  failing a 3h gate run.
 - **Refuse a `contribute.webapp` from the gateway itself** (2026-10-31, #195): the gateway's own webapp is the base at
   `/`, not a contribution, but the fleet build does not know which listed service is the gateway until
   `tacplus fleet gateway` requires one (part 3). It should then refuse a `webapp` contribution from it by name.

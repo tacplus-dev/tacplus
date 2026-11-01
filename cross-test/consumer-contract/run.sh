@@ -3560,7 +3560,7 @@ serde_json = "1.0.149"
 servicemanager = { path = "$output/chassis/servicemanager" }
 tokio = { version = "1.49.0", features = ["rt-multi-thread", "net", "sync", "time"] }
 tokio-stream = { version = "0.1.17", features = ["net"] }
-tokio-tungstenite = "0.28.0"
+tokio-tungstenite = "0.30.0"
 tonic = "0.14.0"
 tempfile = "3"
 EOF

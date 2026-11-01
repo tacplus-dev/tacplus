@@ -48,4 +48,5 @@ run cross-test/runtime-smoke/run.sh
 # These harnesses default to Go, so fan out the full WS-V1 service-language gate.
 run_language_matrix cross-test/smb/run.sh go rust java
 run_language_matrix cross-test/cert-stream/run.sh go rust java
+run_language_matrix cross-test/stream-expiry/run.sh go rust java
 run_language_matrix cross-test/memberport/run.sh go rust java

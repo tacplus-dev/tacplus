@@ -27,6 +27,14 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
 - `smb` (`cross-test/smb/run.sh`) and `cert-stream`
   (`cross-test/cert-stream/run.sh`): service-mesh-boundary and certificate-stream
   runtime gates for Go, Java, and Rust. Run in the nightly matrix.
+- `stream-expiry` (`cross-test/stream-expiry/run.sh`, `just stream-expiry`, in
+  `just gates` and the nightly matrix): server-side stream credential expiry
+  (tacplus#260). Per language, the real generated server (wrapper, Authorizer,
+  grpcserver chassis) is sent a client-streaming, a server-streaming and a bidi
+  stream opened with a token about 3 s from `exp` that is never rotated, while
+  the handler holds every stream open; each must be ended by the server at the
+  token's `exp` with `UNAUTHENTICATED`. A control stream with an hour-long token
+  stays open past that window.
 - `memberport` (`cross-test/memberport/run.sh`, `just memberport`, in `just gates`):
   the generated `(spec.member_port)` member port (tacplus#212). Java runs the
   `memberport-peer` fixture (seeded streams checked byte for byte, both

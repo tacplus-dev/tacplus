@@ -301,6 +301,28 @@ test (tacplus-dev/stratum#17) once kernel#30 lands.
 
 ---
 
+## SE-1 — stream credential expiry runs on the ServiceManager's server, not the ServiceManager
+
+**Status:** open.
+
+`cross-test/stream-expiry` (tacplus#260) drives, per language, the generated
+wrapper, the generated Authorizer verifying a real signed token, and the
+server the generated ServiceManager serves on: Go's `grpcserver.New`/`Listen`
+and Java's `GrpcServer.listen` over TLS, which install the expiry interceptor
+themselves; Rust's tonic server in plaintext, with the ServiceManager's layer
+order (`AuthEnforcingLayer`, then `StreamCredentialExpiryLayer` built from the
+generated `STREAMING_RPC_PATHS`) copied into the test. What is not run is a whole
+ServiceManager against a kernel, so the Rust layer order and the wrapper's
+authorizer wiring are the test's copy of the ServiceManager's, pinned for Rust by
+`TestRustServiceManagerEndsStreamsAtCredentialExpiry`. Handler-provided
+`additional_services` streams are covered in Go and Java (the interceptor is
+server-wide) and not covered in Rust at all (PROPOSALS.md).
+
+To close it: the fake-kernel ServiceManager leg MP-1 also needs, with a short
+token from the fake minter.
+
+---
+
 ## How to close one of these
 
 Two things make a fix real here, and only the second is usually skipped:

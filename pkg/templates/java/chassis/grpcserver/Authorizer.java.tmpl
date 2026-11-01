@@ -38,7 +38,10 @@ import java.util.regex.Pattern;
 
 import io.grpc.Context;
 import io.grpc.Contexts;
+import io.grpc.ForwardingServerCall;
+import io.grpc.ForwardingServerCallListener;
 import io.grpc.Metadata;
+import io.grpc.MethodDescriptor;
 import io.grpc.ServerCall;
 import io.grpc.ServerCallHandler;
 import io.grpc.ServerInterceptor;
@@ -264,6 +267,221 @@ public class Authorizer {
                 return Contexts.interceptCall(ctx, call, headers, next);
             }
         };
+    }
+
+    /**
+     * Shared timer for {@link #streamCredentialExpiryInterceptor}: one daemon
+     * thread for the whole process, created on first use. Cancelled timers are
+     * removed at once so long-lived servers do not accumulate them.
+     */
+    private static final class StreamExpiryTimer {
+        static final java.util.concurrent.ScheduledThreadPoolExecutor EXECUTOR = create();
+
+        private static java.util.concurrent.ScheduledThreadPoolExecutor create() {
+            java.util.concurrent.ScheduledThreadPoolExecutor ex =
+                    new java.util.concurrent.ScheduledThreadPoolExecutor(1, r -> {
+                        Thread t = new Thread(r, "grpc-stream-credential-expiry");
+                        t.setDaemon(true);
+                        return t;
+                    });
+            ex.setRemoveOnCancelPolicy(true);
+            return ex;
+        }
+    }
+
+    /**
+     * Returns a ServerInterceptor that ENDS a streaming call when the token it
+     * opened with expires (API.md, Client Send Contract: a stream carries
+     * exactly one token, the one it opened with, and servers terminate streams
+     * carrying expired credentials).
+     *
+     * <p>Authentication runs once, when a stream opens; a client-, server- or
+     * bidi-streaming call can outlive the token that opened it by hours. For
+     * such a call whose {@code authorization} header carries a parsable bearer
+     * token with an {@code exp} claim, this interceptor schedules a close at
+     * that exp (server clock, the raw claim, no skew leeway) with
+     * UNAUTHENTICATED. A call whose exp is already past is closed at once.
+     *
+     * <p><b>This interceptor performs NO authentication.</b> The token is only
+     * parsed for its exp, never verified: verification stays in the generated
+     * wrappers and the enforcing interceptors. A call with no header, an
+     * unparsable token or no exp passes through untouched (whatever verifies
+     * it decides), and unary calls are never touched.
+     *
+     * <p>grpc-java ServerCall methods are not thread-safe, and the expiry close
+     * runs on a timer thread, so the handler's sendHeaders/sendMessage/close
+     * are serialized with it. After the expiry close the handler's sendMessage
+     * throws UNAUTHENTICATED (a server-streaming loop stops) and its close is
+     * ignored. The call runs in a cancellable Context that is cancelled at the
+     * expiry close, so a handler blocked on the call's executor still sees
+     * {@code Context.current().isCancelled()} — grpc-java itself cancels the
+     * Context of a server-closed call only after that executor frees up.
+     *
+     * <p>GrpcServer installs it server-wide, so it covers the generated
+     * services and Handler.additionalServices() alike.
+     */
+    public static ServerInterceptor streamCredentialExpiryInterceptor() {
+        return new ServerInterceptor() {
+            @Override
+            public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
+                    ServerCall<ReqT, RespT> call,
+                    Metadata headers,
+                    ServerCallHandler<ReqT, RespT> next) {
+                if (call.getMethodDescriptor().getType() == MethodDescriptor.MethodType.UNARY) {
+                    return next.startCall(call, headers);
+                }
+                long expSecs = bearerExpiry(headers.get(AUTH_METADATA_KEY));
+                if (expSecs <= 0) {
+                    return next.startCall(call, headers);
+                }
+                long delayMs = expSecs * 1000L - System.currentTimeMillis();
+                if (delayMs <= 0) {
+                    call.close(streamCredentialExpiredStatus(), new Metadata());
+                    return new ServerCall.Listener<ReqT>() {};
+                }
+                Context.CancellableContext ctx = Context.current().withCancellation();
+                ExpiringServerCall<ReqT, RespT> guarded = new ExpiringServerCall<>(call, ctx);
+                ServerCall.Listener<ReqT> listener;
+                try {
+                    listener = Contexts.interceptCall(ctx, guarded, headers, next);
+                } catch (RuntimeException e) {
+                    ctx.cancel(e);
+                    throw e;
+                }
+                guarded.schedule(delayMs);
+                return new ForwardingServerCallListener.SimpleForwardingServerCallListener<ReqT>(listener) {
+                    @Override
+                    public void onComplete() {
+                        try {
+                            super.onComplete();
+                        } finally {
+                            guarded.finished();
+                        }
+                    }
+
+                    @Override
+                    public void onCancel() {
+                        try {
+                            super.onCancel();
+                        } finally {
+                            guarded.finished();
+                        }
+                    }
+                };
+            }
+        };
+    }
+
+    private static io.grpc.Status streamCredentialExpiredStatus() {
+        return io.grpc.Status.UNAUTHENTICATED.withDescription("stream credential expired");
+    }
+
+    /** The exp claim of a bearer header's token, parsed but NOT verified; 0 when absent or unreadable. */
+    private static long bearerExpiry(String authHeader) {
+        if (authHeader == null || authHeader.isEmpty()) {
+            return 0;
+        }
+        String tokenStr = authHeader;
+        if (tokenStr.regionMatches(true, 0, "bearer ", 0, 7)) {
+            tokenStr = tokenStr.substring(7);
+        }
+        if (tokenStr.isEmpty()) {
+            return 0;
+        }
+        try {
+            return TokenWrapper.parse(tokenStr).getExpiration();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /**
+     * The call wrapper of {@link #streamCredentialExpiryInterceptor}: serializes
+     * the handler's sends and close with the expiry close.
+     */
+    private static final class ExpiringServerCall<ReqT, RespT>
+            extends ForwardingServerCall.SimpleForwardingServerCall<ReqT, RespT> {
+        private final Context.CancellableContext ctx;
+        private boolean closed;
+        private volatile boolean expired;
+        private java.util.concurrent.ScheduledFuture<?> timer;
+
+        ExpiringServerCall(ServerCall<ReqT, RespT> delegate, Context.CancellableContext ctx) {
+            super(delegate);
+            this.ctx = ctx;
+        }
+
+        synchronized void schedule(long delayMs) {
+            if (closed) {
+                return;
+            }
+            timer = StreamExpiryTimer.EXECUTOR.schedule(this::expire, delayMs, TimeUnit.MILLISECONDS);
+        }
+
+        private void expire() {
+            io.grpc.Status status = streamCredentialExpiredStatus();
+            synchronized (this) {
+                if (closed) {
+                    return;
+                }
+                closed = true;
+                expired = true;
+                timer = null;
+                try {
+                    delegate().close(status, new Metadata());
+                } catch (RuntimeException e) {
+                    logger.warn("closing a stream at its credential's expiry failed: {}", e.toString());
+                }
+            }
+            ctx.cancel(status.asRuntimeException());
+        }
+
+        /** The call completed or was cancelled: drop the timer and release the Context. */
+        void finished() {
+            synchronized (this) {
+                closed = true;
+                cancelTimer();
+            }
+            ctx.cancel(null);
+        }
+
+        private void cancelTimer() {
+            if (timer != null) {
+                timer.cancel(false);
+                timer = null;
+            }
+        }
+
+        @Override
+        public synchronized void sendHeaders(Metadata headers) {
+            if (expired) {
+                throw streamCredentialExpiredStatus().asRuntimeException();
+            }
+            super.sendHeaders(headers);
+        }
+
+        @Override
+        public synchronized void sendMessage(RespT message) {
+            if (expired) {
+                throw streamCredentialExpiredStatus().asRuntimeException();
+            }
+            super.sendMessage(message);
+        }
+
+        @Override
+        public synchronized void close(io.grpc.Status status, Metadata trailers) {
+            if (expired) {
+                return;
+            }
+            closed = true;
+            cancelTimer();
+            super.close(status, trailers);
+        }
+
+        @Override
+        public boolean isCancelled() {
+            return expired || super.isCancelled();
+        }
     }
 
     /**

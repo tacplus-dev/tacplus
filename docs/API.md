@@ -375,9 +375,20 @@ shape:
   is attached to the stream headers when the stream opens (gRPC metadata
   cannot change mid-stream). There is deliberately no per-send token
   preflight: it would mint a token the server never sees while still being
-  able to fail a legitimate send. A server that rejects an expired stream
-  credential terminates the stream; the generated reconnect paths (e.g.
+  able to fail a legitimate send. The generated reconnect paths (e.g.
   EventBus subscribers) obtain a fresh token per reconnect attempt.
+
+Servers terminate streams carrying expired credentials. The generated Go,
+Java and Rust servers end every streaming RPC (client-, server- or
+bidi-streaming) at the `exp` of the bearer token it opened with, on the
+server's clock, with `UNAUTHENTICATED`; a stream whose token has already
+expired when it opens is ended at once. The token is checked in full only at
+open, so this is what bounds a stream whose caller never renews its token, or
+cannot because its access was revoked, to one token lifetime. A handler sees
+its stream end the usual way: the stream context is cancelled and further
+sends and receives fail. Unary calls are checked once per call and are not
+cut. (Rust: streams on handler-provided `additional_services` routes are not
+yet covered; see PROPOSALS.md.)
 
 Auth-disabled calls bypass token lookup.
 

@@ -5,6 +5,7 @@ package grpcserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -22,7 +23,9 @@ import (
 	tokenlib "{{.ModuleBasePath}}/chassis/token"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	trace_pb "{{.ModuleBasePath}}/types/sys/trace"
 )
@@ -734,6 +737,116 @@ func (a *authorizer) EnforcingStreamInterceptor() grpc.StreamServerInterceptor {
 		}
 		return handler(srv, ss)
 	}
+}
+
+// StreamCredentialExpiryInterceptor ends a stream at its credential's exp.
+//
+// A stream carries one token, attached when it opens (API.md, Client Send
+// Contract), and the authorization checks run once, at open. Without this a
+// stream opened with a token that then expires, or is revoked and so never
+// renewed, stays open for as long as the caller likes. So a streaming RPC whose
+// authorization header carries a token with an exp claim is ended by the server
+// at that exp with UNAUTHENTICATED, on this server's clock; one whose token has
+// already expired when it opens is ended at once.
+//
+// It only reads exp: the token is verified where it always was, by the
+// generated wrapper or the enforcing interceptors. A stream with no bearer, or
+// one that does not parse or has no exp, passes through for them to refuse.
+//
+// At exp the handler's stream context is cancelled and the interceptor returns
+// UNAUTHENTICATED without waiting for the handler, which may be blocked in a
+// Recv the cancellation cannot reach; gRPC then writes the status and closes
+// the stream, which unblocks it. Its Send and Recv fail from then on.
+func StreamCredentialExpiryInterceptor() grpc.StreamServerInterceptor {
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		exp, ok := streamCredentialExp(ss.Context())
+		if !ok {
+			return handler(srv, ss)
+		}
+		remaining := time.Until(exp)
+		if remaining <= 0 {
+			return errStreamCredentialExpired
+		}
+		ctx, cancel := context.WithCancelCause(ss.Context())
+		defer cancel(nil)
+		expiring := &expiringServerStream{ServerStream: ss, ctx: ctx}
+		done := make(chan error, 1)
+		go func() { done <- handler(srv, expiring) }()
+		timer := time.NewTimer(remaining)
+		defer timer.Stop()
+		select {
+		case err := <-done:
+			return err
+		case <-timer.C:
+			cancel(errStreamCredentialExpired)
+			return errStreamCredentialExpired
+		}
+	}
+}
+
+var errStreamCredentialExpired = status.Error(codes.Unauthenticated, "stream credential expired")
+
+// streamCredentialExp reads the exp claim of the bearer token on ctx's
+// incoming metadata, unverified.
+func streamCredentialExp(ctx context.Context) (time.Time, bool) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return time.Time{}, false
+	}
+	authValues := md.Get("authorization")
+	if len(authValues) == 0 || authValues[0] == "" {
+		return time.Time{}, false
+	}
+	tokenStr := authValues[0]
+	if strings.HasPrefix(strings.ToLower(tokenStr), "bearer ") {
+		tokenStr = tokenStr[7:]
+	}
+	tw, err := tokenlib.ParseToken(tokenStr)
+	if err != nil {
+		return time.Time{}, false
+	}
+	exp := tw.GetExpiration()
+	if exp <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(exp, 0), true
+}
+
+// expiringServerStream is the stream a handler sees under
+// StreamCredentialExpiryInterceptor: its context ends at the credential's exp,
+// and Send and Recv fail UNAUTHENTICATED once it has.
+type expiringServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *expiringServerStream) Context() context.Context { return s.ctx }
+
+func (s *expiringServerStream) SendMsg(m any) error {
+	if err := s.expired(); err != nil {
+		return err
+	}
+	return s.ServerStream.SendMsg(m)
+}
+
+func (s *expiringServerStream) RecvMsg(m any) error {
+	if err := s.expired(); err != nil {
+		return err
+	}
+	if err := s.ServerStream.RecvMsg(m); err != nil {
+		if expired := s.expired(); expired != nil {
+			return expired
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *expiringServerStream) expired() error {
+	if errors.Is(context.Cause(s.ctx), errStreamCredentialExpired) {
+		return errStreamCredentialExpired
+	}
+	return nil
 }
 
 // AuthEnforcingRegistrar wraps a grpc.ServiceRegistrar so that every service

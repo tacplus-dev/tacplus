@@ -884,6 +884,211 @@ where
     }
 }
 
+// ============================================================================
+// Stream credential expiry
+// ============================================================================
+//
+// A stream carries exactly one token: the one it opened with (API.md, Client
+// Send Contract). The per-method wrappers check that token once, at open, so
+// without this layer a stream outlives its credential for as long as the peers
+// keep it busy. This layer ends a streaming rpc at its opening token's exp with
+// UNAUTHENTICATED, on the server clock, from the raw exp claim (no clock-skew
+// leeway). Parity with the Go and Java servers.
+//
+// The token is only parsed, never verified: verification belongs to the
+// AuthEnforcingLayer and the wrapper, which run regardless. A request with no
+// authorization header, an unparsable token, or no exp claim passes through
+// untouched and the wrapper's own verification decides. Unary rpcs are never
+// touched; a tower layer cannot tell unary from streaming, so the
+// ServiceManager hands it the full gRPC paths of its streaming rpcs.
+
+/// Status message a stream ended by its credential's expiry carries.
+pub const STREAM_CREDENTIAL_EXPIRED: &str = "stream credential expired";
+
+/// Tower layer that ends streaming rpcs at their opening token's `exp`.
+#[derive(Clone)]
+pub struct StreamCredentialExpiryLayer {
+    /// Full gRPC paths ("/pkg.Service/Method") of the streaming rpcs to police.
+    streaming_paths: Arc<HashSet<String>>,
+}
+
+impl StreamCredentialExpiryLayer {
+    pub fn new(streaming_paths: impl IntoIterator<Item = String>) -> Self {
+        Self { streaming_paths: Arc::new(streaming_paths.into_iter().collect()) }
+    }
+}
+
+impl<S> tower::Layer<S> for StreamCredentialExpiryLayer {
+    type Service = StreamCredentialExpiryService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        StreamCredentialExpiryService { inner, streaming_paths: self.streaming_paths.clone() }
+    }
+}
+
+/// Tower service built by [`StreamCredentialExpiryLayer`].
+#[derive(Clone)]
+pub struct StreamCredentialExpiryService<S> {
+    inner: S,
+    streaming_paths: Arc<HashSet<String>>,
+}
+
+/// The `exp` claim of the bearer token in an authorization header value,
+/// parsed but NOT verified. None for a missing or unparsable token, or one with
+/// no positive exp.
+pub fn bearer_expiration(authorization: Option<&str>) -> Option<i64> {
+    let header = authorization?.trim();
+    let token_str = match header.get(..7) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("bearer ") => header[7..].trim(),
+        _ => header,
+    };
+    if token_str.is_empty() {
+        return None;
+    }
+    token::Token::parse(token_str).ok()?.expiration().filter(|exp| *exp > 0)
+}
+
+/// The tokio instant at which a unix-seconds `exp` falls, on the server clock.
+/// An exp already past maps to now. None only when exp is too far out to
+/// represent, which no expiry would ever reach anyway.
+fn expiry_deadline(exp: i64) -> Option<tokio::time::Instant> {
+    let exp_at = std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_secs(exp as u64))?;
+    let now = tokio::time::Instant::now();
+    match exp_at.duration_since(std::time::SystemTime::now()) {
+        Ok(remaining) => now.checked_add(remaining),
+        Err(_) => Some(now),
+    }
+}
+
+fn stream_credential_expired() -> tonic::Status {
+    tonic::Status::unauthenticated(STREAM_CREDENTIAL_EXPIRED)
+}
+
+impl<S, ReqBody, ResBody> tower::Service<hyper::http::Request<ReqBody>> for StreamCredentialExpiryService<S>
+where
+    S: tower::Service<hyper::http::Request<ReqBody>, Response = hyper::http::Response<ResBody>>
+        + Clone
+        + Send
+        + 'static,
+    S::Future: Send + 'static,
+    S::Error: Send + 'static,
+    ReqBody: Send + 'static,
+    ResBody: hyper::body::Body<Data = hyper::body::Bytes> + Send + 'static,
+    ResBody::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    type Response = hyper::http::Response<tonic::body::Body>;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn std::future::Future<Output = std::result::Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::result::Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: hyper::http::Request<ReqBody>) -> Self::Future {
+        let deadline = if self.streaming_paths.contains(req.uri().path()) {
+            bearer_expiration(req.headers().get("authorization").and_then(|v| v.to_str().ok()))
+                .and_then(expiry_deadline)
+        } else {
+            None
+        };
+
+        let Some(deadline) = deadline else {
+            let fut = self.inner.call(req);
+            return Box::pin(async move { fut.await.map(|res| res.map(tonic::body::Body::new)) });
+        };
+
+        // Opened with a credential that has already expired: end it at once.
+        if deadline <= tokio::time::Instant::now() {
+            return Box::pin(async move { Ok(stream_credential_expired().into_http()) });
+        }
+
+        let fut = self.inner.call(req);
+        Box::pin(async move {
+            tokio::select! {
+                // The handler is still running (a client-streaming handler
+                // blocked on its next message, or one that has not returned its
+                // response stream yet): dropping `fut` drops the handler.
+                _ = tokio::time::sleep_until(deadline) => Ok(stream_credential_expired().into_http()),
+                res = fut => res.map(|res| {
+                    res.map(|body| tonic::body::Body::new(CredentialExpiringBody::new(body, deadline)))
+                }),
+            }
+        })
+    }
+}
+
+/// A response body that ends with an UNAUTHENTICATED trailers frame at the
+/// stream credential's expiry, dropping the inner body (and with it the
+/// handler's response stream).
+struct CredentialExpiringBody<B> {
+    inner: Option<Pin<Box<B>>>,
+    expiry: Pin<Box<tokio::time::Sleep>>,
+}
+
+impl<B> CredentialExpiringBody<B> {
+    fn new(inner: B, deadline: tokio::time::Instant) -> Self {
+        Self { inner: Some(Box::pin(inner)), expiry: Box::pin(tokio::time::sleep_until(deadline)) }
+    }
+}
+
+impl<B> hyper::body::Body for CredentialExpiringBody<B>
+where
+    B: hyper::body::Body<Data = hyper::body::Bytes>,
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    type Data = hyper::body::Bytes;
+    type Error = Box<dyn std::error::Error + Send + Sync>;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<std::result::Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+        use std::task::Poll;
+        let this = self.get_mut();
+        let Some(inner) = this.inner.as_mut() else {
+            return Poll::Ready(None);
+        };
+        if inner.is_end_stream() {
+            this.inner = None;
+            return Poll::Ready(None);
+        }
+        if this.expiry.as_mut().poll(cx).is_ready() {
+            this.inner = None;
+            let mut trailers = hyper::http::HeaderMap::new();
+            let status = stream_credential_expired();
+            if status.add_header(&mut trailers).is_err() {
+                trailers.insert("grpc-status", hyper::http::HeaderValue::from(16));
+            }
+            return Poll::Ready(Some(Ok(hyper::body::Frame::trailers(trailers))));
+        }
+        match inner.as_mut().poll_frame(cx) {
+            Poll::Ready(Some(Ok(frame))) => {
+                // The inner body ended the stream itself; nothing may follow.
+                if frame.is_trailers() {
+                    this.inner = None;
+                }
+                Poll::Ready(Some(Ok(frame)))
+            }
+            Poll::Ready(Some(Err(e))) => {
+                this.inner = None;
+                Poll::Ready(Some(Err(e.into())))
+            }
+            Poll::Ready(None) => {
+                this.inner = None;
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.as_ref().map_or(true, |b| b.is_end_stream())
+    }
+}
+
 /// True when `namespace` is exactly `/tenants/<t>`.
 fn is_tenant_namespace(namespace: &str) -> bool {
     match namespace.strip_prefix("/tenants/") {
@@ -1615,5 +1820,53 @@ mod authorizer_behavior_tests {
         ] {
             assert_eq!(qualified_method_key(full), want, "full_method {}", full);
         }
+    }
+
+    // The stream credential expiry layer reads exp from the bearer token
+    // without verifying it, and leaves anything it cannot read alone.
+    #[test]
+    fn bearer_expiration_reads_exp_or_passes_through() {
+        let key = new_test_key();
+        let exp = now_plus(3);
+        let bearer = signed_token(&key, exp, SERVICE_NAME, |_| {});
+        assert_eq!(bearer_expiration(Some(&bearer)), Some(exp));
+        let raw = bearer.trim_start_matches("Bearer ").to_string();
+        assert_eq!(bearer_expiration(Some(&raw)), Some(exp), "bare token");
+        assert_eq!(bearer_expiration(Some(&format!("bearer {raw}"))), Some(exp), "lower-case scheme");
+        assert_eq!(bearer_expiration(None), None, "no header");
+        assert_eq!(bearer_expiration(Some("")), None, "empty header");
+        assert_eq!(bearer_expiration(Some("Bearer not-a-token")), None, "unparsable token");
+    }
+
+    // A streaming call opened with an already-expired credential is ended at
+    // once, UNAUTHENTICATED, without reaching the handler; a unary path with
+    // the same token is not touched.
+    #[tokio::test]
+    async fn stream_credential_expiry_ends_expired_stream_at_once() {
+        use tower::{Layer, Service, ServiceExt};
+        let key = new_test_key();
+        let bearer = signed_token(&key, now_plus(-5), SERVICE_NAME, |_| {});
+        let reached = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let inner = {
+            let reached = reached.clone();
+            tower::service_fn(move |_req: hyper::http::Request<tonic::body::Body>| {
+                reached.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async move { Ok::<_, std::convert::Infallible>(hyper::http::Response::new(tonic::body::Body::empty())) }
+            })
+        };
+        let mut svc = StreamCredentialExpiryLayer::new(vec!["/demo.DemoService/Watch".to_string()]).layer(inner);
+        let req = |path: &str| {
+            hyper::http::Request::builder()
+                .uri(path)
+                .header("authorization", bearer.as_str())
+                .body(tonic::body::Body::empty())
+                .unwrap()
+        };
+        let res = svc.ready().await.unwrap().call(req("/demo.DemoService/Watch")).await.unwrap();
+        assert_eq!(res.headers().get("grpc-status").and_then(|v| v.to_str().ok()), Some("16"));
+        assert_eq!(reached.load(std::sync::atomic::Ordering::SeqCst), 0, "expired stream must not reach the handler");
+        let res = svc.ready().await.unwrap().call(req("/demo.DemoService/DoThing")).await.unwrap();
+        assert!(res.headers().get("grpc-status").is_none(), "unary path must pass through");
+        assert_eq!(reached.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

@@ -4,6 +4,15 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **End Rust `additional_services` streams at their token's exp** (2026-11-01, #260): the Go and Java servers end
+  every streaming rpc at its opening token's `exp`, handler-provided services included, because gRPC tells their
+  interceptors the call type. The Rust `StreamCredentialExpiryLayer` is a tower layer that cannot, so it polices only
+  the generated `STREAMING_RPC_PATHS`, and a stream on a handler's own `additional_services` route still outlives its
+  token. Reading the streaming paths off the handler's routes (or a handler-declared list) would close it.
+- **Long MCP sessions end at their token's exp** (2026-11-01, #260): the MCP session carrier is a bidi stream, so
+  like every stream it now ends at the opening token's `exp` (Go, Java, Rust). An MCP client holding one session
+  for longer than a token lifetime must reconnect with a fresh token; #259's make-before-break rotation is the
+  transparent fix if that turns out to matter.
 - **`just gates-container` in a git worktree** (2026-10-31, #255): it mounts only the checkout at `/workspace`, and a
   worktree's `.git` is a file pointing at the main checkout's `.git/worktrees/<name>`, so the first git call in the
   gates fails (`fatal: not a git repository`, exit 128). Mounting `$(git rev-parse --git-common-dir)` at its own path

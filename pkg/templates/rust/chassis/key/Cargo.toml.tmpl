@@ -9,9 +9,9 @@ base64 = "0.22"
 # RSA and ECDSA (issue #186): aws-lc-rs, never the rsa crate (RUSTSEC-2023-0071)
 # nor the elliptic-curve 0.13 stack (crypto-bigint 0.5, RUSTSEC-2026-0387).
 aws-lc-rs = "1"
-ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8", "pem"] }
-pkcs8 = { version = "0.10", features = ["pem", "std"] }
-signature = "2"
+ed25519-dalek = { version = "3", features = ["pkcs8", "pem"] }
+pkcs8 = { version = "0.11", features = ["pem", "std"] }
+signature = "3"
 rand = "0.8"
 pem = "3"
 serde = { version = "1", features = ["derive"] }

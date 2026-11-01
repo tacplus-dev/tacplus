@@ -67,10 +67,14 @@ tokio-rustls = { workspace = true }
 {{- if eq .AutoTlsKeyType "ecdsa"}}
 aws-lc-rs = "1"
 {{- else}}
-ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8"] }
+ed25519-dalek = { version = "3", features = ["pkcs8"] }
 {{- end}}
 rand = "0.8"
-x509-cert = { workspace = true }
+# Pinned rather than taken from dependencies.yaml, like rmcp above: the
+# generated ServiceManager reads certificates through the x509-cert 0.3 API, the
+# line the x509 chassis crate signs with (digest 0.11; 0.2 locked block-buffer
+# 0.10, GHSA-qwgh-2vcv-g2f7, #215), so a consumer's older pin cannot split it.
+x509-cert = "0.3"
 {{- end}}
 
 [lints.rust]

@@ -316,6 +316,28 @@ func TestRustServiceManagerExemptsAuthDisabledMethods(t *testing.T) {
 	}
 }
 
+// Issue #260: a stream carries only the token it opened with, and the
+// per-method wrappers check that token once, at open. The ServiceManager must
+// install the grpcserver StreamCredentialExpiryLayer, fed the model's streaming
+// rpc paths, or a stream outlives its credential for as long as it is kept busy
+// (cross-test/stream-expiry proves the behavior).
+func TestRustServiceManagerEndsStreamsAtCredentialExpiry(t *testing.T) {
+	tmpl, err := loadTemplate("service_manager.rs.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate service_manager.rs.tmpl: %v", err)
+	}
+	for _, want := range []string{
+		"pub const STREAMING_RPC_PATHS: &[&str]",
+		"range .StreamingPaths",
+		"server.layer(StreamCredentialExpiryLayer::new(",
+		"STREAMING_RPC_PATHS.iter()",
+	} {
+		if !strings.Contains(tmpl, want) {
+			t.Errorf("service_manager.rs.tmpl missing %q: streams would outlive their opening token", want)
+		}
+	}
+}
+
 // Item 7 / Piece B: SetEmitter was generated on every wrapper and called by
 // nobody, so the emitter slot was None on every request in every deployed
 // service and accounting produced neither a durable record nor a log line.

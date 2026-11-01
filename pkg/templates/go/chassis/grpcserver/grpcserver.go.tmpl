@@ -292,6 +292,10 @@ func (ps *GrpcServer) Listen(ctx context.Context) error {
 		PermitWithoutStream: true,
 	}))
 
+	// A stream's token is checked once, at open; this ends the stream at the
+	// token's exp, for the generated services and the handler's own alike.
+	opts = append(opts, grpc.ChainStreamInterceptor(StreamCredentialExpiryInterceptor()))
+
 	grpcServer := grpc.NewServer(opts...)
 	if err := ps.impl.RegisterServices(grpcServer); err != nil {
 		return fmt.Errorf("failed to register services: %w", err)

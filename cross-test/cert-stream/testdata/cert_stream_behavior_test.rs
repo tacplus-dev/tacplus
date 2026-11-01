@@ -12,7 +12,7 @@ use x509_cert::name::Name;
 use x509_cert::serial_number::SerialNumber;
 use x509_cert::spki::SubjectPublicKeyInfoOwned;
 use x509_cert::time::Validity;
-use x509_cert::{Certificate, TbsCertificate, Version};
+use x509_cert::{Certificate, Version};
 
 type StreamMemberGrpcHandler =
     dyn crate::s2sm::internal::grpc::servers::svc::certstream::stream_member_service::StreamMemberServiceHandler;
@@ -526,23 +526,30 @@ fn minimal_cert_der(
     let subject_public_key_info = SubjectPublicKeyInfoOwned::from_der(&public_key_der)?;
     let signature_algorithm = subject_public_key_info.algorithm.clone();
     let name = Name::from_str(&format!("CN={id}"))?;
-    let cert = Certificate {
-        tbs_certificate: TbsCertificate {
-            version: Version::V3,
-            serial_number: SerialNumber::new(&[1])?,
-            signature: signature_algorithm.clone(),
-            issuer: name.clone(),
-            validity: Validity::from_now(Duration::from_secs(3600))?,
-            subject: name,
-            subject_public_key_info,
-            issuer_unique_id: None,
-            subject_unique_id: None,
-            extensions: None,
-        },
-        signature_algorithm,
-        signature: BitString::from_bytes(&[1, 2, 3])?,
-    };
-    Ok(cert.to_der()?)
+    // x509-cert 0.3's certificate fields are private (#215), so the fixture is
+    // encoded field by field and parsed back to prove it is a certificate.
+    let serial_number: SerialNumber = SerialNumber::new(&[1])?;
+    let validity: Validity = Validity::from_now(Duration::from_secs(3600))?;
+    let mut tbs = der_tlv(0xa0, &Version::V3.to_der()?)?;
+    tbs.extend(serial_number.to_der()?);
+    tbs.extend(signature_algorithm.to_der()?);
+    tbs.extend(name.to_der()?);
+    tbs.extend(validity.to_der()?);
+    tbs.extend(name.to_der()?);
+    tbs.extend(subject_public_key_info.to_der()?);
+    let mut cert = der_tlv(0x30, &tbs)?;
+    cert.extend(signature_algorithm.to_der()?);
+    cert.extend(BitString::from_bytes(&[1, 2, 3])?.to_der()?);
+    let cert = der_tlv(0x30, &cert)?;
+    Certificate::from_der(&cert)?;
+    Ok(cert)
+}
+
+fn der_tlv(tag: u8, content: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut out = vec![tag];
+    out.extend(x509_cert::der::Length::try_from(content.len())?.to_der()?);
+    out.extend_from_slice(content);
+    Ok(out)
 }
 
 fn public_key_der(public_key: &key_pb::PublicKey) -> Result<Vec<u8>, Box<dyn std::error::Error>> {

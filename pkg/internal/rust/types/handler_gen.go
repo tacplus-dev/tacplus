@@ -97,6 +97,12 @@ type grpcServiceEntry struct {
 	// They must bypass the server's AuthEnforcingLayer, which otherwise rejects
 	// them before the per-method wrapper ever runs.
 	AuthExemptPaths []string
+	// StreamingPaths are the full gRPC paths ("/pkg.Service/Method") of this
+	// service's client-, server- and bidi-streaming rpcs (the MCP session
+	// carrier included). The ServiceManager hands them to the grpcserver
+	// StreamCredentialExpiryLayer, which ends each such stream at its opening
+	// token's exp: a tower layer cannot tell unary from streaming by itself.
+	StreamingPaths []string
 	// IsHosted is true when this entry came from a vservice declaring HostLabel ==
 	// SelfPackage rather than from the host service's own proto package.
 	// Hosted entries get a default Handler trait impl that returns a stub,
@@ -274,6 +280,11 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 	if err != nil {
 		return smTemplateData{}, err
 	}
+	// Streaming rpcs per service, for the stream credential expiry layer.
+	streamingPathsBySvc, err := rustStreamingRpcPaths(config.FlatProtoDir)
+	if err != nil {
+		return smTemplateData{}, err
+	}
 
 	var grpcSvcs []grpcServiceEntry
 	for _, svc := range svcs {
@@ -351,6 +362,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 			HasRequiresDevice:        requiresDeviceSvcs[svc.PackageName+"."+svc.ServiceName],
 			TenantRouted:             tenantRoutedSvcs[svc.PackageName+"."+svc.ServiceName],
 			AuthExemptPaths:          svc.AuthExemptPaths,
+			StreamingPaths:           streamingPathsBySvc[svc.PackageName+"."+svc.ServiceName],
 			IsHosted:                 config.SelfPackage != "" && svc.PackageName != config.SelfPackage,
 			// The one service whose handler the ServiceManager supplies itself.
 			IsGeneratedRecordC2S: svc.SynthesizedKind == parser.SynthesizedKindRecordC2S,
@@ -1102,4 +1114,31 @@ func generatedTypesRelDir(protoFile, packageName string) string {
 		return parentDir
 	}
 	return filepath.Join(parentDir, packageName)
+}
+
+// rustStreamingRpcPaths maps "pkg.Service" to the full gRPC paths
+// ("/pkg.Service/Method") of its streaming rpcs: client-, server- or
+// bidi-streaming. An MCP tool is skipped (it has no gRPC route of its own);
+// the MCP session carrier is an ordinary bidi rpc on the wire and is listed.
+func rustStreamingRpcPaths(flatProtoDir string) (map[string][]string, error) {
+	dp, err := parser.NewDescriptorParser(flatProtoDir)
+	if err != nil {
+		return nil, fmt.Errorf("streaming rpc scan: parse %q: %w", flatProtoDir, err)
+	}
+	paths := make(map[string][]string)
+	for _, fd := range dp.GetAllFiles() {
+		if fd == nil {
+			continue
+		}
+		for _, svc := range fd.Services {
+			for _, m := range svc.Methods {
+				if m.IsMcp || !(m.ClientStreaming || m.ServerStreaming) {
+					continue
+				}
+				key := fd.Package + "." + svc.Name
+				paths[key] = append(paths[key], fmt.Sprintf("/%s.%s/%s", fd.Package, svc.Name, m.Name))
+			}
+		}
+	}
+	return paths, nil
 }

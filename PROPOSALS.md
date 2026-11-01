@@ -8,6 +8,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   worktree's `.git` is a file pointing at the main checkout's `.git/worktrees/<name>`, so the first git call in the
   gates fails (`fatal: not a git repository`, exit 128). Mounting `$(git rev-parse --git-common-dir)` at its own path
   (and marking it a safe directory) would let loopers, which each work in a worktree, run it as written.
+- **Bound the gates' `target/` on a shared runner** (2026-11-01, #255): one `just gates` run in the build image
+  grew the worktree's `target/` to 87G (the per-fixture cargo/Go/Java builds under `target/cross-test`) and filled
+  the runner's 193G disk at the last `current-generation` fixture, failing every gate after it with `No space left
+  on device`. Pruning each fixture's build output once it passes, or a `CARGO_TARGET_DIR` per gate cleaned at its
+  end, would keep a looper's gates inside its share of the disk; current-generation alone also takes ~2h15m in the
+  image, which leaves little of a 4h run for the rest.
 - **Refuse a `contribute.webapp` from the gateway itself** (2026-10-31, #195): the gateway's own webapp is the base at
   `/`, not a contribution, but the fleet build does not know which listed service is the gateway until
   `tacplus fleet gateway` requires one (part 3). It should then refuse a `webapp` contribution from it by name.

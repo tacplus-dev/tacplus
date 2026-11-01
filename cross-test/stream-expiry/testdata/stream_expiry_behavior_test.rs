@@ -33,8 +33,11 @@ use crate::types::svc::streamexpiry::Tick;
 
 type TickStream = Pin<Box<dyn Stream<Item = Result<Tick, tonic::Status>> + Send>>;
 
-/// The audience the generated Authorizer accepts (ACCEPTED_AUDIENCES).
-const AUDIENCE: &str = "streamexpiry";
+/// The audience the generated Authorizer accepts (its service label), which
+/// run.sh reads from the generated code.
+fn audience() -> String {
+    std::env::var("STREAM_EXPIRY_AUDIENCE").unwrap_or_else(|_| "streamexpiry".to_string())
+}
 /// How far out the short-lived token expires.
 const SHORT_TTL_SECS: i64 = 3;
 /// A stream may end no earlier than this before exp (whole-second exp claim).
@@ -77,11 +80,11 @@ fn jwk_for_key(key: &keys::ImmutableKey) -> jwk::ImmutableJwk {
     .expect("build jwk")
 }
 
-/// A signed service token (sub_type service) for AUDIENCE, as a bearer value.
+/// A signed service token (sub_type service) for audience(), as a bearer value.
 fn service_bearer(key: &keys::ImmutableKey, exp: i64) -> String {
     let mut tok = token::Token::new();
     tok.set_issuer("test-issuer").expect("issuer");
-    tok.set_audience(AUDIENCE).expect("audience");
+    tok.set_audience(&audience()).expect("audience");
     tok.set_expiration(exp).expect("expiration");
     tok.set_namespace("/tenants/acme").expect("namespace");
     tok.set_sub_type("service").expect("sub_type");

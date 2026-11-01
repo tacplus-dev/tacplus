@@ -10,6 +10,8 @@ package streamexpiry;
 
 import "sys/spec.proto";
 
+option (spec.service) = {name: "streamexpiry"};
+
 message Tick { string m = 1; }
 
 service StreamerService {

@@ -92,6 +92,11 @@ require (
 )
 EOF
 
+    # The audience the generated Authorizer accepts (its service label).
+    STREAM_EXPIRY_AUDIENCE="$(sed -n 's/^const serviceName = "\(.*\)"$/\1/p' "$OUT/chassis/grpcserver/authorizer.go")"
+    [[ -n "$STREAM_EXPIRY_AUDIENCE" ]] || die "go grpcserver serviceName missing"
+    export STREAM_EXPIRY_AUDIENCE
+
     echo "==> Running generated Go stream-expiry behavior tests"
     (cd "$OUT" && go mod tidy && go vet ./s2sm/grpc/servers/svc/streamexpiry ./chassis/grpcserver \
       && go test -race -count=1 -timeout 300s ./s2sm/grpc/servers/svc/streamexpiry -run '^TestGo' -v) \
@@ -103,6 +108,11 @@ EOF
     grep -q "STREAMING_RPC_PATHS" "$OUT/s2sm/mod.rs" || die "rust ServiceManager STREAMING_RPC_PATHS missing"
     cp "$TESTDATA/stream_expiry_behavior_test.rs" "$OUT/s2sm/stream_expiry_behavior_test.rs"
     printf '\n#[cfg(test)]\nmod stream_expiry_behavior_test;\n' >> "$OUT/s2sm/mod.rs"
+
+    # The audience the generated Authorizer accepts (its service label).
+    STREAM_EXPIRY_AUDIENCE="$(sed -n 's/^const SERVICE_NAME: &str = "\(.*\)";$/\1/p' "$OUT/chassis/grpcserver/src/authorizer.rs")"
+    [[ -n "$STREAM_EXPIRY_AUDIENCE" ]] || die "rust grpcserver SERVICE_NAME missing"
+    export STREAM_EXPIRY_AUDIENCE
 
     echo "==> Running generated Rust stream-expiry behavior tests"
     (cd "$OUT" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo test -p streamexpiry-model rust_stream_expiry -- --nocapture) \

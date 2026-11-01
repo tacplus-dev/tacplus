@@ -30,3 +30,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-10-31 looper release v2.4.4 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.4.4)
 - 2026-10-31 looper release v2.5.4 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.5.4)
 - 2026-10-31 looper issue Generated member port: authenticate black-box member traffic (Hazelcast) with server TLS plus framed bearer tokens (#212, af8642c4)
+- 2026-11-01 looper issue Generated Rust chassis resolves block-buffer 0.10.4 (GHSA-qwgh-2vcv-g2f7) via digest 0.10 / ed25519-dalek 2 (#215, e88ac7fe)

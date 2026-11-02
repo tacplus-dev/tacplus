@@ -1697,6 +1697,11 @@ func writeGoFloatConstraintChecks(b *strings.Builder, msgName, goFieldName, valu
 		idxArg = indexVar + ", "
 	}
 
+	if constraint.HasBound() {
+		fmt.Fprintf(b, "if math.IsNaN(float64(%s)) {\n", valueExpr)
+		fmt.Fprintf(b, "return %s(nil, \"field %s must be a number, got: %%v\", %s%s)\n", errFunc, label, idxArg, valueExpr)
+		b.WriteString("}\n")
+	}
 	if constraint.Gt != nil {
 		fmt.Fprintf(b, "if %s <= %g {\n", valueExpr, *constraint.Gt)
 		fmt.Fprintf(b, "return %s(nil, \"field %s must be > %g, got: %%v\", %s%s)\n", errFunc, label, *constraint.Gt, idxArg, valueExpr)

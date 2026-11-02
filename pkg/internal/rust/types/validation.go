@@ -1073,6 +1073,11 @@ func generateRustFloatConstraintValidation(b *strings.Builder, msg model.Message
 }
 
 func writeRustFloatConstraintChecks(b *strings.Builder, fieldName, valueExpr, indexVar string, constraint *model.FloatConstraint, epsilon float64) {
+	if constraint.HasBound() {
+		fmt.Fprintf(b, "if %s.is_nan() {\n", valueExpr)
+		writeRustConstraintErr(b, fieldName, indexVar, "must be a number", valueExpr)
+		b.WriteString("}\n")
+	}
 	if constraint.Gt != nil {
 		threshold := rustFloatLiteral(*constraint.Gt)
 		fmt.Fprintf(b, "if %s <= %s {\n", valueExpr, threshold)

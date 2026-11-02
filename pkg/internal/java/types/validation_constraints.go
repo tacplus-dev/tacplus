@@ -163,6 +163,11 @@ func writeJavaFloatConstraintValidation(b *strings.Builder, msg model.Message, f
 }
 
 func writeJavaFloatConstraintChecks(b *strings.Builder, fieldName, valueExpr, indexExpr string, constraint *model.FloatConstraint, epsilon float64) {
+	if constraint.HasBound() {
+		fmt.Fprintf(b, "if (Double.isNaN(%s)) {\n", valueExpr)
+		writeJavaConstraintThrow(b, fieldName, indexExpr, "must be a number", valueExpr)
+		b.WriteString("}\n")
+	}
 	if constraint.Gt != nil {
 		threshold := javaDoubleLiteral(*constraint.Gt)
 		fmt.Fprintf(b, "if (%s <= %s) {\n", valueExpr, threshold)

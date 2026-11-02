@@ -75,6 +75,22 @@ use {{.TypedHealthModPath}}::{{.TypedHealthType}};
 {{- if .HasTlsGrpc}}
 use grpcserver::authorizer::Authorizer as GrpcAuthorizer;
 use grpcserver::authorizer::AuthEnforcingLayer;
+use grpcserver::authorizer::StreamCredentialExpiryLayer;
+
+/// Full gRPC paths ("/pkg.Service/Method") of every streaming rpc (client-,
+/// server- or bidi-streaming) this ServiceManager serves on its TLS server.
+/// Each is ended by the server at its opening token's exp, UNAUTHENTICATED: a
+/// stream carries only the token it opened with (API.md, Client Send Contract).
+/// Handler-provided additional_services routes are not listed.
+pub const STREAMING_RPC_PATHS: &[&str] = &[
+{{- range .GrpcServices}}
+{{- if not .IsC2D}}
+{{- range .StreamingPaths}}
+    "{{.}}",
+{{- end}}
+{{- end}}
+{{- end}}
+];
 {{- end}}
 {{- range .ConfigFetches}}
 use {{.ConfigModPath}}::Config as {{.ConfigAliasType}};
@@ -1775,9 +1791,15 @@ impl ServiceManager {
 {{- end}}
 {{- end}}
         ];
-        let mut server = server.layer(AuthEnforcingLayer::with_exempt_paths(
+        let server = server.layer(AuthEnforcingLayer::with_exempt_paths(
             self.authorizer.clone(),
             auth_exempt_paths,
+        ));
+        // A stream is authorized once, at open, by the layer above and its
+        // wrapper; this layer ends every streaming rpc at its opening token's
+        // exp with UNAUTHENTICATED so no stream outlives its credential.
+        let mut server = server.layer(StreamCredentialExpiryLayer::new(
+            STREAMING_RPC_PATHS.iter().map(|p| p.to_string()),
         ));
 
         // Build router: if handler provides additional services, start from those routes

@@ -1240,6 +1240,10 @@ The token minting service validates the signature against the registered public 
 
 For services running in cloud environments (AWS, GCP, Azure), cloud-native identity mechanisms (SigV4-presigned STS requests, OIDC identity tokens) replace credential pairs.
 
+### Streams End At Their Token's Expiry
+
+A streaming RPC (client-, server- or bidi-streaming) carries the one token it opened with, and the generated server ends it at that token's `exp` with `UNAUTHENTICATED` (Go, Java and Rust; see API.md, Client Send Contract). A handler sees the stream end as it would any other end: its stream context is cancelled (Go `stream.Context()`, Java `Context.current()`, Rust the response stream is dropped) and further sends and receives fail. A handler that loops on a stream must watch for that, not run on after it. A client that needs a stream longer than one token lifetime reopens it with a fresh token; the generated reconnect paths do.
+
 ---
 
 ## Record / Event / Store / Projection Annotations

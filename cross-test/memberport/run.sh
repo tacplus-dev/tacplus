@@ -81,6 +81,19 @@ write_java_memberport_pom() {
     </plugins>
   </build>
 
+  <dependencyManagement>
+    <dependencies>
+      <!-- Pinned past advisories in transitive dependencies (#200);
+           scripts/java_dependency_floor_test.go holds the floors.
+           guava (GHSA-xxph-c9ww-hj94) comes in through grpc-java. -->
+      <dependency>
+        <groupId>com.google.guava</groupId>
+        <artifactId>guava</artifactId>
+        <version>33.7.2-android</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
   <dependencies>
     <dependency>
       <groupId>com.google.protobuf</groupId>

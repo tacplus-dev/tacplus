@@ -4,6 +4,11 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Decide whether `assert_float` with only `not_in` refuses NaN** (2026-11-02, #256): a field with any of
+  `gt`/`ge`/`lt`/`le` now refuses NaN in every validating language, and `in` always refused it (no candidate is
+  within epsilon of NaN). A field whose only constraint is `not_in` still accepts NaN, which is arguably right (NaN
+  is not one of the forbidden values) but surprising next to the rest. Refusing NaN on any `assert_float` (or adding
+  an explicit `allow_nan`) would make it one rule; that changes accepted input, so it belongs in a minor.
 - **Release lines still push the deprecated `tacplus/tacplus` image** (2026-11-02, nightly scan): docs/VERSIONING.md
   on main says `tacplus/tacplus` "is never pushed again" and its tags "up to the 2.5 line stay as they are", but each
   patch tag runs its release branch's pre-#193 `images.yml`, which builds and pushes it (`tacplus:2.4.7` and

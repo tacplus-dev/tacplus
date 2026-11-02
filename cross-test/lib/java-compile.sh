@@ -31,12 +31,15 @@ add_java_gcs_archive_dependency() {
 import sys
 pom, version = sys.argv[1], sys.argv[2]
 text = open(pom).read()
-if text.count("</dependencies>") != 1:
-    sys.exit("expected exactly one </dependencies> in " + pom)
-dep = ("  <dependency>\n    <groupId>com.google.cloud</groupId>\n"
-       "    <artifactId>google-cloud-storage</artifactId>\n"
-       "    <version>" + version + "</version>\n  </dependency>\n  ")
-open(pom, "w").write(text.replace("</dependencies>", dep + "</dependencies>"))
+# The project-level </dependencies>, at two spaces: the <dependencyManagement>
+# block closes its own at four.
+end = "\n  </dependencies>\n"
+if text.count(end) != 1:
+    sys.exit("expected exactly one project-level </dependencies> in " + pom)
+dep = ("\n    <dependency>\n      <groupId>com.google.cloud</groupId>\n"
+       "      <artifactId>google-cloud-storage</artifactId>\n"
+       "      <version>" + version + "</version>\n    </dependency>")
+open(pom, "w").write(text.replace(end, dep + end))
 ' "$pom" "$GCS_ARCHIVE_SDK_VERSION"
 }
 
@@ -74,6 +77,36 @@ write_java_compile_pom() {
       </plugin>
     </plugins>
   </build>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- Pinned past advisories in transitive dependencies (#200);
+           scripts/java_dependency_floor_test.go holds the floors.
+           guava (GHSA-xxph-c9ww-hj94) comes in through grpc-java. -->
+      <dependency>
+        <groupId>com.google.guava</groupId>
+        <artifactId>guava</artifactId>
+        <version>33.7.2-android</version>
+      </dependency>
+      <!-- jackson 3.1.4, which the MCP Java SDK declares, carries nine
+           parser and databind advisories: the family at 3.1.8. -->
+      <dependency>
+        <groupId>tools.jackson.core</groupId>
+        <artifactId>jackson-core</artifactId>
+        <version>3.1.8</version>
+      </dependency>
+      <dependency>
+        <groupId>tools.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>3.1.8</version>
+      </dependency>
+      <dependency>
+        <groupId>tools.jackson.dataformat</groupId>
+        <artifactId>jackson-dataformat-yaml</artifactId>
+        <version>3.1.8</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
   <dependencies>
     <dependency>

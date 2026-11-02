@@ -44,3 +44,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-02 looper release v2.3.7 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.3.7)
 - 2026-11-02 looper release v2.4.6 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.4.6)
 - 2026-11-02 looper release v2.5.6 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.5.6)
+- 2026-11-02 looper issue Base and build images pin Go 1.26, Node 24 and Swift 6.1.3; the latest released lines are Go 1.27, Node 26 (LTS) and Swift 6.4 (#255, 2db6debc)

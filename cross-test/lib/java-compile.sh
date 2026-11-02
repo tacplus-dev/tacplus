@@ -75,6 +75,36 @@ write_java_compile_pom() {
     </plugins>
   </build>
 
+  <dependencyManagement>
+    <dependencies>
+      <!-- Pinned past advisories in transitive dependencies (#200);
+           scripts/java_dependency_floor_test.go holds the floors.
+           guava (GHSA-xxph-c9ww-hj94) comes in through grpc-java. -->
+      <dependency>
+        <groupId>com.google.guava</groupId>
+        <artifactId>guava</artifactId>
+        <version>33.7.2-android</version>
+      </dependency>
+      <!-- jackson 3.1.4, which the MCP Java SDK declares, carries nine
+           parser and databind advisories: the family at 3.1.8. -->
+      <dependency>
+        <groupId>tools.jackson.core</groupId>
+        <artifactId>jackson-core</artifactId>
+        <version>3.1.8</version>
+      </dependency>
+      <dependency>
+        <groupId>tools.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>3.1.8</version>
+      </dependency>
+      <dependency>
+        <groupId>tools.jackson.dataformat</groupId>
+        <artifactId>jackson-dataformat-yaml</artifactId>
+        <version>3.1.8</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
   <dependencies>
     <dependency>
       <groupId>com.google.protobuf</groupId>

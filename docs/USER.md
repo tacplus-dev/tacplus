@@ -1048,7 +1048,11 @@ target) cannot be the only tenant check. Every generated server language reads
 the namespace of the instance's own service token at startup; when it is exactly
 `/tenants/<t>`, the generated Authorizer refuses with PERMISSION_DENIED, before
 any handler runs, every caller whose namespace is not at-or-above `/tenants/<t>`
-and not `/system` or below (fleet-wide readers keep passing). A shared service's
+and not `/system` or below (fleet-wide readers keep passing). A caller's
+tenant is always the one of its namespace claim, never of its subject: since
+kernel#23 a tenant-owned service's subject (its token's `sub` and its
+certificate's SAN) is `spiffe://<td>/tenants/<tid>/services/<svc>`, while its
+namespace claim stays `/tenants/<name>`, like its tenant's users'. A shared service's
 instance, running in `/system`, is unchanged. An instance that cannot read its
 own identity at startup fails to start rather than serve unpinned. That door is
 the default policy, "members of the target tenant only"; an rpc that declares
@@ -1087,8 +1091,9 @@ service Crew {
 ```
 
 - **A tid** is exactly 8 characters of `[0-9a-z]`. All-digit ids are reserved for
-  the platform (`people` is `00000001`). A tenant's instances run in namespace
-  `/tenants/<tid>`.
+  the platform (`people` is `00000001`). A tenant's instances carry it in their
+  subject, `spiffe://<td>/tenants/<tid>/services/<svc>` (kernel#23); their
+  namespace claim names the tenant by name, `/tenants/<name>`.
 - **Required.** Generation fails for an rpc of a tenant-owned service that does
   not declare `route_field` (`ValidateTenantRouting`, also run by the fleet
   build). This covers the service's own `service_s2s`/`service_c2s` services and
@@ -1106,7 +1111,9 @@ service Crew {
   surface) before it is routed. It is never filled in from the caller's token,
   and a tenant with no healthy instance is `UNAVAILABLE`, never another tenant's
   instance. A tenant-owned instance also refuses, before the handler, a request
-  routed to a tenant other than its own (`PERMISSION_DENIED`).
+  routed to a tenant other than its own, the tid of its own subject, never read
+  from its namespace claim (`PERMISSION_DENIED`; an instance whose subject
+  names no tid serves no routed call).
 - **The same rule everywhere.** The gateway's generated route table (one table
   for REST and the gRPC proxy) carries each route's field (name, JSON name and
   wire number). The REST dispatcher reads it from the decoded request, and the
@@ -1139,8 +1146,10 @@ service Crew {
   (`(spec.record_read).c2s`) reads from its caller's own tenant, the tid of the
   namespace claim. The store's instance refuses, whoever the caller is
   (`/system` included), a call routed to another tenant and an entry whose
-  `(spec.store_namespace)` value is not in `/tenants/<target_tenant>` or below
-  (`PERMISSION_DENIED`). A record whose key or tenant field is itself named
+  `(spec.store_namespace)` value is not in that tenant's namespace or below:
+  the instance's own namespace claim, `/tenants/<name>`, since `target_tenant`
+  is its subject's tid (`PERMISSION_DENIED`). A shared instance, which knows no
+  tenant's name, holds the entry to `/tenants/<target_tenant>`. A record whose key or tenant field is itself named
   `target_tenant` fails generation on such a host. A shared record store's
   plane carries no route field (#207).
 - **Platform services** (no `tenant_owned`) declare no route field, and

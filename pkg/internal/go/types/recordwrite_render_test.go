@@ -137,6 +137,9 @@ func TestRecordApplyGuard(t *testing.T) {
 // On a tenant-owned record store (#207) the plane is routed by target_tenant:
 // after the route check and the tenant pin, the entry's tenant field must be in
 // the routed tenant, for every caller; an unrouted plane renders no such pin.
+// The routed tenant is a tid and the entry's tenant a namespace, which names it
+// by name (kernel#23): the pin holds the entry to the namespace the instance's
+// authorizer gives for that tid, never to /tenants/<tid>.
 func TestRecordWriteGuardRoutePin(t *testing.T) {
 	m := putXidRowMethod()
 	if got := renderRecordWrite(m); strings.Contains(got, "the tenant this call is routed to") {
@@ -146,12 +149,17 @@ func TestRecordWriteGuardRoutePin(t *testing.T) {
 	got := renderRecordWrite(m)
 	for _, want := range []string{
 		`if err := p.checkRoute(`,
-		`if __rt, __v := req.GetTargetTenant(), req.GetItem().GetTenant(); __v != "/tenants/"+__rt && !strings.HasPrefix(__v, "/tenants/"+__rt+"/") {`,
-		`status.Error(codes.PermissionDenied, "PutXidRow: item.tenant is not in tenant "+__rt+", the tenant this call is routed to; a tenant's instance holds that tenant's entries only")`,
+		`if __rt, __v := req.GetTargetTenant(), req.GetItem().GetTenant(); true {`,
+		`__rn, __err := p.routeNamespace(__rt)`,
+		`if __v != __rn && !strings.HasPrefix(__v, __rn+"/") {`,
+		`status.Error(codes.PermissionDenied, "PutXidRow: item.tenant is not in tenant "+__rt+" ("+__rn+"), the tenant this call is routed to; a tenant's instance holds that tenant's entries only")`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("routed PutXidRow wrapper missing %q\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, `"/tenants/"+__rt`) {
+		t.Errorf("the route pin must not spell the routed tid as a namespace:\n%s", got)
 	}
 	// Order: the route check, then the caller's tenant pin, then the route
 	// pin, then the handler.

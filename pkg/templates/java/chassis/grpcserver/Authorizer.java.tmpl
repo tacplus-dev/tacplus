@@ -607,6 +607,13 @@ public class Authorizer {
     private final Set<String> methodAnyTenant = ConcurrentHashMap.newKeySet();
     /** The instance's own tenant namespace ("/tenants/&lt;t&gt;"), or "" for a shared instance. */
     private volatile String hostTenant = "";
+    /** The instance's own namespace claim, whatever its depth. See {@link #setHostIdentity}. */
+    private volatile String hostNamespace = "";
+    /**
+     * The tid of the instance's own subject ({@code /tenants/<tid>/services/<svc>}),
+     * or "" when the subject names no tenant. See {@link #setHostIdentity}.
+     */
+    private volatile String hostTid = "";
 
     /**
      * Creates an Authorizer that verifies tokens via the given key source.
@@ -734,22 +741,56 @@ public class Authorizer {
      * run by the generated wrapper after request validation and before the
      * handler, on every inbound message. Refuses a route field that is not a
      * tid (INVALID_ARGUMENT) and, on a tenant-owned instance, one naming another
-     * tenant than the instance serves (PERMISSION_DENIED): the router sent the
-     * call to the wrong instance, and serving it would act on the wrong
-     * tenant's data. Returns the tid.
+     * tenant than the tid of its own subject ({@code /tenants/<tid>/services/<svc>})
+     * (PERMISSION_DENIED): the router sent the call to the wrong instance, and
+     * serving it would act on the wrong tenant's data. The instance's namespace
+     * claim names its tenant by name, never by tid (kernel#23), so a
+     * tenant-owned instance whose subject names no tid serves no routed call. A
+     * shared instance checks the shape only. Returns the tid.
      *
      * @param field the route field's proto name, for the message
      * @param value the route field's value on the request
      */
     public String checkRouteTenant(String field, String value) throws ProtoException {
         String tid = RouteTenant.require(field, value);
-        String served = RouteTenant.tenantOfNamespace(hostTenant);
-        if (!hostTenant.isEmpty() && !tid.equals(served)) {
+        String host = hostTenant;
+        String own = hostTid;
+        if (own.isEmpty() && host.isEmpty()) {
+            return tid;
+        }
+        if (own.isEmpty()) {
             throw ProtoException.newErrPermissionDenied(null, "%s",
-                    "routed to tenant " + tid + ", this instance serves tenant "
-                            + (served.isEmpty() ? hostTenant : served));
+                    "routed to tenant " + tid + ", this instance's subject names no tenant id");
+        }
+        if (!tid.equals(own)) {
+            throw ProtoException.newErrPermissionDenied(null, "%s",
+                    "routed to tenant " + tid + ", this instance serves tenant " + own);
         }
         return tid;
+    }
+
+    /**
+     * The namespace tenant {@code tid}'s entries live in on this instance, for
+     * the record plane's route pin. {@link #checkRouteTenant} has admitted tid
+     * before the record plane asks, so on a tenant-owned instance it is the
+     * instance's own tid, and its entries live in the instance's own namespace
+     * claim ({@code /tenants/<name>}, which the subject's tid does not spell). A
+     * shared instance knows no tenant's name, so it holds tid's entries to
+     * {@code /tenants/<tid>}. An instance that serves another tenant, or none it
+     * can name, refuses (PERMISSION_DENIED).
+     */
+    public String routeNamespace(String tid) throws ProtoException {
+        String host = hostTenant;
+        String own = hostTid;
+        if (own.isEmpty() && host.isEmpty()) {
+            return "/tenants/" + tid;
+        }
+        String ns = hostNamespace;
+        if (own.isEmpty() || !own.equals(tid) || ns.isEmpty()) {
+            throw ProtoException.newErrPermissionDenied(null, "%s",
+                    "this instance does not serve tenant " + tid);
+        }
+        return ns;
     }
 
     /**
@@ -768,9 +809,29 @@ public class Authorizer {
         hostTenant = isTenantNamespace(namespace) ? namespace : "";
     }
 
-    /** {@link #setHostNamespace} with the namespace read from the instance's own service token. */
+    /**
+     * Tells the authorizer the instance's own identity: its namespace claim, the
+     * tenant door ({@link #setHostNamespace}), and its subject, whose tid is the
+     * tenant {@link #checkRouteTenant} admits. The two spell the tenant
+     * differently: a tenant-owned instance's subject is
+     * {@code /tenants/<tid>/services/<svc>} while its namespace stays
+     * {@code /tenants/<name>} (kernel#23), so the routed tid is read from the
+     * subject, never from the namespace, and the door from the namespace, never
+     * from the subject.
+     */
+    public void setHostIdentity(String namespace, String subject) {
+        setHostNamespace(namespace);
+        hostNamespace = namespace == null ? "" : namespace;
+        hostTid = RouteTenant.tenantOfInstance(subject);
+    }
+
+    /**
+     * {@link #setHostIdentity} with the namespace and subject read from the
+     * instance's own service token.
+     */
     public void setHostNamespaceFromToken(String token) throws Exception {
-        setHostNamespace(TokenWrapper.parse(token).getNamespace());
+        TokenWrapper tw = TokenWrapper.parse(token);
+        setHostIdentity(tw.getNamespace(), tw.getSubject());
     }
 
     /** True when namespace is exactly {@code /tenants/<t>}. */

@@ -416,18 +416,22 @@ public class AuthorizerBehaviorTest {
     // (and /system) pass. An rpc declaring RPC_FLAG_ANY_TENANT skips the door,
     // and nothing else: audience and auth_services still apply. The backstop
     // refuses a request whose route field is not a tid (INVALID_ARGUMENT) or
-    // names another tenant (PERMISSION_DENIED).
+    // names another tenant than the tid of the instance's own subject
+    // (PERMISSION_DENIED), never the tenant its namespace claim names: since
+    // kernel#23 the instance of tenant beta (tid bbbbbbbb) has subject
+    // /tenants/bbbbbbbb/services/<svc> and namespace /tenants/beta.
     private static void checkTenantRouting(ImmutableKey key) throws Exception {
         final String anyTenantMethod = "CrewService/Hail";
         final String memberMethod = "CrewService/Muster";
         Authorizer crew = authorizerWithKeys(jwkForKey(key));
-        crew.setHostNamespace("/tenants/bbbbbbbb");
+        crew.setHostNamespaceFromToken(signedToken(key, t -> t.setSubType("service")
+            .setSubject("spiffe://example.com/tenants/bbbbbbbb/services/demo").setNamespace("/tenants/beta")));
         crew.setMethodAuth(anyTenantMethod, List.of("caller-svc"));
         crew.setMethodAuth(memberMethod, List.of("caller-svc"));
         crew.setMethodAnyTenant(anyTenantMethod);
 
-        String foreign = signedToken(key, t -> t.setSubType("service").setSubject("caller-svc").setNamespace("/tenants/aaaaaaaa"));
-        String member = signedToken(key, t -> t.setSubType("service").setSubject("caller-svc").setNamespace("/tenants/bbbbbbbb"));
+        String foreign = signedToken(key, t -> t.setSubType("service").setSubject("caller-svc").setNamespace("/tenants/alpha"));
+        String member = signedToken(key, t -> t.setSubType("service").setSubject("caller-svc").setNamespace("/tenants/beta"));
         mustPass("ANY_TENANT: a caller of another tenant passes the door",
             () -> crew.authorizeWithToken(bearer(foreign), anyTenantMethod, null));
         mustRejectCode("default door: a caller of another tenant is refused", ProtoException.PERMISSION_DENIED,
@@ -435,10 +439,10 @@ public class AuthorizerBehaviorTest {
         mustPass("default door: a member passes", () -> crew.authorizeWithToken(bearer(member), memberMethod, null));
 
         // ANY_TENANT widens nothing else.
-        String otherSvc = signedToken(key, t -> t.setSubType("service").setSubject("other-svc").setNamespace("/tenants/aaaaaaaa"));
+        String otherSvc = signedToken(key, t -> t.setSubType("service").setSubject("other-svc").setNamespace("/tenants/alpha"));
         mustReject("ANY_TENANT keeps auth_services", () -> crew.authorizeWithToken(bearer(otherSvc), anyTenantMethod, null));
         String wrongAud = signedToken(key, t -> t.setSubType("service").setSubject("caller-svc")
-            .setNamespace("/tenants/aaaaaaaa").setAudience("kernel"));
+            .setNamespace("/tenants/alpha").setAudience("kernel"));
         mustReject("ANY_TENANT keeps the audience check", () -> crew.authorizeWithToken(bearer(wrongAud), anyTenantMethod, null));
         // The registration is per method: a bare name or another service's
         // method of the same name does not open the door.
@@ -469,7 +473,8 @@ public class AuthorizerBehaviorTest {
             }
         });
 
-        // Backstop: the route field must be a tid naming this instance's tenant.
+        // Backstop: the route field must be a tid naming this instance's tenant,
+        // the tid of its own subject.
         mustPass("backstop: a request routed to this instance's tenant", () -> crew.checkRouteTenant("tenant", "bbbbbbbb"));
         mustRejectCode("backstop: a request routed to another tenant", ProtoException.PERMISSION_DENIED,
             () -> crew.checkRouteTenant("tenant", "aaaaaaaa"));
@@ -491,6 +496,74 @@ public class AuthorizerBehaviorTest {
         mustPass("backstop on a shared instance: a tid passes", () -> shared.checkRouteTenant("tenant", "aaaaaaaa"));
         mustRejectCode("backstop on a shared instance: empty route field", ProtoException.INVALID_ARGUMENT,
             () -> shared.checkRouteTenant("tenant", ""));
+
+        // The record plane's route pin: tenant bbbbbbbb's entries live in the
+        // instance's own namespace, the name its subject's tid does not spell.
+        expectRouteNamespace("beta's instance", crew, "bbbbbbbb", "/tenants/beta");
+        mustRejectCode("routeNamespace of another tenant", ProtoException.PERMISSION_DENIED,
+            () -> crew.routeNamespace("aaaaaaaa"));
+        expectRouteNamespace("a shared instance", shared, "aaaaaaaa", "/tenants/aaaaaaaa");
+
+        // A tenant-owned instance whose subject names no tid serves no routed
+        // call: a name-form subject from before kernel#23, or a namespace that
+        // merely looks like a tid, is never read as one.
+        String[][] noTidIds = {
+            {"/tenants/beta", "spiffe://example.com/tenants/beta/services/demo"},
+            {"/tenants/bbbbbbbb", "spiffe://example.com/system/services/demo"},
+        };
+        for (String[] id : noTidIds) {
+            Authorizer noTid = authorizerWithKeys(jwkForKey(key));
+            noTid.setHostIdentity(id[0], id[1]);
+            for (String tid : List.of("bbbbbbbb", "aaaaaaaa")) {
+                String name = "instance (" + id[0] + ", " + id[1] + ") routed to " + tid;
+                mustRejectCode(name, ProtoException.PERMISSION_DENIED, () -> noTid.checkRouteTenant("tenant", tid));
+                mustRejectCode(name + ": routeNamespace", ProtoException.PERMISSION_DENIED, () -> noTid.routeNamespace(tid));
+            }
+        }
+
+        checkCallerTenantIsTheNamespaceClaim(key);
+    }
+
+    private static void expectRouteNamespace(String name, Authorizer a, String tid, String want) {
+        try {
+            String got = a.routeNamespace(tid);
+            if (!want.equals(got)) {
+                System.err.println("FAIL: routeNamespace(" + tid + ") on " + name + " = " + got + ", want " + want);
+                failures++;
+            }
+        } catch (Exception e) {
+            System.err.println("FAIL: routeNamespace(" + tid + ") on " + name + " must be " + want + ", got: " + e);
+            failures++;
+        }
+    }
+
+    // A tenant-owned caller is in the tenant of its namespace claim, never of
+    // its subject: since kernel#23 its subject is /tenants/<tid>/services/<svc>
+    // while its namespace stays /tenants/<name>. Beta's own service, minted
+    // under beta's tid, passes beta's door; another tenant's caller does not,
+    // whatever its subject spells.
+    private static void checkCallerTenantIsTheNamespaceClaim(ImmutableKey key) throws Exception {
+        Authorizer beta = authorizerWithKeys(jwkForKey(key));
+        beta.setMethodAuth(TEST_METHOD, List.of("caller-svc"));
+        beta.setHostIdentity("/tenants/beta", "spiffe://example.com/tenants/bbbbbbbb/services/demo");
+
+        String own = signedToken(key, t -> t.setSubType("service")
+            .setSubject("spiffe://example.com/tenants/bbbbbbbb/services/caller-svc").setNamespace("/tenants/beta"));
+        mustPass("beta's caller with a tid subject passes beta's door",
+            () -> beta.authorizeWithToken(bearer(own), TEST_METHOD, null));
+        mustPass("authenticate: beta's caller with a tid subject",
+            () -> beta.authenticateWithToken(bearer(own)));
+        mustPass("authenticateAtOrBelow: beta's caller is at-or-above /tenants/beta/users/u1",
+            () -> beta.authenticateAtOrBelowWithToken(bearer(own), "/tenants/beta/users/u1"));
+        mustRejectCode("authenticateAtOrBelow: the caller's subject tid is not its namespace", ProtoException.PERMISSION_DENIED,
+            () -> beta.authenticateAtOrBelowWithToken(bearer(own), "/tenants/bbbbbbbb"));
+        for (String sub : List.of(
+                "spiffe://example.com/tenants/beta/services/caller-svc",
+                "spiffe://example.com/tenants/bbbbbbbb/services/caller-svc")) {
+            String other = signedToken(key, t -> t.setSubType("service").setSubject(sub).setNamespace("/tenants/acme"));
+            mustRejectCode("acme's caller (subject " + sub + ") on beta's instance", ProtoException.PERMISSION_DENIED,
+                () -> beta.authorizeWithToken(bearer(other), TEST_METHOD, null));
+        }
     }
 
     // The remote JWK watch against a key authority that is rolling (every Watch

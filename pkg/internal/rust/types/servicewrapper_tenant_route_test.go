@@ -169,16 +169,18 @@ func TestRustWrapperRegistersAnyTenantRpcs(t *testing.T) {
 	}
 }
 
-// The routed wrapper holds the tenant its instance serves (set by the
-// ServiceManager from the instance's own namespace) and checks against it; a
-// platform wrapper carries none of it.
+// The routed wrapper holds its instance's own identity (set by the
+// ServiceManager from the instance's own token: the tid of its subject and its
+// namespace claim) and checks against it; a platform wrapper carries none of
+// it.
 func TestRustRoutedWrapperCarriesItsHostTenant(t *testing.T) {
 	routed := generateCrewServiceWrapper(t, crewMethod("GetCrew", false, false))
 	for _, want := range []string{
-		"pub fn set_host_namespace(&self, namespace: &str) {",
-		"servicemanager::tenant_route::host_tenant_of_namespace(namespace)",
+		"pub fn set_host_identity(&self, identity: servicemanager::tenant_route::HostIdentity) {",
 		"fn check_route_tenant(&self, field: &str, value: &str) -> Result<(), tonic::Status> {",
 		"servicemanager::tenant_route::check_routed_tenant(field, value, &host)",
+		"fn route_namespace(&self, tid: &str) -> Result<String, tonic::Status> {",
+		"servicemanager::tenant_route::route_namespace(tid, &host)",
 	} {
 		if !strings.Contains(routed, want) {
 			t.Fatalf("routed wrapper missing %q:\n%s", want, routed)
@@ -186,7 +188,7 @@ func TestRustRoutedWrapperCarriesItsHostTenant(t *testing.T) {
 	}
 	m := crewMethod("GetCrew", false, false)
 	m.RouteField = nil
-	if platform := generateCrewServiceWrapper(t, m); strings.Contains(platform, "host_tenant") {
+	if platform := generateCrewServiceWrapper(t, m); strings.Contains(platform, "host_identity") {
 		t.Fatalf("a platform wrapper must not carry a host tenant:\n%s", platform)
 	}
 }

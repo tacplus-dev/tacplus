@@ -122,6 +122,7 @@ func TestGoWrapperRegistersRouteFieldAndAnyTenant(t *testing.T) {
 		`auth.SetMethodRouteField("crew.Crew/Visit", "target_tenant")`,
 		`auth.SetMethodAnyTenant("crew.Crew/Visit")`,
 		"func (p *Crew) SetRouteCheckFunc(f func(fullMethod string, req any) error)",
+		"func (p *Crew) SetRouteNamespaceFunc(f func(tid string) (string, error))",
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("wrapper is missing %q:\n%s", want, src)
@@ -258,7 +259,8 @@ func TestGoClientRoutedBidiFixesTenantAtOpen(t *testing.T) {
 }
 
 // The ServiceManager keeps per-tenant pools for a tenant-routed s2s target and
-// wires each routed wrapper's backstop to the authorizer.
+// wires each routed wrapper's backstop, and its record plane's route
+// namespace, to the authorizer.
 func TestGoServiceManagerTemplateRoutesTenantTargets(t *testing.T) {
 	sm := goSMTemplate(t)
 	for _, want := range []string{
@@ -266,6 +268,7 @@ func TestGoServiceManagerTemplateRoutesTenantTargets(t *testing.T) {
 		`s2sChannels["{{.}}"] = serviceconnection.NewTenantChannelProvider(s2sTenantConnections["{{.}}"])`,
 		"for svcID, conn := range s2sTenantConnections {",
 		"{{.WrapperVarName}}.SetRouteCheckFunc(sm.auth.CheckRoute)",
+		"{{.WrapperVarName}}.SetRouteNamespaceFunc(sm.auth.RouteNamespace)",
 	} {
 		if !strings.Contains(sm, want) {
 			t.Fatalf("service manager template is missing %q", want)

@@ -1323,6 +1323,7 @@ return fmt.Errorf("authorizer not wired for {{.ServerType}} (build/SM bug) - man
 {{- if .HasTenantRoute}}
 // (spec.rpc).route_field: the tenant routing backstop of every routed rpc.
 {{.WrapperVarName}}.SetRouteCheckFunc(sm.auth.CheckRoute)
+{{.WrapperVarName}}.SetRouteNamespaceFunc(sm.auth.RouteNamespace)
 {{- end}}
 {{- if and .HasMethodAuth (not .IsC2D)}}
 {{.WrapperAlias}}.{{.MethodAuthFuncName}}(sm.auth)

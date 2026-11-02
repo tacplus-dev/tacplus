@@ -4,6 +4,17 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Release lines still push the deprecated `tacplus/tacplus` image** (2026-11-02, nightly scan): docs/VERSIONING.md
+  on main says `tacplus/tacplus` "is never pushed again" and its tags "up to the 2.5 line stay as they are", but each
+  patch tag runs its release branch's pre-#193 `images.yml`, which builds and pushes it (`tacplus:2.4.7` and
+  `tacplus:2.5.7`, 2026-11-02, Images runs 41460207658 and 41460215925) `FROM` a `build:X.Y` that is never rebuilt
+  (#283). Either say in VERSIONING.md that the 2.0–2.5 lines keep pushing it until they leave support, or stop
+  pushing it from the lines. Consumers of the 2.x `tacplus` image would then stop getting patches through it.
+- **Retry Go module downloads in CI** (2026-11-02, nightly scan): CI on main at ce69bf89 (run 41456279271) failed
+  `current-generation-go` on one transient checksum-database error (`verifying go.mod: ... reading
+  https://sum.golang.org/tile/8/0/x192/982: stream error: stream ID 139; INTERNAL_ERROR`), not on code. A
+  `go mod download` with a short retry before each Go fixture build (or a warmed module cache in the build image)
+  would keep one network hiccup from failing a gate.
 - **End Rust `additional_services` streams at their token's exp** (2026-11-01, #260): the Go and Java servers end
   every streaming rpc at its opening token's `exp`, handler-provided services included, because gRPC tells their
   interceptors the call type. The Rust `StreamCredentialExpiryLayer` is a tower layer that cannot, so it polices only

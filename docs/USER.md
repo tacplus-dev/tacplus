@@ -377,7 +377,7 @@ parsing.
 | `assert_max_size` | Maximum byte size for string/bytes (default 32KB) or element count for repeated/map (runtime default 1024; user protos should set explicit bounds) |
 | `assert_gt` / `assert_ge` / `assert_lt` / `assert_le` | Numeric comparisons |
 | `assert_numeric` | Complex numeric constraints (in, not_in, multiple_of) |
-| `assert_float` | Float constraints with epsilon tolerance |
+| `assert_float` | Float constraints with epsilon tolerance; a field with any of `gt`/`ge`/`lt`/`le` refuses NaN |
 | `assert_sql` | Valid SQL statement of permitted type (SELECT, etc.), rejects injection patterns |
 | `assert_invariant` | Formal invariant (constrains a `#[kani::proof]` harness via `kani::assume()` in Rust, a JBMC harness via `CProver.assume()` in Java) |
 | `assert_min_size` | Minimum byte length (string/bytes) or element count (repeated/map) |

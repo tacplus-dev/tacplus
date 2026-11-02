@@ -8,6 +8,7 @@ Latest release: v2.4.1 (2026-10-27). 2.4 is the line with the global registry an
 Release lines with branches: 2.0 through 2.4.
 
 ## Next
+- Redact for any type: annotated sensitive fields, deterministic generated Redact<T>, Secrets redacted by construction, a gate for unannotated sensitive-looking fields; the uni-config's redacted view for LLM review (#274) (Jody, 2026-11-01)
 - Accounting: typed outcome (permitted/denied/failed) and typed metrics (e.g. records returned), no data ever (f (#273) (Jody, 2026-11-01)
 - Event trace revisited: owner-bound trace sessions, generated propagation, ephemeral never-recorded events, WatchTrace; the fleet CLI with trace start / --trace (#265) (Jody, 2026-11-01)
 - Chassis reads config, not env: token file and audience and config path from config; the ge (#262) (Jody, 2026-11-01)

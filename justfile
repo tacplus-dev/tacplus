@@ -19,6 +19,7 @@ lock := "bash scripts/with-tree-lock.sh"
 #   cross-test/current-generation/run.sh  write_java_compile_pom()
 #   cross-test/cert-stream/run.sh         write_java_compile_pom()
 #   cross-test/external-token/testdata/pom.xml
+#   cross-test/stream-expiry/testdata/pom.xml
 #   cross-test/consumer-contract/run.sh   (pom heredoc)
 #   cross-test/server-runtime/fixture/java/pom.xml
 #   cross-test/wire-corpus/decoder/java/pom.xml
@@ -187,7 +188,7 @@ gates:
     echo "=== OVERALL fail=1 (protoc preflight) ==="
     exit 1
   fi
-  for g in soundness test current-generation determinism cert-stream claims-provenance w2s-validate c2d-server zero-rpc-s2s; do
+  for g in soundness test current-generation determinism cert-stream stream-expiry claims-provenance w2s-validate c2d-server zero-rpc-s2s; do
     echo "=== $g ==="
     just "$g"
     rc=$?
@@ -222,6 +223,21 @@ cert-stream-java:
 
 cert-stream-rust:
   {{lock}} bash cross-test/cert-stream/run.sh --language rust
+
+# Server-side stream credential expiry (issue #260): a client-streaming, a
+# server-streaming and a bidi stream opened with a short-lived token that is
+# never rotated are ended by the real generated server at the token's exp,
+# UNAUTHENTICATED (API.md, Client Send Contract).
+stream-expiry: stream-expiry-go stream-expiry-java stream-expiry-rust
+
+stream-expiry-go:
+  {{lock}} bash cross-test/stream-expiry/run.sh --language go
+
+stream-expiry-java:
+  {{lock}} bash cross-test/stream-expiry/run.sh --language java
+
+stream-expiry-rust:
+  {{lock}} bash cross-test/stream-expiry/run.sh --language rust
 
 # Behavioral coverage of the generated Java subscriber's backoff on a clean
 # stream close: a peer that ends every stream with OK must not drive a tight

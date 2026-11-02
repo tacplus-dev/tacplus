@@ -209,7 +209,10 @@ func TestRustRecordApplyGuardAuthDisabled(t *testing.T) {
 
 // Issue #207: on a plane routed by tenant, the entry's tenant field must lie in
 // the tenant the call is routed to, whoever the caller is: after the route
-// check and the tenant pin, before the durability floor and the handler.
+// check and the tenant pin, before the durability floor and the handler. The
+// routed tenant is a tid and the entry's tenant a namespace, which names it by
+// name (kernel#23): the pin holds the entry to the namespace the wrapper's
+// route_namespace gives for that tid, never to /tenants/<tid>.
 func TestRustRecordWriteRoutePin(t *testing.T) {
 	m := rustPutXidRowMethod()
 	m.RouteField = &parser.RouteFieldDescriptor{Field: "target_tenant", JSONName: "targetTenant", Number: 15}
@@ -217,18 +220,21 @@ func TestRustRecordWriteRoutePin(t *testing.T) {
 	for _, want := range []string{
 		`self.check_route_tenant("target_tenant", &req.target_tenant)?;`,
 		`let (__rt, __v): (&str, &str) = (req.target_tenant.as_str(), req.item.as_ref().map(|__p| __p.tenant.as_str()).unwrap_or(""));`,
-		`let __home = format!("/tenants/{}", __rt);`,
-		`if __v != __home && !__v.starts_with(&format!("{}/", __home)) {`,
-		`tonic::Status::permission_denied(format!("PutXidRow: item.tenant is not in tenant {}, the tenant this call is routed to; a tenant's instance holds that tenant's entries only", __rt))`,
+		`let __rn: String = self.route_namespace(__rt)?;`,
+		`if __v != __rn && !__v.starts_with(&format!("{}/", __rn)) {`,
+		`tonic::Status::permission_denied(format!("PutXidRow: item.tenant is not in tenant {} ({}), the tenant this call is routed to; a tenant's instance holds that tenant's entries only", __rt, __rn))`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("routed PutXidRow wrapper missing %q\n%s", want, got)
 		}
 	}
 	route, pin, routePin, floor, call := strings.Index(got, "self.check_route_tenant("), strings.Index(got, "let __record_caller_ns"),
-		strings.Index(got, "let __home"), strings.Index(got, "__d < 3"), strings.Index(got, "self.handler.put_xid_row(")
+		strings.Index(got, "let __rn"), strings.Index(got, "__d < 3"), strings.Index(got, "self.handler.put_xid_row(")
 	if !(route < pin && pin < routePin && routePin < floor && floor < call) {
 		t.Fatalf("guard order: route check %d, tenant pin %d, route pin %d, floor %d, handler %d", route, pin, routePin, floor, call)
+	}
+	if strings.Contains(got, `format!("/tenants/{}", __rt)`) {
+		t.Errorf("the route pin must not spell the routed tid as a namespace:\n%s", got)
 	}
 	if plain := renderRustRecordWrite(t, rustPutXidRowMethod()); strings.Contains(plain, "the tenant this call is routed to") {
 		t.Errorf("an unrouted plane carries no route pin:\n%s", plain)
@@ -244,7 +250,8 @@ func TestRustRecordApplyRoutePin(t *testing.T) {
 	for _, want := range []string{
 		`let __record_route: String = req.target_tenant.clone();`,
 		`let (__rt, __v): (&str, &str) = (__record_route.as_str(), __c.item.as_ref().map(|__p| __p.tenant.as_str()).unwrap_or(""));`,
-		`"Apply (put_xid_row): item.tenant is not in tenant {}, the tenant this call is routed to; a tenant's instance holds that tenant's entries only"`,
+		`let __rn: String = self.route_namespace(__rt)?;`,
+		`"Apply (put_xid_row): item.tenant is not in tenant {} ({}), the tenant this call is routed to; a tenant's instance holds that tenant's entries only"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("routed Apply wrapper missing %q\n%s", want, got)

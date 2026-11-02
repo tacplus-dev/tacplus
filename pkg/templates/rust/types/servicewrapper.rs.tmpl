@@ -86,10 +86,11 @@ pub struct ValidationWrapper {
     approval_check: Arc<tokio::sync::RwLock<Option<approval::Check>>>,
 {{- end}}
 {{- if .HasTenantRoute}}
-    /// The tenant this instance serves (the `<t>` of its own `/tenants/<t>`
-    /// namespace), or empty for an instance that serves no single tenant. The
-    /// (spec.rpc).route_field backstop refuses a request routed elsewhere.
-    host_tenant: Arc<std::sync::RwLock<String>>,
+    /// The instance's own identity: the tid of its own subject, which the
+    /// (spec.rpc).route_field backstop admits, and its namespace claim, which
+    /// the record plane's route pin holds that tenant's entries to. The default
+    /// serves no single tenant.
+    host_identity: Arc<std::sync::RwLock<servicemanager::tenant_route::HostIdentity>>,
 {{- end}}
 }
 
@@ -108,28 +109,40 @@ impl ValidationWrapper {
             approval_check: Arc::new(tokio::sync::RwLock::new(None)),
 {{- end}}
 {{- if .HasTenantRoute}}
-            host_tenant: Arc::new(std::sync::RwLock::new(String::new())),
+            host_identity: Arc::new(std::sync::RwLock::new(Default::default())),
 {{- end}}
         }
     }
 {{- if .HasTenantRoute}}
 
-    /// Tells the wrapper the namespace its own instance runs in (the
-    /// authorizer's host namespace, from the instance's own identity). A
-    /// tenant-owned instance runs in `/tenants/<t>` and serves only calls
-    /// routed to `<t>`; any other namespace serves no single tenant, and the
-    /// backstop then only checks that the route field is a tid.
-    pub fn set_host_namespace(&self, namespace: &str) {
-        let tenant = servicemanager::tenant_route::host_tenant_of_namespace(namespace).unwrap_or_default();
-        *self.host_tenant.write().unwrap() = tenant;
+    /// Tells the wrapper its own instance's identity (the authorizer's host
+    /// identity, from the instance's own token). A tenant-owned instance's
+    /// subject is `/tenants/<tid>/services/<svc>` and its namespace
+    /// `/tenants/<name>` (kernel#23): it serves only calls routed to `<tid>`,
+    /// and holds their entries to `/tenants/<name>`. One whose subject names
+    /// no tid serves no routed call; a shared instance only checks that the
+    /// route field is a tid.
+    pub fn set_host_identity(&self, identity: servicemanager::tenant_route::HostIdentity) {
+        *self.host_identity.write().unwrap() = identity;
     }
 
     /// The (spec.rpc).route_field backstop, after request validation and before
     /// the handler: INVALID_ARGUMENT when the route field is not a tid,
     /// PERMISSION_DENIED when it names a tenant this instance does not serve.
     fn check_route_tenant(&self, field: &str, value: &str) -> Result<(), tonic::Status> {
-        let host = self.host_tenant.read().unwrap().clone();
+        let host = self.host_identity.read().unwrap().clone();
         servicemanager::tenant_route::check_routed_tenant(field, value, &host)
+    }
+
+    /// The namespace tenant `tid`'s entries live in on this instance, for the
+    /// record plane's route pin: the route field names the tenant by tid, an
+    /// entry by namespace. PERMISSION_DENIED for a tenant this instance does
+    /// not serve; never a namespace guessed from the tid on a tenant's
+    /// instance.
+    #[allow(dead_code)]
+    fn route_namespace(&self, tid: &str) -> Result<String, tonic::Status> {
+        let host = self.host_identity.read().unwrap().clone();
+        servicemanager::tenant_route::route_namespace(tid, &host)
     }
 {{- end}}
 

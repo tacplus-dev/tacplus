@@ -48,16 +48,18 @@ func TestRustServiceManagerPoolsTenantRoutedTargetsPerTenant(t *testing.T) {
 	}
 }
 
-// A routed service's wrapper is told the namespace its own instance runs in
-// (the authorizer's host namespace), so its backstop refuses a request routed
-// to another tenant; a platform service's wrapper has no such seam.
+// A routed service's wrapper is told its own instance's identity (the
+// authorizer's host identity: the tid of its subject and its namespace claim),
+// so its backstop refuses a request routed to another tenant and its record
+// plane holds entries to the instance's namespace; a platform service's
+// wrapper has no such seam.
 func TestRustServiceManagerTellsRoutedWrappersTheirTenant(t *testing.T) {
 	got := renderTenantRouteSM(t)
-	if !strings.Contains(got, "wrapper_crew.set_host_namespace(&self.authorizer.host_namespace());") {
-		t.Fatalf("routed wrapper must be told its instance's namespace:\n%s", got)
+	if !strings.Contains(got, "wrapper_crew.set_host_identity(self.authorizer.host_identity());") {
+		t.Fatalf("routed wrapper must be told its instance's identity:\n%s", got)
 	}
-	if strings.Contains(got, "wrapper_dock.set_host_namespace(") {
-		t.Fatalf("platform wrapper has no host namespace seam")
+	if strings.Contains(got, "wrapper_dock.set_host_identity(") {
+		t.Fatalf("platform wrapper has no host identity seam")
 	}
 }
 

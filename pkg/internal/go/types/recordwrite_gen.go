@@ -104,16 +104,25 @@ func goRecordTenantPin(base string, path []string, method, label, indent, failSt
 // goRecordRoutePin renders the routed half of the tenant guard (#207): on a
 // plane routed by tenant, the entry's tenant field must be in the tenant the
 // call is routed to. route is the routed request's route field getter
-// expression; the route check has already refused one that is not a tid. An
-// unset tenant field is refused too: an entry on a tenant's instance belongs
-// to that tenant, and the caller says so.
+// expression; the route check has already refused one that is not a tid, or
+// not this instance's. The route field names the tenant by tid and the entry by
+// namespace, which names it by name (/tenants/<name>, kernel#23), so the
+// instance's authorizer says which namespace that tid's entries live in
+// (RouteNamespace). An unset tenant field is refused too: an entry on a
+// tenant's instance belongs to that tenant, and the caller says so.
 func goRecordRoutePin(base string, path []string, route, label, indent, failStmt string) string {
 	if len(path) == 0 || route == "" {
 		return ""
 	}
 	get, _, _ := goEntryExpr(base, path)
-	return fmt.Sprintf(`%[1]sif __rt, __v := %[2]s, %[3]s; __v != "/tenants/"+__rt && !strings.HasPrefix(__v, "/tenants/"+__rt+"/") {
-%[1]s	%[4]s status.Error(codes.PermissionDenied, "%[5]s: %[6]s is not in tenant "+__rt+", the tenant this call is routed to; a tenant's instance holds that tenant's entries only")
+	return fmt.Sprintf(`%[1]sif __rt, __v := %[2]s, %[3]s; true {
+%[1]s	__rn, __err := p.routeNamespace(__rt)
+%[1]s	if __err != nil {
+%[1]s		%[4]s __err
+%[1]s	}
+%[1]s	if __v != __rn && !strings.HasPrefix(__v, __rn+"/") {
+%[1]s		%[4]s status.Error(codes.PermissionDenied, "%[5]s: %[6]s is not in tenant "+__rt+" ("+__rn+"), the tenant this call is routed to; a tenant's instance holds that tenant's entries only")
+%[1]s	}
 %[1]s}
 `, indent, route, get, failStmt, label, strings.Join(path, "."))
 }

@@ -94,11 +94,14 @@ func javaRecordTenantPin(base string, path []string, label, indent string) strin
 
 // javaRecordRoutePin renders the routed half of the tenant guard (#207): on a
 // plane routed by tenant, the entry's tenant field must be in the tenant the
-// call is routed to (/tenants/<tid> or below it), whoever the caller is, a
+// call is routed to (its namespace or below it), whoever the caller is, a
 // /system peer included. route is the routed request's route field getter
-// expression; the route check has already refused one that is not a tid. An
-// unset tenant field is refused too: an entry on a tenant's instance belongs
-// to that tenant, and the caller says so.
+// expression; the route check has already refused one that is not a tid, or
+// not this instance's. The route field names the tenant by tid and the entry by
+// namespace, which names it by name (/tenants/<name>, kernel#23), so the
+// instance's authorizer says which namespace that tid's entries live in
+// (routeNamespace). An unset tenant field is refused too: an entry on a
+// tenant's instance belongs to that tenant, and the caller says so.
 func javaRecordRoutePin(base string, path []string, route, label, indent string) string {
 	if len(path) == 0 || route == "" {
 		return ""
@@ -106,8 +109,9 @@ func javaRecordRoutePin(base string, path []string, route, label, indent string)
 	return fmt.Sprintf(`%[1]s{
 %[1]s    final String __rt = %[2]s;
 %[1]s    final String __v = %[3]s;
-%[1]s    if (!__v.equals("/tenants/" + __rt) && !__v.startsWith("/tenants/" + __rt + "/")) {
-%[1]s        throw new ProtoException(ProtoException.PERMISSION_DENIED, "%[4]s: %[5]s is not in tenant " + __rt + ", the tenant this call is routed to; a tenant's instance holds that tenant's entries only");
+%[1]s    final String __rn = routeNamespace(__rt);
+%[1]s    if (!__v.equals(__rn) && !__v.startsWith(__rn + "/")) {
+%[1]s        throw new ProtoException(ProtoException.PERMISSION_DENIED, "%[4]s: %[5]s is not in tenant " + __rt + " (" + __rn + "), the tenant this call is routed to; a tenant's instance holds that tenant's entries only");
 %[1]s    }
 %[1]s}
 `, indent, route, javaRecordGetter(base, path), label, strings.Join(path, "."))

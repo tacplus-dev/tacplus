@@ -149,8 +149,9 @@ fn skip(buf: &[u8], pos: &mut usize, n: usize) -> Option<()> {
 }
 
 /// The tenant segment of a namespace that is exactly `/tenants/<t>`, whatever
-/// `<t>` is, else `None`. This is the tenant a tenant-owned instance serves:
-/// one whose `<t>` is not a tid serves no routed call at all.
+/// `<t>` is, else `None`: an instance whose own namespace is one is
+/// tenant-owned. `<t>` is the tenant's name (kernel#23), not the tid it is
+/// routed by; that is its subject's (see [`HostIdentity`]).
 pub fn host_tenant_of_namespace(namespace: &str) -> Option<String> {
     let prefix = format!("/{}/", ::spiffe::TENANTS_SEGMENT);
     let tenant = namespace.strip_prefix(prefix.as_str())?;
@@ -180,20 +181,91 @@ pub fn tenant_of_spiffe_id(spiffe_id: &str) -> Option<String> {
     tenant_of_namespace(&parsed.namespace)
 }
 
+/// What a tenant-routed instance knows of its own identity, from its own
+/// service token. The two claims spell its tenant differently: a tenant-owned
+/// instance's subject is `/tenants/<tid>/services/<svc>` while its namespace
+/// stays `/tenants/<name>` (kernel#23). The routed tid is read from the
+/// subject, never from the namespace; the tenant door from the namespace,
+/// never from the subject.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostIdentity {
+    /// The instance's own namespace claim when it is exactly `/tenants/<t>`
+    /// (the tenant door), else empty: a shared instance.
+    pub tenant_namespace: String,
+    /// The instance's own namespace claim, whatever its depth.
+    pub namespace: String,
+    /// The tid of the instance's own subject, empty when it names none.
+    pub tid: String,
+}
+
+impl HostIdentity {
+    /// The identity of an instance with namespace claim `namespace` and
+    /// subject `subject` (a SPIFFE ID; see [`tenant_of_spiffe_id`]).
+    pub fn new(namespace: &str, subject: &str) -> Self {
+        Self {
+            tenant_namespace: if host_tenant_of_namespace(namespace).is_some() {
+                namespace.to_string()
+            } else {
+                String::new()
+            },
+            namespace: namespace.to_string(),
+            tid: tenant_of_spiffe_id(subject).unwrap_or_default(),
+        }
+    }
+
+    /// An instance that serves no single tenant: neither its namespace nor
+    /// its subject names one.
+    pub fn is_shared(&self) -> bool {
+        self.tid.is_empty() && self.tenant_namespace.is_empty()
+    }
+}
+
 /// The tenant-owned instance's backstop for a routed rpc, run after request
 /// validation and before the handler: the route field must be a tid
-/// (INVALID_ARGUMENT), and when the instance serves one tenant (`host_tenant`,
-/// its own `/tenants/<t>`; empty otherwise) it must be that one
-/// (PERMISSION_DENIED). A request routed elsewhere never reaches the handler.
-pub fn check_routed_tenant(field: &str, value: &str, host_tenant: &str) -> Result<(), tonic::Status> {
+/// (INVALID_ARGUMENT), and on a tenant-owned instance it must be the tid of
+/// the instance's own subject (PERMISSION_DENIED), never the tenant its
+/// namespace claim names (kernel#23). A tenant-owned instance whose subject
+/// names no tid serves no routed call; a shared instance checks the shape
+/// only. A request routed elsewhere never reaches the handler.
+pub fn check_routed_tenant(field: &str, value: &str, host: &HostIdentity) -> Result<(), tonic::Status> {
     let tenant = route_tenant(field, value)?;
-    if !host_tenant.is_empty() && tenant != host_tenant {
+    if host.is_shared() {
+        return Ok(());
+    }
+    if host.tid.is_empty() {
+        return Err(tonic::Status::permission_denied(format!(
+            "routed to tenant {}, this instance's subject names no tenant id",
+            tenant
+        )));
+    }
+    if tenant != host.tid {
         return Err(tonic::Status::permission_denied(format!(
             "routed to tenant {}, this instance serves tenant {}",
-            tenant, host_tenant
+            tenant, host.tid
         )));
     }
     Ok(())
+}
+
+/// The namespace tenant `tid`'s entries live in on this instance, for the
+/// record plane's route pin: the route field names the tenant by tid, an entry
+/// by namespace, which names it by name. [`check_routed_tenant`] has admitted
+/// `tid` before the record plane asks, so on a tenant-owned instance it is the
+/// instance's own tid, and its entries live in the instance's own namespace
+/// claim. A shared instance knows no tenant's name, so it holds `tid`'s
+/// entries to `/tenants/<tid>`. An instance that serves another tenant, or
+/// none it can name, has none: PERMISSION_DENIED.
+pub fn route_namespace(tid: &str, host: &HostIdentity) -> Result<String, tonic::Status> {
+    if host.is_shared() {
+        return Ok(format!("/{}/{}", ::spiffe::TENANTS_SEGMENT, tid));
+    }
+    if host.tid.is_empty() || tid != host.tid || host.namespace.is_empty() {
+        return Err(tonic::Status::permission_denied(format!(
+            "this instance does not serve tenant {}",
+            shown(tid)
+        )));
+    }
+    Ok(host.namespace.clone())
 }
 
 #[cfg(test)]
@@ -327,18 +399,71 @@ mod tests {
 
     #[test]
     fn backstop_refuses_malformed_and_another_tenant() {
-        check_routed_tenant("tenant", "aaaaaaaa", "aaaaaaaa").unwrap();
-        // An instance that serves no single tenant only checks the shape.
-        check_routed_tenant("tenant", "bbbbbbbb", "").unwrap();
-        let err = check_routed_tenant("tenant", "", "aaaaaaaa").unwrap_err();
+        // Tenant beta's instance since kernel#23: tid in the subject, name in
+        // the namespace.
+        let beta = HostIdentity::new("/tenants/beta", "spiffe://example.com/tenants/bbbbbbbb/services/crew");
+        assert_eq!(beta.tenant_namespace, "/tenants/beta");
+        assert_eq!(beta.tid, "bbbbbbbb");
+        check_routed_tenant("tenant", "bbbbbbbb", &beta).unwrap();
+        let err = check_routed_tenant("tenant", "", &beta).unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        let err = check_routed_tenant("tenant", "aaaaaaaa", &beta).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(err.message().contains("routed to tenant aaaaaaaa, this instance serves tenant bbbbbbbb"), "{}", err.message());
+
+        // An instance that serves no single tenant only checks the shape.
+        for host in [
+            HostIdentity::default(),
+            HostIdentity::new("/system", "spiffe://example.com/system/services/crew"),
+            HostIdentity::new("/system/us-east", ""),
+        ] {
+            assert!(host.is_shared(), "{host:?}");
+            check_routed_tenant("tenant", "bbbbbbbb", &host).unwrap();
+            let err = check_routed_tenant("tenant", "BBBBBBBB", &host).unwrap_err();
+            assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        }
         assert_eq!(host_tenant_of_namespace("/tenants/beta").as_deref(), Some("beta"));
         assert_eq!(host_tenant_of_namespace("/system"), None);
-        // An instance of a tenant whose name is not a tid serves no routed call.
-        let err = check_routed_tenant("tenant", "aaaaaaaa", "beta").unwrap_err();
+
+        // A tenant-owned instance whose subject names no tid serves no routed
+        // call: a name-form subject from before kernel#23, or a namespace that
+        // merely looks like a tid, is never read as one.
+        for host in [
+            HostIdentity::new("/tenants/beta", "spiffe://example.com/tenants/beta/services/crew"),
+            HostIdentity::new("/tenants/bbbbbbbb", "spiffe://example.com/system/services/crew"),
+        ] {
+            assert!(!host.is_shared(), "{host:?}");
+            for tid in ["bbbbbbbb", "aaaaaaaa"] {
+                let err = check_routed_tenant("tenant", tid, &host).unwrap_err();
+                assert_eq!(err.code(), tonic::Code::PermissionDenied, "{host:?} routed to {tid}");
+                let err = route_namespace(tid, &host).unwrap_err();
+                assert_eq!(err.code(), tonic::Code::PermissionDenied, "{host:?} route namespace of {tid}");
+            }
+        }
+        let err = check_routed_tenant(
+            "tenant",
+            "bbbbbbbb",
+            &HostIdentity::new("/tenants/beta", "spiffe://example.com/tenants/beta/services/crew"),
+        )
+        .unwrap_err();
+        assert!(err.message().contains("this instance's subject names no tenant id"), "{}", err.message());
+    }
+
+    // The record plane's route pin: tenant bbbbbbbb's entries live in the
+    // instance's own namespace, the name its subject's tid does not spell.
+    #[test]
+    fn route_namespace_is_the_instance_namespace_claim() {
+        let beta = HostIdentity::new("/tenants/beta", "spiffe://example.com/tenants/bbbbbbbb/services/crew");
+        assert_eq!(route_namespace("bbbbbbbb", &beta).unwrap(), "/tenants/beta");
+        let err = route_namespace("aaaaaaaa", &beta).unwrap_err();
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
-        let err = check_routed_tenant("tenant", "bbbbbbbb", "aaaaaaaa").unwrap_err();
-        assert_eq!(err.code(), tonic::Code::PermissionDenied);
-        assert!(err.message().contains("routed to tenant bbbbbbbb, this instance serves tenant aaaaaaaa"), "{}", err.message());
+        assert!(err.message().contains("this instance does not serve tenant aaaaaaaa"), "{}", err.message());
+        // A tid subject with no namespace claim names no namespace to hold to.
+        let nameless = HostIdentity::new("", "spiffe://example.com/tenants/bbbbbbbb/services/crew");
+        assert_eq!(route_namespace("bbbbbbbb", &nameless).unwrap_err().code(), tonic::Code::PermissionDenied);
+        // A shared instance knows no tenant's name.
+        let shared = HostIdentity::new("/system", "spiffe://example.com/system/services/crew");
+        assert_eq!(route_namespace("aaaaaaaa", &shared).unwrap(), "/tenants/aaaaaaaa");
+        assert_eq!(route_namespace("aaaaaaaa", &HostIdentity::default()).unwrap(), "/tenants/aaaaaaaa");
     }
 }

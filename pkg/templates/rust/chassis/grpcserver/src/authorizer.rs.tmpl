@@ -180,6 +180,10 @@ pub struct Authorizer {
     /// The instance's own tenant namespace ("/tenants/<t>"), or empty for a
     /// shared instance. See [`set_host_namespace`](Self::set_host_namespace).
     host_tenant: RwLock<String>,
+    /// The instance's own identity, for the tenant-routing backstop and the
+    /// record plane's route pin: its namespace claim and the tid of its own
+    /// subject. See [`set_host_identity`](Self::set_host_identity).
+    host_identity: RwLock<servicemanager::tenant_route::HostIdentity>,
 }
 
 /// The service identity baked in at code generation time.
@@ -214,6 +218,7 @@ impl Authorizer {
             method_actor_patterns: RwLock::new(HashMap::new()),
             method_any_tenant: RwLock::new(HashSet::new()),
             host_tenant: RwLock::new(String::new()),
+            host_identity: RwLock::new(Default::default()),
         }
     }
 
@@ -227,6 +232,7 @@ impl Authorizer {
             method_actor_patterns: RwLock::new(HashMap::new()),
             method_any_tenant: RwLock::new(HashSet::new()),
             host_tenant: RwLock::new(String::new()),
+            host_identity: RwLock::new(Default::default()),
         }
     }
 
@@ -241,18 +247,39 @@ impl Authorizer {
     /// token is admitted on any RPC with no target_namespace_field. Any other
     /// namespace (a shared instance's /system or below) leaves the authorizer
     /// exactly as it was.
+    ///
+    /// The door only: an instance told nothing more serves no routed call when
+    /// its namespace is a tenant's (see [`host_identity`](Self::host_identity)).
     pub fn set_host_namespace(&self, namespace: &str) {
         let tenant = if is_tenant_namespace(namespace) { namespace } else { "" };
         *self.host_tenant.write().unwrap() = tenant.to_string();
+        *self.host_identity.write().unwrap() = servicemanager::tenant_route::HostIdentity {
+            tenant_namespace: tenant.to_string(),
+            ..Default::default()
+        };
     }
 
-    /// [`set_host_namespace`](Self::set_host_namespace) with the namespace read
-    /// from the instance's own service token.
+    /// Tells the authorizer the instance's own identity: its namespace claim,
+    /// the tenant door ([`set_host_namespace`](Self::set_host_namespace)), and
+    /// its subject, whose tid is the tenant the routing backstop admits. The
+    /// two spell the tenant differently: a tenant-owned instance's subject is
+    /// `/tenants/<tid>/services/<svc>` while its namespace stays
+    /// `/tenants/<name>` (kernel#23), so the routed tid is read from the
+    /// subject, never from the namespace, and the door from the namespace,
+    /// never from the subject.
+    pub fn set_host_identity(&self, namespace: &str, subject: &str) {
+        self.set_host_namespace(namespace);
+        *self.host_identity.write().unwrap() =
+            servicemanager::tenant_route::HostIdentity::new(namespace, subject);
+    }
+
+    /// [`set_host_identity`](Self::set_host_identity) with the namespace and
+    /// subject read from the instance's own service token.
     pub fn set_host_namespace_from_token(&self, token_str: &str) -> Result<()> {
         let tw = token::Token::parse(token_str).map_err(|e| {
             AuthorizerError::unauthenticated(format!("own identity token: {}", e))
         })?;
-        self.set_host_namespace(tw.namespace().unwrap_or(""));
+        self.set_host_identity(tw.namespace().unwrap_or(""), tw.subject().unwrap_or(""));
         Ok(())
     }
 
@@ -262,6 +289,15 @@ impl Authorizer {
     /// request routed to any other tenant.
     pub fn host_namespace(&self) -> String {
         self.host_tenant.read().unwrap().clone()
+    }
+
+    /// The instance's own identity, what
+    /// [`set_host_identity`](Self::set_host_identity) recorded: a generated
+    /// service wrapper's tenant-routing backstop admits only the tid of its
+    /// subject, and its record plane holds that tenant's entries to its
+    /// namespace claim.
+    pub fn host_identity(&self) -> servicemanager::tenant_route::HostIdentity {
+        self.host_identity.read().unwrap().clone()
     }
 
     /// Registers an rpc declaring RPC_FLAG_ANY_TENANT: on a tenant-owned
@@ -1702,6 +1738,105 @@ mod authorizer_behavior_tests {
                 .await
                 .unwrap_or_else(|e| panic!("host {host:?} must admit /tenants/acme: {e}"));
         }
+    }
+
+    // A tenant-owned caller is in the tenant of its namespace claim, never of
+    // its subject: since kernel#23 its subject is /tenants/<tid>/services/<svc>
+    // while its namespace stays /tenants/<name>. Beta's own service, minted
+    // under beta's tid, passes beta's door; another tenant's caller does not,
+    // whatever its subject spells.
+    #[tokio::test]
+    async fn caller_tenant_is_the_namespace_claim_not_the_subject() {
+        let key = new_test_key();
+        let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        a.set_method_auth(METHOD_KEY, &["caller-svc"]);
+        a.set_host_identity("/tenants/beta", "spiffe://example.com/tenants/bbbbbbbb/services/demo");
+        let caller = |sub: &'static str, ns: &'static str| {
+            signed_token(&key, now_plus(3600), SERVICE_NAME, move |tok| {
+                tok.set_sub_type("service").expect("sub_type");
+                tok.set_subject(sub).expect("subject");
+                tok.set_namespace(ns).expect("namespace");
+            })
+        };
+        let own = caller("spiffe://example.com/tenants/bbbbbbbb/services/caller-svc", "/tenants/beta");
+        a.authorize_grpc(TEST_METHOD, METHOD, Some(&own), &empty_md())
+            .await
+            .unwrap_or_else(|e| panic!("beta's caller with a tid subject must pass beta's door: {e}"));
+        a.authenticate(Some(&own))
+            .unwrap_or_else(|e| panic!("authenticate: beta's caller with a tid subject must pass: {e}"));
+        a.check_caller_at_or_below(Some(&own), "/tenants/beta/users/u1")
+            .unwrap_or_else(|e| panic!("beta's caller is at-or-above /tenants/beta/users/u1: {e}"));
+        let err = a
+            .check_caller_at_or_below(Some(&own), "/tenants/bbbbbbbb")
+            .err()
+            .expect("the caller's subject tid is not its namespace");
+        assert_eq!(err.code, 7);
+        for sub in [
+            "spiffe://example.com/tenants/beta/services/caller-svc",
+            "spiffe://example.com/tenants/bbbbbbbb/services/caller-svc",
+        ] {
+            let err = a
+                .authorize_grpc(TEST_METHOD, METHOD, Some(&caller(sub, "/tenants/acme")), &empty_md())
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("acme's caller (subject {sub}) must be refused by beta's instance"));
+            assert_eq!(err.code, 7, "acme's caller (subject {sub}): want PERMISSION_DENIED, got {err}");
+        }
+    }
+
+    // The instance's own identity, read from its own token: the door is its
+    // namespace claim (/tenants/beta), the routed tenant the tid of its subject
+    // (bbbbbbbb), never the other way round (kernel#23). The wrapper's routing
+    // backstop and record route pin run on this identity.
+    #[test]
+    fn host_identity_from_own_token() {
+        use servicemanager::tenant_route::{check_routed_tenant, route_namespace};
+        let key = new_test_key();
+        let owned = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        let host_token = signed_token(&key, now_plus(3600), SERVICE_NAME, |tok| {
+            tok.set_sub_type("service").expect("sub_type");
+            tok.set_subject("spiffe://example.com/tenants/bbbbbbbb/services/demo").expect("subject");
+            tok.set_namespace("/tenants/beta").expect("namespace");
+        });
+        // The identity manager hands out the bare token, no "Bearer " scheme.
+        let host_token = host_token.strip_prefix("Bearer ").expect("bearer");
+        owned.set_host_namespace_from_token(host_token).expect("own token");
+        assert_eq!(owned.host_namespace(), "/tenants/beta");
+        let host = owned.host_identity();
+        assert_eq!(host.tid, "bbbbbbbb");
+        assert_eq!(host.namespace, "/tenants/beta");
+        check_routed_tenant("host", "bbbbbbbb", &host).expect("instance of bbbbbbbb accepts a call routed to bbbbbbbb");
+        let err = check_routed_tenant("host", "aaaaaaaa", &host).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(err.message().contains("aaaaaaaa") && err.message().contains("bbbbbbbb"), "{}", err.message());
+        assert_eq!(route_namespace("bbbbbbbb", &host).unwrap(), "/tenants/beta");
+        assert_eq!(route_namespace("aaaaaaaa", &host).unwrap_err().code(), tonic::Code::PermissionDenied);
+
+        let shared = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        shared.set_host_identity("/system", "spiffe://example.com/system/services/demo");
+        check_routed_tenant("host", "aaaaaaaa", &shared.host_identity()).expect("a shared instance checks the shape only");
+        assert_eq!(route_namespace("aaaaaaaa", &shared.host_identity()).unwrap(), "/tenants/aaaaaaaa");
+
+        // A tenant-owned instance whose subject names no tid serves no routed
+        // call: a name-form subject from before kernel#23, a namespace that
+        // merely looks like a tid, or a door set with no identity at all.
+        for (ns, sub) in [
+            ("/tenants/beta", "spiffe://example.com/tenants/beta/services/demo"),
+            ("/tenants/bbbbbbbb", "spiffe://example.com/system/services/demo"),
+        ] {
+            let no_tid = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+            no_tid.set_host_identity(ns, sub);
+            for tid in ["bbbbbbbb", "aaaaaaaa"] {
+                let err = check_routed_tenant("host", tid, &no_tid.host_identity()).unwrap_err();
+                assert_eq!(err.code(), tonic::Code::PermissionDenied, "instance ({ns}, {sub}) routed to {tid}");
+                let err = route_namespace(tid, &no_tid.host_identity()).unwrap_err();
+                assert_eq!(err.code(), tonic::Code::PermissionDenied, "instance ({ns}, {sub}) route namespace of {tid}");
+            }
+        }
+        let door_only = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        door_only.set_host_namespace("/tenants/beta");
+        let err = check_routed_tenant("host", "bbbbbbbb", &door_only.host_identity()).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
     }
 
     // RPC_FLAG_ANY_TENANT opens a tenant-owned instance's door for that rpc

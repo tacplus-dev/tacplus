@@ -638,6 +638,46 @@ func TestAuthorizerTenantOwnedInstanceRefusesOtherTenant(t *testing.T) {
 	}
 }
 
+// A tenant-owned caller is in the tenant of its namespace claim, never of its
+// subject: since kernel#23 its subject is /tenants/<tid>/services/<svc> while
+// its namespace stays /tenants/<name>. Beta's own service, minted under beta's
+// tid, passes beta's door; another tenant's caller does not, whatever its
+// subject spells.
+func TestAuthorizerCallerTenantIsTheNamespaceClaimNotTheSubject(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
+	a.SetHostIdentity("/tenants/beta", "spiffe://example.com/tenants/bbbbbbbb/services/demo")
+
+	caller := func(sub, ns string) string {
+		return signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
+			tok.SetSubType("service").SetSubject(sub).SetNamespace(ns)
+		})
+	}
+	own := caller("spiffe://example.com/tenants/bbbbbbbb/services/caller-svc", "/tenants/beta")
+	if _, err := a.Authorize(bearerCtx(own), testMethod, nil); err != nil {
+		t.Fatalf("beta's caller with a tid subject must pass beta's door, got: %v", err)
+	}
+	if _, err := a.Authenticate(bearerCtx(own)); err != nil {
+		t.Fatalf("Authenticate: beta's caller with a tid subject must pass, got: %v", err)
+	}
+	if _, err := a.AuthenticateAtOrBelow(bearerCtx(own), "/tenants/beta/users/u1"); err != nil {
+		t.Fatalf("AuthenticateAtOrBelow: beta's caller is at-or-above /tenants/beta/users/u1, got: %v", err)
+	}
+	if _, err := a.AuthenticateAtOrBelow(bearerCtx(own), "/tenants/bbbbbbbb"); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("AuthenticateAtOrBelow: the caller's subject tid is not its namespace, got: %v", err)
+	}
+	for _, sub := range []string{
+		"spiffe://example.com/tenants/beta/services/caller-svc",
+		"spiffe://example.com/tenants/bbbbbbbb/services/caller-svc",
+	} {
+		other := caller(sub, "/tenants/acme")
+		if _, err := a.Authorize(bearerCtx(other), testMethod, nil); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("acme's caller (subject %s) must be refused by beta's instance, got: %v", sub, err)
+		}
+	}
+}
+
 // A shared instance (a /system namespace) and an unset host namespace admit
 // every tenant, as before.
 func TestAuthorizerSharedInstanceAdmitsAnyTenant(t *testing.T) {
@@ -712,10 +752,13 @@ func TestAuthorizerAnyTenantOpensTheDoorForThatRpcOnly(t *testing.T) {
 }
 
 // The server-side routing backstop: a routed rpc's request must name a tid
-// (INVALID_ARGUMENT otherwise) and, on a tenant-owned instance, the instance's
-// own tenant (PERMISSION_DENIED otherwise). A shared instance checks the shape
-// only. A wrapper asking about an rpc with no registered route field is a
-// generation bug and fails closed.
+// (INVALID_ARGUMENT otherwise) and, on a tenant-owned instance, the tid of the
+// instance's own subject (PERMISSION_DENIED otherwise), never the tenant its
+// namespace claim names: since kernel#23 the instance of tenant beta (tid
+// bbbbbbbb) has subject /tenants/bbbbbbbb/services/<svc> and namespace
+// /tenants/beta. A shared instance checks the shape only. A wrapper asking
+// about an rpc with no registered route field is a generation bug and fails
+// closed.
 func TestAuthorizerCheckRouteBackstop(t *testing.T) {
 	const routedKey = "demo.DemoService/DoThing"
 	req := func(v string) any { return &host_pb.Host{Host: v} }
@@ -732,9 +775,15 @@ func TestAuthorizerCheckRouteBackstop(t *testing.T) {
 		}
 	}
 
+	key := newTestKey(t)
 	owned := authorizerWithKeys(t)
 	owned.SetMethodRouteField(routedKey, "host")
-	owned.SetHostNamespace("/tenants/bbbbbbbb")
+	hostToken := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
+		tok.SetSubType("service").SetSubject("spiffe://example.com/tenants/bbbbbbbb/services/demo").SetNamespace("/tenants/beta")
+	})
+	if err := owned.SetHostNamespaceFromToken(hostToken); err != nil {
+		t.Fatalf("SetHostNamespaceFromToken: %v", err)
+	}
 	if err := owned.CheckRoute(testMethod, req("bbbbbbbb")); err != nil {
 		t.Fatalf("instance of bbbbbbbb must accept a call routed to bbbbbbbb, got: %v", err)
 	}
@@ -751,5 +800,37 @@ func TestAuthorizerCheckRouteBackstop(t *testing.T) {
 
 	if err := owned.CheckRoute("/demo.DemoService/Unrouted", req("bbbbbbbb")); status.Code(err) != codes.Internal {
 		t.Fatalf("an rpc with no registered route field must fail closed, got %v", err)
+	}
+
+	// The record plane's route pin: tenant bbbbbbbb's entries live in the
+	// instance's own namespace, the name its subject's tid does not spell.
+	if ns, err := owned.RouteNamespace("bbbbbbbb"); err != nil || ns != "/tenants/beta" {
+		t.Fatalf("RouteNamespace(bbbbbbbb) on beta's instance = %q, %v; want /tenants/beta", ns, err)
+	}
+	if _, err := owned.RouteNamespace("aaaaaaaa"); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("RouteNamespace of another tenant must be refused, got %v", err)
+	}
+	if ns, err := shared.RouteNamespace("aaaaaaaa"); err != nil || ns != "/tenants/aaaaaaaa" {
+		t.Fatalf("RouteNamespace on a shared instance = %q, %v; want /tenants/aaaaaaaa", ns, err)
+	}
+
+	// A tenant-owned instance whose subject names no tid serves no routed
+	// call: a name-form subject from before kernel#23, or a namespace that
+	// merely looks like a tid, is never read as one.
+	for _, id := range []struct{ ns, sub string }{
+		{"/tenants/beta", "spiffe://example.com/tenants/beta/services/demo"},
+		{"/tenants/bbbbbbbb", "spiffe://example.com/system/services/demo"},
+	} {
+		noTid := authorizerWithKeys(t)
+		noTid.SetMethodRouteField(routedKey, "host")
+		noTid.SetHostIdentity(id.ns, id.sub)
+		for _, tid := range []string{"bbbbbbbb", "aaaaaaaa"} {
+			if err := noTid.CheckRoute(testMethod, req(tid)); status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("instance %+v must refuse a call routed to %s, got %v", id, tid, err)
+			}
+			if _, err := noTid.RouteNamespace(tid); status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("instance %+v: RouteNamespace(%s) must be refused, got %v", id, tid, err)
+			}
+		}
 	}
 }

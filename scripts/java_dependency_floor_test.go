@@ -4,7 +4,9 @@
 package scripts
 
 import (
+	"encoding/xml"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -82,6 +84,43 @@ func TestJavaDependencyPinsMeetTheirFloors(t *testing.T) {
 	}
 	if poms == 0 {
 		t.Fatal("no cross-test Java pom found")
+	}
+}
+
+// TestJavaGcsArchiveDependencyJoinsTheProjectDependencies: the compile pom
+// holds two <dependencies> blocks once it pins under <dependencyManagement>,
+// and the GCS SDK a GcsArchiveSink build compiles against must go into the
+// project's, not the managed one, where it puts nothing on the classpath.
+func TestJavaGcsArchiveDependencyJoinsTheProjectDependencies(t *testing.T) {
+	pom := filepath.Join(t.TempDir(), "pom.xml")
+	script := `. ../cross-test/lib/java-compile.sh && write_java_compile_pom "$1" /nonexistent && add_java_gcs_archive_dependency "$1"`
+	if out, err := exec.Command("bash", "-c", script, "bash", pom).CombinedOutput(); err != nil {
+		t.Fatalf("writing the compile pom: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(pom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type dependency struct {
+		ArtifactID string `xml:"artifactId"`
+	}
+	var project struct {
+		Dependencies []dependency `xml:"dependencies>dependency"`
+		Managed      []dependency `xml:"dependencyManagement>dependencies>dependency"`
+	}
+	if err := xml.Unmarshal(data, &project); err != nil {
+		t.Fatalf("parsing %s: %v", pom, err)
+	}
+	has := func(deps []dependency) bool {
+		for _, d := range deps {
+			if d.ArtifactID == "google-cloud-storage" {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(project.Dependencies) || has(project.Managed) {
+		t.Errorf("google-cloud-storage is not (only) a project dependency:\n%s", data)
 	}
 }
 

@@ -31,12 +31,15 @@ add_java_gcs_archive_dependency() {
 import sys
 pom, version = sys.argv[1], sys.argv[2]
 text = open(pom).read()
-if text.count("</dependencies>") != 1:
-    sys.exit("expected exactly one </dependencies> in " + pom)
-dep = ("  <dependency>\n    <groupId>com.google.cloud</groupId>\n"
-       "    <artifactId>google-cloud-storage</artifactId>\n"
-       "    <version>" + version + "</version>\n  </dependency>\n  ")
-open(pom, "w").write(text.replace("</dependencies>", dep + "</dependencies>"))
+# The project-level </dependencies>, at two spaces: the <dependencyManagement>
+# block closes its own at four.
+end = "\n  </dependencies>\n"
+if text.count(end) != 1:
+    sys.exit("expected exactly one project-level </dependencies> in " + pom)
+dep = ("\n    <dependency>\n      <groupId>com.google.cloud</groupId>\n"
+       "      <artifactId>google-cloud-storage</artifactId>\n"
+       "      <version>" + version + "</version>\n    </dependency>")
+open(pom, "w").write(text.replace(end, dep + end))
 ' "$pom" "$GCS_ARCHIVE_SDK_VERSION"
 }
 

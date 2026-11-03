@@ -31,6 +31,27 @@ for t in "${gen[@]}"; do
     *) echo "not a program: $t" >&2; exit 1 ;;
   esac
 done
+# docker-buildx (build image only) is built from source with dependencies
+# bumped past advisories its release has not taken yet (build.Dockerfile,
+# buildx stage): it must start, and carry each module at least at its floor.
+if [[ "${TACPLUS_IMAGE:-build}" == build ]]; then
+  docker buildx version
+  buildx=/usr/local/libexec/docker/cli-plugins/docker-buildx
+  for floor in github.com/moby/go-archive@v0.3.0 golang.org/x/net@v0.62.0; do
+    mod=${floor%@*} min=${floor#*@}
+    have=$(go version -m "$buildx" | awk -v m="$mod" '$1 == "dep" && $2 == m { print $3 }')
+    [[ -n "$have" && "$(printf '%s\n%s\n' "$min" "$have" | sort -V | head -n 1)" == "$min" ]] \
+      || { echo "docker-buildx carries $mod ${have:-none}, below $min" >&2; exit 1; }
+  done
+  # Maven's guava is replaced past its advisories (base.Dockerfile, #222): one
+  # guava in Maven's lib/, at least at its floor.
+  guava=(/usr/share/maven/lib/guava-*.jar)
+  [[ ${#guava[@]} -eq 1 ]] || { echo "Maven's lib/ carries ${#guava[@]} guava jars" >&2; exit 1; }
+  have=${guava[0]##*/guava-} have=${have%-jre.jar}
+  [[ "$(printf '%s\n%s\n' 33.7.2 "$have" | sort -V | head -n 1)" == 33.7.2 ]] \
+    || { echo "Maven carries guava $have, below 33.7.2" >&2; exit 1; }
+  mvn --version
+fi
 python3 -c 'import grpc_tools.protoc'
 protoc --version; protoc-gen-swift --version; protoc-gen-grpc-swift-2 --version; node --version
 if [[ "${TACPLUS_IMAGE:-build}" == build ]]; then

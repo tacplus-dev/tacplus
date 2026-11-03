@@ -342,14 +342,14 @@ public class TenantRecordRouteTest {
             fail("beta's caller's entry reached the store in \"" + lastNs + "\"; want " + B_NS);
         }
         wantRefused("beta's caller naming its subject's tid as the entry's tenant", TenantRecordRouteTest.<Tquery.RecordWriteResult>as(b, B_NS, bCallerSubject,
-            (s, o) -> s.putTMessage(put(B, "m2", "/tenants/" + B), o)), Status.Code.INVALID_ARGUMENT, "names a tenant other than the caller's");
+            (s, o) -> s.putTMessage(put(B, "m2", "/tenants/" + B), o)), Status.Code.INVALID_ARGUMENT, "names a tenant the caller neither owns nor is linked to");
         wantRefused("alpha's caller with beta's tid subject, at beta's door", TenantRecordRouteTest.<Tquery.RecordWriteResult>as(b, A_NS, bCallerSubject,
             (s, o) -> s.putTMessage(put(B, "m1", A_NS), o)), Status.Code.PERMISSION_DENIED, null);
         TenantRecordMap doorOpen = serverDoorOpen();
         wantRefused("alpha's caller with beta's tid subject, its own entry past the door", TenantRecordRouteTest.<Tquery.RecordWriteResult>as(doorOpen, A_NS, bCallerSubject,
             (s, o) -> s.putTMessage(put(B, "m1", A_NS), o)), Status.Code.PERMISSION_DENIED, "item.namespace " + NOT_IN_B);
         wantRefused("alpha's caller with beta's tid subject, beta's entry past the door", TenantRecordRouteTest.<Tquery.RecordWriteResult>as(doorOpen, A_NS, bCallerSubject,
-            (s, o) -> s.putTMessage(put(B, "m1", B_NS), o)), Status.Code.INVALID_ARGUMENT, "names a tenant other than the caller's");
+            (s, o) -> s.putTMessage(put(B, "m1", B_NS), o)), Status.Code.INVALID_ARGUMENT, "names a tenant the caller neither owns nor is linked to");
 
         if (failures > 0) {
             System.err.println(failures + " tenant record route check(s) failed");

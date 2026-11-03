@@ -203,14 +203,14 @@ func TestTenantRecordCallerTenantIsTheNamespaceClaim(t *testing.T) {
 		t.Fatalf("beta's caller's entry reached the handler in %q; want /tenants/beta", h.lastNs)
 	}
 	_, err := beta.PutTMessage(ctx, &types.PutTMessageRequest{TargetTenant: "bbbbbbbb", Item: msg("m2", "/tenants/bbbbbbbb")})
-	refusedAfter(t, h, 1, err, codes.InvalidArgument, "names a tenant other than the caller's")
+	refusedAfter(t, h, 1, err, codes.InvalidArgument, "names a tenant the caller neither owns nor is linked to")
 
 	h2 := &routeHandler{}
 	alpha := instanceOfBFor(t, h2, "/tenants/alpha", "spiffe://example.com/tenants/bbbbbbbb/services/tmessaging")
 	_, err = alpha.PutTMessage(ctx, &types.PutTMessageRequest{TargetTenant: "bbbbbbbb", Item: msg("m1", "/tenants/alpha")})
 	refused(t, h2, err, codes.PermissionDenied, "item.namespace is not in tenant bbbbbbbb (/tenants/beta)")
 	_, err = alpha.PutTMessage(ctx, &types.PutTMessageRequest{TargetTenant: "bbbbbbbb", Item: msg("m1", "/tenants/beta")})
-	refused(t, h2, err, codes.InvalidArgument, "names a tenant other than the caller's")
+	refused(t, h2, err, codes.InvalidArgument, "names a tenant the caller neither owns nor is linked to")
 }
 
 func refusedAfter(t *testing.T, h *routeHandler, served int, err error, code codes.Code, substr string) {

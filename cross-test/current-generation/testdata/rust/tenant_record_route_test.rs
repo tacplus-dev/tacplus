@@ -394,7 +394,7 @@ async fn callers_tenant_is_its_namespace_claim() {
     beta.put("bbbbbbbb", "/tenants/beta").await.expect("beta's own caller must be served by beta's instance");
     assert_eq!(beta.reached(), 1, "the write must reach the store");
     assert_eq!(beta.last_ns(), "/tenants/beta", "beta's caller's entry must reach the store in /tenants/beta");
-    refused_after(&beta, 1, beta.put("bbbbbbbb", "/tenants/bbbbbbbb").await, Code::InvalidArgument, "names a tenant other than the caller's");
+    refused_after(&beta, 1, beta.put("bbbbbbbb", "/tenants/bbbbbbbb").await, Code::InvalidArgument, "names a tenant the caller neither owns nor is linked to");
 
     let alpha = instance(BETA_PEER, "/tenants/alpha").await;
     for ns in ["/tenants/alpha", "/tenants/beta"] {

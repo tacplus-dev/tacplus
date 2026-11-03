@@ -5,7 +5,9 @@
 # Usage:  scripts/images-tags.sh <ref_type> <ref_name> <sha>
 #
 # Run from the repository checkout, with its tags fetched. Prints the tags,
-# space-separated. A branch push gets main-<sha7> and main. A release tag vX.Y.Z
+# space-separated. A branch push gets main-<sha7> and main. A line rebuild (a run
+# on release/X.Y, #283) gets X.Y only: it refreshes the line's floating image and
+# never moves main, latest or X, nor any immutable X.Y.Z. A release tag vX.Y.Z
 # gets X.Y.Z, and each floating tag of docs/VERSIONING.md only when it is the
 # highest release that tag covers: X.Y the newest X.Y.x, X the newest X.x,
 # latest the newest of all. Releases are cut on several lines in parallel, so a
@@ -18,6 +20,10 @@ ref_name="$2"
 sha="$3"
 
 if [[ "$ref_type" != tag ]]; then
+  if [[ "$ref_name" =~ ^release/([0-9]+\.[0-9]+)$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+    exit 0
+  fi
   echo "main-${sha::7} main"
   exit 0
 fi

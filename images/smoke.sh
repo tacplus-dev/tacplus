@@ -41,6 +41,14 @@ for floor in github.com/moby/go-archive@v0.3.0 golang.org/x/net@v0.62.0; do
   [[ -n "$have" && "$(printf '%s\n%s\n' "$min" "$have" | sort -V | head -n 1)" == "$min" ]] \
     || { echo "docker-buildx carries $mod ${have:-none}, below $min" >&2; exit 1; }
 done
+# Maven's guava is replaced past its advisories (base.Dockerfile, #222): one
+# guava in Maven's lib/, at least at its floor.
+guava=(/usr/share/maven/lib/guava-*.jar)
+[[ ${#guava[@]} -eq 1 && -f ${guava[0]} ]] || { echo "Maven's lib/ carries ${#guava[@]} guava jars" >&2; exit 1; }
+have=${guava[0]##*/guava-} have=${have%-jre.jar}
+[[ "$(printf '%s\n%s\n' 33.7.2 "$have" | sort -V | head -n 1)" == 33.7.2 ]] \
+  || { echo "Maven carries guava $have, below 33.7.2" >&2; exit 1; }
+mvn --version
 python3 -c 'import grpc_tools.protoc'
 protoc --version; protoc-gen-swift --version; protoc-gen-grpc-swift-2 --version; node --version
 go version; java -version 2>&1 | head -1; cargo --version; swift --version 2>&1 | head -1; dotnet --version

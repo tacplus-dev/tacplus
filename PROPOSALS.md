@@ -111,6 +111,10 @@ the looper then marks it `promoted` or `declined` here with the date.
   then the `buildx` stage, copying it from `docker:${DOCKER_VERSION}-cli` again); `tacplus-smoke` keeps the floors.
   A nightly check that the image's Go binaries carry no module under a known fix (what Trivy found here) before the
   sweep fails would make the next one a patch rather than a red run.
+- **Drop the replaced Maven guava once a Maven release bundles 33.7.2 or later** (2026-11-02, #222): Maven 3.9.16
+  (the newest 3.9) ships guava 33.6.0-jre (CVE-2026-102554), so `images/base.Dockerfile` swaps in
+  `MAVEN_GUAVA_VERSION` (checksum-pinned). When a Maven release ships a fixed guava, drop the swap;
+  `tacplus-smoke` keeps the floor.
 - **One crypto library in the generated Rust service** (2026-10-29, #186): the chassis keys (RSA, ECDSA) are
   aws-lc-rs's, because ring cannot generate RSA keys nor sign with one over 4096 bits, both of which the chassis
   offers in every language (`generate_rsa_8192_key`); TLS stays on rustls's ring provider. A service now compiles

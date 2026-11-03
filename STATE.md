@@ -61,6 +61,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-02 by lo
   0.62.0 (CVE-2026-17106, CVE-2026-78669, CVE-2026-78661, CVE-2026-97045; `tacplus-smoke` checks the floors)
   (#190; backported to release/2.0 through release/2.5 by pull request, as v2.0.13, v2.1.6, v2.2.3, v2.3.5, v2.4.4
   and v2.5.3 once they merge, after #186's).
+  The base image's Maven carries guava 33.7.2-jre in place of the 33.6.0-jre Maven 3.9.16 ships (CVE-2026-102554;
+  checksum-pinned, `mvn` builds a project in the image build, `tacplus-smoke` checks the floor) (#222; backported
+  with #190 on each release line's pull request).
   The base and build images carry Go 1.27, Node 26 (LTS) and Swift 6.4.2 (#255; main only, from 2.6: the
   supported `build:X.Y` lines keep their toolchains). The rule beside the pins: Go follows the newest release, Node
   the newest LTS, Swift the newest release.

@@ -883,6 +883,10 @@ func buildPyFloatConstraintValidation(b *strings.Builder, msg model.Message, fie
 }
 
 func writePyFloatConstraintChecks(b *strings.Builder, fieldLabel, valueExpr string, constraint *model.FloatConstraint, epsilon float64, level int) {
+	if constraint.HasBound() {
+		pyLinef(b, level, "if %s != %s:  # NaN, the one float unequal to itself", valueExpr, valueExpr)
+		pyLinef(b, level+1, "raise invalid_argument(f\"field %s must be a number, got: {%s}\")", fieldLabel, valueExpr)
+	}
 	if constraint.Gt != nil {
 		threshold := pyFloatLiteral(*constraint.Gt)
 		pyLinef(b, level, "if %s <= %s:", valueExpr, threshold)

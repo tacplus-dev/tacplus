@@ -9,6 +9,8 @@ ARG GO_VERSION=1.26
 ARG RUST_VERSION=1
 ARG JDK_VERSION=25
 ARG MAVEN_VERSION=3.9
+ARG MAVEN_GUAVA_VERSION=33.7.2-jre
+ARG MAVEN_GUAVA_SHA256=b530942257fb935f8b2cfaa5f8eb5bd59c555fd8e8d01b8ce98912e077ea606c
 ARG NODE_VERSION=24
 ARG NPM_VERSION=11.21.1
 ARG NPM_UNDICI_VERSION=6.29.1
@@ -19,6 +21,8 @@ FROM maven:${MAVEN_VERSION}-eclipse-temurin-25 AS maven
 FROM node:${NODE_VERSION}-trixie-slim AS node
 
 FROM rust:${RUST_VERSION}-trixie
+ARG MAVEN_GUAVA_VERSION
+ARG MAVEN_GUAVA_SHA256
 ARG NPM_VERSION
 ARG NPM_UNDICI_VERSION
 LABEL org.opencontainers.image.title="tacplus base" \
@@ -37,6 +41,25 @@ COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s /usr/share/maven/bin/mvn /usr/local/bin/mvn \
     && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+# Maven's own lib/ carries a guava that lags its advisories (3.9.16 ships
+# 33.6.0, CVE-2026-102554, #222). No Maven release yet ships 33.7.2 or later,
+# so MAVEN_GUAVA_VERSION (same failureaccess 1.0.3 Maven ships) replaces it,
+# checksum-verified; Maven must then still start and build a project. Drop it
+# once a Maven release bundles it.
+RUN curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/guava.jar \
+       "https://repo.maven.apache.org/maven2/com/google/guava/guava/${MAVEN_GUAVA_VERSION}/guava-${MAVEN_GUAVA_VERSION}.jar" \
+    && echo "${MAVEN_GUAVA_SHA256}  /tmp/guava.jar" | sha256sum -c - \
+    && rm /usr/share/maven/lib/guava-*.jar \
+    && mv /tmp/guava.jar "/usr/share/maven/lib/guava-${MAVEN_GUAVA_VERSION}.jar" \
+    && JAVA_HOME=/opt/java/openjdk mvn --version \
+    && d=$(mktemp -d) && mkdir -p "$d/src/main/java" \
+    && printf '%s\n' '<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>' \
+       '<groupId>smoke</groupId><artifactId>smoke</artifactId><version>1</version>' \
+       '<properties><maven.compiler.release>17</maven.compiler.release></properties></project>' > "$d/pom.xml" \
+    && echo 'public class Smoke {}' > "$d/src/main/java/Smoke.java" \
+    && JAVA_HOME=/opt/java/openjdk mvn -B -q -f "$d/pom.xml" package \
+    && test -f "$d/target/smoke-1.jar" \
+    && rm -rf "$d" /root/.m2
 # The npm bundled in the Node tarball carries its own node_modules (brace-expansion,
 # undici) at versions that lag their advisories; installing a pinned npm over it
 # replaces that whole tree. NPM_VERSION is the first release whose bundle Trivy

@@ -31,7 +31,10 @@ import (
 //
 // Resolution is transitive: a dependency's own tacplus.yaml `depends` are
 // followed (a contract that imports another service's proto says so there), each
-// name once. The first entry seen for a name wins its version.
+// name once. The first entry seen for a name wins its version. The names the
+// project's own proto declares count as seen from the start: a dependency that
+// depends back on the project is satisfied by the project's own sources, never
+// by its published proto, which would collide with a checkout that changes it.
 func resolveDependencies(depends []string, firstSourceDir string) ([]string, []func(), error) {
 	if len(depends) == 0 {
 		return nil, nil, nil
@@ -60,7 +63,7 @@ func resolveDependencies(depends []string, firstSourceDir string) ([]string, []f
 			c()
 		}
 	}
-	seen := map[string]bool{}
+	seen := declaredNames(firstSourceDir)
 	queue := append([]string(nil), depends...)
 	for len(queue) > 0 {
 		d := queue[0]
@@ -257,6 +260,23 @@ func ProtoDirWithDepends(protoDir string) (string, func(), error) {
 // OwnDeclarations keeps, of the scanned names, those declared by files that
 // live in protoDir itself (not in a merged dependency).
 func OwnDeclarations(protoDir string, services, vservices []string) ([]string, []string) {
+	own := declaredNames(protoDir)
+	keep := func(in []string) []string {
+		var out []string
+		for _, n := range in {
+			if own[n] {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+	return keep(services), keep(vservices)
+}
+
+// declaredNames returns the service and vservice names the .proto files under
+// protoDir declare: each (spec.service) or (spec.vservice) name, and the
+// package of a file that identifies its service by package.
+func declaredNames(protoDir string) map[string]bool {
 	own := map[string]bool{}
 	_ = filepath.WalkDir(protoDir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".proto") {
@@ -282,16 +302,7 @@ func OwnDeclarations(protoDir string, services, vservices []string) ([]string, [
 		}
 		return nil
 	})
-	keep := func(in []string) []string {
-		var out []string
-		for _, n := range in {
-			if own[n] {
-				out = append(out, n)
-			}
-		}
-		return out
-	}
-	return keep(services), keep(vservices)
+	return own
 }
 
 var (

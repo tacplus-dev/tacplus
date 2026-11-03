@@ -275,6 +275,7 @@ EOF
   assert_clean_log "$dir/build.log"
   echo "==> Decoding the golden corpus with the generated rust types"
   "$CROSS_TEST_CARGO_TARGET/debug/wire-corpus-rust-decoder" "$FIXTURE" || die "rust decoder failed"
+  prune_cargo_workspace "$decoder_dir" "$dir/model"
 }
 
 run_typescript() {

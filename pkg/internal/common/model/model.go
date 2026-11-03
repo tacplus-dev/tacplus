@@ -115,6 +115,13 @@ type FloatConstraint struct {
 	NotIn   []float64 // must not be one of these values (within epsilon)
 }
 
+// HasBound reports whether any of gt/ge/lt/le is set. Every comparison with
+// NaN is false, so the emitters refuse NaN explicitly on a bounded field
+// before its comparisons, which would each let it through.
+func (c *FloatConstraint) HasBound() bool {
+	return c.Gt != nil || c.Ge != nil || c.Lt != nil || c.Le != nil
+}
+
 // HostValue holds the default host and port for a host.Host field.
 type HostValue struct {
 	Host string

@@ -549,4 +549,5 @@ if [[ ${#clients[@]} -gt 0 ]]; then
   [[ -n "$summary" ]] && summary="$summary; "
   summary="$summary${pairs[*]}"
 fi
+prune_cargo_workspace "$WORK_ROOT/rust/fixture" "$WORK_ROOT/rust/client" "$WORK_ROOT/rust/model"
 echo "server-runtime OK ($summary)"

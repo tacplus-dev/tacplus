@@ -82,5 +82,6 @@ grep -q "^version = \"$FLOOR\"$" <(grep -A1 '^name = "rmcp"$' "$OUT/Cargo.lock")
 echo "==> Building generated Rust MCP crate against rmcp $FLOOR"
 (cd "$OUT" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo build -p "$CRATE") \
   || die "generated MCP crate does not compile against its OWN declared rmcp floor $FLOOR"
+prune_cargo_workspace "$OUT"
 
 echo "==> mcp-floor-version check PASSED (rust, rmcp $FLOOR)"

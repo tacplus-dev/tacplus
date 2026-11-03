@@ -172,4 +172,5 @@ if [[ -s "$FIXTURE_STDERR" ]]; then
   die "fixture server wrote to stderr"
 fi
 
+prune_cargo_workspace "$MODEL_DIR/fixture" "$MODEL_DIR/client" "$MODEL_DIR/model"
 echo "keepalive-rust OK"

@@ -33,6 +33,7 @@ Release lines with branches: 2.0 through 2.4.
 - diskstore archive: public wiring helper for hand-opened RedoLogs (#145) (needs Jody's decision)
 - Make the three well-known platform names proto-declared instead of baked into the generator (#1) (needs Jody's decision)
 - **Parallel gates:** run independent gates and cross-test legs concurrently, bounded by the machine, with a deterministic verdict; lands go from hours to under one (#300). Agent, at Jody's request, 2026-11-03 ("I just want stuff to go faster … much of this can be done in parallel").
+- Build image: rootless BuildKit for image builds inside the container, shared build caches, cold and warm identical (#315). Agent, at Jody's request, 2026-11-03 (`tacplus-dev/roadmap:decisions/looper-job-per-issue-2026-11-03.md`).
 
 ## Later
 - flock state: `(spec.service_state)` labelled `flock`, field merge rules, generated merge, duplicate detection and deletion marks; first user the people table (people#1); kernel stays in-cluster, flock spans clusters (#206; tacplus-dev/roadmap:items/flock-design-2026-10-28.md; no hurry)

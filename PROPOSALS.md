@@ -4,6 +4,17 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **A `just generated <dir>` recipe, so the build's security checks scan what tacplus emits** (2026-11-03, nightly
+  scan): the build pipeline scans a repository's generated code only through a `generated` recipe (looper README,
+  Security checks; looper#49, which notes "tacplus has no `generated` recipe yet"). tacplus has none, and
+  `dependencies.yaml` is not a lockfile, so no scanner reads the versions the generated manifests declare. Tonight's
+  scan found advisories in exactly those: #312 (TypeScript, Rust, Go), #309 (Python build/dev floors), #308
+  (rustls-pemfile), after #264. A recipe that generates the cross-test models for every language into `<dir>`, with a
+  lock-resolved manifest per language, would make OSV-Scanner and cargo-deny catch the next one in the build.
+- **Run outbound-deadline in the gates** (2026-11-03, #310): `cross-test/outbound-deadline/run.sh` (the issue #38
+  deadline and lifetime facts, and with #310 the trace fact) has no recipe and runs in no gate or workflow, so a
+  regression there is invisible. #310 adds the recipe; joining the mandatory `gates` set is a cost decision (one
+  more Rust model build per gates run).
 - **Decide whether `assert_float` with only `not_in` refuses NaN** (2026-11-02, #256): a field with any of
   `gt`/`ge`/`lt`/`le` now refuses NaN in every validating language, and `in` always refused it (no candidate is
   within epsilon of NaN). A field whose only constraint is `not_in` still accepts NaN, which is arguably right (NaN

@@ -753,9 +753,11 @@ impl ServiceManager {
             }
         };
         let authorizer = Arc::new(GrpcAuthorizer::new(auth_conn, Some(tp.clone())));
-        // A tenant-owned instance's own token namespace is /tenants/<t>; the
-        // authorizer refuses callers outside that tenant at the door. An identity
-        // that cannot be read leaves the door unpinned, so it fails startup.
+        // A tenant-owned instance's own token namespace is /tenants/<name>; the
+        // authorizer refuses callers outside that tenant at the door. Its subject
+        // is /tenants/<tid>/services/<svc>: the tid the routed wrappers serve. An
+        // identity that cannot be read leaves the door unpinned, so it fails
+        // startup.
         if identity.has_auth() {
             let own_token = identity.get_token().await?;
             authorizer.set_host_namespace_from_token(&own_token)?;
@@ -1668,8 +1670,9 @@ impl ServiceManager {
 {{- range .GrpcServices}}
 {{- if .TenantRouted}}
         // (spec.rpc).route_field backstop: the wrapper serves only calls routed
-        // to the tenant its instance runs in.
-        {{.WrapperVar}}.set_host_namespace(&self.authorizer.host_namespace());
+        // to the tid of its instance's own subject, and its record plane holds
+        // their entries to the instance's own namespace.
+        {{.WrapperVar}}.set_host_identity(self.authorizer.host_identity());
 {{- end}}
 {{- end}}
 

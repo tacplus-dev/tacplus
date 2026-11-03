@@ -8,24 +8,32 @@
 // in-process: a fake handler behind it, standing for the store and its redo
 // (a call that never reaches it leaves nothing in either), and in front of it
 // the REAL generated grpcserver Authorizer, seeded with a test signing key,
-// told its instance runs in /tenants/bbbbbbbb exactly as the ServiceManager
-// tells it from its own identity, with the wrapper's route backstop told the
-// same and the plane's own generated register_method_auth applied.
+// told its instance's identity from the instance's own token exactly as the
+// ServiceManager tells it, with the wrapper's route backstop told the same and
+// the plane's own generated register_method_auth applied.
 //
-// What it pins, through the wrapper's own methods: the instance of tenant
-// bbbbbbbb never stores an entry for another tenant, whoever the caller is, a
-// /system peer included:
+// Identities are kernel#23's: a tenant-owned service's subject is
+// spiffe://<td>/tenants/<tid>/services/<svc> while its namespace claim stays
+// /tenants/<name>. Tenant beta is tid bbbbbbbb, tenant alpha is tid aaaaaaaa.
+// The instance serves the tid of its own subject; a caller is in the tenant of
+// its namespace claim, so its entries are /tenants/beta's, never
+// /tenants/bbbbbbbb's.
+//
+// What it pins, through the wrapper's own methods: the instance of tenant beta
+// never stores an entry for another tenant, whoever the caller is, a /system
+// peer included:
 //   - a call routed to another tenant is refused (the route check);
-//   - an entry outside the routed tenant is refused (the route pin), on the
-//     single-type writes, on the key-addressed reads and deletes, and per op
-//     of Apply;
+//   - an entry outside the routed tenant's namespace is refused (the route
+//     pin), on the single-type writes, on the key-addressed reads and deletes,
+//     and per op of Apply, an entry spelled with the tid included;
 //   - a call naming no tenant is malformed;
-//   - another tenant's caller is refused at the door;
-//   - a /system peer writing the routed tenant's entries passes.
+//   - another tenant's caller is refused at the door, whatever its subject;
+//   - a /system peer writing the routed tenant's entries passes, and beta's
+//     own caller's unspelled entry is stamped /tenants/beta and served.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use key::keys;
@@ -38,12 +46,16 @@ use tstratum_model::types::services::tmessaging::TMessage;
 use tstratum_model::types::vservices::tquery::tenant_record_map_server::TenantRecordMap;
 use tstratum_model::types::vservices::tquery::*;
 
-const HOST_NAMESPACE: &str = "/tenants/bbbbbbbb";
+/// The instance's own identity: tenant beta's, tid bbbbbbbb.
+const HOST_NAMESPACE: &str = "/tenants/beta";
+const HOST_SUBJECT: &str = "spiffe://example.com/tenants/bbbbbbbb/services/tquery";
 const SYSTEM_PEER: &str = "spiffe://example.com/system/services/tmessaging";
-const TENANT_A_PEER: &str = "spiffe://example.com/tenants/aaaaaaaa/services/tmessaging";
+const ALPHA_PEER: &str = "spiffe://example.com/tenants/aaaaaaaa/services/tmessaging";
+const BETA_PEER: &str = "spiffe://example.com/tenants/bbbbbbbb/services/tmessaging";
 
-/// Counts every call that reached the handler: the store and its redo.
-struct StoreHandler(Arc<AtomicUsize>);
+/// Counts every call that reached the handler: the store and its redo. The
+/// namespace of the last entry put is kept, to see what the wrapper stamped.
+struct StoreHandler(Arc<AtomicUsize>, Arc<Mutex<String>>);
 
 impl StoreHandler {
     fn reached(&self) {
@@ -61,8 +73,9 @@ fn unimpl() -> Status {
 
 #[tonic::async_trait]
 impl TenantRecordMapHandler for StoreHandler {
-    async fn put_t_message(&self, _c: Option<&Caller>, _r: PutTMessageRequest) -> Result<RecordWriteResult, Status> {
+    async fn put_t_message(&self, _c: Option<&Caller>, r: PutTMessageRequest) -> Result<RecordWriteResult, Status> {
         self.reached();
+        *self.1.lock().unwrap() = r.item.map(|m| m.namespace).unwrap_or_default();
         Ok(ack())
     }
     async fn delete_t_message(&self, _c: Option<&Caller>, _r: DeleteTMessageRequest) -> Result<RecordWriteResult, Status> {
@@ -168,26 +181,31 @@ fn service_bearer(key: &keys::ImmutableKey, subject: &str, namespace: &str) -> S
     format!("Bearer {}", tok.base64().expect("signed token has base64"))
 }
 
-/// The instance of tenant bbbbbbbb, its callers presenting `subject`/`namespace`.
+/// The instance of tenant beta (tid bbbbbbbb), its callers presenting
+/// `subject`/`namespace`.
 struct Instance {
     wrapper: ValidationWrapper,
     bearer: String,
     reached: Arc<AtomicUsize>,
+    last_ns: Arc<Mutex<String>>,
 }
 
 async fn instance(subject: &str, namespace: &str) -> Instance {
     let key = keys::generate_ed25519_key().expect("generate ed25519 key");
     let auth = Arc::new(grpcserver::authorizer::Authorizer::with_seeded_jwks(vec![verifying_jwk(&key)]));
-    // As the ServiceManager does: the authorizer learns its instance's namespace
-    // from the instance's own identity, the plane's per-method auth_services are
-    // registered, and the wrapper's route backstop is told the same namespace.
-    auth.set_host_namespace(HOST_NAMESPACE);
+    // As the ServiceManager does: the authorizer learns its instance's identity
+    // from the instance's own token (the door from its namespace, the routed
+    // tid from its subject), the plane's per-method auth_services are
+    // registered, and the wrapper's route backstop is told the same identity.
+    let own = service_bearer(&key, HOST_SUBJECT, HOST_NAMESPACE);
+    auth.set_host_namespace_from_token(own.trim_start_matches("Bearer ")).expect("own identity token");
     register_method_auth(&auth);
     let reached = Arc::new(AtomicUsize::new(0));
-    let wrapper = ValidationWrapper::new(Arc::new(StoreHandler(reached.clone())));
-    wrapper.set_host_namespace(&auth.host_namespace());
+    let last_ns = Arc::new(Mutex::new(String::new()));
+    let wrapper = ValidationWrapper::new(Arc::new(StoreHandler(reached.clone(), last_ns.clone())));
+    wrapper.set_host_identity(auth.host_identity());
     wrapper.set_authorize_func(Some(Arc::new(RealAuthorizer(auth.clone())))).await;
-    Instance { wrapper, bearer: service_bearer(&key, subject, namespace), reached }
+    Instance { wrapper, bearer: service_bearer(&key, subject, namespace), reached, last_ns }
 }
 
 impl Instance {
@@ -199,6 +217,9 @@ impl Instance {
     fn reached(&self) -> usize {
         self.reached.load(Ordering::SeqCst)
     }
+    fn last_ns(&self) -> String {
+        self.last_ns.lock().unwrap().clone()
+    }
     async fn put(&self, target: &str, ns: &str) -> Result<RecordWriteResult, Status> {
         self.wrapper.put_t_message(self.req(put_req(target, ns))).await.map(|r| r.into_inner())
     }
@@ -208,7 +229,7 @@ fn message(ns: &str) -> TMessage {
     TMessage {
         message_id: "m1".to_string(),
         namespace: ns.to_string(),
-        owner: "spiffe://example.com/tenants/aaaaaaaa/users/u1".to_string(),
+        owner: "spiffe://example.com/tenants/alpha/users/u1".to_string(),
         body: "hello".to_string(),
         ..Default::default()
     }
@@ -225,18 +246,23 @@ fn put_op(ns: &str) -> RecordOp {
 /// The call is refused with `code`, its message containing `substr`, and the
 /// store was never asked.
 fn refused<T: std::fmt::Debug>(p: &Instance, got: Result<T, Status>, code: Code, substr: &str) {
+    refused_after(p, 0, got, code, substr);
+}
+
+/// As [`refused`], on an instance whose store had served `served` calls.
+fn refused_after<T: std::fmt::Debug>(p: &Instance, served: usize, got: Result<T, Status>, code: Code, substr: &str) {
     match got {
         Err(s) if s.code() == code && s.message().contains(substr) => {}
         other => panic!("want {:?} containing {:?}, got {:?}", code, substr, other),
     }
-    assert_eq!(p.reached(), 0, "a refused call must not reach the store");
+    assert_eq!(p.reached(), served, "a refused call must not reach the store");
 }
 
 // 1. Tenant A's call forced onto B's instance: the route check refuses it.
 #[tokio::test]
 async fn misrouted_write_is_refused() {
     let p = instance(SYSTEM_PEER, "/system").await;
-    refused(&p, p.put("aaaaaaaa", "/tenants/aaaaaaaa").await, Code::PermissionDenied, "routed to tenant aaaaaaaa, this instance serves tenant bbbbbbbb");
+    refused(&p, p.put("aaaaaaaa", "/tenants/alpha").await, Code::PermissionDenied, "routed to tenant aaaaaaaa, this instance serves tenant bbbbbbbb");
 }
 
 // 2. A's entry under B's route: the route pin refuses it, a /system peer included.
@@ -245,19 +271,19 @@ async fn foreign_entry_under_the_route_is_refused() {
     let p = instance(SYSTEM_PEER, "/system").await;
     refused(
         &p,
-        p.put("bbbbbbbb", "/tenants/aaaaaaaa").await,
+        p.put("bbbbbbbb", "/tenants/alpha").await,
         Code::PermissionDenied,
-        "PutTMessage: item.namespace is not in tenant bbbbbbbb, the tenant this call is routed to; a tenant's instance holds that tenant's entries only",
+        "PutTMessage: item.namespace is not in tenant bbbbbbbb (/tenants/beta), the tenant this call is routed to; a tenant's instance holds that tenant's entries only",
     );
-    // A sibling whose name merely starts with the routed tid is another tenant.
-    refused(&p, p.put("bbbbbbbb", "/tenants/bbbbbbbbx").await, Code::PermissionDenied, "is not in tenant bbbbbbbb");
+    // A sibling whose name merely starts with the routed tenant's is another tenant.
+    refused(&p, p.put("bbbbbbbb", "/tenants/betax").await, Code::PermissionDenied, "is not in tenant bbbbbbbb");
 }
 
 // 3. A call naming no target tenant is malformed.
 #[tokio::test]
 async fn unrouted_call_is_malformed() {
     let p = instance(SYSTEM_PEER, "/system").await;
-    refused(&p, p.put("", "/tenants/bbbbbbbb").await, Code::InvalidArgument, "target_tenant");
+    refused(&p, p.put("", "/tenants/beta").await, Code::InvalidArgument, "target_tenant");
 }
 
 // 4. Apply: the route pin runs per op against the Apply's own route, and an
@@ -268,13 +294,13 @@ async fn apply_is_held_to_its_route() {
     let apply = |target: &str, ops: Vec<RecordOp>| RecordApplyRequest { ops, target_tenant: target.to_string(), ..Default::default() };
     refused(
         &p,
-        p.wrapper.apply(p.req(apply("bbbbbbbb", vec![put_op("/tenants/aaaaaaaa")]))).await,
+        p.wrapper.apply(p.req(apply("bbbbbbbb", vec![put_op("/tenants/alpha")]))).await,
         Code::PermissionDenied,
-        "Apply (put_t_message): item.namespace is not in tenant bbbbbbbb, the tenant this call is routed to",
+        "Apply (put_t_message): item.namespace is not in tenant bbbbbbbb (/tenants/beta), the tenant this call is routed to",
     );
     refused(
         &p,
-        p.wrapper.apply(p.req(apply("aaaaaaaa", vec![put_op("/tenants/aaaaaaaa")]))).await,
+        p.wrapper.apply(p.req(apply("aaaaaaaa", vec![put_op("/tenants/alpha")]))).await,
         Code::PermissionDenied,
         "routed to tenant aaaaaaaa, this instance serves tenant bbbbbbbb",
     );
@@ -286,14 +312,14 @@ async fn delete_and_get_are_held_to_their_route() {
     let p = instance(SYSTEM_PEER, "/system").await;
     let del = DeleteTMessageRequest {
         message_id: "m1".to_string(),
-        namespace: "/tenants/aaaaaaaa".to_string(),
+        namespace: "/tenants/alpha".to_string(),
         target_tenant: "bbbbbbbb".to_string(),
         ..Default::default()
     };
     refused(&p, p.wrapper.delete_t_message(p.req(del)).await, Code::PermissionDenied, "DeleteTMessage: namespace is not in tenant bbbbbbbb");
     let get = GetTMessageRequest {
         message_id: "m1".to_string(),
-        namespace: "/tenants/aaaaaaaa".to_string(),
+        namespace: "/tenants/alpha".to_string(),
         target_tenant: "bbbbbbbb".to_string(),
         ..Default::default()
     };
@@ -305,13 +331,13 @@ async fn delete_and_get_are_held_to_their_route() {
 #[tokio::test]
 async fn watches_are_held_to_their_route() {
     let p = instance(SYSTEM_PEER, "/system").await;
-    let changes = WatchTMessageChangesRequest { namespace: "/tenants/aaaaaaaa".to_string(), target_tenant: "aaaaaaaa".to_string(), ..Default::default() };
+    let changes = WatchTMessageChangesRequest { namespace: "/tenants/alpha".to_string(), target_tenant: "aaaaaaaa".to_string(), ..Default::default() };
     match p.wrapper.watch_t_message_changes(p.req(changes)).await {
         Err(s) if s.code() == Code::PermissionDenied => {}
         Err(s) => panic!("WatchTMessageChanges: want PERMISSION_DENIED, got {:?}", s),
         Ok(_) => panic!("WatchTMessageChanges routed to another tenant must be refused"),
     }
-    let foreign = WatchTMessageChangesRequest { namespace: "/tenants/aaaaaaaa".to_string(), target_tenant: "bbbbbbbb".to_string(), ..Default::default() };
+    let foreign = WatchTMessageChangesRequest { namespace: "/tenants/alpha".to_string(), target_tenant: "bbbbbbbb".to_string(), ..Default::default() };
     match p.wrapper.watch_t_message_changes(p.req(foreign)).await {
         Err(s) if s.code() == Code::PermissionDenied && s.message().contains("is not in tenant bbbbbbbb") => {}
         Err(s) => panic!("WatchTMessageChanges of another tenant's entries: want the route pin, got {:?}", s),
@@ -326,26 +352,52 @@ async fn watches_are_held_to_their_route() {
     assert_eq!(p.reached(), 0, "a refused watch must not reach the store");
 }
 
-// 6. Tenant A's own caller on B's instance: refused, whatever it routes to.
+// 6. Tenant alpha's own caller on beta's instance: refused, whatever it routes to.
 #[tokio::test]
 async fn another_tenants_caller_is_refused() {
-    let p = instance(TENANT_A_PEER, "/tenants/aaaaaaaa").await;
-    for (target, ns) in [("aaaaaaaa", "/tenants/aaaaaaaa"), ("bbbbbbbb", "/tenants/aaaaaaaa"), ("bbbbbbbb", "/tenants/bbbbbbbb")] {
+    let p = instance(ALPHA_PEER, "/tenants/alpha").await;
+    for (target, ns) in [("aaaaaaaa", "/tenants/alpha"), ("bbbbbbbb", "/tenants/alpha"), ("bbbbbbbb", "/tenants/beta")] {
         let got = p.put(target, ns).await;
-        assert!(got.is_err(), "tenant aaaaaaaa's caller writing ({}, {}) on tenant bbbbbbbb's instance must be refused, got {:?}", target, ns, got);
+        assert!(got.is_err(), "tenant alpha's caller writing ({}, {}) on tenant beta's instance must be refused, got {:?}", target, ns, got);
     }
     assert_eq!(p.reached(), 0, "another tenant's caller must not reach the store");
 }
 
-// 7. A /system peer writing the routed tenant's own entries passes.
+// 7. A /system peer writing the routed tenant's own entries passes; an entry
+// spelled with the routed tid is not the routed tenant's.
 #[tokio::test]
 async fn routed_tenants_entries_pass() {
     let p = instance(SYSTEM_PEER, "/system").await;
-    p.put("bbbbbbbb", "/tenants/bbbbbbbb").await.expect("an entry of the routed tenant must pass");
+    p.put("bbbbbbbb", "/tenants/beta").await.expect("an entry of the routed tenant must pass");
     assert_eq!(p.reached(), 1, "the write must reach the store");
-    p.put("bbbbbbbb", "/tenants/bbbbbbbb/users/u1").await.expect("an entry below the routed tenant must pass");
+    p.put("bbbbbbbb", "/tenants/beta/users/u1").await.expect("an entry below the routed tenant must pass");
     assert_eq!(p.reached(), 2, "the write must reach the store");
-    let apply = RecordApplyRequest { ops: vec![put_op("/tenants/bbbbbbbb")], target_tenant: "bbbbbbbb".to_string(), ..Default::default() };
+    let apply = RecordApplyRequest { ops: vec![put_op("/tenants/beta")], target_tenant: "bbbbbbbb".to_string(), ..Default::default() };
     p.wrapper.apply(p.req(apply)).await.expect("an Apply of the routed tenant's entries must pass");
     assert_eq!(p.reached(), 3, "the Apply must reach the store");
+
+    // The tid is not the namespace: an entry spelled /tenants/bbbbbbbb is not
+    // tenant beta's, though the call is routed to bbbbbbbb.
+    refused_after(&p, 3, p.put("bbbbbbbb", "/tenants/bbbbbbbb").await, Code::PermissionDenied, "item.namespace is not in tenant bbbbbbbb (/tenants/beta)");
+}
+
+// 8. A tenant-owned caller (kernel#23: subject /tenants/<tid>/services/<svc>,
+// namespace /tenants/<name>) is in the tenant of its namespace claim: its entry
+// in /tenants/beta is served by beta's instance, and one it spells with its
+// subject's tid, /tenants/bbbbbbbb, is not its tenant's. A caller whose subject
+// names beta's tid under another tenant's namespace is held to that namespace:
+// the real door refuses it before any entry is looked at, whichever tenant its
+// entry names.
+#[tokio::test]
+async fn callers_tenant_is_its_namespace_claim() {
+    let beta = instance(BETA_PEER, "/tenants/beta").await;
+    beta.put("bbbbbbbb", "/tenants/beta").await.expect("beta's own caller must be served by beta's instance");
+    assert_eq!(beta.reached(), 1, "the write must reach the store");
+    assert_eq!(beta.last_ns(), "/tenants/beta", "beta's caller's entry must reach the store in /tenants/beta");
+    refused_after(&beta, 1, beta.put("bbbbbbbb", "/tenants/bbbbbbbb").await, Code::InvalidArgument, "names a tenant the caller neither owns nor is linked to");
+
+    let alpha = instance(BETA_PEER, "/tenants/alpha").await;
+    for ns in ["/tenants/alpha", "/tenants/beta"] {
+        refused(&alpha, alpha.put("bbbbbbbb", ns).await, Code::PermissionDenied, "is not at-or-above this instance's tenant \"/tenants/beta\"");
+    }
 }

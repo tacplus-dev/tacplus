@@ -34,11 +34,12 @@ import (
 //     ops involves.
 //
 //   - On a tenant-owned record store the plane is routed by target_tenant
-//     (#207), and every entry's tenant field must lie in that tenant
-//     (/tenants/<tid> or below), whoever the caller is, a /system peer
-//     included: PERMISSION_DENIED otherwise. check_route_tenant holds the route
-//     field to the instance's own tenant, so an instance only ever stores its
-//     own tenant's entries, and a call misrouted to it leaves nothing behind.
+//     (#207), and every entry's tenant field must lie in that tenant (the
+//     namespace the instance gives for the routed tid, or below), whoever the
+//     caller is, a /system peer included: PERMISSION_DENIED otherwise.
+//     check_route_tenant holds the route field to the tid of the instance's
+//     own subject, so an instance only ever stores its own tenant's entries,
+//     and a call misrouted to it leaves nothing behind.
 //
 // Rust renders no (spec.store_namespace) predicate pin on the plane, so the
 // tenant pin here reads the caller the way the (spec.store_namespace) egress
@@ -112,9 +113,13 @@ func rustRecordTenantPin(base string, path []string, label, indent string) strin
 // plane routed by tenant, the entry's tenant field must be in the tenant the
 // call is routed to. route is an expression naming the routed request's route
 // field (a String); the route check has already refused one that is not a
-// tid. An unset tenant field is refused too: an entry on a tenant's instance
-// belongs to that tenant, and the caller says so. Runs after the tenant pin,
-// so a tenant caller's stamped tenant is the one held to the route.
+// tid, or not this instance's. The route field names the tenant by tid and the
+// entry by namespace, which names it by name (/tenants/<name>, kernel#23), so
+// the wrapper's route_namespace (the instance's own identity) says which
+// namespace that tid's entries live in. An unset tenant field is refused too:
+// an entry on a tenant's instance belongs to that tenant, and the caller says
+// so. Runs after the tenant pin, so a tenant caller's stamped tenant is the
+// one held to the route.
 func rustRecordRoutePin(base string, path []string, route, label, indent string) string {
 	if len(path) == 0 || route == "" {
 		return ""
@@ -126,9 +131,9 @@ func rustRecordRoutePin(base string, path []string, route, label, indent string)
 	}
 	return fmt.Sprintf(`%[1]s{
 %[1]s    let (__rt, __v): (&str, &str) = (%[2]s.as_str(), %[3]s);
-%[1]s    let __home = format!("/tenants/{}", __rt);
-%[1]s    if __v != __home && !__v.starts_with(&format!("{}/", __home)) {
-%[1]s        return Err(tonic::Status::permission_denied(format!("%[4]s: %[5]s is not in tenant {}, the tenant this call is routed to; a tenant's instance holds that tenant's entries only", __rt)));
+%[1]s    let __rn: String = self.route_namespace(__rt)?;
+%[1]s    if __v != __rn && !__v.starts_with(&format!("{}/", __rn)) {
+%[1]s        return Err(tonic::Status::permission_denied(format!("%[4]s: %[5]s is not in tenant {} ({}), the tenant this call is routed to; a tenant's instance holds that tenant's entries only", __rt, __rn)));
 %[1]s    }
 %[1]s}
 `, indent, route, get, label, strings.Join(path, "."))

@@ -179,8 +179,8 @@ func TestJavaWrapperAnyTenantAuthenticate(t *testing.T) {
 }
 
 // The whole wrapper: ANY_TENANT is registered beside auth_services under the
-// key authorize() uses, and the backstop helper is emitted only for a service
-// with a routed rpc.
+// key authorize() uses, and the backstop helper and the record route pin's
+// route-namespace helper are emitted only for a service with a routed rpc.
 func TestJavaServiceWrapperRegistersAnyTenantAndBackstop(t *testing.T) {
 	render := func(t *testing.T, routed bool) string {
 		outputDir := t.TempDir()
@@ -215,6 +215,8 @@ func TestJavaServiceWrapperRegistersAnyTenantAndBackstop(t *testing.T) {
 		`authorizer.setMethodAnyTenant("CrewService/Hail");`,
 		"private void checkRouteTenant(String field, String value) throws ProtoException {",
 		"authorizer.checkRouteTenant(field, value);",
+		"private String routeNamespace(String tid) throws ProtoException {",
+		"return authorizer.routeNamespace(tid);",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("routed wrapper missing %q:\n%s", want, got)
@@ -224,7 +226,7 @@ func TestJavaServiceWrapperRegistersAnyTenantAndBackstop(t *testing.T) {
 		t.Fatalf("only the rpc declaring RPC_FLAG_ANY_TENANT opens the door:\n%s", got)
 	}
 	platform := render(t, false)
-	for _, notWant := range []string{"setMethodAnyTenant", "checkRouteTenant", "checkAuthenticateAnyTenant"} {
+	for _, notWant := range []string{"setMethodAnyTenant", "checkRouteTenant", "routeNamespace", "checkAuthenticateAnyTenant"} {
 		if strings.Contains(platform, notWant) {
 			t.Fatalf("a platform wrapper must not carry %q:\n%s", notWant, platform)
 		}

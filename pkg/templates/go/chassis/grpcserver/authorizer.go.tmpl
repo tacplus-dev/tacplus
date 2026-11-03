@@ -80,8 +80,15 @@ type Authorizer interface {
 	// CheckRoute is the tenant-owned instance's routing backstop for a routed
 	// method, run after request validation and before the handler: the
 	// request's route field must be a tid (INVALID_ARGUMENT otherwise) and, on
-	// an instance in /tenants/<t>, must be t (PERMISSION_DENIED otherwise).
+	// a tenant-owned instance, must be the tid of its own subject
+	// (/tenants/<tid>/services/<svc>; PERMISSION_DENIED otherwise).
 	CheckRoute(fullMethod string, req any) error
+	// RouteNamespace is the namespace the entries of tenant tid live in on this
+	// instance, for the record plane's route pin: on a tenant-owned instance
+	// serving tid, its own namespace claim (/tenants/<name>, which the subject's
+	// tid does not spell); on a shared instance, /tenants/<tid>. An instance
+	// that serves another tenant, or none it can name, has none (error).
+	RouteNamespace(tid string) (string, error)
 	// JwkCache returns the underlying JWK cache for direct key access.
 	JwkCache() *JwkCache
 	// EnforcingUnaryInterceptor returns a unary interceptor that verifies
@@ -227,6 +234,11 @@ type authorizer struct {
 	// hostTenant is the instance's own tenant namespace ("/tenants/<t>"), or ""
 	// for a shared instance. See SetHostNamespace.
 	hostTenant atomic.Value // string
+	// hostNamespace is the instance's own namespace claim, whatever its depth,
+	// and hostTid the tid of its own subject (/tenants/<tid>/services/<svc>),
+	// "" when the subject names no tenant. See SetHostIdentity.
+	hostNamespace atomic.Value // string
+	hostTid       atomic.Value // string
 	logger     *zap.Logger
 }
 
@@ -276,14 +288,28 @@ func (a *authorizer) SetHostNamespace(ns string) {
 	a.hostTenant.Store("")
 }
 
-// SetHostNamespaceFromToken is SetHostNamespace with the namespace read from
-// the instance's own service token (the identity manager's GetToken).
+// SetHostIdentity tells the authorizer the instance's own identity: its
+// namespace claim, the tenant door (SetHostNamespace), and its subject, whose
+// tid is the tenant CheckRoute admits. The two spell the tenant differently: a
+// tenant-owned instance's subject is /tenants/<tid>/services/<svc> while its
+// namespace stays /tenants/<name> (kernel#23), so the routed tid is read from
+// the subject, never from the namespace, and the door from the namespace,
+// never from the subject.
+func (a *authorizer) SetHostIdentity(ns, subject string) {
+	a.SetHostNamespace(ns)
+	a.hostNamespace.Store(ns)
+	tid, _ := serviceconnection.InstanceTenant(subject)
+	a.hostTid.Store(tid)
+}
+
+// SetHostNamespaceFromToken is SetHostIdentity with the namespace and subject
+// read from the instance's own service token (the identity manager's GetToken).
 func (a *authorizer) SetHostNamespaceFromToken(token string) error {
 	tw, err := tokenlib.ParseToken(token)
 	if err != nil {
 		return fmt.Errorf("parse own identity token: %w", err)
 	}
-	a.SetHostNamespace(tw.GetNamespace())
+	a.SetHostIdentity(tw.GetNamespace(), tw.GetSubject())
 	return nil
 }
 
@@ -345,8 +371,11 @@ func (a *authorizer) SetMethodAnyTenant(methodKey string) {
 // generated wrapper runs after request validation and before the handler.
 // Routing is the router's job; this refuses a request that should never have
 // reached this instance: a route field that is not a tid is INVALID_ARGUMENT,
-// and on a tenant-owned instance (own namespace /tenants/<t>) a tid other than
-// t is PERMISSION_DENIED. A shared instance checks the shape only. A method
+// and on a tenant-owned instance a tid other than the one of its own subject
+// (/tenants/<tid>/services/<svc>) is PERMISSION_DENIED: the instance's
+// namespace claim names its tenant by name, never by tid (kernel#23). A
+// tenant-owned instance whose subject names no tid serves no routed call. A
+// shared instance checks the shape only. A method
 // with no registered route field fails closed: the wrapper only asks about
 // routed methods, so this is a generation or wiring bug.
 func (a *authorizer) CheckRoute(fullMethod string, req any) error {
@@ -369,15 +398,39 @@ func (a *authorizer) CheckRoute(fullMethod string, req any) error {
 		return err
 	}
 	host, _ := a.hostTenant.Load().(string)
-	if host == "" {
+	own, _ := a.hostTid.Load().(string)
+	switch {
+	case own == "" && host == "":
 		return nil
-	}
-	if own := strings.TrimPrefix(host, "/tenants/"); tid != own {
+	case own == "":
+		return protoerrors.NewErrPermissionDenied(nil,
+			"routed to tenant %s, this instance's subject names no tenant id", tid)
+	case tid != own:
 		return protoerrors.NewErrPermissionDenied(nil,
 			"routed to tenant %s, this instance serves tenant %s", tid, own)
 	}
 	return nil
 }
+
+// RouteNamespace returns the namespace tenant tid's entries live in on this
+// instance. CheckRoute has admitted tid before the record plane asks, so on a
+// tenant-owned instance it is the instance's own tid, and its entries live in
+// the instance's own namespace claim. A shared instance knows no tenant's
+// name, so it holds tid's entries to /tenants/<tid>.
+func (a *authorizer) RouteNamespace(tid string) (string, error) {
+	host, _ := a.hostTenant.Load().(string)
+	own, _ := a.hostTid.Load().(string)
+	if own == "" && host == "" {
+		return "/tenants/" + tid, nil
+	}
+	ns, _ := a.hostNamespace.Load().(string)
+	if own == "" || tid != own || ns == "" {
+		return "", protoerrors.NewErrPermissionDenied(nil,
+			"this instance does not serve tenant %s", tid)
+	}
+	return ns, nil
+}
+
 
 // SetMethodAuth registers allowed caller patterns for a method. Patterns are RE2 regexes
 // matched against the service path (SPIFFE URI minus the deployment prefix).

@@ -332,13 +332,29 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
      * The (spec.rpc).route_field backstop, after request validation and before
      * the handler, on every inbound message: a route field that is not a tid is
      * refused (INVALID_ARGUMENT), and on a tenant-owned instance one naming
-     * another tenant than the instance serves is refused (PERMISSION_DENIED).
+     * another tenant than the tid of the instance's own subject is refused
+     * (PERMISSION_DENIED).
      */
     private void checkRouteTenant(String field, String value) throws ProtoException {
 {{- if .RequiresAuth}}
         authorizer.checkRouteTenant(field, value);
 {{- else}}
         {{.RouteTenantFQN}}.require(field, value);
+{{- end}}
+    }
+
+    /**
+     * The namespace tenant {@code tid}'s entries live in on this instance, which
+     * the record plane's route pin holds a routed call's entries to: the route
+     * field names the tenant by tid, the entry by namespace. Fail-closed: with
+     * no authorizer wired this refuses, never guesses the tenant's name from its
+     * tid.
+     */
+    private String routeNamespace(String tid) throws ProtoException {
+{{- if .RequiresAuth}}
+        return authorizer.routeNamespace(tid);
+{{- else}}
+        throw new ProtoException(ProtoException.INTERNAL, "tenant route namespace not configured for tenant \"" + tid + "\"");
 {{- end}}
     }
 {{- end}}

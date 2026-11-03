@@ -40,6 +40,7 @@ Release lines with branches: 2.0 through 2.4.
 - Retire the linked claim from the generated namespace backstop (#171), blocked on #170 and tacplus-dev/kernel#4
 - diskstore archive: stable member id across restarts (#143), blocked on #163
 - diskstore archive: retention of old segments and checkpoints (#144), blocked on #163
+- **Known-bad secret values:** extend the required-secret check (#274) with a list of known-bad values beyond its fixed placeholders. Agent, at Jody's request, 2026-11-02: "looks random is better then no check at all. we could expand this later to check for known bad values".
 
 ## Not doing
 - Nothing recorded yet.

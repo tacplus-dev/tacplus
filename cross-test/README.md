@@ -19,8 +19,16 @@ that would thrash the shared cache) keeps its own directory and says why with
 a `separate-cargo-target:` comment on the line that sets it; no leg does
 today. `scripts/cross_test_cargo_target_test.go` (run by `just test`) fails if
 a leg sets its own directory without that comment or runs cargo without
-sourcing the helper. The shared directory is build output under `target/`,
-removed with `target/cross-test` after a gate.
+sourcing the helper. The shared directory is build output under `target/`.
+
+Nothing removes it between gates, so each leg bounds it: once a leg passes,
+it calls `prune_cargo_workspace` (from the same helper) on the workspaces it
+built. That removes their own crates and keeps the shared dependencies for
+the next leg. `current-generation` also deletes each fixture's directory (its
+Go module and Maven tree) once that fixture passes. A failing leg keeps
+everything for diagnosis, and so does `--keep`. Without this, one gate run
+grew `target/cross-test` past 100G and filled the runner's disk (#282). The
+same test fails if a leg runs cargo and never prunes.
 
 ## Commands
 

@@ -14,6 +14,15 @@ ARG RUST_VERSION=1
 ARG NODE_VERSION=24
 ARG SWIFT_VERSION=6.1.3
 ARG DOCKER_VERSION=29
+# docker-buildx is built from its release's source rather than copied from
+# the docker CLI image: its releases (through 0.38.1) vendor moby/go-archive
+# 0.2.0 (CVE-2026-17106, HIGH; fixed in 0.3.0) and golang.org/x/net 0.59.0
+# (CVE-2026-78669, HIGH, fixed in 0.60.0; CVE-2026-78661 and CVE-2026-97045,
+# fixed in 0.62.0) (#190). Drop each bump, and then the stage, once a buildx
+# release carries it; images/smoke.sh checks the floors.
+ARG BUILDX_VERSION=0.38.1
+ARG GO_ARCHIVE_VERSION=0.3.3
+ARG X_NET_VERSION=0.62.0
 ARG PROTOC_VERSION=36.0
 ARG PROTOC_GEN_GO_VERSION=1.36.11
 ARG PROTOC_GEN_GO_GRPC_VERSION=1.6.0
@@ -78,6 +87,18 @@ RUN GOARCH=${TARGETARCH} go install "google.golang.org/protobuf/cmd/protoc-gen-g
     && GOARCH=${TARGETARCH} go install "google.golang.org/grpc/cmd/protoc-gen-go-grpc@v${PROTOC_GEN_GO_GRPC_VERSION}" \
     && mkdir -p /out && find /go/bin -type f \( -name protoc-gen-go -o -name protoc-gen-go-grpc \) -exec cp {} /out/ \;
 
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS buildx
+ARG TARGETARCH
+ARG BUILDX_VERSION
+ARG GO_ARCHIVE_VERSION
+ARG X_NET_VERSION
+RUN git clone --depth 1 --branch "v${BUILDX_VERSION}" https://github.com/docker/buildx /src/buildx \
+    && cd /src/buildx \
+    && go get "github.com/moby/go-archive@v${GO_ARCHIVE_VERSION}" "golang.org/x/net@v${X_NET_VERSION}" && go mod tidy && go mod vendor \
+    && CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -mod=vendor -trimpath \
+       -ldflags "-X github.com/docker/buildx/version.Version=v${BUILDX_VERSION} -X github.com/docker/buildx/version.Package=github.com/docker/buildx" \
+       -o /out/docker-buildx ./cmd/buildx
+
 FROM rust:${RUST_VERSION}-trixie AS rust-tools
 ARG PROTOC_GEN_PROST_VERSION
 ARG PROTOC_GEN_TONIC_VERSION
@@ -130,7 +151,7 @@ COPY --from=node-tools /usr/local/lib/node_modules/@bufbuild /usr/local/lib/node
 COPY --from=swift-tools /out/bin/ /usr/local/bin/
 COPY --from=swift-tools /out/swift-runtime /opt/swift-runtime
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
+COPY --from=buildx /out/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
 COPY images/smoke.sh /usr/local/bin/tacplus-smoke
 RUN ln -s ../lib/node_modules/@bufbuild/protoc-gen-es/bin/protoc-gen-es /usr/local/bin/protoc-gen-es
 # Python codegen runs `python -m grpc_tools.protoc`; black/twine/build are

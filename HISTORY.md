@@ -53,3 +53,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-03 looper release v2.3.9 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.3.9)
 - 2026-11-03 looper release v2.4.8 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.4.8)
 - 2026-11-03 looper release v2.5.9 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.5.9)
+- 2026-11-03 looper issue base image carries Maven's guava 33.6.0-jre (CVE-2026-102554, HIGH): every build image fails the Nightly security scan (#222, ec53ec98)

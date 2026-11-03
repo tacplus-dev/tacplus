@@ -1583,6 +1583,11 @@ func writeTsFloatConstraintValidation(b *strings.Builder, msg model.Message, fie
 }
 
 func writeTsFloatConstraintChecks(b *strings.Builder, fieldLabel, valueExpr string, constraint *model.FloatConstraint, epsilon float64, indent string) {
+	if constraint.HasBound() {
+		fmt.Fprintf(b, "%sif (Number.isNaN(%s)) {\n", indent, valueExpr)
+		fmt.Fprintf(b, "%s\tthrow newErrMissingInvalidData(undefined, `field %s must be a number, got: ${%s}`);\n", indent, fieldLabel, valueExpr)
+		fmt.Fprintf(b, "%s}\n", indent)
+	}
 	if constraint.Gt != nil {
 		lit := formatTsFloat(*constraint.Gt)
 		fmt.Fprintf(b, "%sif (%s <= %s) {\n", indent, valueExpr, lit)

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tacplus-dev/tacplus/pkg/protosrc"
 )
 
 func writeFile(t *testing.T, p, content string) {
@@ -119,6 +121,57 @@ func TestResolveDependenciesIsTransitive(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dirs[1], "services", "opa.proto")); err != nil {
 		t.Fatalf("kernel's own dependency opa not staged: %v", err)
+	}
+}
+
+// A dependency that depends back on the project never brings the project's
+// published proto: the project's own names are satisfied by its own sources.
+// stratum test-depends on letsencrypt, whose contract depends on stratum; the
+// checkout's stratum.proto differs from the published one, and merging both
+// would refuse (tacplus#205).
+func TestResolveDependenciesCycleBackToProject(t *testing.T) {
+	root := t.TempDir()
+	stratumRepo := filepath.Join(root, "stratum-repo")
+	writeFile(t, filepath.Join(stratumRepo, "proto", "dependencies.yaml"), "{}\n")
+	writeFile(t, filepath.Join(stratumRepo, "proto", "registry.yaml"), "vservices:\n    - {name: stratum, field_id: 10}\n")
+	writeFile(t, filepath.Join(stratumRepo, "proto", "services", "stratum.proto"), "syntax = \"proto3\";\npackage stratum;\n// published\nservice Stratum { option (spec.vservice) = { name: \"stratum\" }; }\n")
+	leRepo := filepath.Join(root, "letsencrypt-repo")
+	writeFile(t, filepath.Join(leRepo, "tacplus.yaml"), "language: go\noutput-dir: out\ndepends: [stratum]\n")
+	writeFile(t, filepath.Join(leRepo, "proto", "dependencies.yaml"), "{}\n")
+	writeFile(t, filepath.Join(leRepo, "proto", "registry.yaml"), "services:\n    - {name: letsencrypt, id: 30}\n")
+	writeFile(t, filepath.Join(leRepo, "proto", "services", "letsencrypt.proto"), "syntax = \"proto3\";\npackage letsencrypt;\nservice LetsEncrypt { option (spec.service) = { name: \"letsencrypt\" }; }\n")
+	global := filepath.Join(root, "registry")
+	writeFile(t, filepath.Join(global, "registry.yaml"), "scope: global\nservices:\n    - {name: letsencrypt, id: 30, contract: "+leRepo+", visibility: public}\nvservices:\n    - {name: stratum, field_id: 10, contract: "+stratumRepo+", visibility: public}\n")
+	checkout := filepath.Join(root, "stratum-checkout", "proto")
+	writeFile(t, filepath.Join(checkout, "dependencies.yaml"), "{}\n")
+	writeFile(t, filepath.Join(checkout, "registry.yaml"), "registries: ["+global+"]\nvservices:\n    - {name: stratum, field_id: 10}\n")
+	writeFile(t, filepath.Join(checkout, "services", "stratum.proto"), "syntax = \"proto3\";\npackage stratum;\n// changed in the checkout\nservice Stratum { option (spec.vservice) = { name: \"stratum\" }; }\n")
+
+	dirs, cleanups, err := resolveDependencies([]string{"letsencrypt"}, checkout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, c := range cleanups {
+			c()
+		}
+	}()
+	if len(dirs) != 1 {
+		t.Fatalf("dirs = %v, want letsencrypt alone: stratum is the project itself", dirs)
+	}
+	if _, err := os.Stat(filepath.Join(dirs[0], "services", "letsencrypt.proto")); err != nil {
+		t.Fatalf("letsencrypt not staged: %v", err)
+	}
+	merged := filepath.Join(root, "merged")
+	if err := protosrc.MergeSources(append([]string{checkout}, dirs...), merged); err != nil {
+		t.Fatalf("merge refused: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(merged, "services", "stratum.proto"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "changed in the checkout") {
+		t.Fatalf("merged stratum.proto is not the checkout's:\n%s", got)
 	}
 }
 

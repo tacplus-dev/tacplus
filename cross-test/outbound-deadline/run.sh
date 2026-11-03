@@ -82,3 +82,4 @@ fi
 
 echo "==> Running three-hop chain"
 "$CROSS_TEST_CARGO_TARGET/debug/outbound-deadline-rust"
+prune_cargo_workspace "$CRATE_DIR" "$MODEL_DIR/model"

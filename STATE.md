@@ -114,7 +114,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-04 by lo
   No C2S record writes (by decision, 2.5). The Rust wrapper renders no (spec.store_namespace) predicate pin on the
   query plane (PROPOSALS.md). The looper image's tacplus runs the tacplus image, which 2.6 does not have
   (PROPOSALS.md). `tacplus verify` (Kani) fails on every generated Rust crate: the generated harnesses do not
-  compile (#211; #196 stops generating them). The new build image (Kani, cargo-fuzz, the launcher) is verified by
+  compile (#211; #196 stops generating them). Formal verification is not a gate (#275): `just verify` runs it,
+  `just verify-changed <sha>` says whether the nightly needs it; the pipeline that runs them on release tags and
+  nightly is tacplus-dev/looper#74, its nightly off until #211 and #257 pass. The new build image (Kani, cargo-fuzz, the launcher) is verified by
   images.yml once pushed; the launcher and `tacplus pin` by the gates. The fleet build's image lookup on a private package is
   verified against a fake registry only: the looper's token has no `read:packages` (a public image resolves live).
   `depends`/`src` at a line can take a pre-release (#214). The record plane's tenant checks assume a tenant's

@@ -136,7 +136,7 @@ service runtime code.
 | `cmd/` | CLI command definitions (cobra) |
 | `cmd/build/` | Code regeneration (`tacplus build`) |
 | `cmd/validate/` | Proto validation (`tacplus validate`) |
-| `cmd/verify/` | Verify generated output is up to date (`tacplus verify`) |
+| `cmd/verify/` | Formal verification of a repository's harnesses: Kani for Rust, JBMC for Java (`tacplus verify`) |
 | `cmd/registry/` | Service-registry management (`tacplus registry`) |
 | `cmd/upgrade/` | Self-upgrade (`tacplus upgrade`) |
 | `cmd/version/` | Version info (`tacplus version`) |
@@ -483,6 +483,19 @@ Current durable gates:
 - Consumer-contract runtime tests should cover handler/wrapper/client behavior
   at the generated API seam, including auth-required, auth-disabled, validation,
   namespace mismatch, response validation, stream teardown, and backpressure.
+
+### Formal verification is not a gate
+
+Kani (Rust) and JBMC (Java) run in `just verify` (`scripts/verify.sh`), never
+in `just gates` (#275): they need the build image's verifiers and far more
+memory and time than a land, and they add nothing to a change that leaves the
+generated code alone. `scripts/verify_test.go` fails if anything `just gates`
+reaches runs a verifier. The build pipeline (tacplus-dev/looper#74) runs
+`just verify` on every release tag, and nightly when
+`just verify-changed <last verified sha>` (`scripts/verify-changed.sh`) prints
+`run`. A new input of `scripts/verify.sh` (a fixture, a kitchensink proto set,
+a toolchain pin) goes into the `depends` list of `scripts/verify-changed.sh` too.
+The kitchensink release gate (#196) follows the same split.
 
 Open soundness work belongs in `../roadmap/README.md` or the local
 `todo/` ledger, not in standalone report files.

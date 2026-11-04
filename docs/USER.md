@@ -658,6 +658,21 @@ In Rust the harness is a `#[kani::proof]` that constrains the field with
 `CProver.assume(...)`. The `tacplus verify` command runs these proofs (Rust or
 Java only).
 
+**Where verification runs.** Formal verification is not part of tacplus's
+gates: a land never runs Kani or JBMC. tacplus's build pipeline runs it with
+`just verify`, in the build image of the line:
+
+- on every release tag, so no release ships unverified;
+- nightly, only when something verification depends on changed since the last
+  verified commit: the generator (`pkg/**`), the protos and fixtures it
+  generates from, the harnesses, or the toolchain pins. `just verify-changed
+  <sha>` decides, prints `skip: unchanged since <sha>, verified then` otherwise,
+  and runs when it cannot tell. A failure is filed as a `bug` naming the harness
+  and its counterexample. The nightly schedule starts once the generated
+  harnesses verify (#211, #257).
+
+Go is not formally verified, by decision; it is fuzzed and tested.
+
 > `(spec.proof_requires)` / `(spec.proof_ensures)` exist and are parsed, but no
 > generator consumes them yet — they emit nothing today.
 

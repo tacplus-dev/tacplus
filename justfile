@@ -212,6 +212,21 @@ gates-container:
   docker run --rm -v "$PWD:/workspace" -w /workspace "$image" \
     bash -c 'git config --global --add safe.directory /workspace && just gates'
 
+# Formal verification (#275): Kani on the generated Rust and JBMC on the
+# generated Java of cross-test/proto (Go is not formally verified, by decision).
+# NOT a gate, and `just gates` must never reach it (scripts/verify_test.go): it
+# needs the build image's verifiers and far more memory and time than a land.
+# The build pipeline runs it on every release tag, and nightly when
+# `just verify-changed <last verified sha>` prints `run`. All of it lives in
+# scripts/verify.sh, whose inputs verify-changed watches; keep this a call.
+verify *LANGUAGES:
+  {{lock}} bash scripts/verify.sh {{LANGUAGES}}
+
+# Prints `run` when something `just verify` depends on changed since SHA (or
+# when it cannot tell), else `skip: unchanged since SHA, verified then`.
+verify-changed SHA="":
+  @bash scripts/verify-changed.sh {{ if SHA == "" { "" } else { quote(SHA) } }}
+
 # The build image's tacplus (images/tacplus.sh, #193) against a fake release
 # forge: a pin runs exactly; a checksum mismatch, a missing pin and a line
 # mismatch are refused; a cached version runs offline; and the same pinned

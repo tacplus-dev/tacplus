@@ -4,6 +4,12 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Verification only under the nightly set in gates.yaml** (2026-11-04, #275): once tacplus-dev/looper#48 maps
+  tacplus, its `gates.yaml` lists `just verify` under the nightly and release sets only, never a land's. tacplus has no
+  gates.yaml yet, so #275 landed without it.
+- **`just verify` covers only cross-test/proto** (2026-11-04, #275): it generates the base fixture in Rust and Java and
+  verifies its harnesses. The kitchensink (#196) is the set meant to cover every feature; when it lands, `scripts/verify.sh`
+  generates it instead and `scripts/verify-changed.sh` watches it.
 - **Redact<T> across packages, and the sys types that hold secrets** (2026-11-04, #274): a sensitive tree must stay
   in one proto package (a sensitive field whose type is in another package is refused at generation), and no sys
   type carries `(spec.sensitive)` yet, though several hold secret material (`sys/token.proto` tokens,

@@ -405,6 +405,9 @@ func writeMessageValidationFns(b *strings.Builder, msg model.Message, enums []mo
 			}
 		}
 
+		// Sensitive fields (tacplus#274): required, placeholders, entropy floor.
+		writeRustSensitiveChecks(&vb, msg)
+
 		for _, line := range strings.Split(vb.String(), "\n") {
 			if line != "" {
 				validationCode = append(validationCode, line)

@@ -766,6 +766,11 @@ func writeValidateMethods(b *strings.Builder, msg model.Message, outerClassName 
 		}
 	}
 
+	// Sensitive fields (tacplus#274): required, placeholders, entropy floor.
+	if writeJavaSensitiveChecks(b, msg) {
+		hasValidations = true
+	}
+
 	if !hasValidations {
 		b.WriteString("// No validations defined\n")
 	}

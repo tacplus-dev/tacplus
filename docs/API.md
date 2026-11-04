@@ -973,6 +973,48 @@ and failed validation.
 Generated types and wrappers should expose tacplus structured errors/status
 codes rather than language-specific exception behavior at public seams.
 
+## Redact
+
+For every message with a sensitive leaf in its tree (`(spec.sensitive)`,
+`(spec.sensitive_message)`; USER.md, Redact for Any Type), Go, Java and Rust
+generate a deterministic redact that returns a redacted copy and never changes
+its input:
+
+| Language | Surface |
+|---|---|
+| Go | `func Redact<T>(m *<T>) *<T>` in the type's package (nil in, nil out) |
+| Java | `public static <Outer>.<T> redact<T>(<Outer>.<T> m)` in the package's `Helpers` class (null in, null out) |
+| Rust | `pub fn redact_<snake_t>(m: &<T>) -> <T>` in the package's `helpers.rs` (plus `redact_<snake_t>_in_place(&mut <T>)`) |
+
+The contract, the same in all three and pinned byte for byte by
+`cross-test/redact`:
+
+- a set sensitive `string` becomes `"REDACTED"`, a set sensitive `bytes` value
+  the eight bytes of `REDACTED`; an empty or unset value stays as it was (an
+  explicitly set empty proto3 `optional` stays set and empty);
+- `<field>_redacted` (the injected bool at `50000 + number`) is set on a
+  `(spec.sensitive)` field, and on each eligible field of a
+  `(spec.sensitive_message)`, when it held a value: a non-empty leaf, a present
+  message, a non-empty repeated or map field;
+- repeated fields keep their length and order, map keys are kept, the injected
+  `trace_id` is kept, non-string/bytes values are kept;
+- no key, no randomness, no I/O. Byte-identical serialized output holds for
+  messages whose maps hold at most one entry: protobuf runtimes serialize a
+  multi-entry map in their own order (Rust's `HashMap`), so compare such a
+  message's redacted maps by content.
+
+A sensitive field that is `required` or declares `min_entropy_bits` is checked
+by the message's generated validator, and fails with one of exactly these
+`INVALID_ARGUMENT` messages, which name the field and the rule and never the
+value:
+
+- `field <Message>.<field> (sensitive): required and empty`
+- `field <Message>.<field> (sensitive): a known placeholder value`
+- `field <Message>.<field> (sensitive): estimated entropy below <N> bits`
+
+The legacy `Sanitize<T>` / `<T>Entitlement` / `Build<T>Entitlement` surface is
+deprecated in 2.6 and removed in 3.0.
+
 ## Tracing And Registry
 
 Generated service wrappers emit typed trace/accounting data where the surface

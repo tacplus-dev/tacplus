@@ -554,7 +554,19 @@ extend google.protobuf.MessageOptions {
   // anonymize requires string/bytes). Mirrors how a message-level default is
   // overridden per field; does NOT cascade into nested messages (each message
   // carries its own default).
+  //
+  // LEGACY (deprecated in 2.6, removed in 3.0): use (spec.sensitive) /
+  // (spec.sensitive_message) and the generated Redact<T> instead.
   RedactOption data_entitlement = 60069;
+
+  // sensitive_message: every string and bytes leaf of this message is sensitive
+  // (see the field option (spec.sensitive)), recursively through its
+  // message-typed fields, except a field marked (spec.not_sensitive). For a
+  // message that is secret by construction, e.g. a uni-config's Secrets. Its
+  // required / min_entropy_bits apply to every direct string or bytes field of
+  // the message that has no (spec.sensitive) of its own.
+  // Example: option (spec.sensitive_message) = {};
+  SensitiveOption sensitive_message = 60097;
 
   // config_slice marks a message as one per-service configuration slice with an
   // explicit owner and scope.
@@ -2288,7 +2300,35 @@ extend google.protobuf.FieldOptions {
   // do not reveal it (at Sample/Pull only — never baked into stored state). tacplus
   // generates a typed Sanitize<T>(record, <T>Entitlement, hmacKey) transform; the
   // store computes the entitlement (mechanism in tacplus, policy in service).
+  //
+  // LEGACY (deprecated in 2.6, removed in 3.0): use (spec.sensitive) and the
+  // generated Redact<T> instead. Generation warns when it is declared.
   RedactOption redact = 60082;
+
+  // sensitive: this field holds sensitive material (a secret, a credential, key
+  // material, personal data). Valid on string and bytes fields (singular,
+  // repeated, or as a map's value) and on message-typed fields, where it marks
+  // every string and bytes leaf beneath them. Refused on any other type.
+  //
+  // tacplus generates, in Go, Rust and Java, a deterministic Redact<T>(m) for
+  // every message with a sensitive leaf in its tree: no key, no entitlement, no
+  // randomness, the same input always gives the same output. A set sensitive
+  // string becomes "REDACTED", a set sensitive bytes value the bytes of
+  // "REDACTED"; an empty or unset value stays empty. The injected companion
+  // bool <field>_redacted is set when the field held a value. This is the
+  // redacted view a tool hands to an LLM or a human.
+  //
+  // required and min_entropy_bits add generated validation (see SensitiveOption).
+  // Example: string api_token = 3 [(spec.sensitive) = {required: true}];
+  SensitiveOption sensitive = 60095;
+
+  // not_sensitive: this field LOOKS sensitive by name (secret, password, token,
+  // key, private, credential) but is not, e.g. a page_token or a secret's
+  // version reference. It is the explicit answer the sensitive-name gate asks
+  // for, and inside a (spec.sensitive_message) it keeps the field visible in
+  // Redact<T>.
+  // Example: string secret_version = 4 [(spec.not_sensitive) = true];
+  bool not_sensitive = 60096;
 
   // ----- Principal annotations (§4b: the principal is a property of the type) -----
   // These two say WHERE the caller's principal lives, once, on the type. The
@@ -2499,6 +2539,8 @@ message QueryFieldOption {
 // max(annotation floor, runtime entitlement) under pass-through < anonymize <
 // redact — the runtime entitlement can only ratchet tighter, never loosen below
 // the floor. The two "is-*" modes are the original unconditional behavior.
+// LEGACY (deprecated in 2.6, removed in 3.0) with (spec.redact): use
+// (spec.sensitive) and the deterministic Redact<T>.
 enum RedactMode {
   REDACT_MODE_UNSPECIFIED = 0;   // invalid — presence of the annotation implies a real mode
   REDACT_MODE_DROP = 1;          // HARD FLOOR redact: always cleared to zero        (is-redacted)
@@ -2511,6 +2553,24 @@ enum RedactMode {
 // a whole message default) with a data-entitlement mode.
 message RedactOption {
   RedactMode mode = 1;
+}
+
+// SensitiveOption configures (spec.sensitive) and (spec.sensitive_message).
+// required and min_entropy_bits apply only to a singular string or bytes field.
+// The generated validators (Go, Rust, Java; identical verdicts) check, in order:
+//   - required: an empty value fails;
+//   - a set value that is a known placeholder fails: "REDACTED" or "changeme"
+//     (ASCII case-insensitive), or one character (byte) repeated;
+//   - a set value whose estimated entropy is below min_entropy_bits fails. The
+//     estimate is length x 8 for bytes, and length (code points) x
+//     log2(the size of the character classes present: lower 26, upper 26,
+//     digits 10, any other 33) for a string.
+// The value checks run when the field is required or sets min_entropy_bits;
+// min_entropy_bits defaults to 128 for a required field. Errors name the field
+// and the rule, never the value.
+message SensitiveOption {
+  bool required = 1;
+  optional uint32 min_entropy_bits = 2;
 }
 
 // ============================================================================

@@ -188,7 +188,7 @@ gates:
     echo "=== OVERALL fail=1 (protoc preflight) ==="
     exit 1
   fi
-  for g in soundness test current-generation determinism cert-stream stream-expiry memberport claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg tacplus-script; do
+  for g in soundness test current-generation determinism cert-stream stream-expiry memberport claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg redact tacplus-script; do
     echo "=== $g ==="
     just "$g"
     rc=$?
@@ -319,6 +319,22 @@ jwk-alg-rust:
 
 jwk-alg-typescript:
   {{lock}} bash cross-test/jwk-alg/run.sh --language typescript
+
+# Redact for any type (issue #274): go, java and rust each feed the one shared
+# fixture (cross-test/fixtures/redact_vectors.json) through their generated
+# Redact<T> and sensitive-field validators: byte-identical redacted output (a
+# uni-config with planted secrets) and identical verdicts (required,
+# placeholders, entropy floor), against hand-built expected bytes.
+redact: redact-go redact-java redact-rust
+
+redact-go:
+  {{lock}} bash cross-test/redact/run.sh --language go
+
+redact-java:
+  {{lock}} bash cross-test/redact/run.sh --language java
+
+redact-rust:
+  {{lock}} bash cross-test/redact/run.sh --language rust
 
 # Generation gate against the REAL platform + app proto repos (not the
 # cross-test/proto fixtures every other gate uses). This is the check that

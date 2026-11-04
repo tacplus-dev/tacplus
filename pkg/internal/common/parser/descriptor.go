@@ -638,8 +638,8 @@ func (p *DescriptorParser) ValidateNoNestedRedact() error {
 		return nil
 	}
 	sort.Strings(offenders)
-	return fmt.Errorf("(spec.redact) is declared on a field of a NESTED message declaration (%s); "+
-		"tacplus applies egress redaction only to top-level record messages, so a nested redact is silently dropped — "+
+	return fmt.Errorf("(spec.redact), (spec.sensitive) or (spec.sensitive_message) is declared on a NESTED message declaration (%s); "+
+		"tacplus applies redaction only to top-level messages, so a nested annotation is silently dropped — "+
 		"hoist the type to top level or remove the annotation", strings.Join(offenders, ", "))
 }
 
@@ -652,10 +652,14 @@ func collectNestedRedactFields(filePath string, md protoreflect.MessageDescripto
 		return
 	}
 	if isNested {
+		// (spec.sensitive_message) on a nested declaration is dropped the same way.
+		if opts := md.Options(); opts != nil && proto.HasExtension(opts, spec.E_SensitiveMessage) {
+			*offenders = append(*offenders, fmt.Sprintf("%s: %s", filePath, md.Name()))
+		}
 		fields := md.Fields()
 		for i := 0; i < fields.Len(); i++ {
 			f := fields.Get(i)
-			if opts := f.Options(); opts != nil && proto.HasExtension(opts, spec.E_Redact) {
+			if opts := f.Options(); opts != nil && (proto.HasExtension(opts, spec.E_Redact) || proto.HasExtension(opts, spec.E_Sensitive)) {
 				*offenders = append(*offenders, fmt.Sprintf("%s: %s.%s", filePath, md.Name(), f.Name()))
 			}
 		}
@@ -2072,6 +2076,13 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 		}
 	}
 
+	// sensitive_message: every string/bytes leaf of the message is sensitive.
+	if proto.HasExtension(opts, spec.E_SensitiveMessage) {
+		if so, ok := proto.GetExtension(opts, spec.E_SensitiveMessage).(*spec.SensitiveOption); ok && so != nil {
+			annotations["sensitive_message"] = sensitiveAnnotation(so)
+		}
+	}
+
 	// grpc_config: marks this message as a gRPC service's configuration
 	if proto.HasExtension(opts, spec.E_GrpcConfig) {
 		val := proto.GetExtension(opts, spec.E_GrpcConfig).(*spec.GrpcConfigAnnotation)
@@ -2705,6 +2716,20 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 		if r, ok := proto.GetExtension(opts, spec.E_Redact).(*spec.RedactOption); ok && r != nil {
 			annotations["redact"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringValue: redactModeString(r.GetMode())}
 		}
+	}
+
+	// sensitive - this field holds sensitive material; Redact<T> rewrites it and the
+	// generated validators check required / entropy (sensitive.go). Recorded whenever
+	// present: BoolValue is required, IntValue is min_entropy_bits or -1 when unset.
+	if proto.HasExtension(opts, spec.E_Sensitive) {
+		if so, ok := proto.GetExtension(opts, spec.E_Sensitive).(*spec.SensitiveOption); ok && so != nil {
+			annotations["sensitive"] = sensitiveAnnotation(so)
+		}
+	}
+
+	// not_sensitive - the explicit "looks sensitive, is not" answer to the gate.
+	if proto.HasExtension(opts, spec.E_NotSensitive) && proto.GetExtension(opts, spec.E_NotSensitive).(bool) {
+		annotations["not_sensitive"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 	}
 
 	// leader (bool) - per-graph leader election (valid on queue/topic/priority_queue fields)
@@ -3449,4 +3474,14 @@ func (p *DescriptorParser) ConvertToProtoInfo(filePath string) (*ProtoInfo, erro
 	}
 
 	return info, nil
+}
+
+// sensitiveAnnotation records a (spec.sensitive) / (spec.sensitive_message):
+// BoolValue is required, IntValue is min_entropy_bits, or -1 when it is unset.
+func sensitiveAnnotation(so *spec.SensitiveOption) model.AnnotationValue {
+	bits := int64(-1)
+	if so.MinEntropyBits != nil {
+		bits = int64(so.GetMinEntropyBits())
+	}
+	return model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: so.GetRequired(), IntValue: bits}
 }

@@ -27,7 +27,8 @@ type redactIndicator struct {
 }
 
 // InjectRedactIndicatorFields rewrites the proto text in tempProtoDir so every
-// message with (spec.redact) fields gains a companion "<field>_redacted" bool
+// message with (spec.redact) or sensitive fields (parser.SensitiveIndicator)
+// gains a companion "<field>_redacted" bool
 // (number redactIndicatorFieldBase + the source field number). A redacted scalar
 // is indistinguishable from a genuine zero, so the sanitize transform sets this
 // bool to true when it clears/anonymizes the field, letting the consumer tell a
@@ -60,8 +61,12 @@ func InjectRedactIndicatorFields(tempProtoDir, inputDir string) error {
 			}
 			var inds []redactIndicator
 			for _, f := range msg.Fields {
-				ann, ok := f.Annotations["redact"]
-				if !ok || ann.StringValue == "" {
+				// A legacy (spec.redact) field, or a field Redact<T> rewrites
+				// (parser.SensitiveIndicator: the same predicate every Redact<T>
+				// emitter sets the indicator by).
+				ann, legacy := f.Annotations["redact"]
+				legacy = legacy && ann.StringValue != ""
+				if !legacy && !parser.SensitiveIndicator(msg.Annotations, f.Annotations, parser.DescriptorLeafKind(f), f.Name, int(f.Number)) {
 					continue
 				}
 				name := f.Name + "_redacted"

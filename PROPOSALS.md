@@ -4,6 +4,30 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Redact<T> across packages, and the sys types that hold secrets** (2026-11-04, #274): a sensitive tree must stay
+  in one proto package (a sensitive field whose type is in another package is refused at generation), and no sys
+  type carries `(spec.sensitive)` yet, though several hold secret material (`sys/token.proto` tokens,
+  `sys/tlscert.proto` / `sys/key.proto` private keys, `sys/credpair.proto`). A uni-config that embeds one fails the
+  sensitive-name gate (as it should) with no way to annotate it. Calling the other package's generated redact (Go
+  `pkg.RedactT`, Rust crate path, Java helper class) and annotating the sys types would close it.
+- **Redact<T> and sensitive validators in the client-only targets** (2026-11-04, #274): Python, TypeScript, Swift
+  and C# generate neither `Redact<T>` nor the required/entropy check of a sensitive field (the issue asks for them
+  "where useful"). A client that sends a secret could check its entropy before sending, and a client-side tool could
+  show a redacted view. Needs a decision on which targets get which half.
+- **Kani harness for a message with a required sensitive field** (2026-11-04, #274): the generated Rust proof harness
+  asserts that a default message validates, which a required sensitive field makes false, so `proof.go` skips the
+  harness for such a message. A harness that builds a valid value first would keep it covered.
+- **Sensitive leaves in a oneof** (2026-11-04, #274): `(spec.sensitive)` on a oneof member, and a sensitive tree that
+  reaches a string/bytes/message oneof member, are refused at generation. Supporting them is per-language oneof
+  plumbing (Go wrapper structs, prost enums, Java cases), like the legacy Sanitize<T> recursion has.
+- **The sensitive-name gate on every message in 3.0** (2026-11-04, #274): the gate checks only the trees of messages
+  with a generated `Redact<T>`, so a proto with no sensitive annotation is not gated and no existing consumer's build
+  breaks in a 2.x minor (docs/VERSIONING.md). Gating every message in 3.0 would catch a secret in a type nobody has
+  marked yet, at the price of a `(spec.not_sensitive)` on each `page_token`/`partition_key`-style name.
+- **Remove the legacy egress redaction in 3.0** (2026-11-04, #274): `(spec.redact)`, `(spec.data_entitlement)`,
+  `RedactMode`'s egress modes, `Sanitize<T>`, `<T>Entitlement`, `Build<T>Entitlement`, `sys/entitlement.proto`'s
+  `EntitlementLevel` and the pseudonymize helpers are deprecated in 2.6 (generation warns); 3.0 removes them. The
+  record store's egress (Sample/Pull/Watch) would then apply `Redact<T>` or nothing, a decision for the store.
 - **A `just generated <dir>` recipe, so the build's security checks scan what tacplus emits** (2026-11-03, nightly
   scan): the build pipeline scans a repository's generated code only through a `generated` recipe (looper README,
   Security checks; looper#49, which notes "tacplus has no `generated` recipe yet"). tacplus has none, and

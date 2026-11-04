@@ -176,6 +176,18 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := dp.ValidateNoNestedRedact(); err != nil {
 		return err
 	}
+	// Redact for any type (tacplus#274): the annotation contract, then the gate
+	// that refuses an unannotated sensitive-looking field a Redact<T> would show.
+	if err := parser.ValidateSensitiveAnnotations(allParsedFiles); err != nil {
+		return err
+	}
+	if err := parser.ValidateSensitiveNames(allParsedFiles); err != nil {
+		return err
+	}
+	// The legacy egress redaction still generates, deprecated until 3.0.
+	if w := parser.LegacyRedactWarning(allParsedFiles); w != "" {
+		fmt.Fprintln(os.Stderr, w)
+	}
 	if err := parser.ValidateReservedFieldNumbers(allParsedFiles); err != nil {
 		return err
 	}

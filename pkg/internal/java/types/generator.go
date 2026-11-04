@@ -577,7 +577,7 @@ func generateModule(module *ModuleInfo, protoDir string, config *tactype.Config,
 	helperSubdir := packagePath
 	hasDefaults := messagesWithDefaults(allFiles)
 	if len(mergedProto.Enums) > 0 || len(mergedProto.Constants) > 0 || len(mergedProto.Messages) > 0 || hasFieldDefaults(mergedProto, hasDefaults) {
-		if err := generateHelpers(mergedProto, helperBaseDir, helperSubdir, defaultOuterClass, config, hasDefaults, svcRPCs, vsEntries); err != nil {
+		if err := generateHelpers(mergedProto, helperBaseDir, helperSubdir, defaultOuterClass, config, hasDefaults, svcRPCs, vsEntries, sensitiveIndex(allFiles)); err != nil {
 			return fmt.Errorf("failed to generate Helpers: %w", err)
 		}
 	}

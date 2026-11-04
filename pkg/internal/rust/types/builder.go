@@ -240,6 +240,11 @@ func processProtoFiles(protocDir, outputDir string) ([]model.ProtoFile, error) {
 				return nil, fmt.Errorf("writeRelease %s: %w", pf.RelPath, err)
 			}
 		}
+		if len(pf.Messages) > 0 {
+			// Redact for any type (tacplus#274): the deterministic redact_<t>, and
+			// the verdict helper the sensitive-field validators call.
+			writeRedact(&b, pf, protoFiles)
+		}
 		writePublicView(&b, pf)
 		if len(pf.Messages) > 0 {
 			writeProofHarnesses(&b, pf)

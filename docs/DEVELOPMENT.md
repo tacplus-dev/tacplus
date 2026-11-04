@@ -494,9 +494,38 @@ validators instead so the semantics are portable across generated languages and
 the compiler does not emit attacker-controlled regular expressions into
 backtracking engines.
 
-### Data entitlement (spec.redact)
+### Redact for any type (spec.sensitive)
 
-`(spec.redact)` drives egress data entitlement. The moving parts:
+`(spec.sensitive)`, `(spec.sensitive_message)` and `(spec.not_sensitive)` drive
+the deterministic `Redact<T>` and the sensitive-field validators (tacplus#274).
+Everything a language decides comes from `pkg/internal/common/parser/sensitive.go`,
+so Go, Rust and Java cannot drift:
+
+- **Validation** — `ValidateSensitiveAnnotations` (types, oneof, legacy
+  combination, required/entropy placement, and the tree checks: no cross-package,
+  oneof or unresolvable message in a sensitive tree) and `ValidateSensitiveNames`
+  (the sensitive-name gate, scoped to the trees of messages with a `Redact<T>`)
+  run in `builder.validateSemanticAnnotations`, beside the legacy redact checks.
+- **Plan** — `SensitiveIndex` answers `NeedsRedact` / `NeedsRedactAll` and
+  `Plan(msg, pkg, all)` gives each field's action (replace the leaf, all-leaves
+  recursion, annotated recursion) and whether its indicator is set.
+  `SensitiveIndicator` is the one predicate the proto injector
+  (`InjectRedactIndicatorFields`, the same `<field>_redacted` at
+  `50000 + number` as the legacy feature) and every emitter use. The injected
+  `trace_id` (`TraceIDFieldName`/`TraceIDFieldNumber`, read by
+  `pkg/internal/proto/trace.go`) is never sensitive.
+- **Validators** — `FieldSensitiveCheck` says which fields are checked;
+  `EntropyMicroBits` is the integer entropy table every language emits as
+  constants, so no generated code computes a logarithm and the verdict is the
+  same everywhere. The three error texts are fixed (`redact_gen.go`).
+- **Emitters** — Go `pkg/internal/go/types/redact_gen.go`; Rust and Java in their
+  `pkg/internal/<lang>/types/`. `cross-test/redact` checks all three against one
+  hand-built fixture.
+
+### Data entitlement (spec.redact) — legacy
+
+Deprecated in 2.6, removed in 3.0 (`parser.LegacyRedactWarning` warns at
+generation). `(spec.redact)` drives egress data entitlement. The moving parts:
 
 - **Validation** — `parser.ValidateDataEntitlementAnnotations` (the old
   `ValidateRedactAnnotations` is a thin alias) enforces the mode/type rules in one

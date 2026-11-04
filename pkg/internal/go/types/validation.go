@@ -1160,6 +1160,8 @@ func Validate%[1]s%[3]sWithDepth(m *%[1]s, depth int) error {
 				"store_key", "quorum_write", "collected_health",
 				"projection_source", "projection_record_key",
 				"query_field", "redact",
+				// sensitive is validated by writeGoSensitiveChecks (redact_gen.go).
+				"sensitive", "not_sensitive",
 				"timeseries_column", "timeseries_order_key",
 				"timeseries_partition_key", "timeseries_cardinality_hint",
 				"json_key", "json_aliases",
@@ -1439,6 +1441,11 @@ func Validate%[1]s%[3]sWithDepth(m *%[1]s, depth int) error {
 
 `, goFieldName, goFieldName, validateRef, goFieldName, errFunc, goFieldName)
 		}
+	}
+
+	// Sensitive fields (tacplus#274): required, placeholders, entropy floor.
+	if writeGoSensitiveChecks(b, msg) {
+		hasValidations = true
 	}
 
 	if !hasValidations {

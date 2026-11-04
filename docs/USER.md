@@ -12,18 +12,19 @@ Reference for developers using tacplus to build services — writing proto files
 4. [CLI Commands](#cli-commands)
 5. [Annotation Reference](#annotation-reference)
 6. [Conditional Requirements](#conditional-requirements)
-7. [Formal Verification Annotations](#formal-verification-annotations)
-8. [REST Method Control](#rest-method-control)
-9. [Governed RPC Verbs](#governed-rpc-verbs)
-10. [Tags](#tags)
-11. [State System](#state-system)
-12. [Auth System](#auth-system)
-13. [Record / Event / Store / Projection Annotations](#record--event--store--projection-annotations)
-14. [registry.json and the Semantic IR](#registryjson-and-the-semantic-ir)
-15. [Generated Libraries](#generated-libraries)
-16. [Service Lifecycle](#service-lifecycle)
-17. [Distributed Tracing](#distributed-tracing)
-18. [Well-Known Names (Conventions)](#well-known-names-conventions)
+7. [Redact for Any Type](#redact-for-any-type)
+8. [Formal Verification Annotations](#formal-verification-annotations)
+9. [REST Method Control](#rest-method-control)
+10. [Governed RPC Verbs](#governed-rpc-verbs)
+11. [Tags](#tags)
+12. [State System](#state-system)
+13. [Auth System](#auth-system)
+14. [Record / Event / Store / Projection Annotations](#record--event--store--projection-annotations)
+15. [registry.json and the Semantic IR](#registryjson-and-the-semantic-ir)
+16. [Generated Libraries](#generated-libraries)
+17. [Service Lifecycle](#service-lifecycle)
+18. [Distributed Tracing](#distributed-tracing)
+19. [Well-Known Names (Conventions)](#well-known-names-conventions)
 
 ---
 
@@ -533,6 +534,115 @@ string redirect_url = 3 [(spec.required_if_eq) = {field: "action", value: "ACTIO
 ```
 
 ---
+
+## Redact for Any Type
+
+A message can carry secrets, credentials, key material or personal data. Mark
+those fields, and tacplus generates a **deterministic redacted view** of the
+message: what a tool shows a human, or hands to an LLM to review (a uni-config,
+say), with no secret material in it (tacplus#274).
+
+```protobuf
+message UniConfig {
+  string name = 1;
+  Secrets secrets = 2;                                  // redacted by construction
+  Database database = 3 [(spec.sensitive) = {}];        // every string/bytes leaf below
+  repeated string api_tokens = 4 [(spec.sensitive) = {}, (spec.assert_max_size) = 8];
+  map<string, bytes> signing_keys = 5 [(spec.sensitive) = {}, (spec.assert_max_size) = 8];
+  string page_token = 6 [(spec.not_sensitive) = true];  // looks sensitive, is not
+}
+
+message Secrets {
+  option (spec.sensitive_message) = {};                 // every string/bytes leaf
+  string api_token = 1 [(spec.sensitive) = {required: true}];
+  bytes signing_key = 2 [(spec.sensitive) = {min_entropy_bits: 256}];
+  string secret_version = 3 [(spec.not_sensitive) = true]; // which secret is in use stays visible
+}
+```
+
+| Annotation | Meaning |
+|---|---|
+| `(spec.sensitive) = {}` | on a field: the value is sensitive. Allowed on `string` and `bytes` fields (singular, repeated, or a map's value) and on message-typed fields, where it covers every string and bytes leaf beneath them. Refused on any other type (int, bool, enum, a map of those) and on a oneof member, with an error naming the field |
+| `(spec.sensitive) = {required: true}` | also validated: empty fails; a set value is checked (placeholders, entropy floor, default 128 bits) |
+| `(spec.sensitive) = {min_entropy_bits: N}` | a set value is checked against an N-bit entropy floor (empty passes unless `required`) |
+| `option (spec.sensitive_message) = {...}` | on a message: every string and bytes leaf of it is sensitive, recursively through its message fields, except a `(spec.not_sensitive)` field. For a message that is secret by construction (a uni-config's `Secrets`, PKI, OAuth client secrets). Its `required` / `min_entropy_bits` apply to each direct string/bytes field without a `(spec.sensitive)` of its own |
+| `(spec.not_sensitive) = true` | the explicit answer for a field that looks sensitive and is not (a `page_token`, a secret's version reference); inside a sensitive message it keeps the field visible |
+
+### The generated `Redact<T>`
+
+For every message with a sensitive leaf in its tree, tacplus generates in Go,
+Rust and Java a `Redact<T>` returning a redacted **copy**:
+
+- a set sensitive `string` becomes `"REDACTED"`; a set sensitive `bytes` value
+  becomes the bytes of `REDACTED`; an empty or unset value stays empty;
+- the companion `<field>_redacted` bool (injected at `50000 + the field's number`)
+  is set where a value was replaced, so a reader can tell a redacted value from
+  an authentic one;
+- it recurses through nested messages, repeated fields and map values (map keys
+  are identifiers and are kept); the injected `trace_id` is never redacted;
+- no key, no entitlement, no randomness: the same input gives the same output,
+  byte for byte, in every language (`cross-test/redact`, in `just gates`).
+
+| Language | Call |
+|---|---|
+| Go | `redacted := pkg.Redact<T>(m)` (in the type's package) |
+| Rust | `redact_<snake_t>(&m)` in the package's `helpers.rs` |
+| Java | `Helpers.redact<T>(m)` in the package's `Helpers` class |
+
+A tool that shows a typed message to a person or a model shows `Redact<T>(m)`,
+never `m` (a uni-config's `show --redacted` is the first: tacplus-dev/operator#17).
+A sensitive tree stays inside one proto package: a sensitive message field whose
+type is in another package, a well-known type (`google.protobuf.Struct`, ...) or
+a oneof member is refused at generation rather than left unredacted.
+
+### The sensitive-name gate
+
+Generation fails when, in the tree of any message with a generated `Redact<T>`,
+a `string` or `bytes` field **looks** sensitive and is not covered. A field looks
+sensitive when a word of its name (split on `_`) is, or ends with, `secret`,
+`password`, `passwd`, `token`, `key`, `private` or `credential` (plurals too:
+`api_token`, `client_secrets`, `apikey`), or when it carries an
+`(spec.assert_enc_type)` that admits a private key. It is covered by its own
+`(spec.sensitive)`, a `(spec.sensitive_message)`, or a sensitive ancestor on the
+path; answer a false positive with `(spec.not_sensitive)`. A missed annotation is
+caught at build time, not found in an LLM transcript. A proto that declares no
+sensitive annotation at all is not gated, so no existing build breaks.
+
+### Validated secrets
+
+A `required` or `min_entropy_bits` sensitive field gets a generated check in its
+message's `Validate` (Go, Rust and Java, identical verdicts, `cross-test/redact`).
+In order:
+
+1. `required` and empty fails;
+2. a set value that is a known placeholder fails: `REDACTED` or `changeme` (ASCII
+   case-insensitive), or one character repeated (one byte, for `bytes`);
+3. a set value whose estimated entropy is below the floor fails. The estimate is
+   length × 8 for `bytes`; for a `string`, its length in code points ×
+   log2(the size of the character classes present: lower 26, upper 26, digits 10,
+   any other character 33). A 32-byte CSPRNG value passes; 10 lowercase letters
+   (47 bits) do not.
+
+The error names the field and the rule, never the value:
+`field Secrets.api_token (sensitive): estimated entropy below 128 bits`.
+
+### Migrating from the legacy record redaction
+
+`(spec.redact)`, `(spec.data_entitlement)`, `RedactMode`'s egress modes, and the
+generated `Sanitize<T>` / `<T>Entitlement` are **legacy**: deprecated in 2.6
+(generation warns, naming each use) and removed in 3.0. They still generate
+unchanged until then. To move a record:
+
+| Legacy | Now |
+|---|---|
+| `[(spec.redact) = {mode: REDACT_MODE_DROP}]` on a string/bytes field | `[(spec.sensitive) = {}]`: the value becomes `REDACTED` instead of being cleared |
+| `(spec.redact)` DROP on a message-typed field | `[(spec.sensitive) = {}]` on the field: its string/bytes leaves are redacted, its shape is kept |
+| `option (spec.data_entitlement) = {mode: REDACT_MODE_DROP}` | `option (spec.sensitive_message) = {}` |
+| `PSEUDONYMIZE`, `MAY_REDACT`, `MAY_ANONYMIZE` | no keyed or caller-decided mode: `Redact<T>` treats the field as sensitive. A store that must still pseudonymize keeps the legacy annotation until 3.0 |
+| `Sanitize<T>(m, ent, key)` | `Redact<T>(m)` |
+| `(spec.redact)` on an int, bool or enum | no equivalent: only string and bytes values are secret material; drop the field from the view instead |
+
+A field may not carry both `(spec.redact)` and `(spec.sensitive)`.
 
 ## Formal Verification Annotations
 
@@ -1598,11 +1708,16 @@ The authoritative, exhaustive contract is in
 | Annotation | Meaning |
 |------------|---------|
 | `(spec.query_field) = {op: EQ\|RANGE}` | expose the field as a typed filter in the `query` trait's record query plane |
-| `(spec.redact) = {mode: DROP\|PSEUDONYMIZE\|MAY_REDACT\|MAY_ANONYMIZE}` | marks a field for **data entitlement** (see below). DROP/PSEUDONYMIZE always apply (hard floor); MAY_REDACT/MAY_ANONYMIZE let the caller decide at egress. Valid on scalars, message-typed fields (redact clears the whole sub-message), and repeated fields; ANONYMIZE requires string/bytes |
+| `(spec.redact) = {mode: DROP\|PSEUDONYMIZE\|MAY_REDACT\|MAY_ANONYMIZE}` | **legacy** (deprecated in 2.6, removed in 3.0; use [`(spec.sensitive)`](#redact-for-any-type)): marks a field for **data entitlement** (see below). DROP/PSEUDONYMIZE always apply (hard floor); MAY_REDACT/MAY_ANONYMIZE let the caller decide at egress. Valid on scalars, message-typed fields (redact clears the whole sub-message), and repeated fields; ANONYMIZE requires string/bytes |
 | `(spec.visibility) = VISIBILITY_SHOW\|VISIBILITY_BACKGROUND` | on a field of a `public_view` message: SHOW may be rendered outside the company, BACKGROUND never leaves it (see below) |
 | `(spec.deleted_flag) = true` | marks this record type's soft-delete `bool` field (exactly one per record type). The query plane's `Open<T>QueryRequest`/`Refine<T>Request` carry `include_deleted` (default false: flagged-deleted rows excluded); the row is purged `residency.deleted_max_age_seconds` after the flag was set |
 
 #### Data entitlement (egress redaction)
+
+> **Legacy.** Data entitlement (`(spec.redact)`, `(spec.data_entitlement)`,
+> `Sanitize<T>`, `<T>Entitlement`) is deprecated in 2.6 and removed in 3.0:
+> generation warns where it is used. Use [Redact for Any Type](#redact-for-any-type);
+> its migration table says how a record moves.
 
 Data entitlement sanitizes a record on its way out of a service. It is a lattice —
 `pass-through < anonymize < redact` — where the effective transform for a field is

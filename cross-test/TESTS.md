@@ -98,6 +98,18 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   does not emit these chassis, so its leg renders them first
   (`pkg/internal/python/pyrender`). Local (`just jwk-alg`, part of
   `just gates`); not yet in CI.
+- `redact` (`cross-test/redact/run.sh`): redaction for any type (#274) in the
+  generated Go, Java and Rust. Every leg feeds the same
+  `cross-test/fixtures/redact_vectors.json` (written by
+  `go run ./cross-test/redact/genvectors`, which builds the expected bytes by
+  hand from the wire format, never through a `Redact<T>`): a uni-config with
+  planted secrets (a `(spec.sensitive_message)` Secrets, nested, repeated and
+  map fields, a sensitive field over a plain type, the same type on a plain
+  path) through `Redact<T>` must serialize to the expected bytes exactly; and
+  values through the generated sensitive-field validator must reach the same
+  verdict (required, placeholders, entropy floor), naming the field and the
+  rule and never the value; a CSPRNG 32-byte key passes. Local (`just redact`,
+  part of `just gates`); not yet in CI.
 - `mcp-floor-version` (`cross-test/mcp-floor-version/run.sh`): rmcp floor gate
   for the generated Rust MCP dispatch — generates a service owning one
   `RPC_PRINCIPAL_MCP` tool, pins `rmcp` to the EXACT version

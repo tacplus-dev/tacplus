@@ -261,6 +261,12 @@ func generateGoHelpers(pf model.ProtoFile, baseDir, subdir string, config *tacty
 			return err
 		}
 		generateSanitizeHmacHelpers(&b, needs)
+		// Redact for any type (tacplus#274): the deterministic Redact<T>, and the
+		// verdict helper the sensitive-field validators call.
+		generateRedactHelpers(&b, pf, parser.NewSensitiveIndex(allFiles, resolver))
+		if fileNeedsSensitiveVerdict(pf) {
+			generateSensitiveVerdictHelper(&b)
+		}
 		// Caller → <T>Entitlement builders: map the caller's token data grants onto
 		// the entitlement shape Sanitize<T> consumes (fail-closed; RAW only from a
 		// matching grant).

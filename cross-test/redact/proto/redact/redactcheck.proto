@@ -1,0 +1,71 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+// The redact gate's model (tacplus#274): the shape of a uni-config, with a
+// Secrets message secret by construction, nested, repeated and map fields, and
+// sensitive fields carrying the required / entropy checks. Every leg feeds the
+// same inputs (cross-test/fixtures/redact_vectors.json) through its generated
+// Redact<T> and validators and must reach the same bytes and verdicts.
+syntax = "proto3";
+
+package redactcheck;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "redactcheck"};
+
+message UniConfig {
+  string name = 1;
+  Secrets secrets = 2;
+  repeated Endpoint endpoints = 3 [(spec.assert_max_size) = 8];
+  map<string, string> labels = 4 [(spec.assert_max_size) = 8];
+  map<string, Endpoint> peers = 5 [(spec.assert_max_size) = 8];
+  int32 replicas = 6;
+  // A plain type reached through a sensitive field: all its string and bytes
+  // leaves are redacted on this path.
+  Database database = 7 [(spec.sensitive) = {}];
+  // The same type on a plain path: only its own annotations apply.
+  Database replica_database = 8;
+  repeated string api_tokens = 9 [(spec.sensitive) = {}, (spec.assert_max_size) = 8];
+  map<string, bytes> signing_keys = 10 [(spec.sensitive) = {}, (spec.assert_max_size) = 8];
+  string page_token = 11 [(spec.not_sensitive) = true];
+}
+
+// Secrets is secret by construction: every string and bytes leaf is redacted,
+// and the version reference stays visible so a reader knows which secret is in
+// use.
+message Secrets {
+  option (spec.sensitive_message) = {};
+
+  string api_token = 1 [(spec.sensitive) = {required: true}];
+  bytes signing_key = 2 [(spec.sensitive) = {min_entropy_bits: 256}];
+  string secret_version = 3 [(spec.not_sensitive) = true];
+  int64 rotated_at = 4;
+  Pki pki = 5;
+  repeated string client_secrets = 6 [(spec.assert_max_size) = 8];
+  optional string recovery_code = 7;
+}
+
+message Pki {
+  string private_key_pem = 1;
+  bytes key_der = 2;
+  string cert_pem = 3;
+}
+
+message Endpoint {
+  string url = 1;
+  string password = 2 [(spec.sensitive) = {}];
+}
+
+message Database {
+  string host = 1;
+  string user = 2;
+  string dsn = 3;
+}
+
+// SecretCheck carries the entropy-checked fields the verdict vectors exercise.
+message SecretCheck {
+  string token = 1 [(spec.sensitive) = {required: true}];
+  bytes key = 2 [(spec.sensitive) = {required: true}];
+  string optional_token = 3 [(spec.sensitive) = {min_entropy_bits: 64}];
+}

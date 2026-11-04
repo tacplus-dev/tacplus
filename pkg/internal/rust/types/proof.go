@@ -37,6 +37,12 @@ func writeProofHarnesses(b *strings.Builder, pf model.ProtoFile) {
 	// Collect messages that have any provable annotations
 	var proofMsgs []proofMessage
 	for _, msg := range pf.Messages {
+		// A sensitive-field check (required, placeholders, entropy floor;
+		// tacplus#274) fails the default message and cannot be stated as a
+		// kani::assume, so "validate() succeeds" would be a false claim.
+		if rustMessageHasSensitiveCheck(msg) {
+			continue
+		}
 		pm := buildProofMessage(msg)
 		if len(pm.Fields) > 0 || len(pm.Invariants) > 0 {
 			proofMsgs = append(proofMsgs, pm)

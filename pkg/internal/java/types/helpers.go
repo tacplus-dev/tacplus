@@ -13,6 +13,7 @@ import (
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
 	"github.com/tacplus-dev/tacplus/pkg/internal/proto"
@@ -43,7 +44,10 @@ const helpersClassBudget = 512 << 10
 // static helper methods: enum helpers, constants, serialization, validation, map helpers,
 // and type defaults. Over helpersClassBudget the methods move to HelpersPart<N>
 // classes that Helpers extends.
-func generateHelpers(pf model.ProtoFile, baseDir, subdir, outerClassName string, config *tactype.Config, hasDefaults map[string]bool, svcRPCs []proto.ServiceRPCEntry, vsEntries []proto.VServiceEntry) error {
+//
+// sensitive is the redaction index (tacplus#274) over every parsed file; nil
+// builds it over pf alone.
+func generateHelpers(pf model.ProtoFile, baseDir, subdir, outerClassName string, config *tactype.Config, hasDefaults map[string]bool, svcRPCs []proto.ServiceRPCEntry, vsEntries []proto.VServiceEntry, sensitive *parser.SensitiveIndex) error {
 	outputDir := filepath.Join(baseDir, subdir)
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return err
@@ -119,6 +123,12 @@ func generateHelpers(pf model.ProtoFile, baseDir, subdir, outerClassName string,
 		if err := writeRelease(&body, pf, outerClassName); err != nil {
 			return err
 		}
+	}
+
+	// Redact for any type (tacplus#274): the deterministic redact<T>, and the
+	// verdict helper the sensitive-field validators call.
+	if len(pf.Messages) > 0 {
+		writeRedact(&body, pf, outerClassName, sensitive)
 	}
 
 	writePublicView(&body, pf, outerClassName)
@@ -723,6 +733,9 @@ func writeFromJsonMapField(b *strings.Builder, field model.Field, javaName, elVa
 		switch field.MapValueType {
 		case "string":
 			fmt.Fprintf(b, "builder.put%s(%s, val.getAsString());\n", javaName, keyExpr)
+		case "bytes":
+			// proto3 JSON carries bytes as base64, as for a singular bytes field.
+			fmt.Fprintf(b, "builder.put%s(%s, com.google.protobuf.ByteString.copyFrom(Base64.getDecoder().decode(val.getAsString())));\n", javaName, keyExpr)
 		case "int32", "sint32", "sfixed32", "fixed32", "uint32":
 			fmt.Fprintf(b, "builder.put%s(%s, val.getAsInt());\n", javaName, keyExpr)
 		case "int64", "sint64", "sfixed64", "fixed64", "uint64":
@@ -928,6 +941,8 @@ func writeToJsonMapField(b *strings.Builder, field model.Field, javaName, jsonNa
 		switch field.MapValueType {
 		case "string":
 			fmt.Fprintf(b, "mapObj.addProperty(%s, entry.getValue());\n", keyExpr)
+		case "bytes":
+			fmt.Fprintf(b, "mapObj.addProperty(%s, Base64.getEncoder().encodeToString(entry.getValue().toByteArray()));\n", keyExpr)
 		case "int32", "sint32", "sfixed32", "fixed32", "uint32":
 			fmt.Fprintf(b, "mapObj.addProperty(%s, entry.getValue());\n", keyExpr)
 		case "int64", "sint64", "sfixed64", "fixed64", "uint64":

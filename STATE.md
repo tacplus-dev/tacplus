@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-02 by looper (#202).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-04 by looper (#274).
 
 - **Version / line:** v2.5.0 (latest release, 2026-10-28, `release/2.5` cut at it); main is the 2.6 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -95,6 +95,15 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-02 by lo
   read; `tacplus fleet build` checks each recipe's inputs at the locked commit and records the contribution under
   the service in `fleet.lock` (paths under `/-/apps/<service>/` and `/-/clients/<service>/`, targets, the webapp
   dir's tree). Contract and trust rule in docs/USER.md.
+  Redact for any type (#274): `(spec.sensitive)` on string/bytes/message fields, `(spec.sensitive_message)` (a
+  message secret by construction) and `(spec.not_sensitive)`; Go, Java and Rust generate a deterministic
+  `Redact<T>` (a set sensitive value becomes `REDACTED`, `<field>_redacted` set, recursion through nested, repeated
+  and map fields, `trace_id` kept) and, for `required` / `min_entropy_bits`, a validator (required, placeholders,
+  integer entropy estimate) whose errors name the field and rule, never the value. A gate refuses an unannotated
+  sensitive-looking field in the tree of any type with a `Redact<T>`. Pinned byte for byte across the three by
+  `cross-test/redact` (`just redact`, in the gates) against a hand-built fixture. The legacy egress redaction
+  (`(spec.redact)`, `(spec.data_entitlement)`, `Sanitize<T>`, `<T>Entitlement`) is deprecated (generation warns),
+  removed in 3.0. Gaps: no cross-package sensitive tree, no oneof leaves, no client-only target (PROPOSALS.md).
 - **Released / deployed:** v2.5.0 is the newest release (binaries and checksums; images as before: from 2.6.0 a
   release publishes binaries and `build:X.Y.Z`, and no tacplus image).
 - **Known gaps:** The member port needs kernel to mint `member:<svc>` (tacplus-dev/kernel#30) before Stratum adopts

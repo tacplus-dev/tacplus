@@ -21,9 +21,9 @@ const traceImport = `import "sys/trace.proto";`
 // (TraceFieldsProto) and detection (InjectTraceFields idempotency check), so
 // the field numbers/names cannot drift between the two (OF-7).
 const (
-	traceIDFieldNumber = 200
+	traceIDFieldNumber = parser.TraceIDFieldNumber
 	noopFieldNumber    = 201
-	traceIDFieldName   = "trace_id"
+	traceIDFieldName   = parser.TraceIDFieldName
 	noopFieldName      = "noop"
 )
 

@@ -2107,6 +2107,33 @@ async fn handle_request(&self, req: MyRequest) -> Result<MyResponse, ProtoError>
 
 The same pattern applies in Java, TypeScript, and Python. Omitting the `trace_id` on any downstream call breaks the trace chain for that span.
 
+### Calls to non-tacplus HTTP APIs
+
+A call that is not a tacplus RPC (the Kubernetes API, a cloud provider, any third-party HTTP API) has no field 200, so the trace travels as a request header instead. When the request has a non-empty `trace_id`, every outgoing HTTP call made in the course of fulfilling it carries:
+
+- the W3C Trace Context `traceparent` header, `00-<trace_id>-<parent-id>-01`, when the `trace_id` is a W3C trace-id (32 lowercase hex characters, not all zero); `<parent-id>` is 16 lowercase hex characters, fresh for the call and not all zero;
+- otherwise `X-Tacplus-Trace-Id: <trace_id>`, the value verbatim, percent-encoded only if it holds a character no header value can carry.
+
+An empty `trace_id` sends neither header. Most HTTP servers accept and ignore a header they do not know, so the header is safe to send to any API. Log the `trace_id` on the handler's own log lines too, so the chain can be joined from the service's logs. (Decided in tacplus-dev/kmaker#12.)
+
+```go
+// Go
+func setTraceHeader(h http.Header, traceID string) {
+    if traceID == "" {
+        return
+    }
+    if isW3CTraceID(traceID) { // 32 lowercase hex, not all zero
+        var parent [8]byte
+        for parent == [8]byte{} {
+            _, _ = rand.Read(parent[:])
+        }
+        h.Set("traceparent", "00-"+traceID+"-"+hex.EncodeToString(parent[:])+"-01")
+        return
+    }
+    h.Set("X-Tacplus-Trace-Id", traceID) // percent-encode if it holds a control character
+}
+```
+
 ## Fleet Build
 
 A service is generated alone, in its own repo, against its own proto plus the sys

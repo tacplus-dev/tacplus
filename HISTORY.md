@@ -60,3 +60,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-03 looper release v2.3.10 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.3.10)
 - 2026-11-03 looper release v2.4.9 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.4.9)
 - 2026-11-03 looper release v2.5.10 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.5.10)
+- 2026-11-04 looper issue depends: a dependency that depends back on the project merges the project's published proto, so a proto change cannot generate (#205, b10297da)

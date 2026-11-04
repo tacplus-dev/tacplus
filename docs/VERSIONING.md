@@ -64,7 +64,7 @@ Each supported minor has a branch `release/MAJOR.MINOR`, cut at its `.0` tag
 (or at its first good patch). A patch release is a tag on that branch. The
 branch is protected: changes land only by pull request.
 
-Supported today: `release/2.0` through `release/2.5`, one per minor (2.0 was
+Supported today: `release/2.0` through `release/2.6`, one per minor (2.0 was
 cut at `v2.0.1`; 2.0.0 published images but its release build failed, so
 2.0.1 is the first usable 2.0 release). `tacplus pin` and `tacplus upgrade`
 both take a line's newest patch. The fix looper opens one pull

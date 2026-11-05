@@ -1,8 +1,8 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-04 by looper (#274).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-05 by looper (#213).
 
-- **Version / line:** v2.5.0 (latest release, 2026-10-28, `release/2.5` cut at it); main is the 2.6 line in progress (this repository is the compiler; it declares no tacplus floor)
+- **Version / line:** v2.6.0 (latest release, 2026-11-05, at 87adda9e; `release/2.6` cut at it); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
   generated write surface on the record query plane's S2S half (Get/Put/InsertIfAbsent/ReplaceIfUnchanged/Delete,
   Watch<T>Changes, the atomic Apply with canonical lock order), per-record-type durability (MEMORY/LOCAL/REMOTE),
@@ -14,7 +14,7 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-04 by lo
   the new `(spec.service_s2s).host_tenant_owned`), and the Go server wrapper of a sys contract a service hosts by
   label (`minter.Minter` on kernel had none), and instance health for a service that serves only such a surface
   (#163 D5). JWK verification takes a missing alg from the token within the key's family (#179).
-  On main (2.6): `grpcconfig.disk_persistence.archive.member` names the Java archive member instead of the instance
+  In 2.6: `grpcconfig.disk_persistence.archive.member` names the Java archive member instead of the instance
   id, so a restarted writer keeps its chain (#143; Go and Rust when their ServiceManager wires the archive).
   Archive retention is a bucket lifecycle rule, documented with its pitfall in docs/API.md; the writer never deletes (#144).
   The `linked` claim is retired: the generated namespace backstop (record egress, page/Watch, query predicate, record
@@ -81,7 +81,8 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-04 by lo
   ALPN `tacplus-member/1`, framed `AUTH`/`DATA`/`CLOSE_WRITE`, kernel tokens for `member:<svc>` checked both ways and
   refreshed in-band, same service and namespace only, drop on expiry, nothing forwarded before `AUTH`, no plaintext;
   `grpcconfig.member_port` places it (loopback target only); `sm.getMemberPort().forward(remote)` tunnels outbound.
-  registry.json carries `member_port`. Go and Rust refuse the annotation until #236/#237 (required before 2.6.0).
+  registry.json carries `member_port`. Go and Rust refuse the annotation: #236/#237 were superseded by #259, which
+  moves the member port onto gRPC in all three languages.
   `(spec.smb)`/`(spec.smb_authority)`/`SmbCertService` are deprecated (removed in 3.0) and exclusive with it.
   Pinned by `cross-test/memberport` (`just memberport`, in the gates): the memberport-peer tests and two tenants'
   Hazelcast 5.7 members.
@@ -104,11 +105,12 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-04 by lo
   `cross-test/redact` (`just redact`, in the gates) against a hand-built fixture. The legacy egress redaction
   (`(spec.redact)`, `(spec.data_entitlement)`, `Sanitize<T>`, `<T>Entitlement`) is deprecated (generation warns),
   removed in 3.0. Gaps: no cross-package sensitive tree, no oneof leaves, no client-only target (PROPOSALS.md).
-- **Released / deployed:** v2.5.0 is the newest release (binaries and checksums; images as before: from 2.6.0 a
-  release publishes binaries and `build:X.Y.Z`, and no tacplus image).
+- **Released / deployed:** v2.6.0 is the newest release: the binaries and `checksums.txt`, and
+  `ghcr.io/tacplus-dev/tacplus/build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c`
+  (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.
 - **Known gaps:** The member port needs kernel to mint `member:<svc>` (tacplus-dev/kernel#30) before Stratum adopts
   it (stratum#17); its ServiceManager wiring is compiled, not run (KNOWN_TEST_GAPS MP-1); Go and Rust do not generate
-  it yet (#236, #237). the redo service and the per-tenant Stratum that implement the redo contract are their repos'
+  it (#259 replaces it in all three). The redo service and the per-tenant Stratum that implement the redo contract are their repos'
   (tacplus-dev/redo#1, tacplus-dev/stratum#2). The gateway does not yet route by the route field nor stamp `McpRequest.tenant`
   (tacplus-dev/gateway#3 and its MCP follow-up). MCP on a tenant-owned service is same-tenant only (PROPOSALS.md).
   No C2S record writes (by decision, 2.5). The Rust wrapper renders no (spec.store_namespace) predicate pin on the

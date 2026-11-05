@@ -4,6 +4,15 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **ROADMAP lines for #259's split** (2026-11-05, #259): Jody split #259 (2026-11-04) and asked for a ROADMAP line
+  per part citing it; a looper's push of ROADMAP.md is refused, so the hub adds them. Proposed, under Next, in place
+  of the #259 line: "Member port onto gRPC: bidi byte chunks with make-before-break session rotation, `last`,
+  same-subject session binding, fail-fast statuses and local RST (Java) (#321, from #259, before #322) (Jody,
+  2026-11-04)"; "Generated S2S streams rotate before token expiry in the Go, Java and Rust chassis: `<Svc>Rotating`
+  sibling, `last`, session binding, no cursor; Go and Rust member ports (#322, from #259) (Jody, 2026-11-04)";
+  "Stream rotation for the client-only targets (TypeScript, Python, Swift, C#, W2S/SSE) and C2S through the gateway
+  (#323, from #259, after #322 and tacplus-dev/gateway#26) (Jody, 2026-11-04)". The #212 line's "moves onto gRPC
+  with #259" becomes "with #321". tacplus-dev/gateway#26 (routing a rotation by session id) needs a gateway line too.
 - **Verification only under the nightly set in gates.yaml** (2026-11-04, #275): once tacplus-dev/looper#48 maps
   tacplus, its `gates.yaml` lists `just verify` under the nightly and release sets only, never a land's. tacplus has no
   gates.yaml yet, so #275 landed without it.
@@ -68,7 +77,7 @@ the looper then marks it `promoted` or `declined` here with the date.
   token. Reading the streaming paths off the handler's routes (or a handler-declared list) would close it.
 - **Long MCP sessions end at their token's exp** (2026-11-01, #260): the MCP session carrier is a bidi stream, so
   like every stream it now ends at the opening token's `exp` (Go, Java, Rust). An MCP client holding one session
-  for longer than a token lifetime must reconnect with a fresh token; #259's make-before-break rotation is the
+  for longer than a token lifetime must reconnect with a fresh token; #322's make-before-break rotation is the
   transparent fix if that turns out to matter.
 - **`just gates-container` in a git worktree** (2026-10-31, #255): it mounts only the checkout at `/workspace`, and a
   worktree's `.git` is a file pointing at the main checkout's `.git/worktrees/<name>`, so the first git call in the

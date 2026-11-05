@@ -107,6 +107,7 @@ EOF
     echo "==> Running generated Rust stream-expiry behavior tests"
     (cd "$OUT" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo test -p streamexpiry-model rust_stream_expiry -- --nocapture) \
       || die "generated Rust stream-expiry behavior tests failed"
+    prune_cargo_workspace "$OUT"
     ;;
   java)
     command -v mvn >/dev/null || die "mvn is required to test generated Java output"

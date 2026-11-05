@@ -63,3 +63,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-04 looper issue depends: a dependency that depends back on the project merges the project's published proto, so a proto change cannot generate (#205, b10297da)
 - 2026-11-04 looper release v2.4.10 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.4.10)
 - 2026-11-04 looper release v2.5.11 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.5.11)
+- 2026-11-05 looper issue Redact for any type: an annotation marks sensitive fields; a generated deterministic Redact<T>; Secrets redacted by construction; a gate catches unannotated sensitive-looking fields; the uni-config's redacted view for LLM review (#274)

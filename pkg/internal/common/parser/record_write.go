@@ -138,7 +138,32 @@ func recordEntryOf(b *spec.RecordEntryBinding, msg protoreflect.MessageDescripto
 	if p := b.GetNamespacePath(); p != "" {
 		e.NamespacePath = strings.Split(p, ".")
 	}
+	e.RowFields, e.RowOneofs = rowFieldsOf(msg, b.GetRecord())
 	return e
+}
+
+// rowFieldsOf names msg's singular fields that carry a whole row of the record
+// type — item on a row write, item and expected_item on ReplaceIfUnchanged —
+// and, beside each, the oneof it is a case of ("" for none). A key-addressed
+// request carries none.
+func rowFieldsOf(msg protoreflect.MessageDescriptor, record string) (names, oneofs []string) {
+	if msg == nil || record == "" {
+		return nil, nil
+	}
+	fields := msg.Fields()
+	for i := 0; i < fields.Len(); i++ {
+		f := fields.Get(i)
+		if f.Kind() != protoreflect.MessageKind || f.IsList() || f.IsMap() || string(f.Message().FullName()) != record {
+			continue
+		}
+		oneof := ""
+		if o := f.ContainingOneof(); o != nil && !o.IsSynthetic() {
+			oneof = string(o.Name())
+		}
+		names = append(names, string(f.Name()))
+		oneofs = append(oneofs, oneof)
+	}
+	return names, oneofs
 }
 
 // keyKindAt walks path from msg and returns the proto kind of the field it ends

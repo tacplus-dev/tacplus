@@ -127,10 +127,36 @@ func javaRecordRoute(method *parser.MethodInfo) string {
 	return "request.get" + javaPascalField(method.RouteField.Field) + "()"
 }
 
+// javaRecordRowTraceClear renders the clear of the injected trace_id off every
+// row a write surface request carries (#313): item, and ReplaceIfUnchanged's
+// expected_item, so a row is stored without the trace of the call that wrote
+// it, and a compare value carrying one still matches the stored row. base is
+// the (reassignable) message variable, rebuilt with each row's trace cleared.
+// Empty for a record type without the injected trace_id (rowTrace false) and
+// for a key-addressed request. The request's own trace_id is the call's and
+// stays.
+func javaRecordRowTraceClear(base string, e *parser.RecordEntry, rowTrace func(string) bool, indent string) string {
+	if len(e.RowFields) == 0 || rowTrace == nil || !rowTrace(e.Record) {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s// A stored row never keeps a trace (#313).\n", indent)
+	for _, f := range e.RowFields {
+		p := javaPascalField(f)
+		fmt.Fprintf(&b, `%[1]sif (%[2]s.has%[3]s()) {
+%[1]s    %[2]s = %[2]s.toBuilder().set%[3]s(%[2]s.get%[3]s().toBuilder().clearTraceId()).build();
+%[1]s}
+`, indent, base, p)
+	}
+	return b.String()
+}
+
 // javaRecordEntryPre renders the pre-handler half of the guard for a write
 // surface RPC addressing one record type: its tenant pin, then — on a write —
-// refuse below the floor and stamp the floor when unset.
-func javaRecordEntryPre(method *parser.MethodInfo, indent string) string {
+// refuse below the floor and stamp the floor when unset, then clear the trace
+// off the rows it carries. rowTrace reports whether a record type carries the
+// injected trace_id.
+func javaRecordEntryPre(method *parser.MethodInfo, indent string, rowTrace func(string) bool) string {
 	e := method.RecordEntry
 	if e == nil {
 		return ""
@@ -152,6 +178,9 @@ func javaRecordEntryPre(method *parser.MethodInfo, indent string) string {
 %[1]s}
 `, indent, int32(e.Durability), method.Name, javaRecordDurabilityName(e.Durability))
 	}
+	if c := javaRecordRowTraceClear("request", e, rowTrace, indent); c != "" {
+		b.WriteString("\n" + c)
+	}
 	return b.String()
 }
 
@@ -171,8 +200,9 @@ func javaRecordWritePost(method *parser.MethodInfo, indent string) string {
 // authorization, its tenant pin, its floor, and its place in the canonical lock
 // order; then the Apply's effective durability. Each op is authorized through
 // the wrapper's own checkAuth under its single-type RPC's key, so the
-// authorizer's refusal propagates unchanged.
-func javaRecordApplyPre(method *parser.MethodInfo, serviceName, servicePackage, parentDir string, skipAuth bool, indent string) string {
+// authorizer's refusal propagates unchanged. Each op's rows have their trace
+// cleared, as on its single-type RPC.
+func javaRecordApplyPre(method *parser.MethodInfo, serviceName, servicePackage, parentDir string, skipAuth bool, indent string, rowTrace func(string) bool) string {
 	ops := method.RecordApplyOps
 	if len(ops) == 0 {
 		return ""
@@ -203,8 +233,11 @@ func javaRecordApplyPre(method *parser.MethodInfo, serviceName, servicePackage, 
 		if len(op.NamespacePath) > 0 {
 			hasTenant = true
 			pin = javaRecordTenantPin("__c", op.NamespacePath, "Apply ("+op.CaseField+")", in) +
-				javaRecordRoutePin("__c", op.NamespacePath, javaRecordRoute(method), "Apply ("+op.CaseField+")", in) +
-				fmt.Sprintf("%s__op = __op.toBuilder().set%s(__c).build();\n", in, p)
+				javaRecordRoutePin("__c", op.NamespacePath, javaRecordRoute(method), "Apply ("+op.CaseField+")", in)
+		}
+		pin += javaRecordRowTraceClear("__c", &op, rowTrace, in)
+		if pin != "" {
+			pin += fmt.Sprintf("%s__op = __op.toBuilder().set%s(__c).build();\n", in, p)
 		}
 		fmt.Fprintf(&cases, `%[1]s        case %[2]s: {
 %[3]s%[4]svar __c = __op.get%[5]s();

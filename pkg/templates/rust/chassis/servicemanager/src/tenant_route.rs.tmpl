@@ -163,14 +163,14 @@ pub fn tenant_of_namespace(namespace: &str) -> Option<String> {
     host_tenant_of_namespace(namespace).filter(|t| valid_tenant_id(t))
 }
 
-/// The tid of the tenant a caller's namespace claim sits in: `/tenants/<tid>`
-/// or anything below it (`/tenants/<tid>/...`), else `None`. A caller at
-/// `/system`, or under a tenant whose name is not a tid, is in no tenant.
-pub fn tenant_of_caller_namespace(namespace: &str) -> Option<String> {
-    let prefix = format!("/{}/", ::spiffe::TENANTS_SEGMENT);
-    let rest = namespace.strip_prefix(prefix.as_str())?;
-    let tenant = rest.split('/').next().unwrap_or("");
-    valid_tenant_id(tenant).then(|| tenant.to_string())
+/// The tid of the tenant a caller is in: its token's `tid` claim (see
+/// `Caller::tid`), stamped by kernel at mint, and only when that claim is a
+/// tid. Never its namespace claim, which names the tenant (`/tenants/<name>`,
+/// kernel#23) and is not read for a tid at all (#284). No claim, or a
+/// malformed one, is no tenant: the caller of a tenant-scoped call is refused,
+/// with no fallback.
+pub fn caller_tenant(tid_claim: Option<&str>) -> Option<String> {
+    tid_claim.filter(|t| valid_tenant_id(t)).map(str::to_string)
 }
 
 /// The tid of the tenant whose instance `spiffe_id` names: its namespace,
@@ -377,12 +377,6 @@ mod tests {
         for ns in ["/system", "/tenants", "/tenants/", "/tenants/aaaaaaaa/workspaces/w", "/tenants/acme", "/users/aaaaaaaa"] {
             assert_eq!(tenant_of_namespace(ns), None, "{ns:?}");
         }
-        for ns in ["/tenants/aaaaaaaa", "/tenants/aaaaaaaa/users/alice", "/tenants/aaaaaaaa/"] {
-            assert_eq!(tenant_of_caller_namespace(ns).as_deref(), Some("aaaaaaaa"), "{ns:?}");
-        }
-        for ns in ["", "/", "/system", "/tenants", "/tenants/", "/tenants//aaaaaaaa", "/tenants/acme/users/alice", "/users/aaaaaaaa", "tenants/aaaaaaaa"] {
-            assert_eq!(tenant_of_caller_namespace(ns), None, "{ns:?}");
-        }
         assert_eq!(
             tenant_of_spiffe_id("spiffe://example.com/tenants/bbbbbbbb/services/crew").as_deref(),
             Some("bbbbbbbb")
@@ -394,6 +388,17 @@ mod tests {
             "",
         ] {
             assert_eq!(tenant_of_spiffe_id(id), None, "{id:?}");
+        }
+    }
+
+    // A caller's tenant is its tid claim, only when that is a tid; a namespace
+    // (even a tid-shaped one) passed where the claim belongs is no tenant.
+    #[test]
+    fn caller_tenant_is_the_tid_claim_only() {
+        assert_eq!(caller_tenant(Some("aaaaaaaa")).as_deref(), Some("aaaaaaaa"));
+        assert_eq!(caller_tenant(None), None);
+        for bad in ["", "ACME0001", "acme", "/tenants/aaaaaaaa", "aaaaaaaaa", "aaaaaaa"] {
+            assert_eq!(caller_tenant(Some(bad)), None, "{bad:?}");
         }
     }
 

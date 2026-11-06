@@ -91,6 +91,7 @@ run_rust() {
   echo "==> Running generated Rust W2S request-validation and REST browser-form tests"
   (cd "$OUT" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo test -p w2svalidate-model -- rust_w2s_ rust_rest_browser_) \
     || die "generated Rust W2S request-validation / REST browser-form tests failed"
+  prune_cargo_workspace "$OUT"
 
   echo "==> w2s-validate check PASSED (rust)"
 }

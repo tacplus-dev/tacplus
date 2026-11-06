@@ -12,6 +12,10 @@ import (
 	"encoding/json"
 	"fmt"
 {{- end}}
+{{- if .AnyTraced}}
+
+	"google.golang.org/protobuf/proto"
+{{- end}}
 
 	diskstore "{{.DiskStoreLibPath}}"
 {{- range .Imports}}
@@ -37,6 +41,14 @@ func Require{{.TypeName}}Quorum(durableCopies int) error {
 {{end}}
 // Save{{.TypeName}} atomically saves the latest {{.StoreName}} snapshot (UC1).
 func Save{{.TypeName}}(base, ns string, msg *{{.GoType}}, opts diskstore.SnapshotOpts) error {
+{{- if .ClearTrace}}
+	// A stored value never keeps a trace (#313). Clone so the caller's message
+	// keeps its trace_id.
+	if msg != nil && msg.TraceId != "" {
+		msg = proto.Clone(msg).(*{{.GoType}})
+		msg.TraceId = ""
+	}
+{{- end}}
 	b, err := {{.ToJSON}}(msg)
 	if err != nil {
 		return diskstore.ErrCodec(err.Error())
@@ -73,6 +85,14 @@ func Open{{.TypeName}}Log(base, ns string, archiveCount uint32, codec diskstore.
 
 // Record{{.TypeName}} builds a redo record for a {{.StoreName}} upsert (UC2).
 func Record{{.TypeName}}(msg *{{.GoType}}) (*diskstore.Record, error) {
+{{- if .ClearTrace}}
+	// A stored value never keeps a trace (#313). Clone so the caller's message
+	// keeps its trace_id.
+	if msg != nil && msg.TraceId != "" {
+		msg = proto.Clone(msg).(*{{.GoType}})
+		msg.TraceId = ""
+	}
+{{- end}}
 	b, err := {{.ToJSON}}(msg)
 	if err != nil {
 		return nil, diskstore.ErrCodec(err.Error())

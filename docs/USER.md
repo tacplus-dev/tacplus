@@ -1600,18 +1600,49 @@ Hand-written code is allowed only where platform law intentionally ends.
 
 ## Distributed Tracing
 
-The `trace_id` infrastructure field (field 200) is present on every proto message. When a service receives a request that contains a non-empty `trace_id`, it **must** copy that value into every outgoing RPC it makes in the course of fulfilling that request. The generated wrapper has no visibility into your handler's downstream calls — propagation is the implementer's responsibility.
+A trace follows one piece of work through the fleet in the `trace_id` field
+(field 200). The rules (`tacplus-dev/roadmap:decisions/trace-propagation-2026-11-03.md`, #313):
 
-This applies across all service boundaries: if an external request arrives with a `trace_id` and your handler calls another internal service, that internal call must carry the same `trace_id`.
+- the field is on the message itself;
+- your code copies it onto every message its work causes;
+- tacplus copies it across projections and transformations;
+- it is cleared whenever a value is stored.
 
-### Required Pattern
+### Where the field is
+
+tacplus injects `string trace_id = 200;` and `bool noop = 201;` into every
+message of your protos. That includes the messages it generates from them:
+transformation outputs, the state service's requests and the record query
+plane. These are the exceptions, each for a reason:
+
+| Message | Why it has no field 200 |
+|---|---|
+| `sys/spec.proto`'s option schemas | Annotation schemas, read by the compiler and never sent on the wire. |
+| `<T>Public` (public view) | A renderer is handed only the SHOW fields, so a trace never reaches it (privacy). `<T>ToPublic` has nothing to copy it into. |
+| `trace.TraceEvent` | It is the trace's own record. It carries the trace it reports as `trace_id = 1`. |
+| A message that already declares `trace_id` or `noop` at another number | The field is the author's own and is left as declared. In 3.0 it is a generation error, and a warning before that (#328). |
+
+The sys contract's other messages carry field 200 only where their proto
+declares it: `sys/tokenrequest.proto` and `trace.TraceRequest`. Field 200 on
+every sys wire message comes in 2.7 (#327).
+
+### Your code propagates it
+
+No context, thread-local or task-local value carries a trace. A generated
+wrapper cannot know which of your outgoing calls a request caused: one S2S
+channel multiplexes many users' work. So when a handler receives a message
+with a non-empty `trace_id`, it **must** copy that value onto every message it
+sends because of that request: an RPC, a publish or a command. A call that the
+request does not cause does not carry it: background work, unrelated fan-out,
+batching across requests. Say why where you make that call, e.g.
+`// trace: unrelated: <why>`.
 
 ```go
 // Go
 func (s *myServiceImpl) HandleRequest(ctx context.Context, req *pb.MyRequest) (*pb.MyResponse, error) {
     downstream := &otherpb.OtherRequest{
         // ... business fields ...
-        TraceId: req.TraceId,  // propagate — always copy if non-empty
+        TraceId: req.TraceId,  // propagate: always copy
     }
     return s.sm.Grpc().Clients().Other().OtherApiClient().DoSomething(ctx, downstream)
 }
@@ -1628,7 +1659,43 @@ async fn handle_request(&self, req: MyRequest) -> Result<MyResponse, ProtoError>
 }
 ```
 
-The same pattern applies in Java, TypeScript, and Python. Omitting the `trace_id` on any downstream call breaks the trace chain for that span.
+The same pattern applies in Java, TypeScript and Python. Omitting the
+`trace_id` on a causal call breaks the trace chain from there on.
+
+A generated helper that builds its request itself from a key (a state client's
+`Fetch<F>(ctx, key)`, `Delete<F>`, `Query<F>`, the record readers) has no
+`trace_id` parameter yet, so its request goes out untraced. 2.7 adds a traced
+form of each beside today's (#327), and 3.0 keeps only the traced one (#328).
+
+### Projections and transformations copy it
+
+Every generated projection carries its source's `trace_id`. This covers each
+`(spec.transformation)` output and each projection a `(spec.record)` /
+`(spec.event)` source dispatches: Go `Extract<Row>From<Source>` and
+`<Source>ToProjections`, Java `extract<Row>From<Source>` and
+`<source>ToProjections`, Rust `extract_<row>_from_<source>` and
+`<source>_to_projections`. A split message stays on its trace.
+
+### Stores clear it
+
+A trace is never recorded. Every generated path that persists a value clears
+field 200 on a copy just before it is written, and leaves your message as it
+was:
+
+| Store path | Go / Java / Rust |
+|---|---|
+| The record dispatch hands each projection row to its insert callback | `Handle<Source>` / `handle<Source>` / `handle_<source>` (Rust's `<Row>Row` holds only the timeseries columns) |
+| A `service_store`'s disk helpers write a snapshot or a redo record | `Save<T>`, `Record<T>`, `Snapshot<T>` / `save<T>`, `record<T>`, `snapshot<T>` / `save_<t>`, `record_<t>`, `snapshot_<t>` |
+| A store service's generated wrapper hands its handler the row to write | `<T>StoreService.Put`. The call's own trace still goes to its trace events. |
+| A record store's subscription (its write path) hands its handler the event | The store-derived subscriptions of a `(spec.record_store)`. The trace event is published first. |
+| A state client sends a value to be stored | `Put<F>` and a singleton's `Set` |
+
+A read therefore never returns a stored `trace_id`. The trace stays on
+messages that are delivered rather than stored: topic publishes, queue offers,
+commands, and the subscriptions of a service that is not a store. Their
+receiver propagates it. `cross-test/trace-carry` (in `just gates`) checks the
+projection copy and a write followed by a raw read of the store, in Go, Java
+and Rust.
 
 ## Well-Known Names (Conventions)
 

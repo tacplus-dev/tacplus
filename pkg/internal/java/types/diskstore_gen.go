@@ -50,6 +50,11 @@ type javaDiskStore struct {
 	MinDurableCopies int
 	// ConstName is the SCREAMING_SNAKE store name, for the emitted constant.
 	ConstName string
+
+	// ClearTrace is true when the message carries the injected trace_id (field
+	// 200): the write paths persist a copy with it cleared, so a read never
+	// returns a stored trace (#313).
+	ClearTrace bool
 }
 
 type javaDiskStoreData struct {
@@ -123,6 +128,7 @@ func generateJavaDiskStore(config *tactype.Config, protoDir, srcDir string) erro
 				ConstName:        strings.ToUpper(strutil.ToSnakeCase(msg.Name)),
 				QuorumWrite:      quorumWrite,
 				MinDurableCopies: minDurableCopies,
+				ClearTrace:       javaDiskStoreCarriesTraceID(msg.Fields) && !config.SkippedTraceTypes[fd.Package+"."+msg.Name],
 			})
 		}
 	}
@@ -168,6 +174,19 @@ func generateJavaDiskStore(config *tactype.Config, protoDir, srcDir string) erro
 		zap.Int("stores", len(stores)),
 		zap.String("path", outputPath))
 	return nil
+}
+
+// javaDiskStoreCarriesTraceID reports whether a service_store message carries
+// the injected trace_id (name trace_id, number 200). A message that defines its
+// own trace_id, or was skipped by InjectTraceFields, has nothing to clear.
+func javaDiskStoreCarriesTraceID(fields []parser.FieldDescriptor) bool {
+	for i := range fields {
+		if internalproto.IsTraceField(fields[i].Name, int(fields[i].Number)) &&
+			!internalproto.IsNoopField(fields[i].Name, int(fields[i].Number)) {
+			return true
+		}
+	}
+	return false
 }
 
 // javaGcsArchiveSDK is the Google Cloud Storage client a project pins to ship its

@@ -884,6 +884,11 @@ func generateGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, ser
 	emptyOutput := isEmptyType(method.FullOutputType)
 	handlerEmpty := emptyInput || isTraceRequestType(method.FullInputType)
 	inputHasTrace := typeHasTraceFields(method.FullInputType, servicePackage, parentDir, crossPkgTypes, skippedTraceTypes)
+	// rowTrace: does a record type carry the injected trace_id the write
+	// surface clears off a stored row (#313)?
+	rowTrace := func(record string) bool {
+		return typeHasTraceFields(record, servicePackage, parentDir, crossPkgTypes, skippedTraceTypes)
+	}
 	validateInput := goValidateRef(method.FullInputType, method.InputType, servicePackage)
 	validateOutput := goValidateRef(method.FullOutputType, method.OutputType, servicePackage)
 
@@ -1236,7 +1241,7 @@ if authTok != nil {
 		callerExtract += goPredicatePins(san, method, servicePackage, "\t", "return", svc.IsC2S, goRecordPlaneS2S(svc))
 		callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return")
 		// Watch<T>Changes (#163): the tenant pin of the record write surface.
-		callerExtract += goRecordEntryPre(method, "return")
+		callerExtract += goRecordEntryPre(method, "return", rowTrace)
 		// (spec.store_principal)/(spec.store_namespace)/(spec.record).private on
 		// the WATCH seam: resolved once here, applied to every snapshot_item and
 		// every delta inside the producer loop below, before the frame is
@@ -1815,8 +1820,23 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 	// The record write surface (#163): the durability floor and Apply's per-op
 	// guards run after the request is validated and before the handler; their
 	// post halves run first on the response, ahead of any egress transform.
-	inputValidation += goRecordEntryPre(method, "return nil,") +
-		goRecordApplyPre(method, svc, servicePackage, parentDir, skipAuth)
+	inputValidation += goRecordEntryPre(method, "return nil,", rowTrace) +
+		goRecordApplyPre(method, svc, servicePackage, parentDir, skipAuth, rowTrace)
+
+	// A (spec.service_store) <T>StoreService's Put stores its request as the
+	// row (#313): the trace is cleared off it just before the handler, after
+	// every guard above has read the request as sent. The trace events after
+	// the handler carry the trace the call arrived with, saved here.
+	traceIDExpr := "req.TraceId"
+	if svc.SynthesizedKind == parser.SynthesizedKindStore && method.Name == "Put" && inputHasTrace && !handlerEmpty {
+		traceIDExpr = "__traceID"
+		inputValidation += `
+	// A stored row never keeps a trace (#313); the call's trace is kept for
+	// its trace events.
+	__traceID := req.TraceId
+	req.TraceId = ""
+`
+	}
 	unarySan = goRecordWritePost(method) + goRecordApplyPost(method) + unarySan
 
 	// (spec.record).min_group_size runs first: the refusal is about the number
@@ -1840,12 +1860,12 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 	if isTracing {
 		round := p.traceRound()
 		p.publishTrace(ctx, &trace_pb.TraceEvent{
-			TraceId: req.TraceId,
+			TraceId: %s,
 			Round:   round,
 			%s
 		})
 	}
-`, traceRpcResponseBlock)
+`, traceIDExpr, traceRpcResponseBlock)
 	}
 
 	var traceErrorCopy string
@@ -1854,12 +1874,12 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 		if isTracing {
 			round := p.traceRound()
 			p.publishTrace(ctx, &trace_pb.TraceEvent{
-				TraceId: req.TraceId,
+				TraceId: %s,
 				Round:   round,
 				Error:   err.Error(),
 				%s
 			})
-		}`, traceRpcResponseBlock)
+		}`, traceIDExpr, traceRpcResponseBlock)
 	}
 
 	var outputValidation string

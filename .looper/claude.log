@@ -1,0 +1,400 @@
+< Exit code 1 specify only one of --comments or --json  Display the title, body, and other information about an issue.  When `--comments` is used, terminal output includes the issue details and comments. When output is piped or redirected, only the comments are printed.  With `--web` flag, open the is...
+> Bash gh issue view 204 --repo tacplus-dev/tacplus --json comments,labels -q '.labels[].name, (.comments[] | select(.body | startswith("The looper of tacplus holds") | not) | "---- \(.author.login) \(.authorAssociation) \(.createdAt)\n\(.body)")'
+< approved looper:in-progress feature ---- jodydadescott MEMBER 2026-10-29T03:07:32Z Watch session: added `Blocked-by: #207` so the tenant-routing bug in the record plane goes first: it's on the path to running per-tenant Stratum on seatrials, and it's a cross-tenant write. This issue resumes on its o...
+= thinking_tokens
+= thinking_tokens
+No design has been posted yet, and the issue requires Jody's approval of it before building. So this run's work is to research and write the design. Let me read the context.
+> Bash git log --oneline origin/looper/tacplus-204 -3 2>&1 | head; ls docs; wc -l docs/*.md; grep -n -i "s2s\|remote\|federat\|trust domain\|spiffe" ROADMAP.md STATE.md PROPOSALS.md | head -60
+< fatal: ambiguous argument 'origin/looper/tacplus-204': unknown revision or path not in the working tree. Use '--' to separate paths from revisions, like this: 'git <command> [<revision>...] -- [<file>...]' AGENT.md.tmpl API.md CONSUMER_NEUTRAL_ANALYSIS.md DEVELOPMENT.md INSTALL.md KNOWN_TEST_GAPS.md...
+> Bash cat docs/THEORY.md; grep -n -i "s2s_client\|grpc_s2s\|peer\|trust\|spiffe\|cluster\|fleet" docs/USER.md | head -150
+< # Everything Everywhere Is Typed All At Once  *In tacplus, every field constraint, state boundary, auth policy, and RPC exists in one place — the proto definitions — and every supported generated surface comes from that single source of truth.*  ---  ## The Problem  Building microservices is repetit...
+> Bash sed -n 420,520p docs/USER.md; sed -n 1110,1350p docs/USER.md; sed -n 2060,2125p docs/USER.md
+< | `assert_numeric` | Complex numeric constraints (in, not_in, multiple_of) | | `assert_float` | Float constraints with epsilon tolerance; a field with any of `gt`/`ge`/`lt`/`le` refuses NaN | | `assert_sql` | Valid SQL statement of permitted type (SELECT, etc.), rejects injection patterns | | `asser...
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n -B3 -A25 "message GrpcS2SClient\|message GrpcClient\b\|grpc_s2s_client" pkg/proto/sys/spec.proto | head -120; ls pkg/proto/sys/
+< 95-  TimeseriesStoreAnnotation timeseries_store = 50015; 96-  // 50016, 50017 retired (graph_import/timeseries_import — push-mutation imports removed). 97- 98:  // grpc_s2s_client declares service-to-service gRPC client dependencies. 99-  // tacplus generates typed gRPC client wrappers for each refe...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204/pkg/proto/sys && grep -v "^\s*$" minter.proto | grep -n "rpc \|message \|  [a-z].* = [0-9]*;\|//" | head -120
+< 1:// Copyright (c) 2026 Jody Scott 2:// SPDX-License-Identifier: Apache-2.0 8:// The contract's identity: callers are entitled against "minter" (the audience 9:// is the contract, not the host) and 102 is its TokenEntitlements field, as 10:// registered in the global tacplus registry. 12:// Minter i...
+> Bash cat servicehealth.proto | head -150; grep -n "message\|=\s*[0-9]*;" grpcconfig.proto | head -80
+< // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0  syntax = "proto3";  package servicehealth;  import "sys/spec.proto"; import "sys/healthreport.proto";  // ServiceHealth is the fleet's service-instance health root, part of the sys // contract every fleet provides: every servic...
+> Bash sed -n 40,120p grpcconfig.proto; sed -n 300,400p grpcconfig.proto; grep -n "message ServiceInstanceHealth" -A60 healthreport.proto
+< // max_request_size, request_timeout_seconds, logger, shutdown_timeout_seconds) // are delivered by the cluster via ServiceConfigState and can change at any time. // // TLS certificates are obtained automatically by the servicemanager via X509Mint // after token exchange — they are not part of the c...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+I'm reading the S2S client generator and the linked designs (redo#1, flock) to write the design this issue asks Jody to approve first.
+> Agent Map S2S client discovery/trust
+= background_tasks_changed
+= task_started
+< Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.) agentId: a7845e3ef4785040b (internal ID - do not mention to user. Use SendMessage with to: 'a7845e3ef4785040b', summary: '<5-10 wor...
+> Bash cd /builds/looper/tacplus/issues/204 && gh issue view 1 --repo tacplus-dev/redo --json title,body,comments -q '.title, .body, (.comments[]|"---- \(.author.login) \(.authorAssociation)\n\(.body)")' 2>&1 | head -200
+< The redo service: local ack, second-site copy, compaction, replay, tenant isolation Blocked-by: tacplus-dev/tacplus#198 Blocked-by: tacplus-dev/tacplus#170 Blocked-by: tacplus-dev/tacplus#163  ## What  Build the redo service: durability for every tenant's Stratum, and its copy at a second site. It i...
+> Bash cd /builds/looper/tacplus/issues/204; ls; ls pkg pkg/internal pkg/internal/*; ls pkg/proto/sys; grep -rIl "grpc_s2s_client" --include=* . | grep -v node_modules | head -50
+= task_progress
+< AGENTS.md CODE_OF_CONDUCT.md CONTRIBUTING.md Dockerfile HISTORY.md LICENSE PROPOSALS.md README.md README.src.md ROADMAP.md SECURITY.md STATE.md cmd cross-test docs example go.mod go.sum images justfile main.go pkg roadmap scripts site pkg: builder buildinfo codefile depfiles fleet formatter ghcr git...
+> Bash gh api repos/tacplus-dev/roadmap/contents/items/flock-design-2026-10-28.md -H 'Accept: application/vnd.github.raw' 2>&1 | head -150; gh api repos/tacplus-dev/roadmap/contents/decisions -q '.[].name' 2>&1 | head -50
+< # flock: fleet-wide convergent state, declared in proto  - **Status:** design draft; panel reviewed 2026-10-28 (decisions/flock-panel-2026-10-28/SYNTHESIS.md). Nothing is decided beyond the points marked "Jody". Nothing is built. - **Owner:** Jody - **Background:** `items/people-fleet-wide-store.md`...
+> Bash cd /builds/looper/tacplus/issues/204; grep -n "grpc_s2s_client" -A12 pkg/proto/sys/spec.proto | head -40; grep -rIn -i "s2s" pkg/internal/go/types/generator.go | head -60
+= task_progress
+< 98:  // grpc_s2s_client declares service-to-service gRPC client dependencies. 99-  // tacplus generates typed gRPC client wrappers for each referenced service. 100:  // Example: option (spec.grpc_s2s_client) = {service: "identity.Mint"}; 101:  repeated GrpcS2SClient grpc_s2s_client = 50018; 102- 103...
+Key context: "Kernel across clusters (Jody, 2026-10-29)" — I need the rest of that section, plus the relevant decisions.
+> Bash cd /builds/looper/tacplus/issues/204; grep -rIln -i "s2s\|peerpool" pkg/internal/go pkg/internal/java pkg/internal/rust pkg/templates 2>/dev/null | grep -v _test | head -60
+= task_progress
+< pkg/internal/go/types/publisher_gen.go pkg/internal/go/types/record_c2s_gen.go pkg/internal/go/types/servicewrapper.go pkg/internal/go/types/grpcclient_gen.go pkg/internal/go/types/restdispatch_gen.go pkg/internal/go/types/generator.go pkg/internal/go/types/record_reader_gen.go pkg/internal/go/types...
+> Bash gh api repos/tacplus-dev/roadmap/contents/items/flock-design-2026-10-28.md -H 'Accept: application/vnd.github.raw' 2>&1 | sed -n 150,260p; echo =====; for f in s2s-never-crosses-tenants-2026-10-31.md deployments-per-cluster-2026-10-26.md network-exposure-2026-11-03.md; do echo "##### $f"; gh api rep...
+Templates are in pkg/templates. Let me find the Go grpc client template.
+> Bash cd /builds/looper/tacplus/issues/204/pkg/templates; ls; ls go go/*; grep -rIln "ServiceInstanceHealth\|ServiceHealth" . | head -40
+= task_progress
+< csharp embed.go go go.mod java python rust swift typescript go: chassis types  go/chassis: am approval client_im collection diskstore grpcconfig grpcserver healthreporter httpclient ip jwk jwkview key logger service_im serviceconnection servicemanager spiffe tags token x509  go/types: c2dm.go.tmpl c...
+< - **Kernels in one trust domain mint across clusters.** Each kernel's **private** signing keys never leave it; only the **public**   verifying keys are replicated to every kernel in the trust domain, so any kernel's token verifies fleet-wide. So kernel *does* host a   fleet-scoped root: its public v...
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204/pkg/templates/go/chassis; wc -l serviceconnection/*.tmpl servicemanager/*.tmpl spiffe/* service_im/* jwkview/* token/* grpcserver/* 2>/dev/null; grep -n "ServiceHealth\|ServiceInstanceHealth\|ServiceId\|SpiffeId\|Location\|Cluster\|Labels\|Audience\|Mint\|Verif\|...
+= task_progress
+<     42 serviceconnection/backoff.go.tmpl     52 serviceconnection/backoff_test.go.tmpl     49 serviceconnection/readiness.go.tmpl    174 serviceconnection/readiness_test.go.tmpl    153 serviceconnection/route.go.tmpl    235 serviceconnection/route_test.go.tmpl    654 serviceconnection/serviceconnect...
+= thinking_tokens
+= thinking_tokens
+> Read /builds/looper/tacplus/issues/204/pkg/templates/go/chassis/serviceconnection/serviceconnection.go.tmpl
+= task_progress
+< 1	// Copyright (c) 2026 Jody Scott 2	// SPDX-License-Identifier: Apache-2.0 3	// Generated by tacplus 4	// 5	// CODE GENERATED - DO NOT EDIT 6	 7	package serviceconnection 8	 9	import ( 10		"context" 11		"fmt" 12		"math" 13		"sort" 14		"sync" 15		"time" 16	 17		healthreport_pb "{{.ModuleBasePath}}/t...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204/pkg/templates/go; grep -rn "ReconcileFromHealth\|GetServiceHealth\|ServiceHealth\b\|ServiceHealth(\|ServiceHealth_\|WatchServiceHealth\|ListServiceHealth\|ServiceId\|GetLocation\|Cluster\|GetSpiffeId\|InstanceHealth" chassis/servicemanager types/service_manager.g...
+= task_progress
+< chassis/servicemanager/endpoint.go.tmpl:81:// Ping sends a ClusterService.Ping RPC and measures the round-trip latency. chassis/servicemanager/endpoint.go.tmpl:91:	client := grpcconfig_pb.NewClusterServiceClient(conn) chassis/servicemanager/connection.go.tmpl:41://   - **Dynamic** (other services): ...
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204/pkg/proto/sys; grep -n "message\|string\|int\|repeated\|map<\|rpc " servicehealth.proto healthreport.proto | head -100
+= task_progress
+< servicehealth.proto:17:message ServiceHealth { servicehealth.proto:23:  repeated healthreport.ServiceInstanceHealth instances = 1 [ healthreport.proto:27:message ServiceInstanceHealth { healthreport.proto:29:  string id = 1 [(spec.indexed) = true, (spec.assert_max_size) = 256]; healthreport.proto:30...
+> Bash cat ROADMAP.md | head -80; gh api repos/tacplus-dev/roadmap/contents/ROADMAP.md -H 'Accept: application/vnd.github.raw' | grep -n -i "fleet\|cluster\|trust\|replicat\|scope\|204\|redo\|federat" | head -40
+> Bash cd /builds/looper/tacplus/issues/204; sed -n 1,40p pkg/proto/sys/servicehealth.proto; sed -n 60,80p pkg/proto/sys/healthreport.proto; sed -n 470,540p pkg/templates/go/types/service_manager.go.tmpl
+= task_progress
+< // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0  syntax = "proto3";  package servicehealth;  import "sys/spec.proto"; import "sys/healthreport.proto";  // ServiceHealth is the fleet's service-instance health root, part of the sys // contract every fleet provides: every servic...
+< # Roadmap: tacplus  Owned by Jody; changed only by an agent at Jody's request. Loopers propose in PROPOSALS.md.  ## Now tacplus compiles annotated proto definitions into complete services (Go, Rust, Java) and clients (TypeScript, Python, Swift, C#). Latest release: v2.4.1 (2026-10-27). 2.4 is the li...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204/pkg/templates/go; grep -n "func \|trustDomain\|RootCAs\|caPool\|VerifyPeer\|LocationPath\|SpiffeTrustDomain" types/servicemanager_lib.go.tmpl | head -120
+= task_progress
+< 82:func streamRetryWait(ctx context.Context, backoff *time.Duration) bool { 113:func newEndpointConn(target string) *endpointConn { 122:func (ec *endpointConn) dial(opts []grpc.DialOption) error { 136:func (ec *endpointConn) ping(ctx context.Context) error { 166:func (ec *endpointConn) close() error...
+> Bash gh api repos/tacplus-dev/roadmap/contents/items/multi-cluster.md -H 'Accept: application/vnd.github.raw' | head -80; gh api repos/tacplus-dev/roadmap/contents/decisions/stratum-per-tenant-2026-10-25.md -H 'Accept: application/vnd.github.raw' | grep -n -i -B2 -A6 "trust\|redo\|remote copy\|second sit...
+> Read /builds/looper/tacplus/issues/204/pkg/templates/go/types/servicemanager_lib.go.tmpl
+= task_progress
+< 280			Timeout:             {{.KeepaliveTimeoutSecs}} * time.Second, 281			PermitWithoutStream: true, 282		})) 283	 284		// Build TLS transport credentials for SPIFFE service mesh. 285		// InsecureSkipVerify disables Go's built-in hostname verification 286		// (which requires DNS SANs). VerifyConnect...
+< # Multi-cluster: three regions, quorum, canary  - **Status:** held - **Owner:** Jody - **Opened:** 2026-10-22 - **Held on:** nothing to build until a second production cluster is close. Near term is one cluster   per domain, two domains (dev, prod). - **Gets more expensive while held:** nothing; the...
+Waiting for the code-mapping agent to report how discovery and trust work today.
+> Bash cd /builds/looper/tacplus/issues/204/pkg/templates/go/chassis; grep -n "func VerifyPeerServiceIdentity\|func VerifyPeerInTrustDomain" -A30 x509/*.tmpl | head -80; grep -n "^func \|location\|Location" spiffe/spiffe.go.tmpl | head -60
+= task_progress
+< x509/x509.go.tmpl:237:func VerifyPeerServiceIdentity(cert *stdx509.Certificate, serviceName, trustDomain string) error { x509/x509.go.tmpl-238-	return verifyPeerServiceIdentity(cert, serviceName, trustDomain) x509/x509.go.tmpl-239-} x509/x509.go.tmpl-240- x509/x509.go.tmpl-241-// VerifyPeerInTrustDo...
+> Bash grep -rn "trust_domain\|trustDomain" pkg/proto/sys/*.proto | head -30
+< pkg/proto/sys/grpcconfig.proto:142:  // spiffe_trust_domain is the SPIFFE URI authority: a globally unique instance pkg/proto/sys/grpcconfig.proto:146:  //   spiffe://<spiffe_trust_domain>/system/<location_path...>/services/<service_label> pkg/proto/sys/grpcconfig.proto:148:  string spiffe_trust_dom...
+> Bash cd /builds/looper/tacplus/issues/204/pkg/templates/go/chassis; grep -n "func verifyPeerServiceIdentity" -A35 x509/x509.go.tmpl; sed -n 636,655p spiffe/spiffe.go.tmpl
+= task_progress
+< 205:func verifyPeerServiceIdentity(cert *stdx509.Certificate, serviceName, trustDomain string) error { 206-	if trustDomain == "" { 207-		return fmt.Errorf("cannot verify peer service identity for %q: no SPIFFE trust domain configured", serviceName) 208-	} 209-	expectedTD, err := wrapperSpiffe.Normal...
+> Bash sed -n 120,222p pkg/proto/sys/grpcconfig.proto
+<   // max_send_msg_size is the maximum response message size in bytes.   // Prevents the server from sending responses that could OOM clients.   // Default: 16MB (16777216 bytes). Set to 0 to use the gRPC library default.   int64 max_send_msg_size = 14 [(spec.default_int) = 16777216];    // keepalive...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204/pkg/templates/go; grep -n "aud\|Aud\|tokenFor\|TokenFor" types/grpc_aggregator.go.tmpl types/grpcclient_root.go.tmpl types/grpcclient.go.tmpl | head -40; grep -n "func (.*) GetTokenFor\|MintServiceToken\|MintExternal\|trust domain\|TrustDomain\|bootstrap" chassis...
+= task_progress
+< types/grpc_aggregator.go.tmpl:27:// tokenProviderFor returns an audience-scoped token provider for the given target service ID. types/grpcclient_root.go.tmpl:27:// tokenProviderFor returns an audience-scoped token provider for the given target service ID. 65:// bootstrap path; the static cred_pair (...
+> Bash gh issue view 212 --repo tacplus-dev/tacplus --json comments -q '.comments[] | select(.authorAssociation=="MEMBER") | select(.body|test("[Dd]esign")) | .body' | head -120
+< (Bash completed with no output)
+> Bash cd /builds/looper/tacplus/issues/204/pkg/templates/go; sed -n 20,45p types/grpc_aggregator.go.tmpl; sed -n 60,145p chassis/service_im/service_im.go.tmpl; sed -n 440,540p chassis/service_im/service_im.go.tmpl
+= task_progress
+< 	clients *clients.GrpcClients {{end}} }  {{if .HasClients}} // New creates a Grpc aggregator using per-service ChannelProviders for connection routing. // Each generated client gets a per-service connection provider. // tokenProviderFor returns an audience-scoped token provider for the given target ...
+> Bash gh issue list --repo tacplus-dev/tacplus --label needs-decision --state all --limit 5 --json number,title; gh issue view 212 --repo tacplus-dev/tacplus --json comments -q '.comments[] | "---- \(.author.login) \(.authorAssociation)\n\(.body[0:1500])"' | head -100
+> Bash cd /builds/looper/tacplus/issues/204/pkg/templates/go; grep -n "tokenProviderFor\|authorization\|Bearer" types/grpcclient_root.go.tmpl types/grpcclient_group.go.tmpl types/grpcclient.go.tmpl | head; grep -n "phase2\|Aud\b\|Aud:" chassis/service_im/service_im.go.tmpl | head -20
+= task_progress
+< types/grpcclient_root.go.tmpl:27:// tokenProviderFor returns an audience-scoped token provider for the given target service ID. types/grpcclient_root.go.tmpl:28:func NewGrpcClients(channels map[string]*serviceconnection.ChannelProvider, tokenProviderFor func(string) func() (string, error)) *GrpcClie...
+< [{"number":197,"title":"verify (JBMC): Proof.java compiled against target/generated-sources/tacplus, but 2.4 generates into <output-dir>/model; every harness fails to compile"},{"number":145,"title":"diskstore archive: public wiring helper for hand-opened RedoLogs"},{"number":12,"title":"Python: MCP...
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204/pkg/templates/go; sed -n 860,905p chassis/service_im/service_im.go.tmpl; grep -n "TargetServiceID" ../../internal/go/types/grpcclient_gen.go | head -5
+= task_progress
+< 		return "", fmt.Errorf("token exchange client not initialized") 	}  	// 1. Phase 1: Bootstrap — exchange the Phase 1 credential for refresh + access tokens. 	bootstrapResp, err := tm.exchangeForAccess(exchClient) 	if err != nil { 		return "", err 	} 	accessToken := bootstrapResp.GetAccessToken().Ge...
+= thinking_tokens
+Now server side: authorizer.
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204/pkg/templates/go/chassis; grep -n "func \|auth_services\|AuthServices\|FromFleet\|ServicePathFromSpiffe\|jwk\|Jwk\|aud\b\|Aud\|issuer\|Issuer\|trustDomain\|TrustDomain" grpcserver/authorizer.go.tmpl | head -100
+= task_progress
+< 18:	jwkviewpb "{{.ModuleBasePath}}/types/sys/jwkview" 22:	wrapperJwk "{{.ModuleBasePath}}/chassis/jwk" 33:// PigeonServicePath is an auth_services pattern matching the service path of any 40:func PigeonServicePathFor(service string) string { 46:// Authorization is deterministic: a valid token with m...
+> Bash sed -n 1,80p pkg/proto/sys/publicjwksview.proto | grep -v "^$"; grep -n "MintExternalServiceTokenRequest" -A25 pkg/proto/sys/tokenrequest.proto | head -40
+< // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0 // ============================================================================ // DO NOT MODIFY THIS FILE // ============================================================================ // This file defines the cross-boundary p...
+= thinking_tokens
+> Read /builds/looper/tacplus/issues/204/pkg/templates/go/chassis/grpcserver/authorizer.go.tmpl
+= task_progress
+< 200	const serviceName = "{{.ServiceLabel}}" 201	 202	// acceptedAudiences is every token audience this service accepts: its own name 203	// plus the name of each trait it hosts. A trait's audience is the trait name, 204	// not the host's, so a host that implements a trait must accept the trait 205	/...
+= thinking_tokens
+> Read /builds/looper/tacplus/issues/204/pkg/templates/go/chassis/grpcserver/authorizer.go.tmpl
+= task_progress
+< 490	func (a *authorizer) Authorize(ctx context.Context, fullMethod string, req any) (*tokenlib.TokenWrapper, error) { 491		tw, err := a.verifyBearer(ctx, fullMethod) 492		if err != nil { 493			zap.L().Debug("Token verification failed", 494				zap.String("method", fullMethod), 495				zap.Error(err)) ...
+> Read /builds/looper/tacplus/issues/204/pkg/templates/go/chassis/grpcserver/authorizer.go.tmpl
+= task_progress
+< 700	// verifyBearer verifies the bearer token and applies the tenant door for 701	// fullMethod ("" when the method is unknown, which keeps the door shut). 702	func (a *authorizer) verifyBearer(ctx context.Context, fullMethod string) (*tokenlib.TokenWrapper, error) { 703		md, ok := metadata.FromInco...
+= thinking_tokens
+> Read /builds/looper/tacplus/issues/204/pkg/templates/go/chassis/grpcserver/authorizer.go.tmpl
+= task_progress
+< 950		} 951		r.inner.RegisterService(&wrapped, impl) 952	} 953	 954	// verifyToken parses and verifies a JWT token string against the JWK view. 955	func (a *authorizer) verifyToken(tokenStr string) (*tokenlib.TokenWrapper, error) { 956		tw, err := tokenlib.ParseToken(tokenStr) 957		if err != nil { 95...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204; sed -n 1014,1110p pkg/templates/go/types/servicemanager_lib.go.tmpl; grep -n "func (t\?w\? \?\*\?TokenWrapper) \(Verify\|ServicePath\)\|iss\b\|Issuer\|TrustDomain" pkg/templates/go/chassis/token/token.go.tmpl | head -30
+= task_progress
+< // startWatchJwks maintains the ClusterService.WatchJwks stream and keeps the // local JWK cache up to date. It reconnects with capped backoff + jitter on // any failure, re-acquiring the connection from the pool on every attempt — // a single stream blip must not leave the JWK cache permanently sta...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204; sed -n 965,1060p pkg/templates/go/chassis/token/token.go.tmpl; grep -n "func (token \*TokenWrapper) ServicePath" -A20 pkg/templates/go/chassis/token/token.go.tmpl
+= task_progress
+< // // Parameters: //   - jwk: The JSON Web Key containing the public key for verification // // Returns: //   - error: Returns an error if: //   - Token is missing required claims (iss, kid, exp, signature) //   - Token has expired //   - Signature is invalid or cannot be decoded //   - Signature ve...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204; grep -n "spiffe_trust_domain\|location_path\|trusted_cas\|endpoints\|instance_id" pkg/proto/sys/grpcconfig.proto; grep -n "message\|service \|rpc \|//" pkg/proto/sys/jwkview.proto pkg/proto/sys/publicjwksview.proto | head -60
+= task_progress
+< 9:// contract and GrpcServerService health endpoints. 36:// Bootstrap fields (endpoints, instance_id, private_key, trusted_cas) are loaded 51:  // Cluster endpoints. Set in bootstrap file; can be updated at runtime 52:  // via ServiceConfigState to add/remove endpoints dynamically. 53:  repeated hos...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204; sed -n 138,160p pkg/proto/sys/grpcconfig.proto; grep -rn "auth_services_from_fleet\|AuthServicesFromFleet" --include=*.go --include=*.proto --include=*.tmpl pkg | grep -v _test | head -20
+= task_progress
+<   // ============================================================================   // Bootstrap — SPIFFE Identity   // ============================================================================    // spiffe_trust_domain is the SPIFFE URI authority: a globally unique instance   // name for this au...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204; sed -n 1275,1292p pkg/proto/sys/spec.proto; sed -n 15,95p pkg/fleet/auth.go; sed -n 370,395p pkg/fleet/fleet.go
+= task_progress
+<   // Overridden per-RPC by spec.rpc auth_services; tacplus-generated service   // protos (state, record_map, timeseries, opa_eval) still declare it here.   repeated string auth_services = 1;    // label is the routing label for the physical service that hosts this S2S   // interface. Used for vservi...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204; grep -rniE "cross-cluster|multi-cluster|multiple clusters|federat|trust bundle|external trust|other issuer|foreign (issuer|trust)" --include=*.go --include=*.proto --include=*.tmpl --include=*.md pkg docs ROADMAP.md PROPOSALS.md roadmap STATE.md 2>/dev/null | gr...
+= task_progress
+< pkg/proto/sys/spec.proto:2202:  // keys — the record store federates into a projection, gets record keys, and hydrates the pkg/proto/sys/tokenrequest.proto:161:// federation jwt-bearer assertion). The token minter answers with pkg/proto/sys/grpcconfig.proto:274:// ClusterState is a snapshot of the f...
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204; sed -n 265,330p pkg/proto/sys/grpcconfig.proto; sed -n 30,60p pkg/proto/sys/minter.proto; grep -rn "plan D2\|Location-scoped" --include=*.md --include=*.tmpl -r . | head
+= task_progress
+= thinking_tokens
+< // ClusterInfo describes a single Kubernetes cluster and its members. message ClusterInfo {   string org_id = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 128];   string region = 2 [(spec.assert_required) = true, (spec.assert_max_size) = 64];   string zone = 3 [(spec.assert_max_size) =...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204/pkg/templates; grep -rn "getServiceId()\|service_id\b.*group\|\.service_id\|ServiceIdentityTrustManager(\|expect_service(\|acceptedAudiences\|ACCEPTED_AUDIENCES\|accepted_audiences" java/types/ServiceManager.java.tmpl rust/types/service_manager.rs.tmpl java/chass...
+= task_progress
+< java/types/ServiceManager.java.tmpl:1422:                                if ("{{.ServiceID}}".equals(inst.getServiceId())) { java/types/ServiceManager.java.tmpl:1435:	                                if ("{{.SmbAuthorityServiceID}}".equals(inst.getServiceId())) { java/types/ServiceManager.java.tmpl:2...
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/204/pkg/templates; sed -n 1410,1430p java/types/ServiceManager.java.tmpl; sed -n 2015,2030p rust/types/service_manager.rs.tmpl; sed -n 805,818p rust/types/service_manager.rs.tmpl
+= task_progress
+<                     try {                         {{.HealthStateOuterClass}}.InstancesEntriesResponse resp = healthPollStub.getAllInstances(                                 {{.HealthStateOuterClass}}.InstancesGetAllRequest.getDefaultInstance()); 	                        java.util.List<ServiceInstanc...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue view 206 --repo tacplus-dev/tacplus --json title,state,body -q '.title, .state, .body[0:1500]'; gh issue list --repo tacplus-dev/kernel --search "verifying keys fleet OR cross-cluster OR replication" --state all --limit 8 --json number,title,state
+< flock state: spec.service_state with label flock, field merge rules, generated merge, duplicate detection and deletion marks OPEN ## What  Generate fleet-wide convergent state from proto annotations, as designed in tacplus-dev/roadmap `items/flock-design-2026-10-28.md` (the *Revision* section is cur...
+Still drafting the design while the code-mapping agent finishes; I'll fold its findings in before posting.
+> Bash grep -rn "GetTokenFor\|func (.*) TokenFor\|audience" --include=*.go pkg/internal/go 2>/dev/null | grep -i "s2s\|aud" | head -15; ls cross-test | head -60
+< pkg/internal/go/types/servicewrapper.go:989:			// auth_any_user: verify token signature + audience, and — only when a pkg/internal/go/types/subscriber_template_test.go:77:	// in the topic owner's package, so the connection's audience heuristic pkg/internal/go/types/generator.go:817:		return fmt.Erro...
+= thinking_tokens
+= thinking_tokens
+> Bash cat cross-test/external-token/README.md 2>/dev/null | head -40; ls cross-test/external-token
+< proto run.sh testdata
+> Bash head -40 cross-test/external-token/run.sh
+< #!/usr/bin/env bash # Behavioral fixture for the generated external-audience token accessor # (token_for_external): two calls must reach the token minter twice and return # two distinct tokens, each requested with the caller's own kernel token, the # given aud, and an exp no more than 600 s out. set...
+= thinking_tokens
+= thinking_tokens
+Now drafting the design comment.
+> Write /builds/looper/tacplus/homes/looper-204/design-204.md
+< File created successfully at: /builds/looper/tacplus/homes/looper-204/design-204.md (file state is current in your context — no need to Read it back)
+= thinking_tokens
+= thinking_tokens
+> Bash grep -rln "\"iss\"\|Issuer" pkg/internal/go pkg/internal/rust pkg/internal/java 2>/dev/null | head -10
+< pkg/internal/go/types/servicewrapper.go pkg/internal/go/types/lib_templates_regression_test.go
+> Bash grep -n "\"iss\"\|Issuer" pkg/internal/go/types/servicewrapper.go | head
+< 953:		for _, k := range []string{"sub", "aud", "iss", "azp", "act"} {
+= thinking_tokens
+= thinking_tokens
+> ToolSearch {"query":"select:TaskGet,TaskList","max_results":2}
+<  
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash grep -rn "func audienceFromMethod" -A30 pkg/internal/go | head -45
+< (Bash completed with no output)
+> Bash grep -rn "audienceFromMethod" pkg/internal/go --include=*.go -l | head; grep -rn "audienceFromMethod(" pkg/internal/go -h | head -5
+< pkg/internal/go/types/service_im_bootstrap_pin_test.go pkg/internal/go/types/stateclient_gen.go
+S2S clients find peers by `service_id` alone. Nothing in the discovery, cert or token checks looks at location, cluster or labels. Line numbers are in the template files under `/builds/looper/tacplus/issues/204/pkg/templates/`, except proto and `pkg/fleet` paths. I read Go in full and only checked parity points in Java and Rust.
+
+## 1. Peer discovery
+- **Source.** Health comes from the `ServiceHealth` state root (`pkg/proto/sys/servicehealth.proto:17-27`). It is `service_state {label:["kernel"]}`, keyed `service_id@instance_id`, and entries expire by TTL. Each `ServiceInstanceHealth` (`pkg/proto/sys/healthreport.proto:27-73`) carries `service_id` ("from token sub"), `grpc_endpoint`, `labels` (field 18) and `spiffe_id` (field 21).
+- **Go wiring.** The S2S path never builds generated client wrappers itself; it uses the service-manager wiring in `go/types/service_manager.go.tmpl:484-522`:
+  - It makes one `serviceconnection.NewDynamic(svc, sc.ServiceDialOpts(svc))` per target.
+  - It registers `ServiceHealth().OnInstancesChange`, groups instances by `inst.ServiceId` only (`:507-511`), then calls `ReconcileFromHealth`.
+  - Tenant-routed targets are grouped again by the tenant parsed from `spiffe_id` (`go/chassis/serviceconnection/serviceconnection.go.tmpl:460-463`).
+- **Reconcile.** `ReconcileFromHealth` (`serviceconnection.go.tmpl:260-327`) keys on `host:port` from `GrpcEndpoint`. It skips UNHEALTHY instances when dialing, and closes an endpoint only after 6 snapshots in a row omit it (`:48`). It routes to HEALTHY or DEGRADED endpoints (`:129-133`).
+- **Java.** Polls `getAllInstances` and filters with `"{{.ServiceID}}".equals(inst.getServiceId())` (`java/types/ServiceManager.java.tmpl:1411-1426`).
+- **Rust.** Filters with `.filter(|i| i.service_id == sc.service_id())` (`rust/types/service_manager.rs.tmpl:2024`).
+- **No cluster scoping.** No filter uses `labels`, `spiffe_id` location or trust domain, or cluster. Peers are scoped only by whatever instances report into the one kernel-hosted `ServiceHealth`, reached through the bootstrap `cfg.Endpoints`.
+
+## 2. Client authentication
+- **Token.** `smgrpc.New(s2sChannels, aud => identity.GetTokenFor(aud))` (`service_manager.go.tmpl:526-528`). Each client gets `tokenProviderFor("{{.TargetServiceID}}")` (`go/types/grpcclient_group.go.tmpl:39`), so the audience is the target's service ID (the hosting service, for virtual services). The token is sent as `Authorization: Bearer` (`go/types/grpcclient.go.tmpl:72-86`).
+- **Minting** (`go/chassis/service_im/service_im.go.tmpl`):
+  - `GetTokenFor` is at `:466`.
+  - Phase 1 exchanges the k8s or bootstrap token for refresh and access tokens.
+  - Phase 2 calls `MintServiceToken{InputToken, Aud: audience, TokenPurpose: SERVICE}` (`:879-886`).
+  - Tokens are cached per audience.
+- **Server cert check.**
+  - `ServiceDialOpts(serviceID)` → `VerifyPeerServiceIdentity(cert, serviceID, bc.trustDomain)` (`go/types/servicemanager_lib.go.tmpl:495-502`).
+  - `spiffeTLSDialOpt` (`:459-480`) sets `InsecureSkipVerify` and does its own chain check against `certPool`. That pool is built from `cfg.TrustedCas` (`:289-314`), a single bundle with fail-closed if empty, and `ErrMissingTrustDomain` if `spiffe_trust_domain` is empty.
+  - The SAN check (`go/chassis/x509/x509.go.tmpl:205-228`) needs a URI SAN that parses as `KindService`, with `TrustDomain == configured TD` and `SubjectPath == serviceName`. Any location segments are accepted.
+  - The bootstrap or state connection pins only the trust domain (`VerifyPeerInTrustDomain`, `x509.go.tmpl:250-271`; `servicemanager_lib.go.tmpl:321-323`; `service_im.go.tmpl:222-267`).
+  - Rust uses `spiffe_verifier_base.clone().expect_service(id)` (`service_manager.rs.tmpl:805-816`). Its comment says the SAN is `spiffe://<td>/<service_id>`, which is out of date.
+
+## 3. Server-side admission
+All in `go/chassis/grpcserver/authorizer.go.tmpl`.
+- **`verifyBearer`** (`:702-735`):
+  - Calls `verifyToken`, which looks up the token's `kid` in `JwkCache` (`:955-972`).
+  - Rejects the API token class.
+  - Requires `aud ∈ acceptedAudiences`: own label, hosted traits, and `accepted_audiences` (`:202-212`).
+  - Applies the host-tenant check.
+- **`Authorize` S2S path** (`:527-562`): when `sub_type` is service or workload, `tw.ServicePath()` matches against the per-method `auth_services` RE2 patterns.
+  - `ServicePath` (`go/chassis/token/token.go.tmpl:422-442`) uses `ServicePathFromSpiffe(sub)` (`go/chassis/spiffe/spiffe.go.tmpl:639-652`). It drops the trust domain and `/system/<location>`: "same service matches identically across clouds/accounts/AZs/clusters… (Location-scoped authz is deferred; see plan D2.)"
+- **Issuer and trust domain on tokens are not pinned.** `Verify` (`token.go.tmpl:980-1000+`) checks only that `iss` is non-empty, plus kid, alg, exp and nbf. The authorizer compares neither the token `sub` trust domain nor `iss` to config.
+- **Which keys verify tokens.** The authorizer's `JwkCache` is fed by `JwkVerifyingKeysViewService.Watch` on the bootstrap connection (`:250-255`, `:142-180`). That service is an aggregate of the cluster's `view_member "JwkVerifyingKeysView"` collections (`pkg/proto/sys/jwkview.proto:7-29`). `ClusterService.WatchJwks` is a separate stream that fills `bc.jwkCache` (`servicemanager_lib.go.tmpl:1014-1090`). Its comment says kernel does not implement it (UNIMPLEMENTED).
+- **"Pins the bootstrap trust domain."** This is TLS only: `service_im.go.tmpl:222-267` pins the token authority's cert to the trust domain.
+- **`auth_services_from_fleet`** (`pkg/proto/sys/spec.proto:1284-1290`). `pkg/fleet/auth.go:22-91` (`stampFleetAuth`, called from `pkg/fleet/fleet.go:380-384`) rewrites the merged protos so each such service gets the set of fleet services declaring a `grpc_s2s_client` of it, or `all_grpc_s2s_clients`. If there are no callers it stays fail-closed. This happens at build time, by name, with no cluster dimension.
+
+## 4. Trust domain, location and SPIFFE helpers
+- `Config.spiffe_trust_domain` (16) and `location_path` (17) are bootstrap/runtime config. `location_path` is "Supplied by the operator/deployment… not a token claim" (`pkg/proto/sys/grpcconfig.proto:142-156`).
+- The own SPIFFE ID is built as `ServiceSpiffeID(cfg.SpiffeTrustDomain, cfg.LocationPath, serviceAudience)` (`servicemanager_lib.go.tmpl:573`) for the X509Mint request.
+- Helpers in `go/chassis/spiffe/spiffe.go.tmpl`: `ServiceSpiffeID` (:279), `ParseSpiffeID` (:447) with `LocationPath` (:432, :558), `ServicePathFromSpiffe` (:643), `SameTrustDomain` (:728), `NormalizeTrustDomain` (:116). Python and TypeScript have matching versions.
+
+## 5. Multi-cluster, federation and external issuers
+- `ClusterInfo` and `ClusterState` ("multi-region, multi-cluster topology") plus `ClusterService.Subscribe` (`grpcconfig.proto:265-308`). This feed is only logged (`servicemanager_lib.go.tmpl:1003`) and does not affect S2S routing.
+- `MintExternalServiceToken` (`pkg/proto/sys/minter.proto:39-44`) and `IdentityManager.TokenForExternal` (`service_im.go.tmpl:497-531`) are outbound only. They mint a kernel-signed token for an off-cluster audience (workload identity federation), uncached, at most 600s. Java and Rust have matching versions.
+- `PublicJwksViewService` (`pkg/proto/sys/publicjwksview.proto:7-35`) is read only by the gateway to publish `/.well-known/jwks.json`. It includes the external (WIF ES256) signing keys and is not used to verify incoming tokens.
+- Java `MemberPort` mentions "fleet trust bundle", meaning the same `trustedCas` (`java/chassis/memberport/MemberPort.java.tmpl:77,231`).
+- I found no multiple trust bundles, cross-cluster discovery, external-issuer verification, or per-cluster `ServiceHealth`. Location-scoped authorization is explicitly deferred ("plan D2"); the only references are code comments.
+= task_updated
+= task_notification
+= background_tasks_changed
+Waiting on the code-mapping agent; meanwhile checking how S2S token audiences are chosen.
+> Bash grep -rn "audienceFromMethod" pkg/internal/go/types/stateclient_gen.go | head -3; grep -rln "audienceFromMethod" pkg/internal/go/ --include=*.tmpl --include=*.gotmpl | head
+< 428:	// Build virtual→physical audience mappings for audienceFromMethod. 459:	// audienceFromMethod resolves "oauth" as the audience, the caller tries
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+I have what I need. Writing the design comment.
+> Write /builds/looper/tacplus/homes/looper-204/design-204.md
+< The file /builds/looper/tacplus/homes/looper-204/design-204.md has been updated successfully. (file state is current in your context — no need to Read it back)
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n "message ServiceS2SAnnotation" -A3 pkg/proto/sys/spec.proto; awk '/^message ServiceS2SAnnotation/,/^}/' pkg/proto/sys/spec.proto | grep -o "= [0-9]*;" ; awk '/^message Config/,/^}/' pkg/proto/sys/grpcconfig.proto | grep -o "= [0-9]*[ ;]" | tr '\n' ' '; grep -n "reserved" pkg/proto/sys/grpcco...
+< 1272:message ServiceS2SAnnotation { 1273-  // auth_services: service identities allowed to call (service-level default). 1274-  // ["*"] = any service. Named entries restrict to those identities. 1275-  // Overridden per-RPC by spec.rpc auth_services; tacplus-generated service = 1; = 3; = 4; = 5; = ...
+= thinking_tokens
+= thinking_tokens
+> Bash sed -n 1272,1284p pkg/proto/sys/spec.proto; grep -n "12" pkg/proto/sys/grpcconfig.proto | head -5
+< message ServiceS2SAnnotation {   // auth_services: service identities allowed to call (service-level default).   // ["*"] = any service. Named entries restrict to those identities.   // Overridden per-RPC by spec.rpc auth_services; tacplus-generated service   // protos (state, record_map, timeseries...
+Field numbers I proposed are free (gaps at 2 and 12 left untouched). Posting the design and labelling the issue.
+> Bash grep -c 059a49a55e /builds/looper/tacplus/homes/looper-204/design-204.md; gh issue comment 204 --repo tacplus-dev/tacplus --body-file /builds/looper/tacplus/homes/looper-204/design-204.md && gh issue edit 204 --repo tacplus-dev/tacplus --add-label needs-decision && gh issue view 204 --repo tacplus-d...
+< 0 https://github.com/tacplus-dev/tacplus/issues/204#issuecomment-6694736264 https://github.com/tacplus-dev/tacplus/issues/204 ["needs-decision","approved","looper:in-progress","feature"]
+Nothing was built or committed. The issue requires Jody to approve the design on the issue before any building starts, and no design had been posted. So I posted one: https://github.com/tacplus-dev/tacplus/issues/204#issuecomment-6694736264. I also added the `needs-decision` label and stopped, as rule 1 says.
+
+**How it works today:**
+- **Discovery:** a generated S2S client finds peers by service name alone, from the one health record its own cluster's kernel keeps.
+- **Trust:** it checks peers against one certificate bundle and one key set.
+- **Admission:** the server doesn't check the token's issuer or the trust domain in its subject. That's safe while only the local kernel's keys are trusted, but any cross-site trust has to add those checks.
+
+**What I propose (D1–D8):**
+- **D1, declaring it:**
+  - On the caller: `(spec.grpc_s2s_client) = {service, remote: true}`, which generates a remote client group chosen by site name.
+  - On the server: a new `(spec.service_s2s).remote_auth_services` list, empty by default, that admits named services only.
+  - The tenant door and route checks stay as they are.
+  - Generation fails if a remote client's target doesn't admit it.
+- **D2, finding the peer:** one mechanism for both cases. Each site is configured with its name, trust domain, token issuer, published key set URL, certificate bundle and per-service address, delivered through config state. This departs from the issue's "through the fleet's health state, across clusters", for two reasons:
+  - There is no fleet-wide health state yet; each cluster's kernel keeps its own.
+  - A pod in another cluster or deployment can't be reached anyway: nodes are private and NetworkPolicies are default-deny.
+
+  Someone also has to own exposing each site's address, which isn't tacplus's job.
+- **D3, trust:** federation of trust bundles rather than token exchange.
+  - **Identity:** each identity stays in its own trust domain, and the far site can verify our tokens but never mint one.
+  - **Dependencies:** no extra round trip to the far kernel on every connection.
+  - **Precedent:** it has the same shape as Jody's 2026-10-29 kernel-to-kernel decision.
+- **D4, tokens:** each token is bound to the receiving site, with the audience `remote:<site>:<svc>`. Without that, site B could replay site A's token into A's own local server. The server checks remote tokens with a separate verifier that requires:
+  - the issuer is a configured site;
+  - the subject is in that site's trust domain;
+  - the audience names this site and service;
+  - the caller is a service (not a workload or user) listed in `remote_auth_services`.
+- **D5, kernel:** the kernel's token minter must allow those audiences. I asked permission to file a kernel issue, as #212 did with kernel#30.
+- **D6, open questions:**
+  - Is redo's second site in the same fleet? Since 2026-10-29 a fleet shares one trust domain. If the second site is in the same fleet, two things break: redo's receiver refuses its own trust domain, and it keys its logs by trust domain + tenant.
+  - The flock-gossip driver looks superseded by the 2026-10-29 decisions, which dropped the flock service. I asked whether #206 should use this feature; I'd keep it out.
+- **D7, tests:** the `cross-test/remote-s2s` fixture, covering the issue's admit and refuse cases plus the replay and wrong-issuer cases.
+- **D8, scope:** the full job doesn't fit one 4h run. I proposed doing the contract and Rust here (redo is Rust), with Go and Java as follow-up issues required before the release, as #212 was split.
+
+The issue stays open. Once Jody answers, the next run builds it test-first.
+= success: Nothing was built or committed. The issue requires Jody to approve the design on the issue before any building starts, and no design had been posted. So I posted one: https://github.com/tacplus-dev/tacplus/issues/204#issuecomment-6694736264. I also added the `needs-decision` label and stopped, as rule 1 says.
+
+**How it works today:**
+- **Discovery:** a generated S2S client finds peers by service name alone, from the one health record its own cluster's kernel keeps.
+- **Trust:** it checks peers against one certificate bundle and one key set.
+- **Admission:** the server doesn't check the token's issuer or the trust domain in its subject. That's safe while only the local kernel's keys are trusted, but any cross-site trust has to add those checks.
+
+**What I propose (D1–D8):**
+- **D1, declaring it:**
+  - On the caller: `(spec.grpc_s2s_client) = {service, remote: true}`, which generates a remote client group chosen by site name.
+  - On the server: a new `(spec.service_s2s).remote_auth_services` list, empty by default, that admits named services only.
+  - The tenant door and route checks stay as they are.
+  - Generation fails if a remote client's target doesn't admit it.
+- **D2, finding the peer:** one mechanism for both cases. Each site is configured with its name, trust domain, token issuer, published key set URL, certificate bundle and per-service address, delivered through config state. This departs from the issue's "through the fleet's health state, across clusters", for two reasons:
+  - There is no fleet-wide health state yet; each cluster's kernel keeps its own.
+  - A pod in another cluster or deployment can't be reached anyway: nodes are private and NetworkPolicies are default-deny.
+
+  Someone also has to own exposing each site's address, which isn't tacplus's job.
+- **D3, trust:** federation of trust bundles rather than token exchange.
+  - **Identity:** each identity stays in its own trust domain, and the far site can verify our tokens but never mint one.
+  - **Dependencies:** no extra round trip to the far kernel on every connection.
+  - **Precedent:** it has the same shape as Jody's 2026-10-29 kernel-to-kernel decision.
+- **D4, tokens:** each token is bound to the receiving site, with the audience `remote:<site>:<svc>`. Without that, site B could replay site A's token into A's own local server. The server checks remote tokens with a separate verifier that requires:
+  - the issuer is a configured site;
+  - the subject is in that site's trust domain;
+  - the audience names this site and service;
+  - the caller is a service (not a workload or user) listed in `remote_auth_services`.
+- **D5, kernel:** the kernel's token minter must allow those audiences. I asked permission to file a kernel issue, as #212 did with kernel#30.
+- **D6, open questions:**
+  - Is redo's second site in the same fleet? Since 2026-10-29 a fleet shares one trust domain. If the second site is in the same fleet, two things break: redo's receiver refuses its own trust domain, and it keys its logs by trust domain + tenant.
+  - The flock-gossip driver looks superseded by the 2026-10-29 decisions, which dropped the flock service. I asked whether #206 should use this feature; I'd keep it out.
+- **D7, tests:** the `cross-test/remote-s2s` fixture, covering the issue's admit and refuse cases plus the replay and wrong-issuer cases.
+- **D8, scope:** the full job doesn't fit one 4h run. I proposed doing the contract and Rust here (redo is Rust), with Go and Java as follow-up issues required before the release, as #212 was split.
+
+The issue stays open. Once Jody answers, the next run builds it test-first.

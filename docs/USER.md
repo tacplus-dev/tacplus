@@ -420,7 +420,7 @@ parsing.
 | `assert_numeric` | Complex numeric constraints (in, not_in, multiple_of) |
 | `assert_float` | Float constraints with epsilon tolerance; a field with any of `gt`/`ge`/`lt`/`le` refuses NaN |
 | `assert_sql` | Valid SQL statement of permitted type (SELECT, etc.), rejects injection patterns |
-| `assert_invariant` | Formal invariant (constrains a `#[kani::proof]` harness via `kani::assume()` in Rust, a JBMC harness via `CProver.assume()` in Java) |
+| `assert_invariant` | Formal invariant (assumed by every `#[kani::proof]` harness of the message via `kani::assume()` in Rust, a JBMC harness via `CProver.assume()` in Java) |
 | `assert_min_size` | Minimum byte length (string/bytes) or element count (repeated/map) |
 
 ### gRPC Client Dependency Annotations
@@ -646,15 +646,32 @@ A field may not carry both `(spec.redact)` and `(spec.sensitive)`.
 
 ## Formal Verification Annotations
 
-A field can carry a formal invariant via `(spec.assert_invariant)`, which is
-emitted into a generated proof harness:
+In Rust, each integer or enum field bound (`assert_gt`, `assert_ge`,
+`assert_lt`, `assert_le`, `assert_net_port`, `assert_duration`,
+`assert_duration_min`, `assert_duration_max`) gets a generated
+`#[kani::proof]` harness, `verify_<message>_<field>_<annotation>`, proving that
+`validate()` refuses every value outside the bound: the message is left at its
+default, the field takes any value the bound refuses, and the harness asserts
+`validate().is_err()`. No harness claims `validate()` accepts a value, which
+would depend on every other check of the message. Each harness stubs
+`std::fmt::format` with `#[kani::stub]`, so Kani does not model the error
+message's text (it cannot finish `core::fmt`, and no check depends on it); the
+generated `Cargo.toml` enables it for `cargo kani` with
+`[package.metadata.kani.unstable] stubbing = true`. A message gets none when its
+`validate()` reaches code Kani cannot compile or run: an `assert_email`,
+`assert_fqdn`, `assert_host` or `assert_semver` field (the regex crate), a
+nested message field, a map field, or a `(spec.sensitive)` check. String,
+bytes, float, repeated and oneof fields get none (#211).
+
+A field can also carry a formal invariant via `(spec.assert_invariant)`:
 
 ```protobuf
 string token = 1 [(spec.assert_invariant) = "self.ttl > 0 && self.ttl <= 86400"];
 ```
 
-In Rust the harness is a `#[kani::proof]` that constrains the field with
-`kani::assume(...)`; in Java it is a JBMC harness that constrains it with
+`validate()` checks it with `debug_assert!`, and every Rust harness of the
+message assumes it (`kani::assume(msg.ttl > 0 && ...)`, `self.` read as the
+harness's `msg.`); in Java it is a JBMC harness that constrains it with
 `CProver.assume(...)`. The `tacplus verify` command runs these proofs (Rust or
 Java only).
 
@@ -669,7 +686,7 @@ gates: a land never runs Kani or JBMC. tacplus's build pipeline runs it with
   <sha>` decides, prints `skip: unchanged since <sha>, verified then` otherwise,
   and runs when it cannot tell. A failure is filed as a `bug` naming the harness
   and its counterexample. The nightly schedule starts once the generated
-  harnesses verify (#211, #257).
+  harnesses verify (#257).
 
 Go is not formally verified, by decision; it is fuzzed and tested.
 

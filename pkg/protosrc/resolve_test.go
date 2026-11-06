@@ -222,6 +222,47 @@ func TestAuthArgs(t *testing.T) {
 	}
 }
 
+// TestFindLatestPatchTagSkipsPreReleases resolves a MAJOR.MINOR line in a
+// fixture repo carrying pre-releases: the line is its latest patch release,
+// never a pre-release, whether the pre-release is of that patch or a newer one.
+func TestFindLatestPatchTagSkipsPreReleases(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repo := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main", repo},
+		{"-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"},
+		{"-C", repo, "tag", "v1.2.3"},
+		{"-C", repo, "tag", "v1.2.3-rc.1"},
+		{"-C", repo, "tag", "v1.2.4-rc.1"},
+		{"-C", repo, "tag", "v1.2.10-rc.1"},
+		{"-C", repo, "tag", "v1.20.0"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	got, err := findLatestPatchTag(repo, "v1.2")
+	if err != nil {
+		t.Fatalf("findLatestPatchTag(1.2): %v", err)
+	}
+	if got != "v1.2.3" {
+		t.Errorf("findLatestPatchTag(1.2) = %q, want v1.2.3", got)
+	}
+
+	if got, err := findLatestPatchTag(repo, "v1.3"); err == nil {
+		t.Errorf("findLatestPatchTag(1.3) = %q, want an error (no release on the line)", got)
+	}
+	if out, err := exec.Command("git", "-C", repo, "tag", "v1.4.0-rc.1").CombinedOutput(); err != nil {
+		t.Fatalf("git tag v1.4.0-rc.1: %v\n%s", err, out)
+	}
+	if got, err := findLatestPatchTag(repo, "v1.4"); err == nil {
+		t.Errorf("findLatestPatchTag(1.4) = %q, want an error (only a pre-release on the line)", got)
+	}
+}
+
 // fakeForge serves the git repository at origin over smart HTTP (git
 // http-backend) and records whether every request carried exactly the
 // Authorization header wantAuth ("" meaning none). A request carrying any

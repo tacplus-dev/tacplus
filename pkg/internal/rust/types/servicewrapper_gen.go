@@ -1333,6 +1333,18 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
                 return Ok(tonic::Response::new(<%s>::default()));
             }
         }`, traceRpcRequest, outputType)
+		// A (spec.service_store) <T>StoreService's Put stores its request as the
+		// row (#313): the trace comes off it after the request trace event has
+		// read it, just before the handler; the trace events after the handler
+		// already carry trace_id_saved.
+		if svc.SynthesizedKind == parser.SynthesizedKindStore && method.Name == "Put" && !handlerEmpty {
+			traceAppend += `
+        // A stored row never keeps a trace (#313); trace_id_saved keeps the
+        // call's for its trace events.
+        let mut req = req;
+        req.trace_id.clear();
+`
+		}
 
 		// Publish response trace after handler returns.
 		traceCopy = fmt.Sprintf(`

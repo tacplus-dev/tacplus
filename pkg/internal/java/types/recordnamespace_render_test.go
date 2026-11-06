@@ -218,7 +218,7 @@ func renderNamespaceMethod(t *testing.T, m *parser.MethodInfo, isC2S, recordPlan
 		m, "RecordQuery", "query", "Query."+m.InputType, "Query."+m.OutputType,
 		"Helpers", "Helpers", false, true, map[string]service.AccountingInfo{},
 		"query", "vservices", map[string]string{}, proto.SkippedTraceTypes{},
-		recordNamespaceSanitizer(), nil, nil, isC2S, recordPlaneS2S,
+		recordNamespaceSanitizer(), nil, nil, isC2S, recordPlaneS2S, false,
 	)
 }
 

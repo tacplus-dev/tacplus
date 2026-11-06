@@ -34,6 +34,9 @@ type singletonBoundary struct {
 	TypeName       string // PascalCase message type: "UserProfile", "TeamRoster"
 	GoType         string // Go type: "TeamRoster" or "ballsports_pb.EmployeeSalary"
 	IsCrossPackage bool   // true if type is from another package (don't prefix with types.)
+	// ClearTrace is true when the type carries the injected trace_id: Set sends
+	// a copy with it cleared, so a stored value never keeps a trace (#313).
+	ClearTrace bool
 }
 
 // collectionBoundary describes a repeated message field in the state root.
@@ -45,6 +48,10 @@ type collectionBoundary struct {
 	KeyGoType       string // Go type for key: "string"
 	IsCrossPackage  bool   // true if type is from another package
 	EvictionMaxSize int64  // max entries (from spec.eviction_max_size), 0 = use default
+	// ClearTrace is true when the item type carries the injected trace_id:
+	// Put<F> sends a copy with it cleared, so a stored value never keeps a
+	// trace (#313).
+	ClearTrace bool
 }
 
 // topicBoundary describes a pub/sub topic field in the state root.
@@ -1183,6 +1190,7 @@ func generateStateWrapper(config *tactype.Config, svc ServiceInfo, stateRoot *pa
 				KeyGoType:       keyGoType,
 				IsCrossPackage:  isCrossPackage,
 				EvictionMaxSize: field.Annotations["eviction_max_size"].IntValue,
+				ClearTrace:      proto.FieldTypeCarriesInjectedTrace(dp, fileDesc.Package, field.Type, config.SkippedTraceTypes),
 			})
 			markCross()
 		} else {
@@ -1192,6 +1200,7 @@ func generateStateWrapper(config *tactype.Config, svc ServiceInfo, stateRoot *pa
 				TypeName:       typeName,
 				GoType:         goType,
 				IsCrossPackage: isCrossPackage,
+				ClearTrace:     proto.FieldTypeCarriesInjectedTrace(dp, fileDesc.Package, field.Type, config.SkippedTraceTypes),
 			})
 			markCross()
 		}

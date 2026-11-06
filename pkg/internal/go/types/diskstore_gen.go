@@ -44,6 +44,11 @@ type diskStoreEntry struct {
 	// MinDurableCopies is the declared (spec.min_durable_copies) floor the gate
 	// enforces. Only meaningful when QuorumWrite.
 	MinDurableCopies int
+
+	// ClearTrace is true when the message carries the injected trace_id (field
+	// 200): the write paths persist a copy with it cleared, so a read never
+	// returns a stored trace (#313).
+	ClearTrace bool
 }
 
 // diskStoreImport tracks a unique types-package import for the generated module.
@@ -63,6 +68,10 @@ type diskStoreData struct {
 	// Gates the encoding/json + fmt imports, which only the redo helpers use,
 	// so a set of snapshot-only stores still compiles.
 	AnyRedo bool
+
+	// AnyTraced is true when at least one store clears the injected trace_id on
+	// write. Gates the protobuf proto import (proto.Clone).
+	AnyTraced bool
 }
 
 // generateDiskStore emits per-service_store typed disk-persistence helpers:
@@ -127,6 +136,7 @@ func generateDiskStore(config *tactype.Config, inputDir string) error {
 				SnapshotOnly:     snapshotOnly,
 				QuorumWrite:      quorumWrite,
 				MinDurableCopies: minDurableCopies,
+				ClearTrace:       diskStoreCarriesTraceID(msg.Fields) && !config.SkippedTraceTypes[fd.Package+"."+msg.Name],
 			})
 		}
 	}
@@ -137,12 +147,10 @@ func generateDiskStore(config *tactype.Config, inputDir string) error {
 	sort.Slice(stores, func(i, j int) bool { return stores[i].StoreName < stores[j].StoreName })
 	sort.Slice(imports, func(i, j int) bool { return imports[i].Alias < imports[j].Alias })
 
-	anyRedo := false
+	anyRedo, anyTraced := false, false
 	for i := range stores {
-		if !stores[i].SnapshotOnly {
-			anyRedo = true
-			break
-		}
+		anyRedo = anyRedo || !stores[i].SnapshotOnly
+		anyTraced = anyTraced || stores[i].ClearTrace
 	}
 
 	data := diskStoreData{
@@ -151,6 +159,7 @@ func generateDiskStore(config *tactype.Config, inputDir string) error {
 		Imports:          imports,
 		Stores:           stores,
 		AnyRedo:          anyRedo,
+		AnyTraced:        anyTraced,
 	}
 
 	tmplStr, err := loadTemplate("diskstore_stores.go.tmpl")
@@ -186,6 +195,19 @@ func generateDiskStore(config *tactype.Config, inputDir string) error {
 		zap.Int("stores", len(stores)),
 		zap.String("path", outputPath))
 	return nil
+}
+
+// diskStoreCarriesTraceID reports whether a service_store message carries the
+// injected trace_id (name trace_id, number 200). A message that defines its own
+// trace_id, or was skipped by InjectTraceFields, has nothing to clear.
+func diskStoreCarriesTraceID(fields []parser.FieldDescriptor) bool {
+	for i := range fields {
+		if internalproto.IsTraceField(fields[i].Name, int(fields[i].Number)) &&
+			!internalproto.IsNoopField(fields[i].Name, int(fields[i].Number)) {
+			return true
+		}
+	}
+	return false
 }
 
 // diskStorePackagePath computes (pkgName, parentDir) for a proto file, matching

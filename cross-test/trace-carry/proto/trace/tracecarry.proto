@@ -1,0 +1,52 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+// The trace-carry gate's model (tacplus#313): a projection copies its source's
+// trace_id, and a generated store path clears it before the row is written.
+// Every leg drives its GENERATED code over the same inputs.
+syntax = "proto3";
+
+package tracecarry;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "tracecarry"};
+
+// Reading is a plain message with a transformation: ReadingRow is generated
+// from it, with its extraction and its record dispatch.
+message Reading {
+  option (spec.transformation) = {
+    name: "ReadingRow"
+    field: {source: "reading_id" order_key: 1}
+    field: {source: "observed_at_ms" order_key: 2 partition_key: true}
+    field: {source: "value"}
+  };
+
+  string reading_id = 1 [(spec.assert_max_size) = 128];
+  int64 observed_at_ms = 2;
+  double value = 3;
+}
+
+// TraceService is the package's own server, which the store's label routes to.
+service TraceService {
+  option (spec.service_s2s) = {label: "TraceService"};
+
+  rpc Ping(PingRequest) returns (PingResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}
+
+message PingRequest {}
+
+message PingResponse {
+  // ready reports whether the service is serving.
+  bool ready = 1;
+}
+
+// Note is a service_store: its generated disk helpers are a store path.
+message Note {
+  option (spec.service_store) = {label: ["tracecarry"]};
+
+  string note_id = 1 [(spec.assert_required) = true, (spec.store_key) = true];
+  string body = 2 [(spec.assert_max_size) = 256];
+}

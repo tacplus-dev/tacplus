@@ -279,6 +279,7 @@ EOF
     echo "==> Running generated Rust cert-stream behavior tests"
     (cd "$OUT" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo test -p certstream-model rust_) \
       || die "generated Rust cert-stream behavior tests failed"
+    prune_cargo_workspace "$OUT"
     ;;
   java)
     command -v mvn >/dev/null || die "mvn is required to test generated Java output"

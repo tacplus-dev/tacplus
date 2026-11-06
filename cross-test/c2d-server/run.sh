@@ -169,6 +169,7 @@ run_rust() {
     || { tail -60 "$WORK/rust/test.log"; die "generated Rust standalone C2D host test failed"; }
   grep -q "test generated_c2d_standalone_host_over_socket ... ok" "$WORK/rust/test.log" \
     || { tail -40 "$WORK/rust/test.log"; die "Rust standalone C2D host test did not run"; }
+  prune_cargo_workspace "$OUT"
 
   echo "==> c2d-server check PASSED (rust)"
 }

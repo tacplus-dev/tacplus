@@ -1613,6 +1613,10 @@ TimestampMs: time.Now().UnixMilli(),
 },
 })
 }
+{{- if .ClearStoredTrace}}
+// A stored value never keeps a trace (#313).
+event.TraceId = ""
+{{- end}}
 if sm.{{.HandlerFuncFieldName}} != nil {
 if err := sm.{{.HandlerFuncFieldName}}(ctx, event, meta); err != nil {
 return err

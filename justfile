@@ -161,7 +161,7 @@ gates:
     echo "=== OVERALL fail=1 (protoc preflight) ==="
     exit 1
   fi
-  for g in soundness test current-generation determinism cert-stream stream-expiry claims-provenance w2s-validate c2d-server; do
+  for g in soundness test current-generation determinism cert-stream stream-expiry claims-provenance w2s-validate c2d-server trace-carry; do
     echo "=== $g ==="
     just "$g"
     rc=$?
@@ -265,6 +265,20 @@ external-token-java:
 
 external-token-rust:
   {{lock}} bash cross-test/external-token/run.sh --language rust
+
+# trace_id across projections and stores (#313): a projection carries its
+# source's trace_id; the record dispatch and the service_store disk helpers
+# persist with field 200 empty, read back raw.
+trace-carry: trace-carry-go trace-carry-java trace-carry-rust
+
+trace-carry-go:
+  {{lock}} bash cross-test/trace-carry/run.sh --language go
+
+trace-carry-java:
+  {{lock}} bash cross-test/trace-carry/run.sh --language java
+
+trace-carry-rust:
+  {{lock}} bash cross-test/trace-carry/run.sh --language rust
 
 # Generation gate against the REAL platform + app proto repos (not the
 # cross-test/proto fixtures every other gate uses). This is the check that

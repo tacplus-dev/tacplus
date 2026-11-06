@@ -264,6 +264,7 @@ EOF
   }
   cat "$dir/test.log"
   assert_ran_all rust "$dir/test.log"
+  prune_cargo_workspace "$leg_dir" "$dir/model"
 }
 
 run_java() {

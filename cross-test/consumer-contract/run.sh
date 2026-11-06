@@ -8691,6 +8691,7 @@ run_generation_case() {
 
   echo "==> $language/$case_name: compiling generated output when supported"
   compile_generated_output "$language" "$output" "$case_name"
+  prune_cargo_workspace "$output" "$dir/rust-consumer"
 }
 
 run_second_token_minter_case() {

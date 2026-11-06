@@ -1414,6 +1414,10 @@ public class ServiceManager implements AutoCloseable {
                             // against the other nodes' redo logs at restore.
                             event = event.toBuilder().set{{.StoreEpochFieldPascal}}(System.currentTimeMillis()).build();
 {{- end}}
+{{- if .ClearStoredTrace}}
+                            // A stored value never keeps a trace (#313).
+                            event = event.toBuilder().clearTraceId().build();
+{{- end}}
                             handler.{{.HandlerMethodName}}(event,
                                     new Handler.SubscriptionMeta(meta.offset, meta.timestamp, meta.key, meta.topic, meta.partition));
 {{- if and .DispatchMethod (not .RoutingOnly)}}

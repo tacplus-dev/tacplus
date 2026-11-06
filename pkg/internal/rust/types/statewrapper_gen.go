@@ -31,6 +31,10 @@ type rustSingletonBoundary struct {
 	// "team_roster_defaults". writeDefaults emits one per message
 	// unconditionally, so it is always callable through the glob type imports.
 	DefaultsFn string
+	// ClearTrace is true when TypeName carries the injected trace_id: set
+	// sends the value with it cleared, so a stored value never keeps a trace
+	// (#313).
+	ClearTrace bool
 }
 
 // rustCollectionBoundary describes a repeated message field in the state root.
@@ -39,6 +43,10 @@ type rustCollectionBoundary struct {
 	FieldPascal  string // PascalCase: "Players"
 	TypeName     string // PascalCase item type: "Player"
 	KeyFieldName string // snake_case key field: "player_id"
+	// ClearTrace is true when TypeName carries the injected trace_id:
+	// put_<f> sends the value with it cleared, so a stored value never keeps
+	// a trace (#313).
+	ClearTrace bool
 
 	// MaxEntries is the client-side snapshot safety limit: the field's
 	// (spec.eviction_max_size) when declared, else the shared default.
@@ -364,6 +372,7 @@ func generateRustStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 				FieldPascal:  fieldPascal,
 				TypeName:     typeName,
 				KeyFieldName: keyFieldName,
+				ClearTrace:   proto.FieldTypeCarriesInjectedTrace(dp, fileDesc.Package, field.Type, config.SkippedTraceTypes),
 
 				MaxEntries: boundaries.CollectionSafetyLimit(field),
 			})
@@ -373,6 +382,7 @@ func generateRustStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 				FieldPascal: fieldPascal,
 				TypeName:    typeName,
 				DefaultsFn:  strutil.ToSnakeCase(toProstTypeName(typeName)) + "_defaults",
+				ClearTrace:  proto.FieldTypeCarriesInjectedTrace(dp, fileDesc.Package, field.Type, config.SkippedTraceTypes),
 			})
 		}
 	}

@@ -4,6 +4,31 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **The flock service, and its gossip between clusters** (2026-11-06, #206): tacplus now generates the merge, the
+  unique check, the marks and the clock of a flock table, but nothing runs copies yet. The service needs: the
+  explicit, versioned membership list that purge counts (not health state); gossip of whole entries over generated
+  S2S clients to a peer in another cluster (#204, the ROADMAP entry shared with redo#1); catch-up by comparing the
+  generated digests (a Merkle tree over them); serving nothing until a returning copy has caught up; quarantine
+  alerts for the overlaps `overlap` refuses to merge; and the panel's rate breaker (stop and quarantine if merges
+  exceed N per window). The issue names it a separate follow-up; it needs Jody's design OK, and
+  tacplus-dev/people#1 builds on it.
+- **flock: `scope: FLEET` instead of the `flock` label** (2026-11-06, #206): the design note's 2026-10-29 *Decided*
+  section replaces the flock service with an annotation-driven replication capability (`scope: FLEET` / `CLUSTER` on
+  a `(spec.service_state)` root) hosted by kernel. #206 built what the issue and ROADMAP.md say (`label: ["flock"]`),
+  behind the single predicate `parser.IsFlockRoot`; moving to `scope` is that predicate plus the annotation, the
+  generated merge unchanged. Needs Jody's decision.
+- **flock: compaction of set ops** (2026-11-06, #206): every add and remove of a SET_* element is kept as an op in
+  `flock_meta`, so an entry's metadata only grows (a device updated daily adds an op a day). The panel asked for
+  tombstone cleanup of the causal metadata: an op every copy has acknowledged, and that no live op names, can be
+  folded away, with the same every-copy rule as marks. Needs the membership list (the service, above).
+- **flock: what the generator refuses today** (2026-11-06, #206): a map of scalars, `oneof` and proto3 `optional`
+  fields, IMMUTABLE or nested messages inside a set element, and a map anywhere in a value stored whole (no
+  canonical encoding). Each could merge with more design; none is needed by the people table.
+- **flock: the consistency contract in the generated type, and new fields** (2026-11-06, #206): the panel's point 10
+  (a caller that reads, checks and writes against a table that moved to flock compiles and silently loses the
+  guarantee) is still open for Jody; and a new field should take no writes until the whole fleet runs a build that
+  knows its rule, which needs the service's membership and versions. Rules are pinned in `registry.yaml` so a
+  released rule cannot change.
 - **A floor check over every version tacplus emits, and template manifests that take versions from one place**
   (2026-11-06, nightly scan, #338): four nights of scans found advisories in floors the generated manifests declare
   (#264, #309, #312, #338). No scanner sees them: a lockfile resolve, including the proposed `just generated`

@@ -2465,6 +2465,20 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 	if proto.HasExtension(opts, spec.E_DeletedFlag) && proto.GetExtension(opts, spec.E_DeletedFlag).(bool) {
 		annotations["deleted_flag"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 	}
+	// flock state (tacplus#206): the field's merge rule, recorded whenever
+	// PRESENT (an unspecified value as "unspecified") so ValidateFlockAnnotations
+	// refuses it loudly rather than reading it as absent; and the set-element
+	// identity and unique markers.
+	if proto.HasExtension(opts, spec.E_Merge) {
+		rule := strings.ToLower(strings.TrimPrefix(proto.GetExtension(opts, spec.E_Merge).(spec.MergeRule).String(), "MERGE_RULE_"))
+		annotations["merge"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringValue: rule}
+	}
+	if proto.HasExtension(opts, spec.E_Identity) && proto.GetExtension(opts, spec.E_Identity).(bool) {
+		annotations["identity"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	}
+	if proto.HasExtension(opts, spec.E_Unique) && proto.GetExtension(opts, spec.E_Unique).(bool) {
+		annotations["unique"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	}
 	// visibility: SHOW / BACKGROUND side of a public_view message's field.
 	// Recorded whenever PRESENT (an unspecified value as "") so
 	// ValidatePublicViewAnnotations rejects it loudly rather than reading it as

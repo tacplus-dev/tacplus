@@ -110,6 +110,23 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   verdict (required, placeholders, entropy floor), naming the field and the
   rule and never the value; a CSPRNG 32-byte key passes. Local (`just redact`,
   part of `just gates`); not yet in CI.
+- `flock` (`cross-test/flock/run.sh`): flock state (#206) in the generated Go,
+  Java and Rust. Every leg generates the people table of
+  `cross-test/flock/proto` (every merge rule, a nested message, sets of
+  scalars and messages, a map of messages, a unique set, a table replaced
+  whole) and runs against its generated merge: property tests (merge is
+  commutative, associative and idempotent over whole entries plus marks;
+  merge_entries picks the same survivor in either order) and the panel's
+  scenarios (re-add after remove, concurrent add/remove under each set rule, a
+  revoked device, a mark over a later write, an IMMUTABLE conflict, a
+  far-future clock held, a local unique conflict refused, the partition race
+  merged and a later overlap quarantined); a deterministic simulation of four
+  copies (random delivery order, partitions, a far-ahead clock, quiet spells,
+  a long absence, acks and purges, then heal), which must converge, never bring
+  back an entry a copy saw marked, and never make a redirect cycle, and which
+  must exercise each of those paths; and a fixed scenario whose digests must
+  equal `cross-test/fixtures/flock_vectors.txt` byte for byte. Local
+  (`just flock`, part of `just gates`); not yet in CI.
 - `mcp-floor-version` (`cross-test/mcp-floor-version/run.sh`): rmcp floor gate
   for the generated Rust MCP dispatch — generates a service owning one
   `RPC_PRINCIPAL_MCP` tool, pins `rmcp` to the EXACT version

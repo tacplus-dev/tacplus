@@ -1,0 +1,86 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+// The flock gate's model (tacplus#206), the flock part of the kitchensink: a
+// people table shaped like the one the design names (people#1), with every
+// merge rule, a nested message merged field by field, sets of scalars, of
+// messages and a map of messages under both set rules, a unique set, and a
+// table replaced whole (Session). Every leg runs the same property tests and
+// multi-copy simulation against its generated merge.
+syntax = "proto3";
+
+package flockcheck;
+
+import "sys/spec.proto";
+import "sys/flock.proto";
+
+option (spec.service) = {name: "flockcheck"};
+
+// Link is one IdP account linked to a person: idp + subject identify it.
+message Link {
+  string idp = 1 [(spec.identity) = true];
+  string subject = 2 [(spec.identity) = true];
+  int64 added_ms = 3 [(spec.merge) = MERGE_RULE_MIN];
+  uint32 assurance = 4 [(spec.merge) = MERGE_RULE_LAST_WRITE];
+}
+
+message Membership {
+  string tenant = 1 [(spec.identity) = true];
+  string role = 2 [(spec.merge) = MERGE_RULE_LAST_WRITE];
+}
+
+// Device is a map value: its key is its identity.
+message Device {
+  string name = 1 [(spec.merge) = MERGE_RULE_LAST_WRITE];
+  int64 first_seen_ms = 2 [(spec.merge) = MERGE_RULE_MIN];
+  int64 last_seen_ms = 3 [(spec.merge) = MERGE_RULE_MAX];
+}
+
+// Profile is merged field by field (its field on Person has no rule).
+message Profile {
+  string nickname = 1 [(spec.merge) = MERGE_RULE_LAST_WRITE];
+  uint64 last_sign_in_day = 2 [(spec.merge) = MERGE_RULE_MAX];
+  repeated string emails = 3 [(spec.merge) = MERGE_RULE_SET_ADD_WINS, (spec.assert_max_size) = 16];
+}
+
+message Person {
+  string key = 1 [(spec.store_key) = true, (spec.indexed) = true];
+  flock.Hlc created = 2 [(spec.merge) = MERGE_RULE_IMMUTABLE];
+  flock.Hlc written = 3 [(spec.store_epoch) = true];
+  flock.DeletionMark deleted = 4 [(spec.deleted_flag) = true];
+  string home_region = 5 [(spec.merge) = MERGE_RULE_IMMUTABLE];
+  uint64 generation = 6 [(spec.merge) = MERGE_RULE_MAX];
+  string display = 7 [(spec.merge) = MERGE_RULE_LAST_WRITE];
+  int64 first_seen_ms = 8 [(spec.merge) = MERGE_RULE_MIN];
+  Profile profile = 9;
+  repeated Link links = 10 [
+    (spec.merge) = MERGE_RULE_SET_REMOVE_WINS,
+    (spec.unique) = true,
+    (spec.assert_max_size) = 64
+  ];
+  repeated Membership memberships = 11 [(spec.merge) = MERGE_RULE_SET_REMOVE_WINS, (spec.assert_max_size) = 64];
+  map<string, Device> devices = 12 [(spec.merge) = MERGE_RULE_SET_REMOVE_WINS, (spec.assert_max_size) = 64];
+  repeated string tags = 13 [(spec.merge) = MERGE_RULE_SET_ADD_WINS, (spec.assert_max_size) = 64];
+  repeated string aliases = 14 [(spec.merge) = MERGE_RULE_LAST_WRITE, (spec.assert_max_size) = 8];
+}
+
+// Session is replaced whole: its boundary is MERGE_RULE_LAST_WRITE.
+message Session {
+  string key = 1 [(spec.store_key) = true, (spec.indexed) = true];
+  flock.Hlc created = 2 [(spec.merge) = MERGE_RULE_IMMUTABLE];
+  flock.Hlc written = 3 [(spec.store_epoch) = true];
+  flock.DeletionMark deleted = 4 [(spec.deleted_flag) = true];
+  string device_id = 5;
+  int64 expires_ms = 6;
+}
+
+message PeopleState {
+  option (spec.service_state) = {label: ["flock"], export: true};
+
+  repeated Person people = 1 [(spec.persistence) = true, (spec.assert_max_size) = 1024];
+  repeated Session sessions = 2 [
+    (spec.persistence) = true,
+    (spec.assert_max_size) = 1024,
+    (spec.merge) = MERGE_RULE_LAST_WRITE
+  ];
+}

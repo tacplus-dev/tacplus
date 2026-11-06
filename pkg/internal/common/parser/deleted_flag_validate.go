@@ -93,6 +93,11 @@ func deletedFlagFields(msg *MessageDescriptor) (ok []string, malformed []string)
 		if !f.Annotations["deleted_flag"].BoolValue {
 			continue
 		}
+		// A flock entry's deletion mark (tacplus#206): ValidateFlockAnnotations
+		// owns it, and refuses one outside a flock entry.
+		if f.TypeKind == "message" && f.Type == FlockPackage+".DeletionMark" {
+			continue
+		}
 		switch {
 		case f.IsRepeated:
 			malformed = append(malformed, fmt.Sprintf("%s is repeated; a row has one soft-delete state", f.Name))

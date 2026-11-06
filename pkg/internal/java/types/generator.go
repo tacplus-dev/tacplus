@@ -582,6 +582,11 @@ func generateModule(module *ModuleInfo, protoDir string, config *tactype.Config,
 		}
 	}
 
+	// flock state (tacplus#206): the merge of every flock entry in the package.
+	if err := generateJavaFlock(mergedProto, filepath.Join(helperBaseDir, helperSubdir), module.JavaPackage, defaultOuterClass, config, javaFlockIndex(allFiles), newJavaFlockResolver(allFiles, protoDir)); err != nil {
+		return fmt.Errorf("failed to generate Java flock merge: %w", err)
+	}
+
 	// Generate JBMC proof harnesses in a separate proof/ directory (not in src/main/java)
 	// so that mvn compile doesn't try to compile them — CProver is not a Maven dependency.
 	proofBaseDir := filepath.Join(parentDir, "proof", "java")
@@ -969,6 +974,10 @@ func Generate(config *tactype.Config) error {
 	// so they appear in every language's generated type.
 	if err := proto.InjectRedactIndicatorFields(protoDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to inject redact indicator fields: %w", err)
+	}
+	// flock state (tacplus#206): every flock entry carries its merge metadata.
+	if err := proto.InjectFlockMetaFields(protoDir); err != nil {
+		return fmt.Errorf("failed to inject flock meta fields: %w", err)
 	}
 	// <T>Public for every (spec.public_view) message: its SHOW fields only.
 	if err := proto.AppendPublicViewMessagesToProtos(protoDir); err != nil {

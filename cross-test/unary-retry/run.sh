@@ -108,6 +108,7 @@ EOF
     echo "==> Running generated Rust unary-retry behavior tests"
     (cd "$OUT" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo test -p unaryretry-model rust_) \
       || die "generated Rust unary retry behavior tests failed"
+    prune_cargo_workspace "$OUT"
     ;;
 esac
 echo "==> unary-retry check PASSED ($LANGUAGE)"

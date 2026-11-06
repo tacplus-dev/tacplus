@@ -57,13 +57,13 @@ func (r *repo) tag(name string) {
 }
 
 // plan runs images-plan.sh in the fixture repo and returns its "<base> <build>" output.
-func plan(t *testing.T, dir, event, refType, rebuild string) string {
+func plan(t *testing.T, dir, event, refType, refName, rebuild string) string {
 	t.Helper()
 	script, err := filepath.Abs("images-plan.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("bash", script, event, refType, rebuild)
+	cmd := exec.Command("bash", script, event, refType, rebuild, refName)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -78,6 +78,7 @@ func TestImagesPlan(t *testing.T) {
 		history func(r *repo) // builds the history; the last commit is what the run is for
 		event   string
 		ref     string
+		refName string // the branch or tag name; main when empty
 		rebuild string
 		want    string
 	}{
@@ -174,12 +175,25 @@ func TestImagesPlan(t *testing.T) {
 			},
 			event: "workflow_dispatch", ref: "branch", rebuild: "base", want: "true true",
 		},
+		{
+			// A line rebuild (#283) always rebuilds base, so the line's images take
+			// every OS security fix (apt-get upgrade), whatever rebuild says.
+			name: "line rebuild on a release branch rebuilds base and build",
+			history: func(r *repo) {
+				r.commit("init", "README")
+			},
+			event: "workflow_dispatch", ref: "branch", refName: "release/2.3", rebuild: "build", want: "true true",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := newRepo(t)
 			c.history(r)
-			if got := plan(t, r.dir, c.event, c.ref, c.rebuild); got != c.want {
+			refName := c.refName
+			if refName == "" {
+				refName = "main"
+			}
+			if got := plan(t, r.dir, c.event, c.ref, refName, c.rebuild); got != c.want {
 				t.Errorf("plan = %q, want %q", got, c.want)
 			}
 		})

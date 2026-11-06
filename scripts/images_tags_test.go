@@ -30,10 +30,11 @@ func TestImagesTags(t *testing.T) {
 	// The tags on the fixture repo when the run computes its list: the run's own
 	// tag and every release already pushed, in push order.
 	cases := []struct {
-		name string
-		tags []string
-		ref  string
-		want string
+		name   string
+		tags   []string
+		ref    string
+		branch string // a branch run when ref is empty: main unless set
+		want   string
 	}{
 		{
 			name: "newest release takes every floating tag",
@@ -95,6 +96,20 @@ func TestImagesTags(t *testing.T) {
 			ref:  "",
 			want: "main-abcdef1 main",
 		},
+		{
+			// A line rebuild (#283): a run on release/X.Y moves that line's X.Y and
+			// nothing else, never main or latest, and never an immutable X.Y.Z.
+			name:   "line rebuild on a release branch",
+			tags:   []string{"v2.3.8", "v2.5.8"},
+			branch: "release/2.3",
+			want:   "2.3",
+		},
+		{
+			name:   "line rebuild of the newest line still leaves latest alone",
+			tags:   []string{"v2.3.8", "v2.5.8"},
+			branch: "release/2.5",
+			want:   "2.5",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -106,6 +121,9 @@ func TestImagesTags(t *testing.T) {
 			refType, refName := "tag", c.ref
 			if c.ref == "" {
 				refType, refName = "branch", "main"
+				if c.branch != "" {
+					refName = c.branch
+				}
 			}
 			if got := imageTags(t, r.dir, refType, refName, "abcdef1234567890"); got != c.want {
 				t.Errorf("tags = %q, want %q", got, c.want)

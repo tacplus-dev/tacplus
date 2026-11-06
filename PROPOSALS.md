@@ -4,6 +4,17 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **A floor check over every version tacplus emits, and template manifests that take versions from one place**
+  (2026-11-06, nightly scan, #338): four nights of scans found advisories in floors the generated manifests declare
+  (#264, #309, #312, #338). No scanner sees them: a lockfile resolve, including the proposed `just generated`
+  recipe, picks the newest compatible release, so `cargo audit`/`npm audit`/OSV-Scanner on it pass while the
+  manifest still promises a vulnerable floor. Two parts: (1) a check (soundness or a gate) that generates the
+  cross-test models, collects every declared floor (`Cargo.toml`, `package.json`, `pyproject.toml`, the Go/Java
+  inventory) and fails on an OSV advisory at the floor itself, with its database fetched at run time like
+  govulncheck's; (2) a soundness rule that a chassis template's manifest names no version literal for a crate or
+  package the inventory declares (`{ workspace = true }` in Rust, a template variable in TypeScript/Python), so
+  `dependencies.yaml` is the single place a floor moves. #338 found the same crates at three different floors
+  across sibling chassis.
 - **Verification only under the nightly set in gates.yaml** (2026-11-04, #275): once tacplus-dev/looper#48 maps
   tacplus, its `gates.yaml` lists `just verify` under the nightly and release sets only, never a land's. tacplus has no
   gates.yaml yet, so #275 landed without it.

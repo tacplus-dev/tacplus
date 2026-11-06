@@ -49,7 +49,12 @@ public final class DiskStores {
             Path base, String ns, {{.TypeFqn}} msg, Snapshot.Opts opts) {
         byte[] bytes;
         try {
+{{- if .ClearTrace}}
+            // A stored value never keeps a trace (#313); the caller's message keeps its own.
+            bytes = {{.HelpersFqn}}.{{.ToJsonFn}}(msg.toBuilder().clearTraceId().build()).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+{{- else}}
             bytes = {{.HelpersFqn}}.{{.ToJsonFn}}(msg).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+{{- end}}
         } catch (Exception e) {
             throw DiskStoreException.codec(e.getMessage(), e);
         }
@@ -88,7 +93,12 @@ public final class DiskStores {
     public static RedoLog.Record record{{.MethodName}}({{.TypeFqn}} msg) {
         String payload;
         try {
+{{- if .ClearTrace}}
+            // A stored value never keeps a trace (#313); the caller's message keeps its own.
+            payload = {{.HelpersFqn}}.{{.ToJsonFn}}(msg.toBuilder().clearTraceId().build());
+{{- else}}
             payload = {{.HelpersFqn}}.{{.ToJsonFn}}(msg);
+{{- end}}
         } catch (Exception e) {
             throw DiskStoreException.codec(e.getMessage(), e);
         }

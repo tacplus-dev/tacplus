@@ -40,6 +40,11 @@ type diskStore struct {
 	MinDurableCopies int
 	// ConstName is the SCREAMING_SNAKE store name, for the emitted constant.
 	ConstName string
+
+	// ClearTrace is true when the message carries the injected trace_id (field
+	// 200): the write paths persist a copy with it cleared, so a read never
+	// returns a stored trace (#313).
+	ClearTrace bool
 }
 
 type diskStoreData struct {
@@ -105,6 +110,7 @@ func generateDiskStore(config *tactype.Config, servicesInfo []ServiceInfo, input
 				QuorumWrite:      quorumWrite,
 				MinDurableCopies: minDurableCopies,
 				ConstName:        strings.ToUpper(prostSnakeName(msg.Name)),
+				ClearTrace:       rustDiskStoreCarriesTraceID(msg.Fields) && !config.SkippedTraceTypes[fd.Package+"."+msg.Name],
 			})
 		}
 	}
@@ -147,6 +153,19 @@ func generateDiskStore(config *tactype.Config, servicesInfo []ServiceInfo, input
 		zap.Int("stores", len(stores)),
 		zap.String("path", outputPath))
 	return nil
+}
+
+// rustDiskStoreCarriesTraceID reports whether a service_store message carries
+// the injected trace_id (name trace_id, number 200). A message that defines its
+// own trace_id, or was skipped by InjectTraceFields, has nothing to clear.
+func rustDiskStoreCarriesTraceID(fields []parser.FieldDescriptor) bool {
+	for i := range fields {
+		if internalproto.IsTraceField(fields[i].Name, int(fields[i].Number)) &&
+			!internalproto.IsNoopField(fields[i].Name, int(fields[i].Number)) {
+			return true
+		}
+	}
+	return false
 }
 
 // modulePathOf returns the Rust module path of a fully-qualified function path

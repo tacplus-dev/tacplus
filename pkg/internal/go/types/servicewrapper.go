@@ -1735,6 +1735,22 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 			unarySan = egressSanitizeEnvelopeStmts(fs, "resp", "\t")
 		}
 	}
+
+	// A (spec.service_store) <T>StoreService's Put stores its request as the
+	// row (#313): the trace is cleared off it just before the handler, after
+	// every guard above has read the request as sent. The trace events after
+	// the handler carry the trace the call arrived with, saved here.
+	traceIDExpr := "req.TraceId"
+	if svc.SynthesizedKind == parser.SynthesizedKindStore && method.Name == "Put" && inputHasTrace && !handlerEmpty {
+		traceIDExpr = "__traceID"
+		inputValidation += `
+	// A stored row never keeps a trace (#313); the call's trace is kept for
+	// its trace events.
+	__traceID := req.TraceId
+	req.TraceId = ""
+`
+	}
+
 	// (spec.record).min_group_size runs first: the refusal is about the number
 	// itself, so it must precede any transformation of the response.
 	unarySan = goMinGroupSizeGuard(method, san.minGroupSizeField(method.FullOutputType, servicePackage), "resp", "\t") +
@@ -1753,12 +1769,12 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 	if isTracing {
 		round := p.traceRound()
 		p.publishTrace(ctx, &trace_pb.TraceEvent{
-			TraceId: req.TraceId,
+			TraceId: %s,
 			Round:   round,
 			%s
 		})
 	}
-`, traceRpcResponseBlock)
+`, traceIDExpr, traceRpcResponseBlock)
 	}
 
 	var traceErrorCopy string
@@ -1767,12 +1783,12 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s
 		if isTracing {
 			round := p.traceRound()
 			p.publishTrace(ctx, &trace_pb.TraceEvent{
-				TraceId: req.TraceId,
+				TraceId: %s,
 				Round:   round,
 				Error:   err.Error(),
 				%s
 			})
-		}`, traceRpcResponseBlock)
+		}`, traceIDExpr, traceRpcResponseBlock)
 	}
 
 	var outputValidation string

@@ -618,8 +618,10 @@ func rustMcpStampFrameTenantFn(serviceName string) string {
 // rustMcpSessionTenant renders, for a tenant-routed service, where an MCP
 // session's tenant comes from: the verified caller's token, never the model.
 //
-// The session tenant is the tid of the caller's namespace claim. The carrier
-// resolves it at open (a caller in no tenant cannot open a session), stamps it
+// The session tenant is the caller's tid claim, stamped by kernel; never a tid
+// derived from its namespace claim, which names the tenant (`/tenants/<name>`,
+// #284). The carrier resolves it at open (a caller whose token carries no tid
+// claim cannot open a session, with no fallback to the namespace), stamps it
 // on every inbound frame whose route field is empty and refuses a frame naming
 // another, all BEFORE the routing backstop holds the frame to the instance's
 // own tenant. Each tool's dispatch sets its own route field from the same
@@ -628,16 +630,17 @@ func rustMcpStampFrameTenantFn(serviceName string) string {
 func rustMcpSessionTenant(serviceName, frameIn string, route *parser.RouteFieldDescriptor) string {
 	field := rustRequestFieldIdent(route.Field)
 	return fmt.Sprintf(`
-/// The tenant an MCP session of %[1]s runs in: the tid of the verified
-/// caller's namespace claim (`+"`/tenants/<tid>`"+` or below it). Every tool call of
-/// the session is directed at it; the model never names a tenant.
-/// PERMISSION_DENIED for a caller whose namespace names no tenant: a
-/// tenant-owned service is not reached by a caller of none.
+/// The tenant an MCP session of %[1]s runs in: the verified caller's tid
+/// claim, stamped by kernel. Never derived from its namespace claim, which
+/// names the tenant (`+"`/tenants/<name>`"+`), not its tid. Every tool call of the
+/// session is directed at it; the model never names a tenant.
+/// PERMISSION_DENIED for a caller whose token carries no tid claim, or a
+/// malformed one: a tenant-owned service is not reached by a caller of none.
 pub fn %[2]s(caller: &servicemanager::auth::Caller) -> Result<String, tonic::Status> {
-    servicemanager::tenant_route::tenant_of_caller_namespace(caller.namespace().unwrap_or(""))
+    servicemanager::tenant_route::caller_tenant(caller.tid())
         .ok_or_else(|| {
             tonic::Status::permission_denied(
-                "an MCP session on a tenant-owned service needs a caller in a tenant; this caller's namespace names none",
+                "an MCP session on a tenant-owned service needs a caller in a tenant; this caller's token carries no tid claim",
             )
         })
 }
@@ -1330,17 +1333,21 @@ func rustMcpTests(serviceName string, svc *parser.ServiceInfo, tools []rustMcpTo
 	routed := mcpCarrier.RouteField != nil
 	var b strings.Builder
 
-	// A routed service's sessions run in the tenant of the caller's namespace,
-	// so its test caller sits in one.
+	// A routed service's sessions run in the tenant of the caller's tid claim,
+	// so its test caller carries one. Its namespace names the tenant, by a
+	// name that is not a tid: the session tenant is never read from it (#284).
 	tenantConst, tenantClaim := "", ""
 	if routed {
 		tenantConst = fmt.Sprintf(`
-    /// The tenant the test caller's namespace claim sits in: the session's
-    /// tenant, which every routed tool call must come out aimed at.
+    /// The test caller's tid claim: the session's tenant, which every routed
+    /// tool call must come out aimed at.
     const MCP_TEST_TENANT: &str = %s;
 `, rustQuote(rustMcpTestTenant))
 		tenantClaim = `        token
-            .set_namespace(format!("/tenants/{MCP_TEST_TENANT}/users/alice"))
+            .set_namespace("/tenants/acme/users/alice")
+            .expect("a freshly built token is mutable");
+        token
+            .set_tid(MCP_TEST_TENANT)
             .expect("a freshly built token is mutable");
 `
 	}
@@ -1441,36 +1448,93 @@ mod %[1]s_mcp_tests {
 	return b.String()
 }
 
-// rustMcpTestTenant is the tid the generated gate's caller sits in, and
-// rustMcpTestOtherTenant one it does not.
+// rustMcpTestTenant is the tid claim the generated gate's caller carries, and
+// rustMcpTestOtherTenant a tenant it is not in (and, in the session-tenant
+// gate, the tid-shaped name its namespace spells).
 const (
 	rustMcpTestTenant      = "acme0001"
 	rustMcpTestOtherTenant = "zzzzzzzz"
 )
 
 // rustMcpSessionTenantTests renders the routed carrier's session-tenant gate:
-// the tenant comes from the token, a caller in no tenant opens no session, and
+// the tenant is the token's tid claim and never derived from its namespace
+// (#284), a caller with no valid tid claim opens no session, and
 // an inbound frame is stamped when empty and refused when it names another.
 func rustMcpSessionTenantTests(serviceName, frameIn string, route *parser.RouteFieldDescriptor) string {
 	return fmt.Sprintf(`
-    /// An MCP session's tenant is the tid of the caller's namespace claim, and
-    /// a caller whose namespace names no tenant cannot open one.
+    /// A tenant other than the test caller's, by tid.
+    const MCP_TEST_OTHER_TENANT: &str = %[6]s;
+
+    /// A caller at namespace %[7]snamespace%[7]s whose token carries %[7]stid%[7]s as its tid
+    /// claim, or none.
+    fn mcp_test_caller_in(namespace: &str, tid: Option<&str>) -> servicemanager::auth::Caller {
+        let mut token = token::Token::new();
+        token
+            .set_subject(MCP_TEST_SUBJECT)
+            .expect("a freshly built token is mutable");
+        token
+            .set_namespace(namespace)
+            .expect("a freshly built token is mutable");
+        if let Some(tid) = tid {
+            token.set_tid(tid).expect("a freshly built token is mutable");
+        }
+        servicemanager::auth::Caller::new(token, "mcp-test".to_string())
+    }
+
+    /// An MCP session's tenant is the caller's tid claim; its namespace names
+    /// the tenant by name, which is not a tid.
     #[test]
     fn the_mcp_session_tenant_comes_from_the_token() {
         assert_eq!(
             %[1]s(&mcp_test_caller()).expect("a caller in a tenant opens a session"),
             MCP_TEST_TENANT
         );
-        let mut token = token::Token::new();
-        token
-            .set_subject(MCP_TEST_SUBJECT)
-            .expect("a freshly built token is mutable");
-        token
-            .set_namespace("/system")
-            .expect("a freshly built token is mutable");
-        let refused = %[1]s(&servicemanager::auth::Caller::new(token, "mcp-test".to_string()))
+    }
+
+    /// A namespace naming a tenant whose name looks like another tenant's tid
+    /// never makes the session that tenant's: the tid claim decides, and a
+    /// frame naming the other is refused.
+    #[test]
+    fn the_mcp_session_tenant_is_the_tid_claim_not_a_tid_shaped_namespace() {
+        let caller = mcp_test_caller_in(&format!("/tenants/{MCP_TEST_OTHER_TENANT}"), Some(MCP_TEST_TENANT));
+        let tenant = %[1]s(&caller).expect("a caller with a tid claim opens a session");
+        assert_eq!(tenant, MCP_TEST_TENANT);
+        assert_ne!(tenant, MCP_TEST_OTHER_TENANT, "the session tenant was derived from the namespace");
+        let mut frame = <%[3]s>::default();
+        frame.%[5]s = MCP_TEST_OTHER_TENANT.to_string();
+        let refused = %[2]s(&mut frame, &tenant)
+            .expect_err("a frame naming the namespace's look-alike tenant was accepted");
+        assert_eq!(refused.code(), tonic::Code::PermissionDenied);
+    }
+
+    /// No tid is derived from a namespace: a caller whose namespace is
+    /// tid-shaped but whose token carries no tid claim opens no session.
+    #[test]
+    fn an_mcp_caller_with_a_tid_shaped_namespace_and_no_tid_claim_is_refused() {
+        for namespace in [format!("/tenants/{MCP_TEST_TENANT}"), format!("/tenants/{MCP_TEST_TENANT}/users/alice")] {
+            let refused = %[1]s(&mcp_test_caller_in(&namespace, None))
+                .expect_err("a tid was derived from the caller's namespace");
+            assert_eq!(refused.code(), tonic::Code::PermissionDenied, "{namespace}");
+            assert!(refused.message().contains("no tid claim"), "{}", refused.message());
+        }
+    }
+
+    /// A caller in no tenant cannot open a session.
+    #[test]
+    fn an_mcp_caller_at_system_with_no_tid_claim_is_refused() {
+        let refused = %[1]s(&mcp_test_caller_in("/system", None))
             .expect_err("a caller in no tenant opened a session");
         assert_eq!(refused.code(), tonic::Code::PermissionDenied);
+    }
+
+    /// A tid claim that is not a tid is no tenant, with no fallback.
+    #[test]
+    fn an_mcp_caller_with_a_malformed_tid_claim_is_refused() {
+        for tid in ["", "ACME0001", "acme", "acme00011", "/tenants/acme0001"] {
+            let refused = %[1]s(&mcp_test_caller_in("/tenants/acme", Some(tid)))
+                .expect_err("a malformed tid claim opened a session");
+            assert_eq!(refused.code(), tonic::Code::PermissionDenied, "{tid:?}");
+        }
     }
 
     /// A frame naming no tenant is stamped with the session's at ingress, so
@@ -1489,14 +1553,14 @@ func rustMcpSessionTenantTests(serviceName, frameIn string, route *parser.RouteF
     #[test]
     fn an_mcp_frame_naming_another_tenant_is_refused() {
         let mut frame = <%[3]s>::default();
-        frame.%[5]s = %[6]s.to_string();
+        frame.%[5]s = MCP_TEST_OTHER_TENANT.to_string();
         let refused = %[2]s(&mut frame, MCP_TEST_TENANT)
             .expect_err("a frame naming another tenant was accepted");
         assert_eq!(refused.code(), tonic::Code::PermissionDenied);
-        assert_eq!(frame.%[5]s, %[6]s, "a refused frame must not be restamped");
+        assert_eq!(frame.%[5]s, MCP_TEST_OTHER_TENANT, "a refused frame must not be restamped");
     }
 `, rustMcpSessionTenantFn(serviceName), rustMcpStampFrameTenantFn(serviceName), frameIn,
-		route.Field, rustRequestFieldIdent(route.Field), rustQuote(rustMcpTestOtherTenant))
+		route.Field, rustRequestFieldIdent(route.Field), rustQuote(rustMcpTestOtherTenant), "`")
 }
 
 // rustMcpToolRouteTests renders one routed tool's gate: its route field is not

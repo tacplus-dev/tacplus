@@ -605,6 +605,33 @@ run_java_generated_self_tests() {
     grep -q '^TenantRecordRouteTest: all checks passed$' "$test_log" \
       || die "tenant-record host fixture (java): TenantRecordRouteTest did not report its checks passed"
   fi
+  # The tenant-record WRITER fixture's c2s reader self-test (#284), copied in by
+  # install_tenant_record_c2s_selftest, so it is present exactly in that build.
+  local trc_test trc_class
+  trc_test="$(find "$output/src/main/java" -type f -path '*/s2sm/TenantRecordC2STest.java' -print -quit)"
+  if [[ -n "$trc_test" ]]; then
+    trc_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$trc_test").$(basename "$trc_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$trc_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q '^TenantRecordC2STest: all checks passed$' "$test_log" \
+      || die "tenant-record writer fixture (java): TenantRecordC2STest did not report its checks passed"
+  fi
+  # The generated MCP gate of a tenant-routed service (#170, #284): its session
+  # tenant is the caller's tid claim, never a tid read off its namespace. Run
+  # for the services whose carrier is routed (the tenant-route fixture's crew).
+  local mcp_test mcp_class
+  while IFS= read -r mcp_test; do
+    grep -qF 'sessionTenant(' "$mcp_test" || continue
+    mcp_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$mcp_test").$(basename "$mcp_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$mcp_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q "^PASS $(basename "$mcp_test" .java)" "$test_log" \
+      || die "java: the tenant-routed MCP gate $(basename "$mcp_test" .java) did not report PASS"
+  done < <(find "$output/src/main/java" -type f -name '*McpTest.java' | sort)
   # The record-egress fixture's user-and-listed-service self-test, copied in by
   # install_user_and_listed_service_selftest (which dies if it cannot), so it is
   # present exactly in that fixture's build.
@@ -845,6 +872,16 @@ run_rust_spiffe_self_tests() {
     assert_clean_log "$log_dir/rust-model-lib-test.log"
     grep -qF 'identity_error_tests::missing_token_minter_is_permanent ... ok' "$log_dir/rust-model-lib-test.log" \
       || die "NEW-21: the generated ServiceManager's identity_error_tests did not run (log: $log_dir/rust-model-lib-test.log)"
+    # #284: a routed c2s reader's and a routed MCP session's tenant self-tests
+    # are generated beside them; when they are, they must have run.
+    if grep -rqF --include='record_c2s.rs' 'mod record_c2s_tenant_tests' "$output/s2sm"; then
+      grep -qF 'record_c2s_tenant_tests::a_tid_shaped_namespace_never_names_the_tenant ... ok' "$log_dir/rust-model-lib-test.log" \
+        || die "#284: the generated c2s reader's tenant self-tests did not run (log: $log_dir/rust-model-lib-test.log)"
+    fi
+    if grep -rqF --include='*.rs' 'fn the_mcp_session_tenant_is_the_tid_claim_not_a_tid_shaped_namespace' "$output/s2sm"; then
+      grep -qF '_mcp_tests::the_mcp_session_tenant_is_the_tid_claim_not_a_tid_shaped_namespace ... ok' "$log_dir/rust-model-lib-test.log" \
+        || die "#284: the generated MCP session tenant self-tests did not run (log: $log_dir/rust-model-lib-test.log)"
+    fi
   fi
 
   # The main fixture's JSON-key self-test, copied in by
@@ -2033,6 +2070,52 @@ install_tenant_record_route_selftest() {
   esac
 }
 
+# install_tenant_record_c2s_selftest drops the tenant-record fixture's c2s
+# reader self-test (#284) into the generated WRITER output, next to the
+# generated client-facing record reader it drives in-process: a read goes to the
+# caller's tid claim, never to a tid read off its namespace (which names the
+# tenant), and a caller without the claim is refused. It first asserts the
+# reader takes the tenant from the claim at all.
+install_tenant_record_c2s_selftest() {
+  local output="$1"
+  local language="$2"
+  local c2s=""
+
+  local claim=""
+  case "$language" in
+    go)
+      c2s="$(find "$output" -type f -path '*/s2sm/record_c2s.go' -print -quit)"
+      claim='serviceconnection.CallerTenant(caller.Token().GetTid())'
+      ;;
+    java)
+      c2s="$(find "$output/src/main/java" -type f -path '*/s2sm/TmessagingRecordsGeneratedHandler.java' -print -quit)"
+      claim='RouteTenant.callerTenant(caller.getTid())'
+      ;;
+    rust)
+      c2s="$(find "$output" -type f -path '*/s2sm/record_c2s.rs' -print -quit)"
+      claim='tenant_route::caller_tenant(caller.tid())'
+      ;;
+  esac
+  [[ -n "$c2s" ]] || die "tenant-record fixture ($language): the generated c2s record reader of tmessaging was not found under $output"
+  grep -qF "$claim" "$c2s" \
+    || die "tenant-record fixture ($language): the generated c2s record reader does not take the caller's tenant from its tid claim"
+
+  case "$language" in
+    go)
+      cp "$SELFTESTS_SRC/go/tenant_record_c2s_test.go" "$(dirname "$c2s")/"
+      ;;
+    java)
+      cp "$SELFTESTS_SRC/java/TenantRecordC2STest.java" "$(dirname "$c2s")/"
+      ;;
+    rust)
+      # Generated beside the reader (#[cfg(test)] record_c2s_tenant_tests),
+      # run by compile_current_output's `cargo test --lib`, which checks they ran.
+      grep -qF 'mod record_c2s_tenant_tests' "$c2s" \
+        || die "tenant-record fixture (rust): the generated c2s record reader carries no tenant self-test"
+      ;;
+  esac
+}
+
 # assert_tenantrecord_client_routed checks that the tenant-record fixture's
 # WRITER (tmessaging) pools the record store per tenant: before #207 its plane
 # client was one pool over every tenant's instance and sent each call to
@@ -3073,6 +3156,7 @@ TENANTRECORD_PY
         install_tenant_record_route_selftest "$output_root" "$language"
       else
         assert_tenantrecord_client_routed "$output_root" "$language"
+        install_tenant_record_c2s_selftest "$output_root" "$language"
       fi
       echo "==> Compiling $language tenant-record fixture ($self)"
       compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"

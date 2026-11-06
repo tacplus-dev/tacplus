@@ -125,12 +125,15 @@ func TestJavaMcpRoutedToolRefusesTheRouteFieldAndTakesItFromTheSession(t *testin
 		t.Fatalf("the routed roster tool does not refuse its route field:\n%s", rendered)
 	}
 
-	// The session's tenant is the verified caller's, from its namespace claim,
-	// and a caller with none cannot use a routed tool at all.
+	// The session's tenant is the verified caller's, from its token's tid claim
+	// (never its namespace, which names the tenant, #284), and a caller with
+	// none cannot use a routed tool at all.
 	for _, want := range []string{
 		"public static String sessionTenant(Caller caller) {",
-		"com.example.chassis.serviceconnection.RouteTenant.tenantOfCaller(caller.getNamespace())",
+		"String tid = caller == null ? \"\" : com.example.chassis.serviceconnection.RouteTenant.callerTenant(caller.getTid());",
 		"throw ProtoException.newErrPermissionDenied(null, \"%s\",",
+		"\"an MCP session of ",
+		" is opened in the caller's own tenant, and the caller's token carries no tid claim\");",
 		"public static Mcp.McpRequest stampTenant(String sessionTenant, Mcp.McpRequest frame) {",
 		"return frame.toBuilder().setTenant(sessionTenant).build();",
 	} {
@@ -165,8 +168,10 @@ func TestJavaMcpPlatformServiceHasNoSessionTenant(t *testing.T) {
 func TestJavaMcpRoutedGateCoversTheTenant(t *testing.T) {
 	gate := generateJavaMcpDispatchTest(javaMcpRoutedService(), javaMcpRoutedTools(t), javaMcpRoutedFileParams())
 	for _, want := range []string{
-		// The test caller belongs to a tenant, or no routed tool call could pass.
-		`\"namespace\":\"/tenants/mcptest1\"`,
+		// The test caller belongs to a tenant, or no routed tool call could pass:
+		// its token's tid claim names it, and its namespace names the tenant by a
+		// name that is not a tid (#284).
+		`return new Caller("{\"sub\":\"` + javaMcpTestSubject + `\",\"namespace\":\"/tenants/mcptest\",\"tid\":\"mcptest1\"}", "mcp-test-request");`,
 		// The schema has no route field.
 		`check(__propsTargetTenant != null && !__propsTargetTenant.containsKey("target_tenant"),`,
 		// The route field is taken from the token.
@@ -180,8 +185,21 @@ func TestJavaMcpRoutedGateCoversTheTenant(t *testing.T) {
 		// The session's tenant comes from the token, and a token naming none
 		// opens no session.
 		"sessionTenantIsTheCallersTenant();",
-		`TicketApiMcp.sessionTenant(new Caller("{\"sub\":\"` + javaMcpTestSubject + `\",\"namespace\":\"/tenants/mcptest1/team\"}", "mcp-test-request"))`,
+		`TicketApiMcp.sessionTenant(new Caller("{\"sub\":\"` + javaMcpTestSubject + `\",\"namespace\":\"/tenants/mcptest/team\",\"tid\":\"mcptest1\"}", "mcp-test-request"))`,
+		// A namespace whose name looks like another tenant's tid: the session
+		// is still the tid claim's, and a frame naming the look-alike is refused.
+		`Caller lookalike = new Caller("{\"sub\":\"` + javaMcpTestSubject + `\",\"namespace\":\"/tenants/othertn1\",\"tid\":\"mcptest1\"}", "mcp-test-request");`,
+		`check(TicketApiMcp.sessionTenant(lookalike).equals("mcptest1"),`,
+		`check(!TicketApiMcp.sessionTenant(lookalike).equals("othertn1"),`,
+		`TicketApiMcp.stampTenant(TicketApiMcp.sessionTenant(lookalike), Mcp.McpRequest.newBuilder().setPayload("{}").setTenant("othertn1").build())`,
+		// No tid claim is no tenant, however tid-shaped the namespace's name.
+		`TicketApiMcp.sessionTenant(new Caller("{\"sub\":\"` + javaMcpTestSubject + `\",\"namespace\":\"/tenants/mcptest1\"}", "mcp-test-request")),`,
 		`\"namespace\":\"/system\"}", "mcp-test-request")),`,
+		`checkPermissionDenied(() -> TicketApiMcp.sessionTenant(null),`,
+		// A malformed tid claim is no tenant either.
+		`\"tid\":\"MCPTEST1\"}", "mcp-test-request")),`,
+		`\"tid\":\"/tenants/mcptest1\"}", "mcp-test-request")),`,
+		`\"tid\":\"\"}", "mcp-test-request")),`,
 		// Frame ingress: empty is stamped, the same is kept, another is refused.
 		"aFrameWithNoTenantIsStamped();",
 		"aFrameWithAnotherTenantIsRefused();",
@@ -246,7 +264,7 @@ func TestJavaMcpCarrierStampsTheFrameTenantBeforeTheRouteBackstop(t *testing.T) 
 		at += i
 	}
 	// The generated tool dispatch reaches RouteTenant through the chassis.
-	if !strings.Contains(got, "com.example.chassis.serviceconnection.RouteTenant.tenantOfCaller(") {
+	if !strings.Contains(got, "com.example.chassis.serviceconnection.RouteTenant.callerTenant(") || strings.Contains(got, "tenantOfCaller") {
 		t.Fatalf("the MCP dispatch does not read the session tenant through RouteTenant:\n%s", got)
 	}
 

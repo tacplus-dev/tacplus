@@ -1223,17 +1223,19 @@ func javaMcpSessionTenant(svc *parser.ServiceInfo, p javaMcpFileParams) string {
 	}
 	return fmt.Sprintf(`
     /**
-    * sessionTenant is the tenant an MCP session acts in: the tid of the
-    * verified caller's namespace claim, /tenants/&lt;tid&gt; or any namespace
-    * below it. A caller of no tenant (a /system one) has no session here,
-    * PERMISSION_DENIED: every tool of this service is directed at a tenant,
-    * and the model is never the one to name it.
+    * sessionTenant is the tenant an MCP session acts in: the tid claim kernel
+    * stamps on the verified caller's token. Never the caller's namespace, which
+    * names the tenant (/tenants/&lt;name&gt;, #284), even when that name looks
+    * like a tid. A caller whose token carries no tid claim, or a malformed one
+    * (a /system caller), has no session here, PERMISSION_DENIED: every tool of
+    * this service is directed at a tenant, and the model is never the one to
+    * name it.
     */
     public static String sessionTenant(Caller caller) {
-        String tid = caller == null ? "" : %[1]s.tenantOfCaller(caller.getNamespace());
+        String tid = caller == null ? "" : %[1]s.callerTenant(caller.getTid());
         if (tid.isEmpty()) {
             throw ProtoException.newErrPermissionDenied(null, "%%s",
-                    "an MCP session of %[2]s is opened in a tenant, and the caller's namespace names none");
+                    "an MCP session of %[2]s is opened in the caller's own tenant, and the caller's token carries no tid claim");
         }
         return tid;
     }

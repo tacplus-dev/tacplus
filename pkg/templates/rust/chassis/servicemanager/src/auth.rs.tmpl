@@ -133,6 +133,14 @@ impl Caller {
         self.token.linked()
     }
 
+    /// Returns the caller's tid claim: the tid of the tenant its namespace is
+    /// in, stamped by kernel at mint, or None when the token carries none. It
+    /// is the only source of a caller's tid: the namespace claim names the
+    /// tenant (`/tenants/<name>`), never its tid, and no tid is derived from it.
+    pub fn tid(&self) -> Option<&str> {
+        self.token.tid()
+    }
+
     /// Returns the x-request-id forwarded from the gateway.
     pub fn request_id(&self) -> &str {
         &self.request_id

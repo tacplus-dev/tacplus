@@ -36,9 +36,11 @@ import {{.ChassisBase}}.serviceconnection.RouteTenant;
 {{- if .Routed}}
  *
  * <p>The plane is hosted by a tenant-owned record store, so the reads go to
- * the caller's own tenant's instance: the tid of its namespace claim, the same
- * tenant the namespace pin holds the rows to (#207). A caller of no tenant has
- * no instance to read from and is refused.
+ * the caller's own tenant's instance: the tid claim kernel stamps on its token,
+ * the tenant whose namespace the namespace pin holds the rows to (#207). The
+ * tid is never derived from the namespace, which names the tenant
+ * ({@code /tenants/<name>}, #284). A caller whose token carries no tid claim
+ * has no instance to read from and is refused.
 {{- end}}
  *
  * <p>The data path is the ALREADY-GENERATED typed reader, not a second client.
@@ -74,14 +76,16 @@ public final class {{.ClassName}} implements {{.HandlerIfaceFqn}} {
 {{- if .Routed}}
 
     /**
-     * The tenant whose record store instance a read goes to: the tid of the
-     * caller's namespace claim, never a client-supplied value.
+     * The tenant whose record store instance a read goes to: the caller's
+     * token's tid claim, never its namespace (which names the tenant, #284)
+     * and never a client-supplied value. A caller with no tid claim, or a
+     * malformed one, is PERMISSION_DENIED: there is no fallback.
      */
-    private static String requireTenant(String method, String namespace) throws ProtoException {
-        String tenant = RouteTenant.tenantOfCaller(namespace);
+    static String requireTenant(String method, Caller caller) throws ProtoException {
+        String tenant = caller == null ? "" : RouteTenant.callerTenant(caller.getTid());
         if (tenant.isEmpty()) {
             throw new ProtoException(ProtoException.PERMISSION_DENIED,
-                    method + ": the caller's namespace belongs to no tenant, and the record store is one instance per tenant");
+                    method + ": the caller's token carries no tid claim, and the record store is one instance per tenant");
         }
         return tenant;
     }
@@ -100,7 +104,7 @@ public final class {{.ClassName}} implements {{.HandlerIfaceFqn}} {
         String namespace = requireNamespace("{{.GetRpcName}}", caller);
         String principal = requirePrincipal("{{.GetRpcName}}", caller);
 {{- if $.Routed}}
-        String tenant = requireTenant("{{.GetRpcName}}", namespace);
+        String tenant = requireTenant("{{.GetRpcName}}", caller);
 {{- end}}
         {{$.PlaneOuter}}.{{.FilterType}} filter = {{$.PlaneOuter}}.{{.FilterType}}.newBuilder()
                 .{{.KeySetter}}(request.{{.KeyGetter}}())
@@ -126,7 +130,7 @@ public final class {{.ClassName}} implements {{.HandlerIfaceFqn}} {
         String namespace = requireNamespace("{{.ListRpcName}}", caller);
         String principal = requirePrincipal("{{.ListRpcName}}", caller);
 {{- if $.Routed}}
-        String tenant = requireTenant("{{.ListRpcName}}", namespace);
+        String tenant = requireTenant("{{.ListRpcName}}", caller);
 {{- end}}
         {{$.SelfOuter}}.{{.RecordName}}ReadFilter supplied = request.getFilter();
         {{$.PlaneOuter}}.{{.FilterType}}.Builder filter = {{$.PlaneOuter}}.{{.FilterType}}.newBuilder();

@@ -252,6 +252,12 @@ type SubscriptionTemplateEntry struct {
 	// of an envelope that carries no trace id and no body.
 	RoutingOnly      bool
 	EnvelopeTypeName string // e.g. "TopologyEventRoutingEnvelope"
+	// ClearStoredTrace is true for a store-derived subscription (the store's
+	// write path) over a source carrying the injected trace_id: the dispatch
+	// clears event.TraceId after publishing the trace event and before the
+	// handler, so a stored value never keeps a trace (#313). A declared
+	// subscription keeps the trace for its handler to propagate.
+	ClearStoredTrace bool
 }
 
 // TimeseriesInsertEntry is one typed timeseries insert callback the service
@@ -715,6 +721,7 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 			TargetService:         targetService,
 			RoutingOnly:           sub.RoutingOnly,
 			EnvelopeTypeName:      typeName + boundaries.RoutingEnvelopeSuffix,
+			ClearStoredTrace:      sub.StoreIngest && sub.SourceCarriesTrace && !sub.RoutingOnly,
 		})
 	}
 

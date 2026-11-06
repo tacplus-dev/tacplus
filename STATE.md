@@ -67,6 +67,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-04 by lo
   The base and build images carry Go 1.27, Node 26 (LTS) and Swift 6.4.2 (#255; main only, from 2.6: the
   supported `build:X.Y` lines keep their toolchains). The rule beside the pins: Go follows the newest release, Node
   the newest LTS, Swift the newest release.
+  Line rebuild (#283): the weekly Images run on main dispatches images.yml on each supported `release/X.Y`, which
+  rebuilds `base:X.Y` and `build:X.Y` from that branch (apt-get upgrade) and moves nothing else; a patch tag builds
+  its `build` fresh. A line takes part once its backport of #283 merges (the dispatch skips a branch without it).
   The cross-test harnesses and the example pin golang.org/x/net at v0.62.0 (GO-2026-6603/6611/6612/6617, the
   HTTP/2 server the generated Go chassis reaches, and GO-2026-6860/6866) in every go.mod they write and every
   dependencies.yaml; `scripts/go_dependency_floor_test.go` refuses a lower or missing pin (#199; backported to

@@ -4,6 +4,14 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Kani harnesses beyond integer bounds** (2026-11-06, #211): the generated Rust harnesses now prove only that
+  `validate()` refuses each integer/enum bound, and skip a message whose `validate()` reaches the regex crate (Kani
+  0.68 panics compiling it), a nested message, a map field (prost's `HashMap` default makes a syscall Kani does not
+  model) or a sensitive check; they stub `std::fmt::format`, which Kani cannot finish. Wider coverage: bounded
+  strings/bytes (`kani::vec::any_vec` behind `String::from_utf8`) for the size checks; same-package nested messages
+  (the generator can see their validators); a stub of `RandomState::new` for map fields; regex validators stubbed by
+  `#[kani::stub]` with the claim restricted to the other fields. The "accepts every value inside the bounds" claim
+  needs a model of every check of the message, which #196's kitchensink is the place for.
 - **A floor check over every version tacplus emits, and template manifests that take versions from one place**
   (2026-11-06, nightly scan, #338): four nights of scans found advisories in floors the generated manifests declare
   (#264, #309, #312, #338). No scanner sees them: a lockfile resolve, including the proposed `just generated`

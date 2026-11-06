@@ -51,20 +51,16 @@ func TestRouteTenantRefusesEmptyAndMalformed(t *testing.T) {
 	}
 }
 
-// A namespace claim belongs to the tenant of /tenants/<tid>, at or below it;
-// /system, a malformed tid and anything else belong to none.
-func TestNamespaceTenant(t *testing.T) {
-	for ns, want := range map[string]string{
-		"/tenants/acme0001":          "acme0001",
-		"/tenants/acme0001/team/ops": "acme0001",
-	} {
-		if got, ok := NamespaceTenant(ns); !ok || got != want {
-			t.Fatalf("NamespaceTenant(%q) = (%q, %v), want %q", ns, got, ok, want)
-		}
+// A caller's tenant is its token's tid claim when that is a tid; no claim, a
+// malformed one and a namespace (which names a tenant, never its tid) are
+// none (#284).
+func TestCallerTenant(t *testing.T) {
+	if got, ok := CallerTenant("acme0001"); !ok || got != "acme0001" {
+		t.Fatalf("CallerTenant(%q) = (%q, %v), want acme0001", "acme0001", got, ok)
 	}
-	for _, none := range []string{"", "/", "/system", "/tenants", "/tenants/", "/tenants/ACME0001", "/tenants/acme", "/example/tenants/acme0001", "tenants/acme0001"} {
-		if got, ok := NamespaceTenant(none); ok {
-			t.Fatalf("NamespaceTenant(%q) = %q, want none", none, got)
+	for _, none := range []string{"", "ACME0001", "acme", "acme00012", "/tenants/acme0001", "/tenants/acme0001/team/ops"} {
+		if got, ok := CallerTenant(none); ok {
+			t.Fatalf("CallerTenant(%q) = %q, want none", none, got)
 		}
 	}
 }

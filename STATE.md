@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-05 by looper (#213).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-06 by looper (#284).
 
 - **Version / line:** v2.6.0 (latest release, 2026-11-05, at 87adda9e; `release/2.6` cut at it); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -49,8 +49,10 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-05 by lo
   Tenant identity after kernel#23 (subject `/tenants/<tid>/services/<svc>`, namespace `/tenants/<name>`, #202): a
   caller's tenant is its namespace claim everywhere (Go, Java, Rust); a tenant-owned instance's routing backstop admits
   the tid of its own subject, and the record plane's route pin holds an entry to the instance's own namespace (it
-  read both from the namespace claim, which refused every routed call). Gap: the MCP session tenant and the c2s
-  record reader still read a tid from the caller's namespace claim, which holds a name (#284, needs-decision).
+  read both from the namespace claim, which refused every routed call). A caller's tid is the new `tid` claim
+  (`JWT_PAYLOAD_TYPE_TID` 30, stamped by kernel, tacplus-dev/kernel#32): the MCP session tenant and the c2s record
+  reader read it only, never derive a tid from the namespace (a name), and refuse a caller without it (#284; v2.6.2
+  from main, release/2.6 by #326, and release/2.5 by #316 as v2.5.13 once it merges).
   Deterministic builds (#193): a repository pins the exact release and the build image digest in `tacplus.lock`
   (`tacplus pin` writes it; moving it is a commit); there is no tacplus image (the old tags stay, deprecated, and
   2.6 gets none); `build:X.Y` per line, rebuilt on every release as an immutable `build:X.Y.Z`, carries Kani and

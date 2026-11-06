@@ -66,3 +66,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-05 looper issue Redact for any type: an annotation marks sensitive fields; a generated deterministic Redact<T>; Secrets redacted by construction; a gate catches unannotated sensitive-looking fields; the uni-config's redacted view for LLM review (#274)
 - 2026-11-05 looper issue Formal verification (Kani/JBMC) leaves the gates: a nightly job (and every release tag) runs it, not each land (#275)
 - 2026-11-06 looper issue Release tacplus v2.6.0 (build image #193, record-plane tenant routing #207) once #207 closes (#213)
+- 2026-11-06 looper issue tacplus:2.4 image cannot build a Go service: no GitHub credential for the private registry, no go for goimports (#188)

@@ -18,7 +18,6 @@ Release lines with branches: 2.0 through 2.4.
 - Generated member port: Hazelcast member traffic over server TLS plus framed bearer tokens, no mTLS (#212); moves onto gRPC with #259
 - macOS build image per release line (`macos-build:X.Y`, pinned like `build:X.Y`: Rust, Go, just, protoc, tacplus), built on the Mac runner, for #195's darwin builds (#261) (Jody, 2026-10-31)
 - Long-lived streams survive token expiry by make-before-break rotation: acquire token, open, send, acquire new token, open new stream, cut over, close old; the member port moves onto gRPC (#259, before #236/#237) (Jody, 2026-10-31)
-- Generated S2S clients to a peer service in another cluster or deployment: redo site-to-site (redo#1 option A, Jody 2026-10-28) and flock gossip (#204; design needs Jody's OK)
 - Release v2.5.0 (routing #170, records #163) once #163 closes (#198)
 - Kitchensink: formal verification and fuzzing once per release on a covering proto set; coverage check in every service build; no harnesses in services (#196, after #193)
 - Move CI, images, releases and nightlies from GitHub Actions to the GitLab build pipeline (#194, after looper#17)
@@ -39,6 +38,7 @@ Release lines with branches: 2.0 through 2.4.
 - Make-before-break rotation for the client-only targets and C2S through the gateway (#323). Agent, at Jody's request, 2026-11-05 (#259's split).
 
 ## Later
+- Generated S2S clients to a peer service in another cluster or deployment (#204): parked (Jody, 2026-11-06). Cross-deployment work is a future item and needs a deeper huddle with Jody before any design or build. (Was: redo site-to-site, redo#1 option A, 2026-10-28; flock gossip.)
 - flock state: `(spec.service_state)` labelled `flock`, field merge rules, generated merge, duplicate detection and deletion marks; first user the people table (people#1); kernel stays in-cluster, flock spans clusters (#206; tacplus-dev/roadmap:items/flock-design-2026-10-28.md; no hurry)
 - Fleet builder gathers service webapp pieces and clients, builds the merged webapp and the fleet's gateway (#195, after #180; contract needs Jody's OK)
 - Split the build image by language (build-go, build-rust, build-java, …), each with its toolchain and verifier (tacplus-dev/roadmap:decisions/tacplus-images-2026-10-27.md)

@@ -71,7 +71,14 @@ EOF
   if [[ "$l" == java ]]; then
     # shellcheck source=../cross-test/lib/java-compile.sh
     source "$ROOT/cross-test/lib/java-compile.sh"
-    write_java_compile_pom "$dir/pom.xml" "$dir/tacplus"
+    # The generated tree: the directory holding src/main/java.
+    java_src="$(find "$dir/tacplus" -type d -path '*/src/main/java' -print -quit)"
+    if [[ -z "$java_src" ]]; then
+      echo "=== verify $l: FAIL (no generated src/main/java under $dir/tacplus) ===" >&2
+      fail=1
+      continue
+    fi
+    write_java_compile_pom "$dir/pom.xml" "${java_src%/src/main/java}"
   fi
   echo "==> tacplus verify ($l)"
   (cd "$dir" && "$TACPLUS_BIN" verify) 2>&1 | tee "$dir/verify.log"

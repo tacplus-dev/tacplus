@@ -1,0 +1,400 @@
+< {{- end}}      /** Returns the server-assigned instance ID. */     public String getInstanceId() { return identity.getInstanceId(); } {{- if .HasMemberPort}}      /**      * Returns the member port (spec.member_port): already listening on      * grpcconfig.member_port.listen_address and delivering t...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Docs done. Checkpointing, then checking on the gates.
+> Bash cd /builds/looper/tacplus/issues/321; /usr/local/bin/repo-looper --repo tacplus --issue 321 --checkpoint "Member port on gRPC implemented (sys/memberport.proto, MemberPort.java.tmpl rewrite), cross-test/memberport rewritten (behaviour, stream-expiry leg, Hazelcast: all green locally), stream-expiry ...
+< [2026-11-07T08:21:31Z] checkpoint of #321 (a step) pushed to looper/tacplus-321:  21 files changed, 2368 insertions(+), 740 deletions(-) === protoc-check === === protoc-check rc=0 === === soundness === === soundness rc=0 === === test ===
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/321; /usr/local/bin/looper-trace check 2>&1 | tail -15
+= task_started
+= task_notification
+< handler cross-test/server-runtime/client/go/main.go:112 checkPage (inbound: api)   causal cross-test/server-runtime/client/go/main.go:114 ListEventsPaged: DROPS the inbound trace_id handler cross-test/server-runtime/client/go/main.go:137 checkFailClosed (inbound: api)   causal cross-test/server-runt...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/321; gh issue list --repo tacplus-dev/tacplus --state all --search "trace_id server-runtime in:title,body" --limit 10 2>&1 | head; gh issue list --repo tacplus-dev/tacplus --state all --search "looper-trace" --limit 10 2>&1 | head; sed -n 60,80p cross-test/server-run...
+< 311	OPEN	server-runtime Go driver: four calls with no inbound request lack their `// trace: unrelated:` marker, so looper-trace check fails on main	bug, approved	2026-11-04T00:28:14Z 311	OPEN	server-runtime Go driver: four calls with no inbound request lack their `// trace: unrelated:` marker, so lo...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The trace findings are in test-driver code my change doesn't touch and are already filed (#310, #311). Waiting on the gates.
+> Bash timeout 580 bash -c 'until grep -q "OVERALL" /tmp/mp/gates.log; do sleep 30; done'; grep -E '^=== ' /tmp/mp/gates.log
+= task_started
+= task_notification
+< === protoc-check === === protoc-check rc=0 === === soundness === === soundness rc=0 === === test === === test rc=1 === === current-generation ===
+> Bash grep -n -E '^(--- FAIL|FAIL|panic)|_test.go:[0-9]+:' /tmp/mp/gates.log | head -30
+< 591:--- FAIL: TestIsSysPackage_KnowsEveryEmbeddedSysPackage (0.00s) 592:    fleet_test.go:448: sys/memberport.proto declares package "memberport", which isSysPackage does not know 975:FAIL 976:FAIL	github.com/tacplus-dev/tacplus/pkg/fleet	25.496s 1027:FAIL
+> Bash cd /builds/looper/tacplus/issues/321; grep -n 'func isSysPackage' -A40 pkg/fleet/fleet.go | head -50
+< 523:func isSysPackage(pkg string) bool { 524-	switch pkg { 525-	case "spec", "tokenrequest", "x509", "healthreport", "minter", "redolog", "servicehealth", "services", "entitlements", "accounting_method", "services_config", "tenant_config", "project_config", "mcp", "query", "logger", "host", "key", "...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/321; sed -i 's/"tacplus", "eventbus_support":/"tacplus", "eventbus_support", "memberport":/' pkg/fleet/fleet.go; grep -rln '"publicjwksview"' --include=*.go pkg cmd scripts | head; go test ./pkg/fleet/ 2>&1 | tail -2
+= task_started
+= task_notification
+< pkg/fleet/fleet.go ok  	github.com/tacplus-dev/tacplus/pkg/fleet	14.484s
+= thinking_tokens
+= thinking_tokens
+Fixed (fleet's sys-package list needed `memberport`). Gates continue; polling.
+> Bash timeout 590 bash -c 'until grep -q "OVERALL" /tmp/mp/gates.log; do sleep 30; done'; grep -E '^=== ' /tmp/mp/gates.log | tail -4
+= task_started
+= task_notification
+< === soundness rc=0 === === test === === test rc=1 === === current-generation ===
+> Bash timeout 590 bash -c 'until grep -q "OVERALL" /tmp/mp/gates.log; do sleep 30; done'; grep -E '^=== ' /tmp/mp/gates.log | tail -4; tail -3 /tmp/mp/gates.log
+= task_started
+= task_notification
+< === soundness rc=0 === === test === === test rc=1 === === current-generation ===     Removed 49M fixture tree requiresdevice-java ==> Generating rust requires-device fixture ==> Compiling rust requires-device fixture
+= thinking_tokens
+= thinking_tokens
+> Bash date -u +%H:%M; cd /builds/looper/tacplus/issues/321; git status --short
+< 08:51  M PROPOSALS.md  M STATE.md  M cross-test/TESTS.md  M cross-test/memberport/run.sh  M cross-test/memberport/testdata/HazelcastMemberPortTest.java  M cross-test/memberport/testdata/MemberPortBehaviorTest.java  M cross-test/memberport/testdata/MemberportPeer.java  M cross-test/stream-expiry/run....
+= thinking_tokens
+= thinking_tokens
+While the gates run, I'll get an independent read of the concurrency in the new template.
+> Agent Review MemberPort cutover concurrency
+= background_tasks_changed
+= task_started
+< Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.) agentId: a59b000ff39e131c4 (internal ID - do not mention to user. Use SendMessage with to: 'a59b000ff39e131c4', summary: '<5-10 wor...
+> Read /builds/looper/tacplus/issues/321/pkg/templates/java/chassis/memberport/MemberPort.java.tmpl
+= task_progress
+> Bash timeout 590 bash -c 'until grep -q "OVERALL" /tmp/mp/gates.log; do sleep 30; done'; grep -E '^=== ' /tmp/mp/gates.log | tail -4
+> Read /builds/looper/tacplus/issues/321/pkg/proto/sys/memberport.proto
+= task_progress
+< 1	// Copyright (c) 2026 Jody Scott 2	// SPDX-License-Identifier: Apache-2.0 3	 4	// Package memberport is the wire of the member port (spec.member_port, 5	// tacplus#212, #321): the black-box member protocol of a service (Hazelcast's, 6	// say) tunnelled between its members as gRPC bidi streams of b...
+< 1	// Copyright (c) 2026 Jody Scott 2	// SPDX-License-Identifier: Apache-2.0 3	// Generated by tacplus 4	// 5	// CODE GENERATED - DO NOT EDIT 6	 7	package {{.ChassisBase}}.memberport; 8	 9	import {{.ChassisBase}}.grpcserver.Authorizer; 10	import {{.ChassisBase}}.jwk.ImmutableJwk; 11	import {{.Chassis...
+= task_started
+I found three real defects and two minor races. None of them is common, and nothing breaks admission or ordering. I found no ServerCall/ClientCall serialization violation and no lock-order deadlock. Every call goes through the leg's monitor, and the only nesting is sendLock then a leg lock, never the reverse. The pump's `wait(100)` is timed, so a missed `notifyAll` costs up to 100 ms, not a hang. Nothing is dialled, read or forwarded before admission. Every refusal I traced resets the local socket.
+
+**1. Server session hangs for good when a leg is closed before `owner` is set (lines 1256-1269, 1307-1310, 812). Serious, needs a near-expiry token.**
+- **Trigger:** a client opens with a token that expires while `first()` is still running (up to the 10 s `connect` at 1356, plus `tokenSource.token()`).
+  - The expiry timer reads `owner.get()`, which is null, and calls `leg.abort(UNAUTHENTICATED)` without faulting anything.
+  - `first()` then dials the target and calls `s.start(leg)` on an already-closed call.
+- **Why it never ends:** once the server closes the call itself, grpc-java delivers `onComplete`, not `onCancel`. `onComplete` (1308) puts no `End` in the inbox, so the reader blocks in `inbox.take()` forever.
+- **Effect:**
+  - The pump keeps forwarding target bytes into `send()`, which drops them silently because `ended` is true and `isReady()` returns true.
+  - The client's cancel arrives after the server already closed the call, so it does nothing.
+  - The session stays in `sessions`/`inbound`, the target connection is never reset, and two worker threads leak.
+- **Same gap for a rotation leg:** if an attached rotation leg's expiry fires before `owner.set`, it is closed with no `End`. The reader later moves to it after the client's `last` and hangs the same way.
+- **Fix direction:** push an `End` from `onComplete`, or from `abort`/`finish` on the server leg.
+
+**2. A clean end can still reset the target and drop its unsent bytes (lines 773-776 against 814).**
+- **Interleaving:**
+  1. The server pump calls `sendLeg.send(fin)` and is preempted before `finSent = true`.
+  2. The client receives the fin; it already has `finSent`, so it half-closes.
+  3. The server reader takes `End(OK)` and sees `finSent == false`.
+  4. It calls `fault(...)`, which resets `plain` with SO_LINGER 0.
+- **Effect:** a correct close becomes an RST. Bytes the reader already wrote to `plain` but the kernel has not yet delivered to the target are discarded.
+- **Fix:** set `finSent = true` before the send, inside the lock.
+
+**3. A rotation the server attached but the client gave up on is never detached (lines 935-942, 1078-1080, 1143-1144).**
+- **Interleaving:**
+  1. The server's `attach` sets `rotating = true` and `nextLeg = leg`.
+  2. The client's `attached.get` times out at 10 s and aborts the leg.
+  3. The client treats DEADLINE_EXCEEDED as retryable and schedules a retry.
+  4. On the server, `onCancel` only queues `End` in that leg's inbox. Nothing clears `rotating` or `nextLeg`.
+  5. Every retry is refused by `attach` with PERMISSION_DENIED, and the client then faults the session (1139-1140).
+- **Effect:** a transient slow rotation always drops the session, so the retry path does not work once the server has attached. Fails closed, but the session is lost when it could have been kept.
+
+**4. Minor: a narrow window around the cutover (lines 948-950 against 844).**
+- `lastReceived` sets `rotating = false` before `read()` sets `nextLeg = null`.
+- A new rotation attached in that window has its `nextLeg` overwritten with null. The next `last` then faults ("no stream to cut over to"), and the orphaned leg lives until its own expiry.
+- A well-behaved client cannot hit this, because its next rotation comes at least 250 ms later. A buggy same-subject peer could.
+- **Fix:** clear `nextLeg` inside the same `synchronized (this)` block.
+
+**5. Minor: `attach` races `fault` (lines 936-940 against 895-911).**
+- `fault` sets `done` without the session's lock, then reads `nextLeg` as null.
+- `attach` had already passed its `done` check, so it then sets `nextLeg` and the leg is accepted.
+- **Effect:** that leg is never aborted by the session. It is cleaned up only when the peer cancels (it will, since its own session faults) or at token expiry. Bounded leak, no data effect.
+
+**Checked and found correct:**
+- **Byte order at cutover:** sends are serialized under sendLock and `last` is written before the switch. Each reader drains the old leg to `last` before calling `request` on the next one, and the client sets `nextLeg` before it sends `last`.
+- **Client clean end:** `finished()` runs from both threads, at least one sees both flags, and `finish()` is idempotent.
+- **Clean end that overlaps a rotation:** the late `cutOver` sends nothing because `ended` is set, and the pending leg is aborted in `ended()`.
+- **Interrupt during `close()`:** `open()` catches it and resets the socket.
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === soundness rc=0 === === test === === test rc=1 === === current-generation ===
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/321; python3 - <<'EOF' p='pkg/templates/java/chassis/memberport/MemberPort.java.tmpl'; s=open(p).read() rep=[ # 1: server leg closed by this side delivers its End ("""        @Override         synchronized void finish() {             if (!closed) {                 en...
+< 932:        private boolean rotating;
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash /tmp/mp/rt.sh 'MemberPortBehaviorTest,MemberPortStreamExpiryTest'; grep -E '^=== ' /tmp/mp/gates.log | tail -2
+= task_started
+= task_notification
+< rc=0 === test rc=1 === === current-generation ===
+= thinking_tokens
+= thinking_tokens
+Tests still green after the fixes. Waiting on the gates.
+> Bash timeout 590 bash -c 'until grep -q "OVERALL" /tmp/mp/gates.log; do sleep 30; done'; grep -E '^=== ' /tmp/mp/gates.log | tail -3; tail -2 /tmp/mp/gates.log; date -u +%H:%M
+= task_started
+= task_notification
+< === test === === test rc=1 === === current-generation === ==> Generating rust record-egress HOST fixture ==> Compiling rust record-egress HOST fixture 09:14
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/321; go test ./pkg/fleet/ ./pkg/internal/common/parser/ ./pkg/internal/java/... ./pkg/internal/go/types/ ./pkg/internal/rust/types/ 2>&1 | tail -8; gofmt -l pkg/fleet pkg/internal/go/types pkg/internal/rust/types pkg/internal/common/parser
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/pkg/fleet	(cached) ok  	github.com/tacplus-dev/tacplus/pkg/internal/common/parser	(cached) ok  	github.com/tacplus-dev/tacplus/pkg/internal/java/types	37.826s ok  	github.com/tacplus-dev/tacplus/pkg/internal/go/types	4.755s ok  	github.com/tacplus-dev/tacplus/pkg/...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/321; git add -A pkg cross-test docs STATE.md PROPOSALS.md justfile && git status --short && git commit -q -F - <<'EOF' Member port onto gRPC with make-before-break session rotation (Java) (#321)  #212's member port carried Hazelcast's member traffic in a hand-framed ...
+< M  PROPOSALS.md M  STATE.md M  cross-test/TESTS.md M  cross-test/memberport/run.sh M  cross-test/memberport/testdata/HazelcastMemberPortTest.java M  cross-test/memberport/testdata/MemberPortBehaviorTest.java A  cross-test/memberport/testdata/MemberPortStreamExpiryTest.java M  cross-test/memberport/t...
+> Bash cd /builds/looper/tacplus/issues/321; /usr/local/bin/repo-looper --repo tacplus --issue 321 --checkpoint "Committed 3b676f20 (member port on gRPC, tests, docs); local just gates still running (fleet sys-package list fixed after test failure); land queued next. Left: land verdict, outcome comment, cl...
+< [2026-11-07T09:15:14Z] checkpoint of #321 (a step) pushed to looper/tacplus-321:  22 files changed, 2405 insertions(+), 741 deletions(-) 73275
+> Bash timeout 590 bash -c 'until grep -q "OVERALL" /tmp/mp/gates.log; do sleep 30; done'; grep -E '^=== ' /tmp/mp/gates.log | tail -3; tail -5 /tmp/mp/land.log
+= task_started
+= task_notification
+< === test === === test rc=1 === === current-generation === [2026-11-07T09:15:16Z] checkpoint of #321 (land queued) pushed to looper/tacplus-321:  23 files changed, 2409 insertions(+), 741 deletions(-) [2026-11-07T09:15:18Z] queued: the manager of tacplus merges looper/tacplus-321 after the lands queu...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'until grep -q "OVERALL" /tmp/mp/gates.log; do sleep 30; done'; grep -E '^=== ' /tmp/mp/gates.log | tail -3; tail -2 /tmp/mp/land.log | cut -c1-300
+= task_started
+= task_notification
+< === test === === test rc=1 === === current-generation === [2026-11-07T09:15:16Z] checkpoint of #321 (land queued) pushed to looper/tacplus-321:  23 files changed, 2409 insertions(+), 741 deletions(-) [2026-11-07T09:15:18Z] queued: the manager of tacplus merges looper/tacplus-321 after the lands queu...
+> Bash timeout 590 bash -c 'until grep -q "OVERALL" /tmp/mp/gates.log; do sleep 30; done'; grep -E '^=== ' /tmp/mp/gates.log | tail -3; tail -1 /tmp/mp/gates.log; tail -1 /tmp/mp/land.log | cut -c1-300; date -u +%H:%M
+= task_started
+= task_notification
+< === test === === test rc=1 === === current-generation === ==> Compiling rust quorum-write fixture [2026-11-07T09:15:18Z] queued: the manager of tacplus merges looper/tacplus-321 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your t...
+= thinking_tokens
+= thinking_tokens
+Still waiting: local `current-generation` is slow (Rust fixtures), and the land is queued with the manager. Polling both.
+> Bash timeout 590 bash -c 'until grep -q "OVERALL" /tmp/mp/gates.log || ! kill -0 $(cat /tmp/mp/land.pid) 2>/dev/null; do sleep 30; done'; grep -E '^=== ' /tmp/mp/gates.log | tail -3; tail -1 /tmp/mp/land.log | cut -c1-400
+= task_started
+= task_notification
+< === test === === test rc=1 === === current-generation === [2026-11-07T09:15:18Z] queued: the manager of tacplus merges looper/tacplus-321 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+> Bash timeout 590 bash -c 'until grep -q "OVERALL" /tmp/mp/gates.log || ! kill -0 $(cat /tmp/mp/land.pid) 2>/dev/null; do sleep 30; done'; grep -E '^=== ' /tmp/mp/gates.log | tail -3; tail -1 /tmp/mp/land.log | cut -c1-400; date -u +%H:%M
+= task_started
+= task_notification
+< === test === === test rc=1 === === current-generation === [2026-11-07T09:15:18Z] queued: the manager of tacplus merges looper/tacplus-321 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+> Bash tail -4 /tmp/mp/gates.log; wc -l /tmp/mp/gates.log; ps -o pid,etime,args --ppid $(pgrep -f 'current-generation/run.sh' | head -1) 2>/dev/null | head -5
+<     PASS java tenant-route (crew)     Removed 47M fixture tree tenantroute-crew-java ==> Generating rust tenant-route fixture (harbor) ==> Compiling rust tenant-route fixture (harbor) 1176 /tmp/mp/gates.log     PID     ELAPSED COMMAND   23243    01:43:11 bash scripts/with-tree-lock.sh bash cross-tes...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Local gates are progressing but slowly. I'll run the member port and stream-expiry scripts directly (prebuilt binary outside the shared tree) so those two get a full run.sh pass sooner.
+> Bash go build -o /tmp/mp/tacplus . && (TACPLUS_BIN=/tmp/mp/tacplus TACPLUS_BIN_PREBUILT=1 bash cross-test/memberport/run.sh --language java > /tmp/mp/mp-java.log 2>&1; echo "rc=$?" >> /tmp/mp/mp-java.log; for l in go rust; do TACPLUS_BIN=/tmp/mp/tacplus TACPLUS_BIN_PREBUILT=1 bash cross-test/memberport/r...
+= task_started
+= task_notification
+< Exit code 1 tail: option used in invalid context -- 2
+> Bash for f in /tmp/mp/mp-java.log /tmp/mp/mp-go.log /tmp/mp/mp-rust.log; do echo "== $f"; tail -n 3 $f; done
+< == /tmp/mp/mp-java.log INFO: member port: session 0bBdgHfDt7DB2NGV-7btNQ dropped: member port closed ==> memberport check PASSED (java) rc=0 == /tmp/mp/mp-go.log ==> Generation must refuse (spec.member_port) for go ==> memberport check PASSED (go) rc=0 == /tmp/mp/mp-rust.log ==> Generation must refu...
+> Bash TACPLUS_BIN=/tmp/mp/tacplus TACPLUS_BIN_PREBUILT=1 bash cross-test/stream-expiry/run.sh --language java > /tmp/mp/se-java.log 2>&1; echo "rc=$?"; tail -n 4 /tmp/mp/se-java.log; tail -n 1 /tmp/mp/land.log | cut -c1-300; grep -E '^=== ' /tmp/mp/gates.log | tail -1
+= task_started
+= task_notification
+< rc=0 10:09:18.022 [grpc-default-worker-ELG-3-5] DEBUG io.grpc.netty.shaded.io.grpc.netty.NettyClientHandler -- [id: 0x2cf70c89, L:/127.0.0.1:58866 ! R:localhost/127.0.0.1:36321] INBOUND PING: ack=false bytes=40715087873 10:09:18.022 [grpc-default-worker-ELG-3-5] DEBUG io.grpc.netty.shaded.io.grpc.ne...
+= thinking_tokens
+= thinking_tokens
+Both pass via their scripts. Running the opt-in soak for an indicative throughput number while waiting.
+> Bash MEMBERPORT_SOAK=1 /tmp/mp/rt.sh 'MemberPortBehaviorTest#soakOverheadAgainstDirect'; grep -a 'memberport soak' /tmp/mp/test.log
+= task_started
+= task_notification
+< rc=0 memberport soak: echo 10:10:10.154 [grpc-default-worker-ELG-3-3] DEBUG io.grpc.netty.shaded.io.grpc.netty.NettyServerHandler -- [id: 0x39510379, L:/127.0.0.1:38595 - R:/127.0.0.1:58578] INBOUND DATA: streamId=5 padding=0 endStream=false length=7 bytes=00000000022001
+> Bash grep -a -o 'MiB direct [0-9.]* MiB/s, tunnelled [0-9.]* MiB/s; 1-byte RTT direct [0-9]* us, tunnelled [0-9]* us; heap used [0-9]* MiB' /tmp/mp/test.log; grep -a -o '256 MiB direct.*' /tmp/mp/test.log | head -2
+< 256 MiB direct 10:10:10.154 [grpc-default-worker-ELG-3-3] DEBUG io.grpc.netty.shaded.io.grpc.netty.NettyServerHandler -- [id: 0x39510379, L:/127.0.0.1:38595 - R:/127.0.0.1:58578] OUTBOUND DATA: streamId=5 padding=0 endStream=false length=7 bytes=00000000022001
+> Bash grep -a -o 'MiB/s, tunnelled.*\|[0-9.]* MiB/s, tunnelled [0-9.]* MiB/s\|1-byte RTT[^\[]*' /tmp/mp/test.log | head; grep -a -B1 -A1 'tunnelled' /tmp/mp/test.log | cut -c1-200 | head
+< 249.0 MiB/s, tunnelled 34.1 MiB/s 1-byte RTT direct 34 us, tunnelled 10:10:10.154  256 MiB direct 10:10:10.154 [grpc-default-worker-ELG-3-3] DEBUG io.grpc.netty.shaded.io.grpc.netty.NettyServerHandler -- [id: 0x39510379, L:/127.0.0.1:38595 - R:/127.0.0.1:58578] OUTBOUND DATA: stream 249.0 MiB/s, tun...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'while kill -0 $(cat /tmp/mp/land.pid) 2>/dev/null; do sleep 30; done'; tail -n 3 /tmp/mp/land.log | cut -c1-600; grep -E '^=== ' /tmp/mp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-07T09:15:16Z] checkpoint of #321 (land queued) pushed to looper/tacplus-321:  23 files changed, 2409 insertions(+), 741 deletions(-) [2026-11-07T09:15:18Z] queued: the manager of tacplus merges looper/tacplus-321 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash timeout 590 bash -c 'while kill -0 $(cat /tmp/mp/land.pid) 2>/dev/null; do sleep 30; done'; tail -n 2 /tmp/mp/land.log | cut -c1-600; grep -E '^=== ' /tmp/mp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-07T09:15:16Z] checkpoint of #321 (land queued) pushed to looper/tacplus-321:  23 files changed, 2409 insertions(+), 741 deletions(-) [2026-11-07T09:15:18Z] queued: the manager of tacplus merges looper/tacplus-321 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash timeout 590 bash -c 'while kill -0 $(cat /tmp/mp/land.pid) 2>/dev/null; do sleep 30; done'; tail -n 2 /tmp/mp/land.log | cut -c1-600; grep -E '^=== ' /tmp/mp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-07T09:15:16Z] checkpoint of #321 (land queued) pushed to looper/tacplus-321:  23 files changed, 2409 insertions(+), 741 deletions(-) [2026-11-07T09:15:18Z] queued: the manager of tacplus merges looper/tacplus-321 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash timeout 590 bash -c 'while kill -0 $(cat /tmp/mp/land.pid) 2>/dev/null; do sleep 30; done'; tail -n 2 /tmp/mp/land.log | cut -c1-800; grep -E '^=== ' /tmp/mp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-07T09:15:16Z] checkpoint of #321 (land queued) pushed to looper/tacplus-321:  23 files changed, 2409 insertions(+), 741 deletions(-) [2026-11-07T09:15:18Z] queued: the manager of tacplus merges looper/tacplus-321 after the lands queued before it, one at a time, and says on the issue what ca...
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'while kill -0 $(cat /tmp/mp/land.pid) 2>/dev/null; do sleep 30; done'; tail -n 2 /tmp/mp/land.log | cut -c1-800; grep -E '^=== ' /tmp/mp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-07T09:15:16Z] checkpoint of #321 (land queued) pushed to looper/tacplus-321:  23 files changed, 2409 insertions(+), 741 deletions(-) [2026-11-07T09:15:18Z] queued: the manager of tacplus merges looper/tacplus-321 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash timeout 590 bash -c 'while kill -0 $(cat /tmp/mp/land.pid) 2>/dev/null; do sleep 30; done'; tail -n 2 /tmp/mp/land.log | cut -c1-800; grep -E '^=== ' /tmp/mp/gates.log | tail -2; tail -n 1 /tmp/mp/gates.log; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-07T09:15:16Z] checkpoint of #321 (land queued) pushed to looper/tacplus-321:  23 files changed, 2409 insertions(+), 741 deletions(-) [2026-11-07T09:15:18Z] queued: the manager of tacplus merges looper/tacplus-321 after the lands queued before it, one at a time, and says on the issue what ca...
+= thinking_tokens
+= thinking_tokens
+Still waiting on the manager's verdict (queued since 09:15); local `current-generation` is still running. About 35 minutes left in this run.
+> Bash timeout 590 bash -c 'while kill -0 $(cat /tmp/mp/land.pid) 2>/dev/null; do sleep 30; done'; tail -n 2 /tmp/mp/land.log | cut -c1-800; grep -E '^=== ' /tmp/mp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-07T09:15:16Z] checkpoint of #321 (land queued) pushed to looper/tacplus-321:  23 files changed, 2409 insertions(+), 741 deletions(-) [2026-11-07T09:15:18Z] queued: the manager of tacplus merges looper/tacplus-321 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash grep -n -a -E 'FAIL|error|rc=2' /tmp/mp/gates.log | grep -v -i 'debug\|errors\.\|ErrorUtils' | tail -20
+< 155:- streaming/error-path trace and accounting completeness is covered by consumer-contract runtime cases. 161:include timeouts, structured errors, and streaming-method stubs. 168:- `swift W2S structured errors` ✓ (pkg/templates/swift/types/W2SClient.swift.tmpl) 169:- `csharp W2S structured errors`...
+> Bash sed -n 1255,1278p /tmp/mp/gates.log | cut -c1-300
+< ==> Compiling java tenant-slice owner fixture     PASS java tenant-slice owner     Removed 53M fixture tree tenantslice-owner-java ==> Generating rust tenant-slice owner fixture ==> Compiling rust tenant-slice owner fixture     PASS rust tenant-slice owner      Removed 594 files, 2.7GiB total     Re...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+`current-generation` passed every fixture; its rc=2 is the tree guard, because I committed while it ran, not a failure. One more poll for the land verdict before my time runs out.
+> Bash timeout 840 bash -c 'while kill -0 $(cat /tmp/mp/land.pid) 2>/dev/null; do sleep 30; done'; tail -n 2 /tmp/mp/land.log | cut -c1-800; grep -E '^=== ' /tmp/mp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bkadpcitf). Output is being written to: /builds/looper/tacplus/homes/looper-321/tmp/claude-61000/-builds-looper-tacplus-issues-321/01ae64fd-222a-452f-8a12-4877e39c0e78/tasks/bkadpcitf.output. You will be notified w...
+> Bash date -u +%H:%M; tail -n 1 /tmp/mp/land.log | cut -c1-600; gh issue view 321 --repo tacplus-dev/tacplus --comments 2>/dev/null | tail -8 | cut -c1-400
+< 11:29 [2026-11-07T09:15:18Z] queued: the manager of tacplus merges looper/tacplus-321 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. -- author:	tacplus-looper association:	none...
+= thinking_tokens
+= thinking_tokens
+Time is nearly up and the manager hasn't ruled yet. Writing the final checkpoint so the next run can finish the outcome comment and close.
+> Bash cd /builds/looper/tacplus/issues/321; /usr/local/bin/repo-looper --repo tacplus --issue 321 --checkpoint "Done: commit 3b676f20 (member port on gRPC: sys/memberport.proto, MemberPort.java.tmpl rewrite incl. fixes from an independent concurrency review; cross-test/memberport rewritten + MemberPortStr...
+< [2026-11-07T11:29:59Z] checkpoint of #321 (a step) pushed to looper/tacplus-321:  23 files changed, 2409 insertions(+), 741 deletions(-)
+> Bash timeout 420 bash -c 'while kill -0 $(cat /tmp/mp/land.pid) 2>/dev/null; do sleep 20; done'; date -u +%H:%M; tail -n 1 /tmp/mp/land.log | cut -c1-800
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< 11:37 [2026-11-07T09:15:18Z] queued: the manager of tacplus merges looper/tacplus-321 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+#321 is built and committed (`3b676f20`), and its land has been queued with the manager since 09:15Z. There was no verdict by 11:37Z, when my time ran out, so I have not posted the outcome comment or closed the issue. The manager still lands it after this run ends. The final checkpoint tells the next run to read the verdict (fixing and re-landing if the gates failed), then comment and close.
+
+**What changed**
+- **Conflict:** PROPOSALS.md was the only conflict. #321 now has its ROADMAP.md line, so I moved my proposal from Open to "Promoted".
+- **Wire:** a new `pkg/proto/sys/memberport.proto` defines `MemberChunk{payload, last, session_id, fin}`. The member port serves `/memberport.MemberTunnel/Open` on its own TLS 1.3 listener.
+- **Java member port:** `MemberPort.java.tmpl` is rewritten onto gRPC. The frame parser and in-band `AUTH` frames are gone.
+  - A token is checked once, when a stream opens, in both directions: the receiver sends its own token in a `tacplus-member-token` response header.
+  - At about 75% of a token's lifetime the session moves to a new stream, with `last` sent each way. A rotation joins the session only if its token names the same service and tenant.
+  - Refusals are `UNAUTHENTICATED` or `PERMISSION_DENIED` with no reason text, and every stream closes at its token's `exp`.
+  - A stream that ends without `last` drops the session; nothing is spliced onto another stream.
+  - A dropped session resets its local connection, so the client sees ECONNRESET.
+- **Review fixes:** an independent review of the concurrency found five defects. The most serious could leave a server session hanging forever, and another could turn a clean close into a reset. All five are fixed and the tests pass again.
+- **Tests:** `cross-test/memberport` is rewritten. It covers every leg the issue lists plus two tenants' Hazelcast members. A new `MemberPortStreamExpiryTest` is the member port's stream-expiry leg, and `just stream-expiry` runs it.
+- **Small fixes:**
+  - `pkg/fleet` now knows the new sys package; `TestIsSysPackage` failed without it.
+  - The Go and Rust refusals now point to #322 instead of the closed #236/#237.
+- **Docs:** API.md, USER.md, DEVELOPMENT.md, STATE.md and cross-test/TESTS.md are updated. KNOWN_TEST_GAPS has two new entries:
+  - **MP-2:** three rotation edge cases on the generated client are not driven by any test.
+  - **MP-3:** clock skew between members and throughput are not gated.
+
+**Verification**
+- **Passed:** soundness, all Go tests (after the fleet fix), and the memberport (java/go/rust) and stream-expiry java scripts. Every `current-generation` fixture passed too. That gate's exit code 2 came from its tree guard, because I committed while it ran.
+- **Not finished:** the full local `just gates` run did not complete. The land re-runs the gates.
+- **Throughput:** the opt-in soak measured 34.1 MiB/s through the tunnel against 249 MiB/s direct, and a 1-byte round trip of 510 µs against 34 µs. The fixture logs Netty at DEBUG level and the gates were running at the same time, so treat these as rough only.
+
+**Decisions for Jody to know:** nobody answered the five design questions on the issue, so I built my recommendations:
+1. The session id travels in the first chunk.
+2. The member port has its own listener.
+3. A `fin` field marks a clean half-close.
+4. The receiver presents a member token on every stream.
+5. The status at `exp` has no description, on the member port only.
+
+**Trace check:** I touched no service handlers. The 9 findings from `looper-trace check` are in cross-test driver code and are already filed as #310 and #311.
+= success: #321 is built and committed (`3b676f20`), and its land has been queued with the manager since 09:15Z. There was no verdict by 11:37Z, when my time ran out, so I have not posted the outcome comment or closed the issue. The manager still lands it after this run ends. The final checkpoint tells the next run to read the verdict (fixing and re-landing if the gates failed), then comment and close.
+
+**What changed**
+- **Conflict:** PROPOSALS.md was the only conflict. #321 now has its ROADMAP.md line, so I moved my proposal from Open to "Promoted".
+- **Wire:** a new `pkg/proto/sys/memberport.proto` defines `MemberChunk{payload, last, session_id, fin}`. The member port serves `/memberport.MemberTunnel/Open` on its own TLS 1.3 listener.
+- **Java member port:** `MemberPort.java.tmpl` is rewritten onto gRPC. The frame parser and in-band `AUTH` frames are gone.
+  - A token is checked once, when a stream opens, in both directions: the receiver sends its own token in a `tacplus-member-token` response header.
+  - At about 75% of a token's lifetime the session moves to a new stream, with `last` sent each way. A rotation joins the session only if its token names the same service and tenant.
+  - Refusals are `UNAUTHENTICATED` or `PERMISSION_DENIED` with no reason text, and every stream closes at its token's `exp`.
+  - A stream that ends without `last` drops the session; nothing is spliced onto another stream.
+  - A dropped session resets its local connection, so the client sees ECONNRESET.
+- **Review fixes:** an independent review of the concurrency found five defects. The most serious could leave a server session hanging forever, and another could turn a clean close into a reset. All five are fixed and the tests pass again.
+- **Tests:** `cross-test/memberport` is rewritten. It covers every leg the issue lists plus two tenants' Hazelcast members. A new `MemberPortStreamExpiryTest` is the member port's stream-expiry leg, and `just stream-expiry` runs it.
+- **Small fixes:**
+  - `pkg/fleet` now knows the new sys package; `TestIsSysPackage` failed without it.
+  - The Go and Rust refusals now point to #322 instead of the closed #236/#237.
+- **Docs:** API.md, USER.md, DEVELOPMENT.md, STATE.md and cross-test/TESTS.md are updated. KNOWN_TEST_GAPS has two new entries:
+  - **MP-2:** three rotation edge cases on the generated client are not driven by any test.
+  - **MP-3:** clock skew between members and throughput are not gated.
+
+**Verification**
+- **Passed:** soundness, all Go tests (after the fleet fix), and the memberport (java/go/rust) and stream-expiry java scripts. Every `current-generation` fixture passed too. That gate's exit code 2 came from its tree guard, because I committed while it ran.
+- **Not finished:** the full local `just gates` run did not complete. The land re-runs the gates.
+- **Throughput:** the opt-in soak measured 34.1 MiB/s through the tunnel against 249 MiB/s direct, and a 1-byte round trip of 510 µs against 34 µs. The fixture logs Netty at DEBUG level and the gates were running at the same time, so treat these as rough only.
+
+**Decisions for Jody to know:** nobody answered the five design questions on the issue, so I built my recommendations:
+1. The session id travels in the first chunk.
+2. The member port has its own listener.
+3. A `fin` field marks a clean half-close.
+4. The receiver presents a member token on every stream.
+5. The status at `exp` has no description, on the member port only.
+
+**Trace check:** I touched no service handlers. The 9 findings from `looper-trace check` are in cross-test driver code and are already filed as #310 and #311.

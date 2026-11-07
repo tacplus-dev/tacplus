@@ -67,3 +67,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-05 looper issue Formal verification (Kani/JBMC) leaves the gates: a nightly job (and every release tag) runs it, not each land (#275)
 - 2026-11-06 looper issue Release tacplus v2.6.0 (build image #193, record-plane tenant routing #207) once #207 closes (#213)
 - 2026-11-06 looper issue tacplus:2.4 image cannot build a Go service: no GitHub credential for the private registry, no go for goimports (#188)
+- 2026-11-06 looper issue Images carry moby/go-archive v0.2.0 (CVE-2026-17106, HIGH): bump to 0.3.0 and patch the release lines (#190)

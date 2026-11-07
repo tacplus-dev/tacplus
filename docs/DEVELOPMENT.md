@@ -484,6 +484,20 @@ Current durable gates:
   at the generated API seam, including auth-required, auth-disabled, validation,
   namespace mismatch, response validation, stream teardown, and backpressure.
 
+### The gates run concurrently
+
+`just gates` runs its gates, and the language legs of each, concurrently,
+`GATES_JOBS` at once (half the CPUs by default), and `current-generation` its
+fixtures with the same cap (#300; run one after another they used about 1.5
+of 16 CPUs and a land took hours). The output is assembled in the order the
+gates are named, so it and the verdict (`=== OVERALL fail=N ===`, each gate's
+`=== GATE rc=N ===`) do not depend on the cap; a table of each gate's wall
+time and the total comes before the verdict. A gate you add runs beside every
+other: it takes its own work directory, builds Rust in `$CARGO_TARGET_DIR`
+(`cross-test/lib/cargo-target.sh`) and uses the prebuilt `$TACPLUS_BIN`.
+`cross-test/README.md` has the details. `GATES_JOBS=1 just gates` runs them
+one at a time.
+
 ### Formal verification is not a gate
 
 Kani (Rust) and JBMC (Java) run in `just verify` (`scripts/verify.sh`), never

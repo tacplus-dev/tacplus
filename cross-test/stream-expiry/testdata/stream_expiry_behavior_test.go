@@ -172,6 +172,28 @@ func freePort(t *testing.T) int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
+// awaitListening returns once the server accepts connections on port. A
+// stream opened before then fails with Unavailable, not at its token's exp:
+// on a loaded machine (the gates run concurrently, tacplus#300) Listen can
+// take that long to bind.
+func awaitListening(t *testing.T, port int, listenErr <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		c, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(port), 200*time.Millisecond)
+		if err == nil {
+			c.Close()
+			return
+		}
+		select {
+		case err := <-listenErr:
+			t.Fatalf("generated grpcserver Listen exited before serving: %v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	t.Fatalf("generated grpcserver did not start listening on port %d", port)
+}
+
 // startServer serves the generated StreamerService behind the generated
 // Authorizer on the generated grpcserver, wired as the generated
 // ServiceManager wires them, and returns a client to it and the signing key the
@@ -201,7 +223,9 @@ func startServer(t *testing.T) (types.StreamerServiceClient, *keylib.ImmutableKe
 	if err != nil {
 		t.Fatalf("grpcserver.New: %v", err)
 	}
-	go func() { _ = srv.Listen(ctx) }()
+	listenErr := make(chan error, 1)
+	go func() { listenErr <- srv.Listen(ctx) }()
+	awaitListening(t, port, listenErr)
 
 	// The certificate identity is not under test; stream expiry is.
 	conn, err := grpc.NewClient("127.0.0.1:"+strconv.Itoa(port),

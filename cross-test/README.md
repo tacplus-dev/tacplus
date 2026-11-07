@@ -30,6 +30,30 @@ everything for diagnosis, and so does `--keep`. Without this, one gate run
 grew `target/cross-test` past 100G and filled the runner's disk (#282). The
 same test fails if a leg runs cargo and never prunes.
 
+## Concurrent gates and legs
+
+`just gates` (`scripts/gates.sh`) runs its gates concurrently, and runs the
+language legs of a gate that only names its legs (`cert-stream:
+cert-stream-go cert-stream-java cert-stream-rust`) as jobs of their own:
+`GATES_JOBS` at once, half the CPUs by default (#300). `current-generation`
+runs its fixtures, one job per fixture and language, with the same cap
+(`CROSS_TEST_JOBS`, which `just gates` sets to its own cap). Both use the
+bounded scheduler in `cross-test/lib/jobs.sh`, which prints each job's
+output whole, in the order the jobs were added, so the log and the verdict
+are the same whatever the cap; `scripts/gates_test.go` runs the gates with
+two caps and compares.
+
+Cargo locks a target directory for a whole build, so two jobs running at once
+never share one: each job slot of `just gates` gets its own directory under
+`target/gates/cargo-slotN` (through `TACPLUS_CROSS_TEST_CARGO_TARGET`), and a
+runner's concurrent job calls `use_slot_cargo_target` for one beside the
+runner's. The jobs that run one after another in a slot share its directory,
+so its dependency builds, as before; a run that passes removes the slot
+directories. Before the gates, `scripts/gates.sh` generates once and builds
+one tacplus binary for every gate (`TACPLUS_BIN`, `TACPLUS_BIN_PREBUILT`),
+and runs each leg with `just --no-deps`, so no two gates regenerate into the
+same paths at once. A new gate must not write a path another gate writes.
+
 ## Commands
 
 ```bash

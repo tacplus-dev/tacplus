@@ -488,16 +488,24 @@ public class DiskStoreTest {
                 log.roll(RedoLog.dedupFile(log.activePath()));
                 check(awaitFailures(shipper, 1), "the seeded segment's upload should be failing");
 
+                // A few appends, each fsynced, and a bound far above their cost:
+                // an append that waits on the failing upload never finishes,
+                // while a loaded runner (the gates run concurrently, #300) once
+                // took over 20s for 100 fsyncs.
                 Thread writer = new Thread(() -> {
-                    for (int i = 0; i < 100; i++) {
+                    for (int i = 0; i < 10; i++) {
                         log.append(RedoLog.Record.upsert("k" + i, "{\"v\":" + i + "}"));
                     }
                 });
                 writer.start();
-                writer.join(20_000L);
-                check(!writer.isAlive(), "appends must not wait on a failing upload");
+                writer.join(60_000L);
+                boolean appended = !writer.isAlive();
 
                 sink.failPuts.set(0);
+                // A writer still running is released by the recovered sink, or
+                // at least finishes before close() pulls the log from under it.
+                writer.join(60_000L);
+                check(appended, "appends must not wait on a failing upload");
                 check(awaitDrained(shipper), "the queue should drain once the sink recovers");
             } finally {
                 log.close();

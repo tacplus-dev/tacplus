@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-05 by looper (#213).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-06 by looper (#300).
 
 - **Version / line:** v2.6.0 (latest release, 2026-11-05, at 87adda9e; `release/2.6` cut at it); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -105,6 +105,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-05 by lo
   `cross-test/redact` (`just redact`, in the gates) against a hand-built fixture. The legacy egress redaction
   (`(spec.redact)`, `(spec.data_entitlement)`, `Sanitize<T>`, `<T>Entitlement`) is deprecated (generation warns),
   removed in 3.0. Gaps: no cross-package sensitive tree, no oneof leaves, no client-only target (PROPOSALS.md).
+  `just gates` runs its gates and their language legs concurrently, and current-generation its fixtures,
+  `GATES_JOBS` at once (half the CPUs by default), each job slot in its own cargo directory; the log and the
+  verdict are the same whatever the cap, and a table of each gate's wall time comes before the verdict (#300).
 - **Released / deployed:** v2.6.0 is the newest release: the binaries and `checksums.txt`, and
   `ghcr.io/tacplus-dev/tacplus/build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c`
   (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.

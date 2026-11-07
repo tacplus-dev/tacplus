@@ -34,21 +34,35 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   stream opened with a token about 3 s from `exp` that is never rotated, while
   the handler holds every stream open; each must be ended by the server at the
   token's `exp` with `UNAUTHENTICATED`. A control stream with an hour-long token
-  stays open past that window.
+  stays open past that window. Java also runs the member port's leg
+  (`cross-test/memberport`'s `MemberPortStreamExpiryTest`, tacplus#321): a member
+  tunnel stream that is not rotated ends at `exp` with `UNAUTHENTICATED`, no
+  reason text, and the loopback connection behind it is reset.
 - `memberport` (`cross-test/memberport/run.sh`, `just memberport`, in `just gates`):
-  the generated `(spec.member_port)` member port (tacplus#212). Java runs the
-  `memberport-peer` fixture (seeded streams checked byte for byte, both
-  directions at once) through peer ↔ member port ↔ member port ↔ peer:
-  1 byte to multi-MB, 48 concurrent connections, half-close either way, a stream
-  across several in-band token refreshes, a stalled reader (bounded buffering, no
-  drop), every refused input (another tenant's or service's token, no token, an
-  expired token, a wrong audience or key, garbled or oversized frames, data
-  before `AUTH`, plaintext, no ALPN) with nothing forwarded, expiry without
-  refresh, a stalled mint, an unreachable JWKS, a certificate rotation mid-stream,
-  and the sender's checks of the receiver (its certificate and its `AUTH`); then
-  two tenants' Hazelcast 5.7 members through the port. `MEMBERPORT_SOAK=1` adds
-  a soak that prints throughput and latency against a direct connection. Go and
-  Rust must refuse the annotation at generation until #236/#237.
+  the generated `(spec.member_port)` member port (tacplus#212, on gRPC since
+  #321). Java runs the `memberport-peer` fixture (seeded streams checked byte for
+  byte, both directions at once) through peer ↔ member port ↔ member port ↔ peer:
+  1 byte to multi-MB, 48 concurrent connections, half-close either way, a byte
+  session across several token lifetimes (make-before-break rotations, both
+  directions trickling at once), a stalled reader (bounded buffering, no drop),
+  and hand-driven tunnel streams: every refused open (no, garbage, expired,
+  wrong-audience or unknown-key token: `UNAUTHENTICATED`; another tenant's or
+  service's token: `PERMISSION_DENIED`; no reason text) with nothing dialled, a
+  data chunk before the session opens, plaintext and #212-framing peers, the
+  first-chunk deadline, a rotation with another subject's token or an unknown
+  session id (`PERMISSION_DENIED`), an old stream cut off without `last` (the
+  session drops, nothing spliced, the target's connection reset) and a receiver
+  that ends without `last` (the sender's local connection reset), a cutover with
+  `last` both ways in order; a mint failure (dropped at expiry), a revoked
+  caller (cut off within one lifetime), a refused tunnel resetting its local
+  connection in under a second (`ECONNRESET`), an unreachable JWKS, a
+  certificate rotation mid-stream, and the sender's checks of the receiver (its
+  certificate and its token); `MemberPortStreamExpiryTest` (also run by
+  `just stream-expiry`): an unrotated stream ends with `UNAUTHENTICATED` at `exp`
+  and a reset; then two tenants' Hazelcast 5.7 members through the port.
+  `MEMBERPORT_SOAK=1` adds a soak that prints throughput and latency against a
+  direct connection. Go and Rust must refuse the annotation at generation until
+  #322.
 - `external-token` (`cross-test/external-token/run.sh`): behavioral gate for the
   generated external-audience token accessor (`token_for_external` /
   `TokenForExternal` / `tokenForExternal`) in Go, Java, and Rust. A mock token

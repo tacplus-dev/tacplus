@@ -235,9 +235,10 @@ verify-changed SHA="":
 tacplus-script: generate
   {{lock}} bash images/tacplus_test.sh
 
-# The generated member port (tacplus#212): Java's memberport-peer and
-# Hazelcast tests over real sockets; Go and Rust must refuse (spec.member_port)
-# until they generate it (#236, #237). MEMBERPORT_SOAK=1 adds the soak.
+# The generated member port (tacplus#212, on gRPC since #321): Java's
+# memberport-peer, stream-expiry and Hazelcast tests over real sockets; Go and
+# Rust must refuse (spec.member_port) until they generate it (#322).
+# MEMBERPORT_SOAK=1 adds the soak.
 memberport: memberport-java memberport-go memberport-rust
 
 memberport-java:

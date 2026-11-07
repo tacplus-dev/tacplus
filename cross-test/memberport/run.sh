@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Member port (tacplus#212) behaviour gate.
+# Member port (tacplus#212, on gRPC since #321) behaviour gate.
 #
 # java: generate a (spec.member_port) service, assert the ServiceManager owns
 # its member port, and run the memberport-peer tests (peer <-> member port <->
-# member port <-> peer: correctness, backpressure, faults, failure modes, the
-# sender's checks of the receiver) and the Hazelcast integration test (two
-# tenants' members through the port; Hazelcast 5.7.0, Stratum's version).
-# MEMBERPORT_SOAK=1 adds the opt-in soak, which prints the overhead against a
-# direct connection.
+# member port <-> peer: correctness, session rotation across token lifetimes,
+# backpressure, refusals and their statuses, faults, failure modes, the
+# sender's checks of the receiver), the member port's stream-expiry leg and the
+# Hazelcast integration test (two tenants' members through the port; Hazelcast
+# 5.7.0, Stratum's version). MEMBERPORT_SOAK=1 adds the opt-in soak, which
+# prints the overhead against a direct connection. --test <classes> runs only
+# those (cross-test/stream-expiry runs MemberPortStreamExpiryTest this way).
 #
-# go, rust: the member port is not generated there yet (tacplus#236, #237), so
+# go, rust: the member port is not generated there yet (tacplus#322), so
 # generation must refuse (spec.member_port) rather than emit a service whose
 # member traffic nothing guards.
 set -euo pipefail
@@ -17,9 +19,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROTO_SRC="$ROOT_DIR/cross-test/memberport/proto"
 LANGUAGE="java"
+TESTS="MemberPortBehaviorTest,MemberPortStreamExpiryTest,HazelcastMemberPortTest"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --language) LANGUAGE="$2"; shift 2 ;;
+    --test) TESTS="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -242,8 +246,7 @@ case "$LANGUAGE" in
     if out="$(generate 2>&1)"; then
       die "$LANGUAGE generated a (spec.member_port) service it has no member port for"
     fi
-    issue="tacplus#236"
-    [[ "$LANGUAGE" == rust ]] && issue="tacplus#237"
+    issue="tacplus#322"
     grep -q "declares (spec.member_port), which is generated for java only so far" <<<"$out" \
       || die "$LANGUAGE refused for another reason: $(tail -5 <<<"$out")"
     grep -q "$issue" <<<"$out" || die "$LANGUAGE refusal does not name $issue"
@@ -261,6 +264,9 @@ case "$LANGUAGE" in
     grep -q 'MemberPort.audienceFor("grid")' "$SM" || die "ServiceManager does not mint the member audience"
     grep -q 'identity.getTokenFor(memberAudience)' "$SM" || die "member tokens do not come from the identity manager"
     grep -q 'memberPortAddresses(cfg);' "$SM" || die "member port config is not checked before startup"
+    grep -q 'OPEN_METHOD' "$MP" || die "the member port does not serve the member tunnel over gRPC"
+    [[ -f "$OUT/src/main/java/com/example/grid/model/types/sys/memberport/Memberport.java" ]] \
+      || die "sys/memberport.proto (MemberChunk) was not generated"
 
     echo "==> Generation must refuse (spec.member_port) without auto_tls"
     NO_TLS="$WORK/proto-no-tls"
@@ -280,10 +286,10 @@ case "$LANGUAGE" in
     cp "$ROOT_DIR"/cross-test/memberport/testdata/*.java "$TEST_DIR/"
     write_java_memberport_pom "$OUT/pom.xml" "$OUT"
 
-    echo "==> Running the member port behaviour and Hazelcast tests"
+    echo "==> Running the member port tests: $TESTS"
     java_env="$(java_home_env)"
     (cd "$OUT" && env ${java_env:+"$java_env"} MEMBERPORT_SOAK="${MEMBERPORT_SOAK:-}" \
-      mvn -q -Dtest='MemberPortBehaviorTest,HazelcastMemberPortTest' test) \
+      mvn -q -Dtest="$TESTS" test) \
       || die "member port tests failed"
     ;;
 esac

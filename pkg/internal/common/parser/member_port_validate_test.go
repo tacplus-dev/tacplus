@@ -75,11 +75,11 @@ func TestRefuseMemberPort(t *testing.T) {
 		"grid.proto":  `service Grid { option (spec.member_port) = {}; rpc Get(Ping) returns (Ping); }`,
 		"plain.proto": `service Plain { rpc Get(Ping) returns (Ping); }`,
 	})
-	if err := RefuseMemberPort(p, "plain", "go", "tacplus#236"); err != nil {
+	if err := RefuseMemberPort(p, "plain", "go", "tacplus#322"); err != nil {
 		t.Fatalf("a service without (spec.member_port) is refused: %v", err)
 	}
-	err := RefuseMemberPort(p, "grid", "go", "tacplus#236")
-	if err == nil || !strings.Contains(err.Error(), "grid.Grid declares (spec.member_port)") || !strings.Contains(err.Error(), "tacplus#236") {
+	err := RefuseMemberPort(p, "grid", "go", "tacplus#322")
+	if err == nil || !strings.Contains(err.Error(), "grid.Grid declares (spec.member_port)") || !strings.Contains(err.Error(), "tacplus#322") {
 		t.Fatalf("RefuseMemberPort error = %v, want the service and the follow-up named", err)
 	}
 }

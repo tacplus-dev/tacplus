@@ -301,6 +301,44 @@ test (tacplus-dev/stratum#17) once kernel#30 lands.
 
 ---
 
+## MP-2 — the member port's rotation edge cases on the generated client
+
+**Status:** open.
+
+`cross-test/memberport` drives rotation through two generated member ports
+(several token lifetimes, both directions at once, a mint failure, a revoked
+caller) and drives the server's refusals of a rotation (another subject, an
+unknown session id) and the no-splice fault with hand-written tunnel streams.
+Three paths of the generated *client* are written and reviewed but not driven:
+its one retry of an `UNAUTHENTICATED` open with a fresh token (nothing counts
+the retry), its drop of a session whose rotation is refused (a real member port
+never refuses a same-subject rotation, so only a fake receiver could), and a new
+stream that fails after its open but before the cutover.
+
+To close it: a fake receiver (the test's `fakeReceiver` already serves the
+tunnel) that refuses the first open with `UNAUTHENTICATED` and counts the
+retry, refuses a rotation with `PERMISSION_DENIED`, and resets the new stream
+before the client's `last`.
+
+---
+
+## MP-3 — the member port's rotation under clock skew and throughput are not gated
+
+**Status:** open.
+
+The client rotates at 75% of its token's lifetime on its own clock, and the
+server closes a stream at `exp` on its clock; nothing runs two members with
+skewed clocks, so the margin (a quarter of the lifetime) is argued, not tested.
+The soak that measures the gRPC tunnel's throughput and latency against a direct
+connection is opt-in (`MEMBERPORT_SOAK=1`) and asserts nothing: a throughput
+regression against #212's raw TLS framing would not fail a gate.
+
+To close it: a clock seam in the member port (an injectable `now`) and a leg
+that skews one member by most of a quarter lifetime; and a soak floor (say, a
+fraction of the direct rate) once the nightly runners' numbers are known.
+
+---
+
 ## SE-1 — stream credential expiry runs on the ServiceManager's server, not the ServiceManager
 
 **Status:** open.

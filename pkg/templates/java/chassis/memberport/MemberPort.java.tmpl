@@ -12,13 +12,29 @@ import {{.ChassisBase}}.spiffe.Spiffe;
 import {{.ChassisBase}}.token.TokenWrapper;
 import {{.PackageBase}}.utils.Utils;
 import {{.TypesBase}}.sys.jwk.JwkOuterClass;
+import {{.TypesBase}}.sys.memberport.Memberport.MemberChunk;
 import {{.TypesBase}}.sys.x509.X509;
 
-import java.io.BufferedInputStream;
+import com.google.protobuf.ByteString;
+import io.grpc.CallOptions;
+import io.grpc.ClientCall;
+import io.grpc.ManagedChannel;
+import io.grpc.Metadata;
+import io.grpc.MethodDescriptor;
+import io.grpc.Server;
+import io.grpc.ServerCall;
+import io.grpc.ServerCallHandler;
+import io.grpc.ServerServiceDefinition;
+import io.grpc.Status;
+import io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts;
+import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
+import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
+import io.grpc.netty.shaded.io.netty.handler.ssl.SslContext;
+import io.grpc.netty.shaded.io.netty.handler.ssl.SslContextBuilder;
+import io.grpc.netty.shaded.io.netty.handler.ssl.SslProvider;
+import io.grpc.protobuf.ProtoUtils;
+
 import java.io.ByteArrayInputStream;
-import java.io.BufferedOutputStream;
-import java.io.DataInputStream;
-import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -26,98 +42,119 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketAddress;
 import java.net.SocketException;
-import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
 import java.security.Principal;
 import java.security.PrivateKey;
+import java.security.SecureRandom;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.net.ssl.KeyManager;
-import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
-import javax.net.ssl.SSLParameters;
-import javax.net.ssl.SSLServerSocket;
-import javax.net.ssl.SSLSocket;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509ExtendedKeyManager;
+import javax.net.ssl.X509ExtendedTrustManager;
 import javax.net.ssl.X509TrustManager;
 
 /**
- * The member port of a {@code (spec.member_port)} service (tacplus#212): the
- * only way the service's members exchange black-box traffic (Hazelcast's
+ * The member port of a {@code (spec.member_port)} service (tacplus#212, #321):
+ * the only way the service's members exchange black-box traffic (Hazelcast's
  * member protocol, say), authenticated the way gRPC is, with server TLS and
  * kernel-signed bearer tokens, never mTLS.
  *
- * <p>Inbound, {@link #listen} accepts TLS 1.3 (ALPN {@value #ALPN}) on the pod's
- * member port with the member's serving certificate, and forwards each admitted
- * connection's raw bytes to a loopback target, where the black-box protocol
- * binds. Outbound, {@link #forward} returns a loopback address; every connection
- * to it is tunnelled to a remote member port, whose certificate is verified
- * against the fleet trust bundle and must name this service in this namespace.
+ * <p>Inbound, {@link #listen} serves {@code /memberport.MemberTunnel/Open}
+ * (sys/memberport.proto) on its own gRPC listener, TLS 1.3 with the member's
+ * serving certificate, and forwards each admitted byte session to a loopback
+ * target, where the black-box protocol binds. Outbound, {@link #forward}
+ * returns a loopback address; every connection to it becomes a byte session
+ * tunnelled to a remote member port, whose certificate must chain to the fleet
+ * trust bundle and name this service in this namespace, and whose own member
+ * token must be admitted like an inbound one.
  *
- * <p>Every byte between member ports is framed: a 1-byte type, a 4-byte
- * big-endian length and the payload. {@code AUTH} (at most
- * {@value #MAX_AUTH_BYTES} bytes) carries a token, {@code DATA} (at most
- * {@value #MAX_DATA_BYTES}) carries bytes, and {@code CLOSE_WRITE} (empty)
- * half-closes, since TLS close_notify ends both directions. Each side opens with
- * an {@code AUTH} frame and refreshes it in-band before it expires. A token is
- * admitted only when it is kernel-signed (a key of the JWKS), unexpired, a
- * service token with audience {@code member:<service>}, for this same service
- * in this same namespace (so the same tenant, for a tenant-owned service).
+ * <p>A stream carries one token, the one it opened with (in the
+ * {@code authorization} metadata, never in a chunk), and is checked once, at
+ * open. A token is admitted only when it is kernel-signed (a key of the JWKS),
+ * unexpired, a service token with audience {@code member:<service>}, for this
+ * same service in this same namespace (so the same tenant, for a tenant-owned
+ * service). A refused open ends with {@code UNAUTHENTICATED} (a bad, missing or
+ * expired token) or {@code PERMISSION_DENIED} (a valid token not allowed), and
+ * the server closes a stream at its token's {@code exp} with
+ * {@code UNAUTHENTICATED}; no status carries a description, the reason goes to
+ * the log.
  *
- * <p>It fails closed. Nothing is forwarded, and the target is not even dialled,
- * before a valid {@code AUTH}; a peer whose token expires without a newer one is
- * dropped; an unknown type, an oversize frame, {@code DATA} before {@code AUTH}
- * and a plaintext peer drop the connection; there is no plaintext fallback.
- * Tokens are never logged.
+ * <p>A byte session outlives its tokens by make-before-break rotation: at about
+ * 75% of its token's lifetime the client acquires a new token, opens a new
+ * stream presenting the session id, and once the server has attached it writes
+ * its final chunk on the old stream with {@code last}; the server, reading it,
+ * writes its own {@code last} there, ends the old stream and writes on the new
+ * one. Each side reads the old stream to its {@code last} before anything of
+ * the new one, so the bytes keep their order with no sequence numbers. A
+ * rotation is attached only when its token names the same subject (service and
+ * namespace) as the session; the id alone authorizes nothing.
+ *
+ * <p>It fails closed. Nothing is dialled or forwarded before admission; a
+ * stream that ends without its {@code last} drops the session (never spliced);
+ * a client that cannot rotate drops its session when its token expires. A
+ * dropped session resets its loopback connection ({@code SO_LINGER} 0: an RST,
+ * never a FIN or a hang). Tokens are never logged.
  */
 public final class MemberPort implements AutoCloseable {
     private static final Logger LOG = Logger.getLogger(MemberPort.class.getName());
 
-    /** The ALPN protocol both ends must negotiate. */
-    public static final String ALPN = "tacplus-member/1";
     /** The prefix of a member port's token audience: {@code member:<service>}. */
     public static final String AUDIENCE_PREFIX = "member:";
-    /** Frame type: a bearer token. */
-    public static final int FRAME_AUTH = 1;
-    /** Frame type: forwarded bytes. */
-    public static final int FRAME_DATA = 2;
-    /** Frame type: the sender will send no more DATA (half-close). */
-    public static final int FRAME_CLOSE_WRITE = 3;
-    /** The largest AUTH payload: the token's own size bound. */
-    public static final int MAX_AUTH_BYTES = 16 * 1024;
-    /** The largest DATA payload, and the read buffer of each direction. */
-    public static final int MAX_DATA_BYTES = 64 * 1024;
-    private static final int FRAME_HEADER_BYTES = 5;
-    private static final int HANDSHAKE_TIMEOUT_MS = 10_000;
-    /** Connections still proving themselves (TLS handshake and opening AUTH) at once. */
+    /** The member tunnel's gRPC service name (sys/memberport.proto). */
+    public static final String SERVICE_NAME = "memberport.MemberTunnel";
+    /** The response header that carries the receiver's own member token. */
+    public static final String TOKEN_HEADER = "tacplus-member-token";
+    /** The largest chunk payload, and the read buffer of each direction. */
+    public static final int MAX_CHUNK_BYTES = 64 * 1024;
+    /** The fraction of a token's lifetime after which the client rotates. */
+    public static final double ROTATE_AT = 0.75;
+    /** The member tunnel's one method: a bidi stream of byte chunks. */
+    public static final MethodDescriptor<MemberChunk, MemberChunk> OPEN_METHOD =
+            MethodDescriptor.<MemberChunk, MemberChunk>newBuilder()
+                    .setType(MethodDescriptor.MethodType.BIDI_STREAMING)
+                    .setFullMethodName(MethodDescriptor.generateFullMethodName(SERVICE_NAME, "Open"))
+                    .setRequestMarshaller(ProtoUtils.marshaller(MemberChunk.getDefaultInstance()))
+                    .setResponseMarshaller(ProtoUtils.marshaller(MemberChunk.getDefaultInstance()))
+                    .build();
+
+    static final Metadata.Key<String> AUTHORIZATION = Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
+    static final Metadata.Key<String> MEMBER_TOKEN = Metadata.Key.of(TOKEN_HEADER, Metadata.ASCII_STRING_MARSHALLER);
+    /** The TLS handshake, and a stream's first chunk after it opens, must each arrive within this. */
+    private static final int ADMISSION_TIMEOUT_MS = 10_000;
+    /** Streams still proving themselves (opened, first chunk not yet handled) at once. */
     private static final int MAX_PENDING_ADMISSIONS = 256;
-    /** Seconds a closing TLS socket may wait to send close_notify behind a blocked writer. */
-    private static final int CLOSE_LINGER_SECONDS = 1;
-    private static final long REFRESH_MIN_MS = 250;
-    private static final long REFRESH_MAX_MS = 30_000;
-    private static final long REFRESH_RETRY_MS = 1_000;
+    private static final long ROTATE_MIN_MS = 250;
+    private static final long ROTATE_RETRY_MS = 1_000;
+    private static final SecureRandom RANDOM = new SecureRandom();
 
     /** The member token of this instance: the ServiceManager mints, caches and refreshes it. */
     @FunctionalInterface
@@ -197,12 +234,37 @@ public final class MemberPort implements AutoCloseable {
         return out;
     }
 
-    /** Thrown when a peer's token or certificate is not a member of this service. */
+    /**
+     * Thrown when a peer's token or certificate is not a member of this service:
+     * {@link #denied} when the token is valid but not allowed here
+     * (PERMISSION_DENIED), else the token itself is bad (UNAUTHENTICATED).
+     */
     public static final class RefusedException extends Exception {
         private static final long serialVersionUID = 1L;
+        final boolean denied;
 
         RefusedException(String message) {
+            this(message, false);
+        }
+
+        RefusedException(String message, boolean denied) {
             super(message);
+            this.denied = denied;
+        }
+
+        Status status() {
+            return denied ? Status.PERMISSION_DENIED : Status.UNAUTHENTICATED;
+        }
+    }
+
+    /** An admitted token: who it names and when it expires. */
+    static final class Admitted {
+        final String subject;
+        final long expMillis;
+
+        Admitted(String subject, long expMillis) {
+            this.subject = subject;
+            this.expMillis = expMillis;
         }
     }
 
@@ -211,13 +273,17 @@ public final class MemberPort implements AutoCloseable {
     private final String trustDomain;
     private final TokenSource tokenSource;
     private final JwkLookup jwks;
-    private final SSLContext serverContext;
-    private final SSLContext clientContext;
+    private final SslContext serverSsl;
+    private final SslContext clientSsl;
     private final ExecutorService workers;
     private final ScheduledThreadPoolExecutor timers;
     private final AtomicInteger pendingAdmissions = new AtomicInteger();
-    private final Set<ServerSocket> listeners = ConcurrentHashMap.newKeySet();
-    private final Set<Tunnel> tunnels = ConcurrentHashMap.newKeySet();
+    private final Set<ServerSocket> localListeners = ConcurrentHashMap.newKeySet();
+    private final Set<Server> servers = ConcurrentHashMap.newKeySet();
+    private final Set<ManagedChannel> channels = ConcurrentHashMap.newKeySet();
+    private final Set<Session> sessions = ConcurrentHashMap.newKeySet();
+    /** The inbound sessions by id, for rotations to join. */
+    private final Map<String, InboundSession> inbound = new ConcurrentHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
     /** This instance's namespace, read once from its own token: it never changes. */
     private volatile String ownNamespace;
@@ -257,10 +323,15 @@ public final class MemberPort implements AutoCloseable {
         this.tokenSource = Objects.requireNonNull(tokenSource, "member port: token source is required");
         this.jwks = Objects.requireNonNull(jwks, "member port: JWKS lookup is required");
         Objects.requireNonNull(servingCert, "member port: serving certificate is required");
-        this.serverContext = SSLContext.getInstance("TLSv1.3");
-        this.serverContext.init(new KeyManager[] {new ServingKeyManager(servingCert)}, null, null);
-        this.clientContext = SSLContext.getInstance("TLSv1.3");
-        this.clientContext.init(null, new TrustManager[] {new MemberTrustManager(trustManagerFor(trustedCas))}, null);
+        // The JDK provider asks the key manager on every handshake, so a
+        // renewed certificate applies from the next one.
+        this.serverSsl = GrpcSslContexts.configure(SslContextBuilder.forServer(new ServingKeyManager(servingCert)), SslProvider.JDK)
+                .protocols("TLSv1.3")
+                .build();
+        this.clientSsl = GrpcSslContexts.configure(SslContextBuilder.forClient(), SslProvider.JDK)
+                .trustManager(new MemberTrustManager(trustManagerFor(trustedCas)))
+                .protocols("TLSv1.3")
+                .build();
         this.workers = Executors.newCachedThreadPool(daemonThreads("member-port"));
         this.timers = new ScheduledThreadPoolExecutor(1, daemonThreads("member-port-timer"));
         this.timers.setRemoveOnCancelPolicy(true);
@@ -272,37 +343,33 @@ public final class MemberPort implements AutoCloseable {
     }
 
     /**
-     * Accepts member connections on {@code listenAddress} and forwards each
-     * admitted one to {@code target}, which must be a loopback address.
+     * Serves the member tunnel on {@code listenAddress} and forwards each
+     * admitted byte session to {@code target}, which must be a loopback address.
      *
      * @return the bound address (its port when {@code listenAddress} names port 0)
      */
     public InetSocketAddress listen(InetSocketAddress listenAddress, InetSocketAddress target) throws IOException {
         requireLoopback("target", target);
-        SSLServerSocket server = (SSLServerSocket) serverContext.getServerSocketFactory().createServerSocket();
-        SSLParameters params = server.getSSLParameters();
-        params.setProtocols(new String[] {"TLSv1.3"});
-        params.setApplicationProtocols(new String[] {ALPN});
-        params.setNeedClientAuth(false);
-        server.setSSLParameters(params);
-        server.bind(listenAddress);
-        register(server);
-        InetSocketAddress bound = (InetSocketAddress) server.getLocalSocketAddress();
-        startThread("member-port-listen-" + bound.getPort(), () -> {
-            while (!server.isClosed()) {
-                Socket accepted;
-                try {
-                    accepted = server.accept();
-                } catch (IOException e) {
-                    if (!server.isClosed()) {
-                        LOG.log(Level.WARNING, "member port: accept failed", e);
-                    }
-                    return;
-                }
-                admit(accepted, admitted -> admitInbound((SSLSocket) accepted, target, admitted));
-            }
-        });
-        return bound;
+        Objects.requireNonNull(listenAddress, "member port: listen address is required");
+        ServerServiceDefinition tunnel = ServerServiceDefinition.builder(SERVICE_NAME)
+                .addMethod(OPEN_METHOD, new TunnelHandler(target))
+                .build();
+        Server server = NettyServerBuilder.forAddress(listenAddress)
+                .sslContext(serverSsl)
+                .handshakeTimeout(ADMISSION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .maxInboundMessageSize(MAX_CHUNK_BYTES + 1024)
+                .addService(tunnel)
+                .build();
+        servers.add(server);
+        if (closed.get()) {
+            servers.remove(server);
+            throw new SocketException("member port closed");
+        }
+        server.start();
+        SocketAddress bound = server.getListenSockets().get(0);
+        return bound instanceof InetSocketAddress isa
+                ? new InetSocketAddress(listenAddress.getAddress(), isa.getPort())
+                : listenAddress;
     }
 
     /**
@@ -322,7 +389,17 @@ public final class MemberPort implements AutoCloseable {
         requireLoopback("local forward address", localAddress);
         ServerSocket local = new ServerSocket();
         local.bind(localAddress);
-        register(local);
+        localListeners.add(local);
+        ManagedChannel channel = NettyChannelBuilder.forAddress(remote)
+                .sslContext(clientSsl)
+                .maxInboundMessageSize(MAX_CHUNK_BYTES + 1024)
+                .build();
+        channels.add(channel);
+        if (closed.get()) {
+            closeQuietly(local);
+            channel.shutdownNow();
+            throw new SocketException("member port closed");
+        }
         InetSocketAddress bound = (InetSocketAddress) local.getLocalSocketAddress();
         startThread("member-port-forward-" + bound.getPort(), () -> {
             while (!local.isClosed()) {
@@ -335,23 +412,33 @@ public final class MemberPort implements AutoCloseable {
                     }
                     return;
                 }
-                admit(accepted, admitted -> dialOutbound(accepted, remote, admitted));
+                try {
+                    workers.execute(() -> new OutboundSession(accepted, channel, remote).open());
+                } catch (RejectedExecutionException e) {
+                    reset(accepted);
+                }
             }
         });
         return bound;
     }
 
-    /** Stops listening and drops every connection. */
+    /** Stops listening and drops every session. */
     @Override
     public void close() {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        for (ServerSocket s : listeners) {
+        for (ServerSocket s : localListeners) {
             closeQuietly(s);
         }
-        for (Tunnel t : tunnels) {
-            t.close("member port closed");
+        for (Session s : sessions) {
+            s.fault("member port closed", Status.UNAVAILABLE);
+        }
+        for (Server s : servers) {
+            s.shutdownNow();
+        }
+        for (ManagedChannel c : channels) {
+            c.shutdownNow();
         }
         timers.shutdownNow();
         workers.shutdownNow();
@@ -360,124 +447,14 @@ public final class MemberPort implements AutoCloseable {
     // ---- Admission ----
 
     /**
-     * Runs one connection's admission on a worker under an absolute deadline: a
-     * peer that has not finished the TLS handshake and the opening AUTH
-     * exchange within it is dropped, however slowly it trickles bytes, and at
-     * most {@value #MAX_PENDING_ADMISSIONS} connections may be proving
-     * themselves at once.
+     * Verifies a peer's token. Refuses anything but a kernel-signed, unexpired
+     * service token with this port's audience (UNAUTHENTICATED otherwise) for
+     * this same service in this same namespace (PERMISSION_DENIED otherwise).
      */
-    private void admit(Socket accepted, java.util.function.Consumer<AtomicBoolean> admission) {
-        if (pendingAdmissions.incrementAndGet() > MAX_PENDING_ADMISSIONS) {
-            pendingAdmissions.decrementAndGet();
-            LOG.warning("member port: too many connections awaiting admission; dropping " + accepted.getRemoteSocketAddress());
-            closeQuietly(accepted);
-            return;
+    Admitted verifyPeer(String token) throws RefusedException {
+        if (token == null || token.isEmpty()) {
+            throw new RefusedException("no token");
         }
-        AtomicBoolean admitted = new AtomicBoolean();
-        try {
-            ScheduledFuture<?> deadline = timers.schedule(() -> {
-                if (admitted.compareAndSet(false, true)) {
-                    // Closing a socket under handshake may wait on its lock: not on the timer.
-                    workers.execute(() -> closeQuietly(accepted));
-                }
-            }, HANDSHAKE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-            workers.execute(() -> {
-                try {
-                    admission.accept(admitted);
-                } finally {
-                    pendingAdmissions.decrementAndGet();
-                    deadline.cancel(false);
-                }
-            });
-        } catch (RejectedExecutionException e) {
-            pendingAdmissions.decrementAndGet();
-            closeQuietly(accepted);
-        }
-    }
-
-    private void admitInbound(SSLSocket tls, InetSocketAddress target, AtomicBoolean admitted) {
-        Socket plain = null;
-        try {
-            tls.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
-            tls.startHandshake();
-            requireAlpn(tls);
-            DataInputStream in = new DataInputStream(new BufferedInputStream(tls.getInputStream(), MAX_DATA_BYTES));
-            OutputStream out = new BufferedOutputStream(tls.getOutputStream(), MAX_DATA_BYTES + FRAME_HEADER_BYTES);
-            long peerExpMillis = readOpeningAuth(in);
-            // The peer is a member: only now is the target dialled at all.
-            String own = tokenSource.token();
-            byte[] ownBytes = own.getBytes(StandardCharsets.UTF_8);
-            writeFrame(out, FRAME_AUTH, ownBytes, 0, ownBytes.length);
-            plain = new Socket();
-            plain.connect(target, HANDSHAKE_TIMEOUT_MS);
-            tls.setSoTimeout(0);
-            claim(admitted);
-            new Tunnel(tls, in, out, plain, own, peerExpMillis).start();
-        } catch (Exception e) {
-            LOG.warning("member port: inbound connection from " + tls.getRemoteSocketAddress()
-                    + " refused: " + describe(e));
-            closeQuietly(plain);
-            closeQuietly(tls);
-        }
-    }
-
-    private void dialOutbound(Socket local, InetSocketAddress remote, AtomicBoolean admitted) {
-        SSLSocket tls = null;
-        try {
-            tls = (SSLSocket) clientContext.getSocketFactory().createSocket();
-            SSLParameters params = tls.getSSLParameters();
-            params.setProtocols(new String[] {"TLSv1.3"});
-            params.setApplicationProtocols(new String[] {ALPN});
-            tls.setSSLParameters(params);
-            tls.connect(remote, HANDSHAKE_TIMEOUT_MS);
-            tls.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
-            tls.startHandshake();
-            requireAlpn(tls);
-            DataInputStream in = new DataInputStream(new BufferedInputStream(tls.getInputStream(), MAX_DATA_BYTES));
-            OutputStream out = new BufferedOutputStream(tls.getOutputStream(), MAX_DATA_BYTES + FRAME_HEADER_BYTES);
-            String own = tokenSource.token();
-            byte[] ownBytes = own.getBytes(StandardCharsets.UTF_8);
-            writeFrame(out, FRAME_AUTH, ownBytes, 0, ownBytes.length);
-            // The receiver proves itself twice: its certificate (checked in the
-            // handshake) and its own AUTH frame, before any byte moves.
-            long peerExpMillis = readOpeningAuth(in);
-            tls.setSoTimeout(0);
-            claim(admitted);
-            new Tunnel(tls, in, out, local, own, peerExpMillis).start();
-        } catch (Exception e) {
-            LOG.warning("member port: outbound connection to " + remote + " refused: " + describe(e));
-            closeQuietly(tls);
-            closeQuietly(local);
-        }
-    }
-
-    /** Ends the admission deadline's hold on the connection, unless it already fired. */
-    private static void claim(AtomicBoolean admitted) throws RefusedException {
-        if (!admitted.compareAndSet(false, true)) {
-            throw new RefusedException("admission took longer than " + HANDSHAKE_TIMEOUT_MS + "ms");
-        }
-    }
-
-    private long readOpeningAuth(DataInputStream in) throws IOException, RefusedException {
-        int type = in.readUnsignedByte();
-        int length = in.readInt();
-        if (type != FRAME_AUTH) {
-            throw new RefusedException("the first frame is type " + type + ", not AUTH");
-        }
-        if (length <= 0 || length > MAX_AUTH_BYTES) {
-            throw new RefusedException("AUTH frame of " + length + " bytes (at most " + MAX_AUTH_BYTES + ")");
-        }
-        byte[] token = new byte[length];
-        in.readFully(token);
-        return verifyPeer(new String(token, StandardCharsets.UTF_8));
-    }
-
-    /**
-     * Verifies a peer's token and returns its expiry in epoch milliseconds.
-     * Refuses anything but a kernel-signed, unexpired service token with this
-     * port's audience for this same service in this same namespace.
-     */
-    long verifyPeer(String token) throws RefusedException {
         TokenWrapper tw;
         try {
             tw = TokenWrapper.parse(token);
@@ -496,7 +473,7 @@ public final class MemberPort implements AutoCloseable {
         }
         String use = tw.getTokenUse();
         if (!(use.isEmpty() || "service".equals(use) || "access".equals(use))) {
-            throw new RefusedException(use + " tokens cannot open a member connection");
+            throw new RefusedException(use + " tokens cannot open a member stream");
         }
         long expMillis = tw.getExpiration() * 1000L;
         if (System.currentTimeMillis() >= expMillis) {
@@ -517,13 +494,13 @@ public final class MemberPort implements AutoCloseable {
             throw new RefusedException("token identity: " + e.getMessage());
         }
         if (!serviceLabel.equals(peerService)) {
-            throw new RefusedException("token is for service \"" + peerService + "\", not \"" + serviceLabel + "\"");
+            throw new RefusedException("token is for service \"" + peerService + "\", not \"" + serviceLabel + "\"", true);
         }
         String own = ownNamespace();
         if (!own.equals(peerNamespace)) {
-            throw new RefusedException("token is for namespace \"" + peerNamespace + "\", this member is in \"" + own + "\"");
+            throw new RefusedException("token is for namespace \"" + peerNamespace + "\", this member is in \"" + own + "\"", true);
         }
-        return expMillis;
+        return new Admitted(peerService + "@" + peerNamespace, expMillis);
     }
 
     /** This instance's namespace, from its own member token. */
@@ -535,7 +512,7 @@ public final class MemberPort implements AutoCloseable {
         try {
             ns = TokenWrapper.parse(tokenSource.token()).namespacePath();
         } catch (Exception e) {
-            throw new RefusedException("this member has no token to compare a peer with: " + describe(e));
+            throw new RefusedException("this member has no token to compare a peer with: " + describe(e), true);
         }
         ownNamespace = ns;
         return ns;
@@ -588,213 +565,641 @@ public final class MemberPort implements AutoCloseable {
                 + serviceLabel + " in " + (tenantOwned ? own : "/system") + " of trust domain " + trustDomain);
     }
 
-    // ---- The tunnel ----
+    // ---- Streams ----
 
-    /** One admitted connection: a TLS member stream and its plain loopback socket. */
-    private final class Tunnel {
-        private final SSLSocket tls;
-        private final DataInputStream in;
-        private final OutputStream out;
-        private final Socket plain;
-        private final Object writeLock = new Object();
-        private final AtomicBoolean done = new AtomicBoolean();
-        private final AtomicInteger halvesClosed = new AtomicInteger();
-        private volatile long peerExpMillis;
-        private volatile String lastSent;
-        private volatile ScheduledFuture<?> expiryTimer;
-        private volatile ScheduledFuture<?> refreshTimer;
+    /** What a stream delivers to its session, in order: chunks, then its end. */
+    private static final class End {
+        final Status status;
 
-        Tunnel(SSLSocket tls, DataInputStream in, OutputStream out, Socket plain, String sent, long peerExpMillis) {
-            this.tls = tls;
-            this.in = in;
-            this.out = out;
+        End(Status status) {
+            this.status = status;
+        }
+    }
+
+    /**
+     * One stream of a byte session, either end. Its gRPC call is not
+     * thread-safe, so every operation on it holds the leg's lock.
+     */
+    private abstract static class Leg {
+        /** The token's exp: the client's own, the server's peer's. */
+        final long expMillis;
+        /** Chunks and the end, as they arrived; read only once this leg is the session's read leg. */
+        final LinkedBlockingQueue<Object> inbox = new LinkedBlockingQueue<>();
+        /** This side sends nothing more on the stream. */
+        boolean ended;
+        /** The call is over: nothing more arrives either. */
+        boolean closed;
+        volatile ScheduledFuture<?> expiry;
+
+        Leg(long expMillis) {
+            this.expMillis = expMillis;
+        }
+
+        abstract void send(MemberChunk chunk);
+
+        abstract boolean isReady();
+
+        abstract void request();
+
+        /** Ends the stream cleanly: the client half-closes, the server closes OK. */
+        abstract void finish();
+
+        /** Ends the stream with a status, no description. */
+        abstract void abort(Status status);
+    }
+
+    private static final class ClientLeg extends Leg {
+        final ClientCall<MemberChunk, MemberChunk> call;
+
+        ClientLeg(ClientCall<MemberChunk, MemberChunk> call, long expMillis) {
+            super(expMillis);
+            this.call = call;
+        }
+
+        @Override
+        synchronized void send(MemberChunk chunk) {
+            if (!ended) {
+                call.sendMessage(chunk);
+            }
+        }
+
+        @Override
+        synchronized boolean isReady() {
+            return ended || call.isReady();
+        }
+
+        @Override
+        synchronized void request() {
+            // A half-closed stream still delivers the server's chunks to its last.
+            if (!closed) {
+                call.request(1);
+            }
+        }
+
+        @Override
+        synchronized void finish() {
+            if (!ended) {
+                ended = true;
+                call.halfClose();
+            }
+        }
+
+        @Override
+        synchronized void abort(Status status) {
+            if (!closed) {
+                ended = true;
+                closed = true;
+                call.cancel(null, null);
+            }
+        }
+    }
+
+    private static final class ServerLeg extends Leg {
+        final ServerCall<MemberChunk, MemberChunk> call;
+        final String subject;
+
+        ServerLeg(ServerCall<MemberChunk, MemberChunk> call, Admitted admitted) {
+            super(admitted.expMillis);
+            this.call = call;
+            this.subject = admitted.subject;
+        }
+
+        synchronized void accept(String ownToken, MemberChunk first) {
+            if (!ended) {
+                Metadata headers = new Metadata();
+                headers.put(MEMBER_TOKEN, ownToken);
+                call.sendHeaders(headers);
+                call.sendMessage(first);
+            }
+        }
+
+        @Override
+        synchronized void send(MemberChunk chunk) {
+            if (!ended) {
+                call.sendMessage(chunk);
+            }
+        }
+
+        @Override
+        synchronized boolean isReady() {
+            return ended || call.isReady();
+        }
+
+        @Override
+        synchronized void request() {
+            if (!closed) {
+                call.request(1);
+            }
+        }
+
+        // A call the server closes itself gets onComplete, not onCancel: its
+        // End is queued here, so a reader on it never waits for good.
+        @Override
+        synchronized void finish() {
+            if (!closed) {
+                ended = true;
+                closed = true;
+                call.close(Status.OK, new Metadata());
+                inbox.add(new End(Status.OK));
+            }
+        }
+
+        @Override
+        synchronized void abort(Status status) {
+            if (!closed) {
+                ended = true;
+                closed = true;
+                call.close(status, new Metadata());
+                inbox.add(new End(status));
+            }
+        }
+    }
+
+    // ---- Byte sessions ----
+
+    /**
+     * One loopback connection's bytes over a sequence of streams. The pump
+     * sends local bytes on the send leg; the reader takes the read leg's chunks
+     * in order and moves to the next leg only past the read leg's {@code last}.
+     */
+    private abstract class Session {
+        final Socket plain;
+        final Object sendLock = new Object();
+        final AtomicBoolean done = new AtomicBoolean();
+        /** Guarded by sendLock. */
+        Leg sendLeg;
+        /** The leg after the read leg: set when a rotation attaches, before either side's last. */
+        volatile Leg nextLeg;
+        volatile Leg readLeg;
+        volatile boolean finSent;
+        volatile boolean finReceived;
+        volatile String sessionId = "";
+        private volatile Thread reader;
+
+        Session(Socket plain) {
             this.plain = plain;
-            this.lastSent = sent;
-            this.peerExpMillis = peerExpMillis;
         }
 
-        void start() {
+        /** Starts moving bytes on {@code first}, both ways. */
+        void start(Leg first) {
+            synchronized (sendLock) {
+                sendLeg = first;
+            }
+            readLeg = first;
             try {
-                tls.setTcpNoDelay(true);
                 plain.setTcpNoDelay(true);
-                // A close must not wait without bound behind a write blocked on
-                // a peer that stopped reading.
-                tls.setSoLinger(true, CLOSE_LINGER_SECONDS);
             } catch (SocketException e) {
-                close("socket options: " + describe(e));
+                fault("socket options: " + describe(e), Status.CANCELLED);
                 return;
             }
-            tunnels.add(this);
+            sessions.add(this);
             if (closed.get()) {
-                close("member port closed");
+                fault("member port closed", Status.UNAVAILABLE);
                 return;
             }
-            scheduleExpiry(peerExpMillis);
-            scheduleRefresh();
-            workers.execute(this::pumpOut);
-            workers.execute(this::pumpIn);
+            first.request();
+            try {
+                workers.execute(this::pump);
+                workers.execute(this::read);
+            } catch (RejectedExecutionException e) {
+                fault("member port closed", Status.UNAVAILABLE);
+            }
         }
 
-        /** Local bytes to the peer, framed. */
-        private void pumpOut() {
-            byte[] buf = new byte[MAX_DATA_BYTES];
+        /** Local bytes to the send leg, waiting while it is not ready (backpressure). */
+        private void pump() {
+            byte[] buf = new byte[MAX_CHUNK_BYTES];
             try {
                 InputStream local = plain.getInputStream();
-                while (true) {
+                while (!done.get()) {
                     int n = local.read(buf);
                     if (n < 0) {
-                        send(FRAME_CLOSE_WRITE, buf, 0, 0);
-                        halfClosed();
+                        synchronized (sendLock) {
+                            // Set first: the peer may answer the fin before send returns.
+                            finSent = true;
+                            sendLeg.send(MemberChunk.newBuilder().setFin(true).build());
+                        }
+                        finished();
                         return;
                     }
                     if (n > 0) {
-                        if (System.currentTimeMillis() >= peerExpMillis) {
-                            close("peer token expired");
-                            return;
+                        MemberChunk chunk = MemberChunk.newBuilder().setPayload(ByteString.copyFrom(buf, 0, n)).build();
+                        synchronized (sendLock) {
+                            while (!done.get() && !sendLeg.isReady()) {
+                                sendLock.wait(100);
+                            }
+                            sendLeg.send(chunk);
                         }
-                        send(FRAME_DATA, buf, 0, n);
                     }
                 }
             } catch (IOException e) {
-                close("local stream: " + describe(e));
+                fault("local connection: " + describe(e), Status.CANCELLED);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                fault("interrupted", Status.CANCELLED);
             }
         }
 
-        /** Peer frames, unframed, to the local socket. */
-        private void pumpIn() {
-            byte[] buf = new byte[MAX_DATA_BYTES];
-            boolean peerWriteClosed = false;
+        /** A leg became ready to send: wake the pump. */
+        void ready() {
+            synchronized (sendLock) {
+                sendLock.notifyAll();
+            }
+        }
+
+        /** The read leg's chunks to the local socket, leg by leg. */
+        private void read() {
+            reader = Thread.currentThread();
             try {
                 OutputStream local = plain.getOutputStream();
-                while (true) {
-                    int type;
-                    try {
-                        type = in.readUnsignedByte();
-                    } catch (EOFException eof) {
-                        close(halvesClosed.get() == 2 ? null : "peer closed the stream");
+                while (!done.get()) {
+                    Leg leg = readLeg;
+                    Object item = leg.inbox.take();
+                    if (item instanceof End end) {
+                        if (finSent && finReceived) {
+                            ended(leg, end);
+                        } else {
+                            fault("stream ended without last (" + end.status.getCode() + ")", Status.CANCELLED);
+                        }
                         return;
                     }
-                    int length = in.readInt();
-                    switch (type) {
-                        case FRAME_AUTH -> {
-                            if (length <= 0 || length > MAX_AUTH_BYTES) {
-                                close("AUTH frame of " + length + " bytes");
-                                return;
-                            }
-                            byte[] token = new byte[length];
-                            in.readFully(token);
-                            long exp;
-                            try {
-                                exp = verifyPeer(new String(token, StandardCharsets.UTF_8));
-                            } catch (RefusedException e) {
-                                close("refreshed token refused: " + e.getMessage());
-                                return;
-                            }
-                            peerExpMillis = exp;
-                            scheduleExpiry(exp);
-                        }
-                        case FRAME_DATA -> {
-                            if (length <= 0 || length > MAX_DATA_BYTES || peerWriteClosed) {
-                                close(peerWriteClosed ? "DATA after CLOSE_WRITE" : "DATA frame of " + length + " bytes");
-                                return;
-                            }
-                            in.readFully(buf, 0, length);
-                            if (System.currentTimeMillis() >= peerExpMillis) {
-                                close("peer token expired");
-                                return;
-                            }
-                            local.write(buf, 0, length);
-                            local.flush();
-                        }
-                        case FRAME_CLOSE_WRITE -> {
-                            if (length != 0 || peerWriteClosed) {
-                                close("malformed CLOSE_WRITE");
-                                return;
-                            }
-                            peerWriteClosed = true;
-                            plain.shutdownOutput();
-                            halfClosed();
-                        }
-                        default -> {
-                            close("unknown frame type " + type);
+                    MemberChunk chunk = (MemberChunk) item;
+                    if (chunk.getPayload().size() > MAX_CHUNK_BYTES
+                            || (finReceived && !chunk.getPayload().isEmpty())
+                            || !chunk.getSessionId().isEmpty()) {
+                        fault("malformed chunk", Status.CANCELLED);
+                        return;
+                    }
+                    if (!chunk.getPayload().isEmpty()) {
+                        chunk.getPayload().writeTo(local);
+                        local.flush();
+                    }
+                    if (chunk.getFin() && !finReceived) {
+                        finReceived = true;
+                        plain.shutdownOutput();
+                        finished();
+                    }
+                    if (chunk.getLast()) {
+                        Leg next = nextLeg;
+                        if (next == null) {
+                            fault("last with no stream to cut over to", Status.CANCELLED);
                             return;
                         }
+                        readLeg = next;
+                        nextLeg = null;
+                        lastReceived(leg, next);
+                        next.request();
+                    } else {
+                        leg.request();
                     }
                 }
             } catch (IOException e) {
-                close("member stream: " + describe(e));
+                fault("local connection: " + describe(e), Status.CANCELLED);
+            } catch (InterruptedException e) {
+                // fault() interrupts the reader; nothing more to do.
             }
         }
 
-        private void send(int type, byte[] payload, int off, int len) throws IOException {
-            synchronized (writeLock) {
-                writeFrame(out, type, payload, off, len);
+        /** Moves the sends to {@code next}: {@code last} on the old leg, which then ends. */
+        void cutOver(Leg next) {
+            synchronized (sendLock) {
+                Leg old = sendLeg;
+                old.send(MemberChunk.newBuilder().setLast(true).build());
+                old.finish();
+                cancel(old.expiry);
+                sendLeg = next;
+                sendLock.notifyAll();
             }
         }
 
-        /** Both directions have half-closed: the connection ends cleanly. */
-        private void halfClosed() {
-            if (halvesClosed.incrementAndGet() == 2) {
-                close(null);
+        /** The read leg's last arrived; the reader moves to {@code next}. */
+        abstract void lastReceived(Leg old, Leg next);
+
+        /** Both directions sent their fin, or one did: the subclass ends the session when it may. */
+        abstract void finished();
+
+        /** The read leg ended after both directions' fin: a clean end. */
+        void ended(Leg leg, End end) {
+            if (!done.compareAndSet(false, true)) {
+                return;
             }
+            sessions.remove(this);
+            forget();
+            cancel(leg.expiry);
+            leg.finish();
+            Leg pending = nextLeg;
+            if (pending != null) {
+                cancel(pending.expiry);
+                pending.abort(Status.CANCELLED);
+            }
+            closeQuietly(plain);
         }
 
-        private void scheduleExpiry(long expMillis) {
-            long delay = Math.max(0, expMillis - System.currentTimeMillis());
-            ScheduledFuture<?> previous = expiryTimer;
-            expiryTimer = schedule(() -> {
-                if (System.currentTimeMillis() >= peerExpMillis) {
-                    close("peer token expired without a refresh");
+        /** Drops the session: every stream ends, the local connection is reset. */
+        void fault(String reason, Status status) {
+            if (!done.compareAndSet(false, true)) {
+                return;
+            }
+            sessions.remove(this);
+            forget();
+            LOG.info("member port: session " + sessionId + " dropped: " + reason);
+            Leg s;
+            synchronized (sendLock) {
+                s = sendLeg;
+                sendLock.notifyAll();
+            }
+            for (Leg leg : new Leg[] {s, readLeg, nextLeg}) {
+                if (leg != null) {
+                    cancel(leg.expiry);
+                    leg.abort(status);
                 }
-            }, delay);
-            if (previous != null) {
-                previous.cancel(false);
+            }
+            reset(plain);
+            Thread r = reader;
+            if (r != null) {
+                r.interrupt();
+            }
+        }
+
+        /** Removes the session from what can still find it. */
+        void forget() {}
+    }
+
+    /** The server side of a session: its first leg dialled {@code target}. */
+    private final class InboundSession extends Session {
+        final String subject;
+        /** Guarded by this: a rotation attached and not yet cut over. */
+        private boolean rotating;
+
+        InboundSession(Socket plain, String subject) {
+            super(plain);
+            this.subject = subject;
+        }
+
+        /** Attaches a rotation's leg, when the session is live and has none pending. */
+        synchronized boolean attach(ServerLeg leg) {
+            if (done.get() || rotating || finSent && finReceived) {
+                return false;
+            }
+            rotating = true;
+            nextLeg = leg;
+            // fault() sets done before it reads nextLeg: one of the two sees the other.
+            if (done.get()) {
+                detach(leg);
+                return false;
+            }
+            return true;
+        }
+
+        /** A pending rotation's leg ended before its cutover: the session may take another. */
+        synchronized void detach(Leg leg) {
+            if (nextLeg == leg) {
+                nextLeg = null;
+                rotating = false;
+            }
+        }
+
+        @Override
+        void lastReceived(Leg old, Leg next) {
+            // The client cut over: its last is the server's cue to cut over too.
+            cutOver(next);
+            synchronized (this) {
+                rotating = false;
+            }
+        }
+
+        @Override
+        void finished() {
+            // The server ends a session when the client half-closes after both fins.
+        }
+
+        @Override
+        void forget() {
+            inbound.remove(sessionId, this);
+        }
+    }
+
+    /** The client side of a session: a local connection forwarded to {@code remote}. */
+    private final class OutboundSession extends Session {
+        final ManagedChannel channel;
+        final InetSocketAddress remote;
+        private final AtomicBoolean rotating = new AtomicBoolean();
+        private volatile ScheduledFuture<?> rotation;
+
+        OutboundSession(Socket plain, ManagedChannel channel, InetSocketAddress remote) {
+            super(plain);
+            this.channel = channel;
+            this.remote = remote;
+        }
+
+        /** Opens the first stream; on any refusal, resets the local connection. */
+        void open() {
+            ClientLeg leg;
+            try {
+                leg = openLeg("");
+            } catch (Exception e) {
+                LOG.warning("member port: tunnel to " + remote + " refused: " + describe(e));
+                reset(plain);
+                return;
+            }
+            start(leg);
+            if (!done.get()) {
+                schedule(leg);
             }
         }
 
         /**
-         * Sends a newer token in-band before this side's expires: checked at a
-         * quarter of the remaining lifetime, so the cached token the
-         * ServiceManager renews ahead of expiry goes out well before it lapses.
+         * Opens a stream with the current token; an UNAUTHENTICATED refusal is
+         * retried once with a fresh one, PERMISSION_DENIED never.
          */
-        private void scheduleRefresh() {
-            long remaining;
+        private ClientLeg openLeg(String joining) throws Exception {
             try {
-                remaining = TokenWrapper.parse(lastSent).getExpiration() * 1000L - System.currentTimeMillis();
-            } catch (Exception e) {
-                remaining = REFRESH_MIN_MS;
+                return openOnce(joining, tokenSource.token());
+            } catch (RefusedStream e) {
+                if (e.status.getCode() != Status.Code.UNAUTHENTICATED) {
+                    throw e;
+                }
+                return openOnce(joining, tokenSource.token());
             }
-            refreshTimer = schedule(this::refresh, Math.max(REFRESH_MIN_MS, Math.min(REFRESH_MAX_MS, remaining / 4)));
         }
 
-        private void refresh() {
-            if (done.get()) {
+        /**
+         * Opens one stream: its first chunk names the session it joins (empty
+         * for a new one), and it is attached once the server's headers carry a
+         * member token this side admits and its first chunk names the session.
+         */
+        private ClientLeg openOnce(String joining, String token) throws Exception {
+            long expMillis = TokenWrapper.parse(token).getExpiration() * 1000L;
+            ClientCall<MemberChunk, MemberChunk> call = channel.newCall(OPEN_METHOD,
+                    CallOptions.DEFAULT.withDeadlineAfter(Math.max(1, expMillis - System.currentTimeMillis()), TimeUnit.MILLISECONDS));
+            ClientLeg leg = new ClientLeg(call, expMillis);
+            CompletableFuture<String> attached = new CompletableFuture<>();
+            AtomicBoolean receiverAdmitted = new AtomicBoolean();
+            Metadata headers = new Metadata();
+            headers.put(AUTHORIZATION, "Bearer " + token);
+            synchronized (leg) {
+                call.start(new ClientCall.Listener<MemberChunk>() {
+                    @Override
+                    public void onHeaders(Metadata h) {
+                        try {
+                            verifyPeer(h.get(MEMBER_TOKEN));
+                            receiverAdmitted.set(true);
+                        } catch (RefusedException e) {
+                            attached.completeExceptionally(new RefusedStream(Status.PERMISSION_DENIED,
+                                    "the receiver's token: " + e.getMessage()));
+                            leg.abort(Status.CANCELLED);
+                        }
+                    }
+
+                    @Override
+                    public void onMessage(MemberChunk chunk) {
+                        if (attached.isDone()) {
+                            leg.inbox.add(chunk);
+                            return;
+                        }
+                        String id = chunk.getSessionId();
+                        if (!receiverAdmitted.get() || id.isEmpty() || !(joining.isEmpty() || joining.equals(id))
+                                || !chunk.getPayload().isEmpty() || chunk.getLast() || chunk.getFin()) {
+                            attached.completeExceptionally(new RefusedStream(Status.PERMISSION_DENIED,
+                                    "the receiver did not attach the stream"));
+                            leg.abort(Status.CANCELLED);
+                            return;
+                        }
+                        attached.complete(id);
+                    }
+
+                    @Override
+                    public void onClose(Status status, Metadata trailers) {
+                        synchronized (leg) {
+                            leg.ended = true;
+                            leg.closed = true;
+                        }
+                        if (!attached.isDone()) {
+                            attached.completeExceptionally(new RefusedStream(status, "the stream was refused"));
+                        }
+                        leg.inbox.add(new End(status));
+                    }
+
+                    @Override
+                    public void onReady() {
+                        ready();
+                    }
+                }, headers);
+                call.request(1);
+                call.sendMessage(MemberChunk.newBuilder().setSessionId(joining).build());
+            }
+            try {
+                sessionId = attached.get(ADMISSION_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            } catch (ExecutionException e) {
+                leg.abort(Status.CANCELLED);
+                throw e.getCause() instanceof Exception ex ? ex : e;
+            } catch (TimeoutException e) {
+                leg.abort(Status.CANCELLED);
+                throw new RefusedStream(Status.DEADLINE_EXCEEDED, "the receiver did not attach the stream in time");
+            }
+            return leg;
+        }
+
+        /** Schedules {@code leg}'s rotation at ROTATE_AT of its lifetime and its drop at its exp. */
+        private void schedule(Leg leg) {
+            long left = leg.expMillis - System.currentTimeMillis();
+            leg.expiry = later(() -> {
+                Leg current;
+                synchronized (sendLock) {
+                    current = sendLeg;
+                }
+                if (current == leg) {
+                    fault("token expired without a rotation", Status.CANCELLED);
+                }
+            }, left);
+            rotation = later(this::rotate, Math.max(ROTATE_MIN_MS, (long) (left * ROTATE_AT)));
+        }
+
+        /**
+         * Make-before-break: a new token, a new stream joining this session,
+         * then the cutover. A mint that fails or returns no newer token is
+         * retried until the current token expires, when the session drops.
+         */
+        private void rotate() {
+            if (done.get() || (finSent && finReceived) || !rotating.compareAndSet(false, true)) {
                 return;
             }
             try {
-                String token = tokenSource.token();
-                if (!token.equals(lastSent)) {
-                    byte[] bytes = token.getBytes(StandardCharsets.UTF_8);
-                    send(FRAME_AUTH, bytes, 0, bytes.length);
-                    lastSent = token;
+                Leg current;
+                synchronized (sendLock) {
+                    current = sendLeg;
                 }
-                scheduleRefresh();
-            } catch (IOException e) {
-                close("sending a refreshed token: " + describe(e));
+                String token;
+                try {
+                    token = tokenSource.token();
+                } catch (Exception e) {
+                    LOG.warning("member port: token mint for a rotation failed, retrying: " + describe(e));
+                    rotation = later(this::rotate, ROTATE_RETRY_MS);
+                    return;
+                }
+                if (TokenWrapper.parse(token).getExpiration() * 1000L <= current.expMillis) {
+                    // No newer token yet: the identity cache renews it ahead of expiry.
+                    rotation = later(this::rotate, ROTATE_RETRY_MS);
+                    return;
+                }
+                ClientLeg next;
+                try {
+                    try {
+                        next = openOnce(sessionId, token);
+                    } catch (RefusedStream e) {
+                        if (e.status.getCode() != Status.Code.UNAUTHENTICATED) {
+                            throw e;
+                        }
+                        next = openOnce(sessionId, tokenSource.token());
+                    }
+                } catch (RefusedStream e) {
+                    Status.Code code = e.status.getCode();
+                    if (code == Status.Code.UNAUTHENTICATED || code == Status.Code.PERMISSION_DENIED) {
+                        fault("rotation refused (" + code + "): " + e.getMessage(), Status.CANCELLED);
+                        return;
+                    }
+                    LOG.warning("member port: rotation failed, retrying: " + describe(e));
+                    rotation = later(this::rotate, ROTATE_RETRY_MS);
+                    return;
+                }
+                nextLeg = next;
+                if (done.get()) {
+                    next.abort(Status.CANCELLED);
+                    return;
+                }
+                cutOver(next);
+                schedule(next);
             } catch (Exception e) {
-                // The mint failed: retry. If it keeps failing the peer drops
-                // this connection when the token it holds expires.
-                LOG.warning("member port: token refresh failed, retrying: " + describe(e));
-                refreshTimer = schedule(this::refresh, REFRESH_RETRY_MS);
+                LOG.warning("member port: rotation failed, retrying: " + describe(e));
+                rotation = later(this::rotate, ROTATE_RETRY_MS);
+            } finally {
+                rotating.set(false);
             }
         }
 
-        /**
-         * Runs {@code task} on a worker after the delay: the single timer thread
-         * only hands off, so one connection's blocking close or stalled mint
-         * never holds up another's expiry or refresh.
-         */
-        private ScheduledFuture<?> schedule(Runnable task, long delayMillis) {
+        @Override
+        void lastReceived(Leg old, Leg next) {
+            // The server's last follows the client's: its sends are already on next.
+        }
+
+        @Override
+        void finished() {
+            if (finSent && finReceived) {
+                // Both directions are done: the client ends the stream; the
+                // server, seeing it, closes OK and the reader ends cleanly.
+                synchronized (sendLock) {
+                    sendLeg.finish();
+                }
+            }
+        }
+
+        @Override
+        void forget() {
+            cancel(rotation);
+        }
+
+        /** Runs {@code task} on a worker after the delay: the timer thread only hands off. */
+        private ScheduledFuture<?> later(Runnable task, long delayMillis) {
             if (done.get()) {
                 return null;
             }
@@ -803,32 +1208,217 @@ public final class MemberPort implements AutoCloseable {
                     try {
                         workers.execute(task);
                     } catch (RejectedExecutionException e) {
-                        close("member port closed");
+                        fault("member port closed", Status.UNAVAILABLE);
                     }
                 }, delayMillis, TimeUnit.MILLISECONDS);
             } catch (RejectedExecutionException e) {
-                close("member port closed");
+                fault("member port closed", Status.UNAVAILABLE);
                 return null;
             }
         }
+    }
 
-        /** Ends the connection; reason null is a clean end. */
-        void close(String reason) {
-            if (!done.compareAndSet(false, true)) {
-                return;
+    /** A stream the receiver refused or never attached. */
+    private static final class RefusedStream extends Exception {
+        private static final long serialVersionUID = 1L;
+        final transient Status status;
+
+        RefusedStream(Status status, String message) {
+            super(message + " (" + status.getCode() + ")");
+            this.status = status;
+        }
+    }
+
+    /** The server end of the member tunnel: admits each stream, then opens or joins its session. */
+    private final class TunnelHandler implements ServerCallHandler<MemberChunk, MemberChunk> {
+        private final InetSocketAddress target;
+
+        TunnelHandler(InetSocketAddress target) {
+            this.target = target;
+        }
+
+        @Override
+        public ServerCall.Listener<MemberChunk> startCall(ServerCall<MemberChunk, MemberChunk> call, Metadata headers) {
+            String peer = String.valueOf(call.getAttributes().get(io.grpc.Grpc.TRANSPORT_ATTR_REMOTE_ADDR));
+            Admitted admitted;
+            try {
+                admitted = verifyPeer(bearer(headers.get(AUTHORIZATION)));
+            } catch (RefusedException e) {
+                LOG.warning("member port: stream from " + peer + " refused: " + e.getMessage());
+                call.close(e.status(), new Metadata());
+                return new ServerCall.Listener<MemberChunk>() {};
             }
-            tunnels.remove(this);
-            cancel(expiryTimer);
-            cancel(refreshTimer);
-            if (reason != null) {
-                LOG.info("member port: connection with " + tls.getRemoteSocketAddress() + " dropped: " + reason);
+            if (pendingAdmissions.incrementAndGet() > MAX_PENDING_ADMISSIONS) {
+                pendingAdmissions.decrementAndGet();
+                LOG.warning("member port: too many streams awaiting admission; refusing " + peer);
+                call.close(Status.RESOURCE_EXHAUSTED, new Metadata());
+                return new ServerCall.Listener<MemberChunk>() {};
             }
-            closeQuietly(tls);
-            closeQuietly(plain);
+            ServerLeg leg = new ServerLeg(call, admitted);
+            AtomicBoolean admitting = new AtomicBoolean(true);
+            AtomicBoolean firstSeen = new AtomicBoolean();
+            Runnable admittedOrGone = () -> {
+                if (admitting.compareAndSet(true, false)) {
+                    pendingAdmissions.decrementAndGet();
+                }
+            };
+            ScheduledFuture<?> deadline = timers.schedule(() -> {
+                if (!firstSeen.get()) {
+                    LOG.warning("member port: stream from " + peer + " sent no first chunk in " + ADMISSION_TIMEOUT_MS + "ms");
+                    leg.abort(Status.DEADLINE_EXCEEDED);
+                    admittedOrGone.run();
+                }
+            }, ADMISSION_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            AtomicReference<InboundSession> owner = new AtomicReference<>();
+            // The stream closes at its token's exp, whatever it is doing then.
+            leg.expiry = timers.schedule(() -> {
+                InboundSession s = owner.get();
+                synchronized (leg) {
+                    if (leg.closed) {
+                        return;
+                    }
+                }
+                LOG.info("member port: stream from " + peer + " reached its token's exp");
+                if (s != null && s.nextLeg == leg) {
+                    // A rotation that never cut over: the session goes on, on its current stream.
+                    s.detach(leg);
+                } else if (s != null) {
+                    s.fault("a stream's token expired without a rotation", Status.UNAUTHENTICATED);
+                }
+                leg.abort(Status.UNAUTHENTICATED);
+                admittedOrGone.run();
+            }, Math.max(0, admitted.expMillis - System.currentTimeMillis()), TimeUnit.MILLISECONDS);
+            leg.request();
+            return new ServerCall.Listener<MemberChunk>() {
+                @Override
+                public void onMessage(MemberChunk chunk) {
+                    if (firstSeen.compareAndSet(false, true)) {
+                        deadline.cancel(false);
+                        try {
+                            workers.execute(() -> {
+                                owner.set(first(leg, chunk, peer));
+                                admittedOrGone.run();
+                            });
+                        } catch (RejectedExecutionException e) {
+                            leg.abort(Status.UNAVAILABLE);
+                            admittedOrGone.run();
+                        }
+                        return;
+                    }
+                    leg.inbox.add(chunk);
+                }
+
+                @Override
+                public void onHalfClose() {
+                    leg.inbox.add(new End(Status.OK));
+                }
+
+                @Override
+                public void onCancel() {
+                    deadline.cancel(false);
+                    cancel(leg.expiry);
+                    synchronized (leg) {
+                        leg.ended = true;
+                        leg.closed = true;
+                    }
+                    leg.inbox.add(new End(Status.CANCELLED));
+                    InboundSession s = owner.get();
+                    if (s != null) {
+                        s.detach(leg);
+                    }
+                    admittedOrGone.run();
+                }
+
+                @Override
+                public void onComplete() {
+                    cancel(leg.expiry);
+                }
+
+                @Override
+                public void onReady() {
+                    InboundSession s = owner.get();
+                    if (s != null) {
+                        s.ready();
+                    }
+                }
+            };
+        }
+
+        /**
+         * A stream's first chunk: no session id opens a session (only now is
+         * the target dialled), a session id joins that session as a rotation
+         * when the token names the same subject.
+         */
+        private InboundSession first(ServerLeg leg, MemberChunk chunk, String peer) {
+            if (!chunk.getPayload().isEmpty() || chunk.getLast() || chunk.getFin()) {
+                LOG.warning("member port: stream from " + peer + " opened with a data chunk");
+                leg.abort(Status.PERMISSION_DENIED);
+                return null;
+            }
+            String own;
+            try {
+                own = tokenSource.token();
+            } catch (Exception e) {
+                LOG.warning("member port: no member token to answer " + peer + " with: " + describe(e));
+                leg.abort(Status.UNAVAILABLE);
+                return null;
+            }
+            String joining = chunk.getSessionId();
+            if (!joining.isEmpty()) {
+                InboundSession s = inbound.get(joining);
+                if (s == null || !s.subject.equals(leg.subject) || !s.attach(leg)) {
+                    LOG.warning("member port: rotation from " + peer + " refused: "
+                            + (s == null ? "no such live session" : !s.subject.equals(leg.subject)
+                                    ? "its token names another subject" : "the session cannot take a rotation now"));
+                    leg.abort(Status.PERMISSION_DENIED);
+                    return null;
+                }
+                leg.accept(own, MemberChunk.newBuilder().setSessionId(joining).build());
+                synchronized (leg) {
+                    if (leg.closed) {
+                        s.detach(leg);
+                    }
+                }
+                return s;
+            }
+            synchronized (leg) {
+                if (leg.closed) {
+                    // Expired or cancelled while waiting: never dial for it.
+                    return null;
+                }
+            }
+            Socket plain = new Socket();
+            try {
+                plain.connect(target, ADMISSION_TIMEOUT_MS);
+            } catch (IOException e) {
+                LOG.warning("member port: the member target " + target + " is unreachable: " + describe(e));
+                closeQuietly(plain);
+                leg.abort(Status.UNAVAILABLE);
+                return null;
+            }
+            InboundSession s = new InboundSession(plain, leg.subject);
+            s.sessionId = newSessionId();
+            inbound.put(s.sessionId, s);
+            leg.accept(own, MemberChunk.newBuilder().setSessionId(s.sessionId).build());
+            s.start(leg);
+            return s;
         }
     }
 
     // ---- Helpers ----
+
+    private static String newSessionId() {
+        byte[] id = new byte[16];
+        RANDOM.nextBytes(id);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(id);
+    }
+
+    private static String bearer(String header) {
+        if (header == null) {
+            return null;
+        }
+        return header.regionMatches(true, 0, "bearer ", 0, 7) ? header.substring(7) : header;
+    }
 
     private static void cancel(ScheduledFuture<?> f) {
         if (f != null) {
@@ -836,34 +1426,20 @@ public final class MemberPort implements AutoCloseable {
         }
     }
 
-    private static void writeFrame(OutputStream out, int type, byte[] payload, int off, int len) throws IOException {
-        out.write(type);
-        out.write(len >>> 24);
-        out.write(len >>> 16);
-        out.write(len >>> 8);
-        out.write(len);
-        out.write(payload, off, len);
-        out.flush();
-    }
-
-    private static void requireAlpn(SSLSocket tls) throws RefusedException {
-        if (!ALPN.equals(tls.getApplicationProtocol())) {
-            throw new RefusedException("the peer did not negotiate ALPN " + ALPN);
+    /** Resets a local connection: SO_LINGER 0 sends an RST, never a FIN or a hang. */
+    private static void reset(Socket s) {
+        try {
+            s.setSoLinger(true, 0);
+        } catch (SocketException ignored) {
+            // Already closed: nothing to reset.
         }
+        closeQuietly(s);
     }
 
     private static void requireLoopback(String what, InetSocketAddress address) {
         if (address == null || address.isUnresolved() || !address.getAddress().isLoopbackAddress()) {
             throw new IllegalArgumentException("member port: the " + what + " must be a loopback address, got " + address
                     + ": nothing may reach the member protocol except through the member port");
-        }
-    }
-
-    private void register(ServerSocket s) throws IOException {
-        listeners.add(s);
-        if (closed.get()) {
-            s.close();
-            throw new SocketException("member port closed");
         }
     }
 
@@ -915,8 +1491,12 @@ public final class MemberPort implements AutoCloseable {
         }
     }
 
-    /** Chain to the fleet bundle, then {@link #verifyPeerCertificate}. */
-    private final class MemberTrustManager implements X509TrustManager {
+    /**
+     * Chain to the fleet bundle, then {@link #verifyPeerCertificate}. Extended,
+     * so the JDK does not add a hostname check: a member's certificate names its
+     * SPIFFE ID, which this checks, not a host.
+     */
+    private final class MemberTrustManager extends X509ExtendedTrustManager {
         private final X509TrustManager delegate;
 
         MemberTrustManager(X509TrustManager delegate) {
@@ -929,9 +1509,29 @@ public final class MemberPort implements AutoCloseable {
         }
 
         @Override
+        public void checkClientTrusted(X509Certificate[] chain, String authType, Socket socket) throws CertificateException {
+            checkClientTrusted(chain, authType);
+        }
+
+        @Override
+        public void checkClientTrusted(X509Certificate[] chain, String authType, SSLEngine engine) throws CertificateException {
+            checkClientTrusted(chain, authType);
+        }
+
+        @Override
         public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
             delegate.checkServerTrusted(chain, authType);
             verifyPeerCertificate(chain);
+        }
+
+        @Override
+        public void checkServerTrusted(X509Certificate[] chain, String authType, Socket socket) throws CertificateException {
+            checkServerTrusted(chain, authType);
+        }
+
+        @Override
+        public void checkServerTrusted(X509Certificate[] chain, String authType, SSLEngine engine) throws CertificateException {
+            checkServerTrusted(chain, authType);
         }
 
         @Override

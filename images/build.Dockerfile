@@ -28,7 +28,9 @@ ARG DOCKER_VERSION=29
 # 0.2.0 (CVE-2026-17106, HIGH; fixed in 0.3.0) and golang.org/x/net 0.59.0
 # (CVE-2026-78669, HIGH, fixed in 0.60.0; CVE-2026-78661 and CVE-2026-97045,
 # fixed in 0.62.0) (#190). Drop each bump, and then the stage, once a buildx
-# release carries it; images/smoke.sh checks the floors.
+# release carries it; images/smoke.sh checks the floors. gh is built from its
+# release's source the same way, with this X_NET_VERSION: its releases
+# (through 2.103.3) build with golang.org/x/net 0.60.0 (CVE-2026-78661) (#350).
 ARG BUILDX_VERSION=0.38.1
 ARG GO_ARCHIVE_VERSION=0.3.3
 ARG X_NET_VERSION=0.62.0
@@ -63,7 +65,6 @@ ARG TARGETARCH
 ARG PROTOC_VERSION
 ARG GRPC_JAVA_VERSION
 ARG JUST_VERSION
-ARG GH_VERSION
 ARG GCLOUD_VERSION
 ARG OPENJML_VERSION
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -84,10 +85,6 @@ RUN case "$TARGETARCH" in \
     && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/just.tar.gz \
        "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-${JUST_ARCH}-unknown-linux-musl.tar.gz" \
     && tar -xz -C /opt/just -f /tmp/just.tar.gz just && rm /tmp/just.tar.gz \
-    && mkdir -p /opt/gh \
-    && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/gh.tar.gz \
-       "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz" \
-    && tar -xz --strip-components=2 -C /opt/gh -f /tmp/gh.tar.gz "gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh" && rm /tmp/gh.tar.gz \
     && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/gcloud.tar.gz \
        "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-${GCLOUD_VERSION}-linux-${GCLOUD_ARCH}.tar.gz" \
     && tar -xz -C /opt -f /tmp/gcloud.tar.gz && rm /tmp/gcloud.tar.gz \
@@ -116,6 +113,17 @@ RUN git clone --depth 1 --branch "v${BUILDX_VERSION}" https://github.com/docker/
     && CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -mod=vendor -trimpath \
        -ldflags "-X github.com/docker/buildx/version.Version=v${BUILDX_VERSION} -X github.com/docker/buildx/version.Package=github.com/docker/buildx" \
        -o /out/docker-buildx ./cmd/buildx
+
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS gh
+ARG TARGETARCH
+ARG GH_VERSION
+ARG X_NET_VERSION
+RUN git clone --depth 1 --branch "v${GH_VERSION}" https://github.com/cli/cli /src/gh \
+    && cd /src/gh \
+    && go get "golang.org/x/net@v${X_NET_VERSION}" && go mod tidy \
+    && CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath \
+       -ldflags "-X github.com/cli/cli/v2/internal/build.Version=${GH_VERSION}" \
+       -o /out/gh ./cmd/gh
 
 FROM rust:${RUST_VERSION}-trixie AS rust-tools
 ARG PROTOC_GEN_PROST_VERSION
@@ -165,7 +173,7 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
 COPY --from=fetch /opt/protoc/bin/protoc /opt/protoc/bin/protoc-gen-grpc-java /usr/local/bin/
 COPY --from=fetch /opt/protoc/include /usr/local/include
 COPY --from=fetch /opt/just/just /usr/local/bin/just
-COPY --from=fetch /opt/gh/gh /usr/local/bin/gh
+COPY --from=gh /out/gh /usr/local/bin/gh
 COPY --from=fetch /opt/google-cloud-sdk /opt/google-cloud-sdk
 COPY --from=fetch /opt/openjml /root/.cache/tacplus/tools/openjml
 COPY --from=go-tools /out/ /usr/local/bin/

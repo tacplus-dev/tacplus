@@ -152,6 +152,10 @@ the looper then marks it `promoted` or `declined` here with the date.
   image builds buildx v0.38.1 from source with moby/go-archive 0.3.3 and golang.org/x/net 0.62.0, because no buildx
   release (master included) has taken them yet. When one does, set `BUILDX_VERSION` to it and drop the bumps (and
   then the `buildx` stage, copying it from `docker:${DOCKER_VERSION}-cli` again); `tacplus-smoke` keeps the floors.
+- **Drop the from-source gh once a gh release carries golang.org/x/net >= 0.62.0** (2026-11-07, #350): the build
+  image builds gh v2.103.2 from source with x/net 0.62.0 (CVE-2026-78661), because gh's releases through 2.103.3
+  build with 0.60.0. When one does, set `GH_VERSION` to it and download its release tarball in the `fetch` stage
+  again, dropping the `gh` stage; `tacplus-smoke` keeps the floor.
   A nightly check that the image's Go binaries carry no module under a known fix (what Trivy found here) before the
   sweep fails would make the next one a patch rather than a red run.
 - **Drop the replaced Maven guava once a Maven release bundles 33.7.2 or later** (2026-11-02, #222): Maven 3.9.16

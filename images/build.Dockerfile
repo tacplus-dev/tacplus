@@ -3,8 +3,9 @@
 # that generating, building, testing, fuzzing and formally verifying uses:
 # protoc and the plugin for every target language, grpcio-tools and the Python
 # packaging tools, the verifiers (Kani for Rust; JBMC and OpenJML for Java),
-# cargo-fuzz and the nightly Rust it runs on, just, the gh CLI, the docker CLI
-# and gcloud. tacplus itself is not in it: /usr/local/bin/tacplus is
+# cargo-fuzz and the nightly Rust it runs on, just, the gh CLI, the docker CLI,
+# gcloud, rootless BuildKit (tacplus-image-build builds images inside the
+# container, #315) and sccache. tacplus itself is not in it: /usr/local/bin/tacplus is
 # images/tacplus.sh, which runs the release the repository pins
 # (tacplus.lock), checked against the release's checksums.txt. This is also
 # the image tacplus's own gates run in (CI, the nightly gates,
@@ -50,6 +51,25 @@ ARG GCLOUD_VERSION=549.0.0
 ARG OPENJML_VERSION=21-0.23
 ARG KANI_VERSION=0.68.0
 ARG CARGO_FUZZ_VERSION=0.13.2
+# Rootless BuildKit and the compiler cache (#315). buildkitd, buildctl, runc
+# (the one BuildKit's release ships) and RootlessKit are built from their
+# release tag, checked to be the pinned commit: their release binaries carry
+# go-archive 0.2.0 and x/net 0.55.0-0.59.0 (the advisories of the buildx stage
+# below) and older Go standard libraries, so each takes GO_ARCHIVE_VERSION and
+# X_NET_VERSION and Go GO_VERSION. BuildKit's QEMU helpers (C) and sccache
+# (Rust) are release archives, checked against their sha256 per architecture.
+# Move a version with its commit, or with its two digests.
+ARG BUILDKIT_VERSION=0.34.2
+ARG BUILDKIT_COMMIT=8c579433824224dc64a158cf8734495b6e2b186a
+ARG BUILDKIT_SHA256_AMD64=b9f18b8e37eb450e9e5df03117045237cdd12d3c4a0034ffeeaa857852a15e13
+ARG BUILDKIT_SHA256_ARM64=a4ad483a33b2f1544c5ccce1c5956c559e1a6e84b8bf6cedd847d695885237a3
+ARG RUNC_VERSION=1.5.2
+ARG RUNC_COMMIT=29dd3dc2b13b4123162e5fe132504bb4b15569f1
+ARG ROOTLESSKIT_VERSION=3.3.0
+ARG ROOTLESSKIT_COMMIT=888c3189e9cdf34dcdb19011e1c7c34eb94b5393
+ARG SCCACHE_VERSION=0.19.0
+ARG SCCACHE_SHA256_AMD64=aa73c7270c997894038c0d8f0d297865f57569e1687883322bc431713d4bb9dd
+ARG SCCACHE_SHA256_ARM64=3e47fc4a71b1ddd1b4294a0de9d34498922fdf41e3cd0bda5df3954e3d6deb9d
 # cargo-fuzz needs a nightly Rust (sanitizers); a dated one, so a rebuild of
 # the same file installs the same toolchain.
 ARG RUST_NIGHTLY=nightly-2026-10-15
@@ -66,6 +86,12 @@ ARG JUST_VERSION
 ARG GH_VERSION
 ARG GCLOUD_VERSION
 ARG OPENJML_VERSION
+ARG BUILDKIT_VERSION
+ARG BUILDKIT_SHA256_AMD64
+ARG BUILDKIT_SHA256_ARM64
+ARG SCCACHE_VERSION
+ARG SCCACHE_SHA256_AMD64
+ARG SCCACHE_SHA256_ARM64
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
@@ -96,6 +122,25 @@ RUN case "$TARGETARCH" in \
     && curl -fsSL --retry 30 --retry-delay 5 -o /tmp/openjml.zip \
        "https://github.com/OpenJML/OpenJML/releases/download/${OPENJML_VERSION}/openjml-ubuntu-latest-${OPENJML_VERSION}.zip" \
     && unzip -q /tmp/openjml.zip -d /opt/openjml && rm /tmp/openjml.zip && chmod -R +x /opt/openjml
+# BuildKit's QEMU helper for the other architecture (a foreign platform's RUN
+# steps, with no binfmt registration on the host), and sccache.
+RUN case "$TARGETARCH" in \
+      arm64) SC_ARCH=aarch64; BK_SHA=$BUILDKIT_SHA256_ARM64; SC_SHA=$SCCACHE_SHA256_ARM64 ;; \
+      amd64) SC_ARCH=x86_64; BK_SHA=$BUILDKIT_SHA256_AMD64; SC_SHA=$SCCACHE_SHA256_AMD64 ;; \
+      *) echo "unsupported TARGETARCH '$TARGETARCH'" >&2; exit 1 ;; \
+    esac \
+    && mkdir -p /opt/buildkit/bin \
+    && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/buildkit.tar.gz \
+       "https://github.com/moby/buildkit/releases/download/v${BUILDKIT_VERSION}/buildkit-v${BUILDKIT_VERSION}.linux-${TARGETARCH}.tar.gz" \
+    && echo "${BK_SHA}  /tmp/buildkit.tar.gz" | sha256sum -c - \
+    && tar -xz --strip-components=1 -C /opt/buildkit/bin -f /tmp/buildkit.tar.gz --wildcards 'bin/buildkit-qemu-*' \
+    && find /opt/buildkit/bin -name 'buildkit-qemu-*' ! -name '*-x86_64' ! -name '*-aarch64' -delete \
+    && rm /tmp/buildkit.tar.gz \
+    && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/sccache.tar.gz \
+       "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-${SC_ARCH}-unknown-linux-musl.tar.gz" \
+    && echo "${SC_SHA}  /tmp/sccache.tar.gz" | sha256sum -c - \
+    && tar -xz --strip-components=1 -C /opt/buildkit/bin -f /tmp/sccache.tar.gz "sccache-v${SCCACHE_VERSION}-${SC_ARCH}-unknown-linux-musl/sccache" \
+    && rm /tmp/sccache.tar.gz && chmod +x /opt/buildkit/bin/*
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS go-tools
 ARG TARGETARCH
@@ -116,6 +161,42 @@ RUN git clone --depth 1 --branch "v${BUILDX_VERSION}" https://github.com/docker/
     && CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -mod=vendor -trimpath \
        -ldflags "-X github.com/docker/buildx/version.Version=v${BUILDX_VERSION} -X github.com/docker/buildx/version.Package=github.com/docker/buildx" \
        -o /out/docker-buildx ./cmd/buildx
+
+# buildkitd, buildctl (upstream's build tags and version stamp) and
+# RootlessKit: pure Go, cross-compiled.
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS buildkit
+ARG TARGETARCH
+ARG BUILDKIT_VERSION
+ARG BUILDKIT_COMMIT
+ARG ROOTLESSKIT_VERSION
+ARG ROOTLESSKIT_COMMIT
+ARG GO_ARCHIVE_VERSION
+ARG X_NET_VERSION
+RUN git clone --depth 1 --branch "v${BUILDKIT_VERSION}" https://github.com/moby/buildkit /src/buildkit \
+    && cd /src/buildkit && test "$(git rev-parse HEAD)" = "${BUILDKIT_COMMIT}" \
+    && go get "github.com/moby/go-archive@v${GO_ARCHIVE_VERSION}" "golang.org/x/net@v${X_NET_VERSION}" && go mod tidy && go mod vendor \
+    && ldflags="-X github.com/moby/buildkit/version.Version=v${BUILDKIT_VERSION} -X github.com/moby/buildkit/version.Revision=${BUILDKIT_COMMIT} -X github.com/moby/buildkit/version.Package=github.com/moby/buildkit" \
+    && CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -mod=vendor -trimpath -ldflags "$ldflags" \
+       -tags "osusergo netgo static_build seccomp" -o /out/buildkitd ./cmd/buildkitd \
+    && CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -mod=vendor -trimpath -ldflags "$ldflags" -o /out/buildctl ./cmd/buildctl \
+    && git clone --depth 1 --branch "v${ROOTLESSKIT_VERSION}" https://github.com/rootless-containers/rootlesskit /src/rootlesskit \
+    && cd /src/rootlesskit && test "$(git rev-parse HEAD)" = "${ROOTLESSKIT_COMMIT}" \
+    && go get "golang.org/x/net@v${X_NET_VERSION}" && go mod tidy \
+    && CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath -o /out/rootlesskit ./cmd/rootlesskit
+
+# runc, as BuildKit's release builds it (buildkit-runc): cgo and a static
+# libseccomp, so it builds for the target platform rather than across.
+FROM golang:${GO_VERSION}-trixie AS runc
+ARG RUNC_VERSION
+ARG RUNC_COMMIT
+ARG X_NET_VERSION
+RUN apt-get update && apt-get install -y --no-install-recommends libseccomp-dev && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 --branch "v${RUNC_VERSION}" https://github.com/opencontainers/runc /src/runc \
+    && cd /src/runc && test "$(git rev-parse HEAD)" = "${RUNC_COMMIT}" \
+    && go get "golang.org/x/net@v${X_NET_VERSION}" && go mod tidy && go mod vendor \
+    && CGO_ENABLED=1 go build -mod=vendor -trimpath -tags "apparmor seccomp netgo cgo static_build osusergo" \
+       -ldflags "-X main.version=${RUNC_VERSION} -X main.gitCommit=${RUNC_COMMIT} -extldflags -static" -o /out/buildkit-runc . \
+    && /out/buildkit-runc --version
 
 FROM rust:${RUST_VERSION}-trixie AS rust-tools
 ARG PROTOC_GEN_PROST_VERSION
@@ -158,16 +239,25 @@ ARG GRPCIO_TOOLS_VERSION
 ARG RUST_NIGHTLY
 ARG TACPLUS_LINE
 LABEL org.opencontainers.image.title="tacplus build" \
-      org.opencontainers.image.description="tacplus base plus protoc and every plugin, grpcio-tools, Kani, JBMC/OpenJML, cargo-fuzz, just, the docker CLI and gcloud; its tacplus runs the repository's pinned release" \
+      org.opencontainers.image.description="tacplus base plus protoc and every plugin, grpcio-tools, Kani, JBMC/OpenJML, cargo-fuzz, just, the docker CLI, gcloud, rootless BuildKit and sccache; its tacplus runs the repository's pinned release" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus"
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends dnsutils iproute2 jbmc patch ripgrep \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends dnsutils iproute2 jbmc patch ripgrep uidmap \
     && rm -rf /var/lib/apt/lists/*
+# Rootless BuildKit runs as `build`, never root (images/image-build.sh): its
+# subordinate IDs are the range RootlessKit maps into the daemon's user
+# namespace, and /run/buildkit holds the daemon's socket, state and log.
+RUN useradd --create-home --uid 1000 --user-group --shell /bin/bash build \
+    && echo build:100000:65536 > /etc/subuid && echo build:100000:65536 > /etc/subgid \
+    && install -d -o build -g build -m 0755 /run/buildkit
 COPY --from=fetch /opt/protoc/bin/protoc /opt/protoc/bin/protoc-gen-grpc-java /usr/local/bin/
 COPY --from=fetch /opt/protoc/include /usr/local/include
 COPY --from=fetch /opt/just/just /usr/local/bin/just
 COPY --from=fetch /opt/gh/gh /usr/local/bin/gh
 COPY --from=fetch /opt/google-cloud-sdk /opt/google-cloud-sdk
 COPY --from=fetch /opt/openjml /root/.cache/tacplus/tools/openjml
+COPY --from=fetch /opt/buildkit/bin/ /usr/local/bin/
+COPY --from=buildkit /out/ /usr/local/bin/
+COPY --from=runc /out/buildkit-runc /usr/local/bin/buildkit-runc
 COPY --from=go-tools /out/ /usr/local/bin/
 COPY --from=rust-tools /out/bin/ /usr/local/bin/
 COPY --from=node-tools /usr/local/lib/node_modules/@bufbuild /usr/local/lib/node_modules/@bufbuild
@@ -177,6 +267,8 @@ COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=buildx /out/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
 COPY images/smoke.sh /usr/local/bin/tacplus-smoke
 COPY images/tacplus.sh /usr/local/bin/tacplus
+COPY images/image-build.sh /usr/local/bin/tacplus-image-build
+COPY images/cache.sh /usr/local/bin/tacplus-cache
 # Kani's setup downloads its CBMC bundle and installs the pinned nightly it
 # compiles with; cargo-fuzz runs on RUST_NIGHTLY: cargo +"$RUST_NIGHTLY" fuzz.
 RUN cargo kani setup \

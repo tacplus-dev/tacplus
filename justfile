@@ -384,11 +384,15 @@ claims-provenance:
 # tacplus is images/tacplus.sh). TACPLUS_LINE=X.Y builds it as that line's
 # image. CI builds and pushes the multi-arch set to ghcr.io
 # (.github/workflows/images.yml), and runs images/smoke-pipeline.sh in it.
+# images/cache-determinism.sh then builds compilers and an image (rootless
+# BuildKit, which needs a user namespace: the two --security-opt) cold and
+# warm in the new image, and requires one verdict and one set of digests.
 images:
   docker build -f images/base.Dockerfile -t tacplus-local/base:latest .
   docker build -f images/build.Dockerfile --build-arg BASE_IMAGE=tacplus-local/base:latest --build-arg TACPLUS_LINE="${TACPLUS_LINE:-}" -t tacplus-local/build:latest .
   docker run --rm tacplus-local/build:latest tacplus-smoke
   docker run --rm -v "$PWD:/src:ro" tacplus-local/build:latest bash /src/images/smoke-pipeline.sh
+  docker run --rm --security-opt seccomp=unconfined --security-opt apparmor=unconfined -v "$PWD:/src:ro" tacplus-local/build:latest bash /src/images/cache-determinism.sh
 
 # The local fix looper (see CONTRIBUTING.md, Requesting a fix).
 fix-looper *ARGS:

@@ -4,6 +4,27 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Point the GitLab build jobs at the `ci` cache, and give them a user namespace** (2026-11-06, #315): the
+  build image reads its cache from the build's configuration, and the tacplus-dev/build jobs (looper
+  `ci/build.gitlab-ci.yml`) are where that configuration belongs:
+  - `TACPLUS_CACHE_BUCKET=gs://tacplus-ci-build-cache`;
+  - `TACPLUS_CACHE_REGISTRY=<region>-docker.pkg.dev/tacplus-ci/build-cache` (tacplus-dev/cloud#5);
+  - `eval "$(tacplus-cache env)"`, with `tacplus-cache restore` before the build and `tacplus-cache save` after it.
+
+  Rootless BuildKit also needs `security_opt = ["seccomp=unconfined", "apparmor=unconfined"]` on the build jobs'
+  containers (cloud's `jobs.build`, kept apart for this) and newuidmap's setuid (no `cap_drop` of SETUID/SETGID).
+  Two things are not verified yet: sccache's GCS backend authenticating through Workload Identity Federation
+  (external_account ADC), and gcloud's for the snapshots.
+- **Hermetic base and build Dockerfiles** (2026-11-06, #315): the cache keeps an image's digest the same cold and
+  warm, but two cold builds on different days still differ, because the inputs move: `apt-get update && upgrade`,
+  `rust:1` and the other base tags, `npm install -g` and git clones by tag. Making the same commit give the same
+  digest on any day takes snapshot.debian.org at a pinned date, base images by digest and locked tool installs.
+  `images/cache-determinism.sh` proves the cache on a hermetic fixture.
+- **images.yml: drop the buildx fallback, and `just images` in the build image** (2026-11-07, #315): #315's workflow
+  half (still open on it) builds base and build with `tacplus-image-build` in `build:latest` and falls back to buildx
+  on the runner while `build:latest` predates the tool. Once a `build:latest` carrying `tacplus-image-build` is published, the fallback
+  is dead code: drop it. `just images` still builds with the host's Docker (it bootstraps an image set from
+  nothing); a variant that builds inside a published build image would need BuildKit named contexts for base → build.
 - **A floor check over every version tacplus emits, and template manifests that take versions from one place**
   (2026-11-06, nightly scan, #338): four nights of scans found advisories in floors the generated manifests declare
   (#264, #309, #312, #338). No scanner sees them: a lockfile resolve, including the proposed `just generated`

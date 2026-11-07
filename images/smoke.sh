@@ -7,7 +7,9 @@
 set -euo pipefail
 gen=(protoc protoc-gen-go protoc-gen-go-grpc protoc-gen-grpc-java protoc-gen-es protoc-gen-prost protoc-gen-tonic protoc-gen-prost-serde protoc-gen-prost-crate protoc-gen-swift protoc-gen-grpc-swift-2 git node gofmt python3)
 sdk=(go java mvn cargo rustc swift dotnet npm just jq jbmc gh docker gcloud black cargo-kani kani cargo-fuzz curl tacplus)
-for t in "${gen[@]}" "${sdk[@]}"; do
+# Image builds inside the container and the compiler cache (#315).
+build=(buildkitd buildctl buildkit-runc rootlesskit newuidmap newgidmap setpriv sccache tacplus-image-build tacplus-cache)
+for t in "${gen[@]}" "${sdk[@]}" "${build[@]}"; do
   command -v "$t" >/dev/null || { echo "missing: $t" >&2; exit 1; }
 done
 # gcloud ships without its bundled Python; it must still start on the system one.
@@ -41,6 +43,16 @@ for floor in github.com/moby/go-archive@v0.3.0 golang.org/x/net@v0.62.0; do
   [[ -n "$have" && "$(printf '%s\n%s\n' "$min" "$have" | sort -V | head -n 1)" == "$min" ]] \
     || { echo "docker-buildx carries $mod ${have:-none}, below $min" >&2; exit 1; }
 done
+# So are BuildKit, its runc and RootlessKit (build.Dockerfile, buildkit and
+# runc stages, #315).
+for bin in buildkitd buildctl buildkit-runc rootlesskit; do
+  for floor in github.com/moby/go-archive@v0.3.0 golang.org/x/net@v0.62.0; do
+    mod=${floor%@*} min=${floor#*@}
+    have=$(go version -m "$(command -v "$bin")" | awk -v m="$mod" '$1 == "dep" && $2 == m { print $3 }')
+    [[ -z "$have" || "$(printf '%s\n%s\n' "$min" "$have" | sort -V | head -n 1)" == "$min" ]] \
+      || { echo "$bin carries $mod $have, below $min" >&2; exit 1; }
+  done
+done
 # Maven's guava is replaced past its advisories (base.Dockerfile, #222): one
 # guava in Maven's lib/, at least at its floor.
 guava=(/usr/share/maven/lib/guava-*.jar)
@@ -53,6 +65,17 @@ python3 -c 'import grpc_tools.protoc'
 protoc --version; protoc-gen-swift --version; protoc-gen-grpc-swift-2 --version; node --version
 go version; java -version 2>&1 | head -1; cargo --version; swift --version 2>&1 | head -1; dotnet --version
 jbmc --version; just --version; cargo kani --version; cargo +"$RUST_NIGHTLY" fuzz --version
+# Rootless BuildKit runs as `build`, from its subordinate IDs, and emulates a
+# foreign platform's RUN steps with its own QEMU helper (images/image-build.sh).
+buildkitd --version; buildctl --version; rootlesskit --version; sccache --version
+{ grep -q '^build:' /etc/subuid && grep -q '^build:' /etc/subgid; } || { echo "user build has no subordinate IDs" >&2; exit 1; }
+[[ "$(stat -c %U /run/buildkit)" == build ]] || { echo "/run/buildkit is not build's" >&2; exit 1; }
+case "$(uname -m)" in
+  aarch64 | arm64) command -v buildkit-qemu-x86_64 >/dev/null ;;
+  x86_64) command -v buildkit-qemu-aarch64 >/dev/null ;;
+esac || { echo "missing BuildKit's QEMU helper for the other platform" >&2; exit 1; }
+# Nothing configured is a cold build: tacplus-cache changes nothing.
+[[ -z "$(env -u TACPLUS_CACHE_BUCKET -u TACPLUS_CACHE_DIR tacplus-cache env)" ]] || { echo "tacplus-cache env is not empty with no cache configured" >&2; exit 1; }
 # tacplus is the launcher (a POSIX sh script), never a compiler binary.
 [[ "$(head -n 1 "$(command -v tacplus)")" == '#!/bin/sh' ]] || { echo "tacplus is not the launcher (images/tacplus.sh)" >&2; exit 1; }
 echo "tacplus-smoke: OK (build image, line ${TACPLUS_LINE:-none})"

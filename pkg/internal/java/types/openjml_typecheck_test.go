@@ -88,6 +88,17 @@ func TestJavaJmlSpecsTypecheckAndSitOnTheDepthMethod(t *testing.T) {
 			t.Errorf("ill-typed spec %q in:\n%s", bad, got)
 		}
 	}
+
+	// Each loop of the specified validator has the frame ESC needs; the
+	// at-rest validator, which has no specs, has none.
+	strict, atRest, _ := strings.Cut(got, "public static void validateSizesAtRest(")
+	loops := strings.Count(strict, "\nfor (")
+	if loops == 0 || strings.Count(strict, "//@ loop_assigns \\everything;\nfor (") != loops {
+		t.Errorf("want each of the %d loops of the strict validator after loop_assigns:\n%s", loops, strict)
+	}
+	if strings.Contains(atRest, "loop_assigns") {
+		t.Errorf("the at-rest validator has no specs, so no loop frames:\n%s", atRest)
+	}
 }
 
 // assert_numeric is specified too, in the comparison the validator makes; its
@@ -123,7 +134,7 @@ func TestJavaJmlSpecsCoverAssertNumeric(t *testing.T) {
 		"//@ ensures msg.getOneOf() == 1 || msg.getOneOf() == 2 || msg.getOneOf() == 4;",
 		"//@ ensures msg.getNoneOf() != 3L && msg.getNoneOf() != 5L;",
 		"//@ ensures Integer.toUnsignedLong(msg.getEven()) % 2L == 0L;",
-		"//@ ensures Long.compareUnsigned(msg.getBig(), 10L) < 0;",
+		"//@ ensures (msg.getBig() >= 0 && msg.getBig() < 10L);",
 		"//@ ensures msg.getModeValue() != 0;",
 		"if (!(val == 1L || val == 2L || val == 4L)) {",
 		"if (val == 3L || val == 5L) {",

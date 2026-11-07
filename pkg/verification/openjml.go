@@ -214,6 +214,9 @@ func runOpenJmlEsc(path, classpath, specsDir string, methods []jmlMethod) string
 		"-nowarn",
 		"--prover", openjmlProver,
 		"--timeout", openjmlTimeoutMillis,
+		// The validators run on Java's wrapping arithmetic (depth + 1 after
+		// depth > 24 was refused, val % n): prove them under it.
+		"--code-math", "java",
 		"--specs-path", specsDir,
 		"-cp", classpath,
 		"--method", strings.Join(names, ","),

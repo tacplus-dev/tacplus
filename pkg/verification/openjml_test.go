@@ -18,13 +18,13 @@ import com.example.ks.model.types.sys.errors.ProtoException;
 public class Helpers {
     //@ requires msg != null;
     //@ ensures msg.getPort() >= 0 && msg.getPort() <= 65535;
-    //@ ensures Long.compareUnsigned(msg.getLeThousand(), 1000L) <= 0;
+    //@ ensures (msg.getLeThousand() >= 0 && msg.getLeThousand() <= 1000L);
     public static void validateBounds(Kitchensink.Bounds msg) throws ProtoException {
         validateBoundsDepth(msg, 0);
     }
     //@ requires msg != null;
     //@ ensures msg.getPort() >= 0 && msg.getPort() <= 65535;
-    //@ ensures Long.compareUnsigned(msg.getLeThousand(), 1000L) <= 0;
+    //@ ensures (msg.getLeThousand() >= 0 && msg.getLeThousand() <= 1000L);
     public static void validateBoundsDepth(Kitchensink.Bounds msg, int depth) throws ProtoException {
     }
     public static void validateBoundsAtRest(Kitchensink.Bounds msg) throws ProtoException {
@@ -50,7 +50,7 @@ func TestParseJmlSourceReadsTheSpecifiedValidators(t *testing.T) {
 	if got, want := strings.Join(names, " "), "validateBounds(Kitchensink.Bounds) validateBoundsDepth(Kitchensink.Bounds)"; got != want {
 		t.Errorf("methods = %q, want %q (the at-rest validator has no specs)", got, want)
 	}
-	if got := src.Methods[1].Clauses; len(got) != 3 || got[0] != "requires msg != null" || got[2] != "ensures Long.compareUnsigned(msg.getLeThousand(), 1000L) <= 0" {
+	if got := src.Methods[1].Clauses; len(got) != 3 || got[0] != "requires msg != null" || got[2] != "ensures (msg.getLeThousand() >= 0 && msg.getLeThousand() <= 1000L)" {
 		t.Errorf("clauses = %q", got)
 	}
 }

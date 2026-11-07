@@ -31,10 +31,35 @@ func writeValidation(b *strings.Builder, pf model.ProtoFile, outerClassName stri
 func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassName string, crossHelpers map[string]string) error {
 	// The strict validator carries the message's JML specs, which `tacplus
 	// verify` proves with OpenJML ESC (#257).
-	if err := writeValidateMethods(b, msg, outerClassName, crossHelpers, "", jmlSpecs(msg)); err != nil {
+	specs := jmlSpecs(msg)
+	var strict strings.Builder
+	if err := writeValidateMethods(&strict, msg, outerClassName, crossHelpers, "", specs); err != nil {
 		return err
 	}
+	if specs == "" {
+		b.WriteString(strict.String())
+	} else {
+		b.WriteString(withJmlLoopFrames(strict.String()))
+	}
 	return writeValidateMethods(b, msg, outerClassName, crossHelpers, "AtRest", "")
+}
+
+// withJmlLoopFrames puts `loop_assigns \everything` before each loop of a
+// validator ESC proves. ESC otherwise infers a loop's frame from the
+// assignments in its body and refuses the calls a validator loop makes (an
+// element getter, a nested validator), which may assign anything. The
+// message's getters stay fixed across the loop (their results are final ghost
+// fields), so the specs still prove.
+func withJmlLoopFrames(code string) string {
+	lines := strings.SplitAfter(code, "\n")
+	var out strings.Builder
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "for (") {
+			out.WriteString("//@ loop_assigns \\everything;\n")
+		}
+		out.WriteString(line)
+	}
+	return out.String()
 }
 
 // writeValidateMethods writes one validator family. suffix is "" for the strict
@@ -1106,7 +1131,7 @@ func jmlNumericConstraint(value, protoType string, c *model.NumericConstraint) s
 	}
 	if c.MultipleOf != nil {
 		if protoType == "uint64" || protoType == "fixed64" {
-			parts = append(parts, fmt.Sprintf("Long.remainderUnsigned(%s, %dL) == 0L", value, *c.MultipleOf))
+			// Long.remainderUnsigned has no ESC spec: left out.
 		} else {
 			parts = append(parts, fmt.Sprintf("%s %% %dL == 0L", v, *c.MultipleOf))
 		}
@@ -1126,7 +1151,19 @@ func jmlIntegerBound(value, protoType, op string, bound int64) string {
 	case "uint32", "fixed32":
 		return fmt.Sprintf("Integer.toUnsignedLong(%s) %s %dL", value, op, bound)
 	case "uint64", "fixed64":
-		return fmt.Sprintf("Long.compareUnsigned(%s, %dL) %s 0", value, bound, op)
+		// A long holding a uint64 is negative from 2^63 up, above every
+		// non-negative bound. Split on the sign, which ESC reads; it has no
+		// spec of Long.compareUnsigned. A negative bound (2^63 and up) is left out.
+		if bound < 0 {
+			return ""
+		}
+		switch op {
+		case ">", ">=":
+			return fmt.Sprintf("(%s < 0 || %s %s %dL)", value, value, op, bound)
+		case "<", "<=":
+			return fmt.Sprintf("(%s >= 0 && %s %s %dL)", value, value, op, bound)
+		}
+		return fmt.Sprintf("%s %s %dL", value, op, bound)
 	}
 	return ""
 }

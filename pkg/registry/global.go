@@ -83,6 +83,80 @@ func (r *Registry) Register(kind, name, contract, visibility string) (int32, err
 	return id, nil
 }
 
+// Slice kinds: a (spec.config_slice) is tenant- or project-scoped, and its
+// service's field in the generated TenantConfig or ProjectConfig is registered
+// per kind.
+const (
+	SliceTenant  = "tenant"
+	SliceProject = "project"
+)
+
+// sliceRange is the range this authority allocates slice fields from: the id
+// ranges' bounds, except that a global field starts at 1, since TenantConfig
+// and ProjectConfig have no legacy range or azp field. Disjoint ranges keep two
+// authorities a lock unions from handing out the same field.
+func (r *Registry) sliceRange() (int32, int32, error) {
+	lo, hi, err := r.allocRange()
+	if err != nil {
+		return 0, 0, err
+	}
+	if r.Scope == ScopeGlobal {
+		lo = 1
+	}
+	return lo, hi, nil
+}
+
+// sliceField returns e's field of the given slice kind, to read or set.
+func sliceField(e *ServiceEntry, kind string) (*int32, error) {
+	switch kind {
+	case SliceTenant:
+		return &e.TenantSliceField, nil
+	case SliceProject:
+		return &e.ProjectSliceField, nil
+	}
+	return nil, fmt.Errorf("register: slice kind must be %s or %s, got %q", SliceTenant, SliceProject, kind)
+}
+
+// RegisterSlice allocates, in this AUTHORITY, the TenantConfig (kind tenant)
+// or ProjectConfig (kind project) field of a service it already holds:
+// max(existing field of that kind within the scope's range)+1, never reused.
+// Like an id, the field is a wire number every build of every consumer must
+// agree on, so it is decided here once and synced into locks, never assigned
+// by a build (tacplus#352). A field already registered is an error.
+func (r *Registry) RegisterSlice(name, kind string) (int32, error) {
+	if r.IsLock() {
+		return 0, fmt.Errorf("register: this registry.yaml is a lock of %s, not an authority", strings.Join(r.Registries, ", "))
+	}
+	lo, hi, err := r.sliceRange()
+	if err != nil {
+		return 0, fmt.Errorf("register: %w", err)
+	}
+	e, ok := r.byName[name]
+	if !ok {
+		return 0, fmt.Errorf("register: service %q is not registered here; register it first (or with the same command, given --contract)", name)
+	}
+	field, err := sliceField(e, kind)
+	if err != nil {
+		return 0, err
+	}
+	if *field != 0 {
+		return 0, fmt.Errorf("service %q's %s slice is already registered as field %d", name, kind, *field)
+	}
+	max := lo - 1
+	for _, o := range r.Services {
+		f, _ := sliceField(o, kind)
+		if *f >= lo && *f <= hi && *f > max {
+			max = *f
+		}
+	}
+	if max+1 > hi {
+		return 0, fmt.Errorf("registry %s slice field overflow: all %s fields %d-%d are taken", kind, r.Scope, lo, hi)
+	}
+	*field = max + 1
+	r.dirty = true
+	return *field, nil
+}
+
 // nextIDIn returns max(ids within [lo,hi])+1, starting at lo, or 0 when the
 // range is exhausted. Ids outside the range (legacy ones, or the other scope's)
 // are ignored: they are frozen or someone else's.
@@ -113,6 +187,8 @@ func Union(regs []*Registry, labels []string) (*Registry, error) {
 	u := &Registry{byName: map[string]*ServiceEntry{}, vsByName: map[string]*VServiceEntry{}}
 	owner := map[int32]string{}
 	nameOwner := map[string]string{}
+	// Slice fields are wire numbers too, each in its own message's space.
+	sliceOwner := map[string]map[int32]string{SliceTenant: {}, SliceProject: {}}
 	label := func(i int) string {
 		if i < len(labels) {
 			return labels[i]
@@ -132,6 +208,17 @@ func Union(regs []*Registry, labels []string) (*Registry, error) {
 			}
 			nameOwner[e.Name] = label(i)
 			owner[e.ID] = fmt.Sprintf("service %q (%s)", e.Name, label(i))
+			for _, kind := range []string{SliceTenant, SliceProject} {
+				f, _ := sliceField(e, kind)
+				if *f == 0 {
+					continue
+				}
+				if prev, dup := sliceOwner[kind][*f]; dup {
+					errs = append(errs, fmt.Sprintf("%s_slice_field %d is %s and service %q in %s", kind, *f, prev, e.Name, label(i)))
+					continue
+				}
+				sliceOwner[kind][*f] = fmt.Sprintf("service %q (%s)", e.Name, label(i))
+			}
 			c := *e
 			u.Services = append(u.Services, &c)
 			u.byName[e.Name] = &c
@@ -222,6 +309,12 @@ func (r *Registry) SyncFromGlobal(global *Registry, serviceNames, vserviceNames 
 		return fmt.Errorf("not in any registry this lock names (%s):\n  %s\n\nIn a checkout of the right authority run\n  tacplus registry register NAME --kind service|vservice --contract <this proto repo's URL> --visibility public|private\nand merge it, then re-run tacplus registry here", strings.Join(r.Registries, ", "), strings.Join(unregistered, "\n  "))
 	}
 	return nil
+}
+
+// sliceNotInLock is the build's refusal of a declared slice whose field no
+// authority this lock names has registered.
+func (r *Registry) sliceNotInLock(kind, name string) error {
+	return fmt.Errorf("service %q declares a %s (spec.config_slice), but its %s_slice_field is not in the registry lock (authorities %s): a slice's field is a wire number its authority registers, never one a build assigns. In a checkout of the authority run\n  tacplus registry register %s --%s-slice\nand merge it, then run `tacplus registry --proto-dir %s` here", name, kind, kind, strings.Join(r.Registries, ", "), name, kind, r.inputDir)
 }
 
 func (r *Registry) notInLock(kind, name string) error {

@@ -5,6 +5,26 @@
 # its tacplus is the launcher of the pinned release (images/tacplus.sh), not a
 # compiler. images/smoke-pipeline.sh then runs generate, test, verify and fuzz.
 set -euo pipefail
+# docker-buildx and gh are built from source with dependencies bumped past
+# advisories their releases have not taken yet (build.Dockerfile, the buildx
+# and gh stages): each must carry every bumped module at least at its floor.
+# scripts/images_smoke_test.go sources this file for these two functions.
+go_floors() {
+  local bin=$1 floor mod min have; shift
+  for floor in "$@"; do
+    mod=${floor%@*} min=${floor#*@}
+    have=$(go version -m "$bin" | awk -v m="$mod" '$1 == "dep" && $2 == m { print $3 }')
+    [[ -n "$have" && "$(printf '%s\n%s\n' "$min" "$have" | sort -V | head -n 1)" == "$min" ]] \
+      || { echo "${bin##*/} carries $mod ${have:-none}, below $min" >&2; return 1; }
+  done
+}
+go_floors_check() {
+  go_floors "${TACPLUS_SMOKE_BUILDX:-/usr/local/libexec/docker/cli-plugins/docker-buildx}" \
+    github.com/moby/go-archive@v0.3.0 golang.org/x/net@v0.62.0 || return 1
+  # CVE-2026-78661 (#350): gh's releases (through 2.103.3) build with x/net 0.60.0.
+  go_floors "$(command -v gh)" golang.org/x/net@v0.62.0
+}
+(return 0 2>/dev/null) && return 0
 gen=(protoc protoc-gen-go protoc-gen-go-grpc protoc-gen-grpc-java protoc-gen-es protoc-gen-prost protoc-gen-tonic protoc-gen-prost-serde protoc-gen-prost-crate protoc-gen-swift protoc-gen-grpc-swift-2 git node gofmt python3)
 sdk=(go java mvn cargo rustc swift dotnet npm just jq jbmc gh docker gcloud black cargo-kani kani cargo-fuzz curl tacplus)
 for t in "${gen[@]}" "${sdk[@]}"; do
@@ -30,17 +50,11 @@ for t in "${gen[@]}"; do
     *) echo "not a program: $t" >&2; exit 1 ;;
   esac
 done
-# docker-buildx is built from source with dependencies bumped past advisories
-# its release has not taken yet (build.Dockerfile, buildx stage): it must
-# start, and carry each module at least at its floor.
+# docker-buildx and gh, built from source (go_floors_check above), must start
+# and carry each bumped module at least at its floor.
 docker buildx version
-buildx=/usr/local/libexec/docker/cli-plugins/docker-buildx
-for floor in github.com/moby/go-archive@v0.3.0 golang.org/x/net@v0.62.0; do
-  mod=${floor%@*} min=${floor#*@}
-  have=$(go version -m "$buildx" | awk -v m="$mod" '$1 == "dep" && $2 == m { print $3 }')
-  [[ -n "$have" && "$(printf '%s\n%s\n' "$min" "$have" | sort -V | head -n 1)" == "$min" ]] \
-    || { echo "docker-buildx carries $mod ${have:-none}, below $min" >&2; exit 1; }
-done
+gh --version
+go_floors_check
 # Maven's guava is replaced past its advisories (base.Dockerfile, #222): one
 # guava in Maven's lib/, at least at its floor.
 guava=(/usr/share/maven/lib/guava-*.jar)

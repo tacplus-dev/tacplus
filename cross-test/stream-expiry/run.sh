@@ -8,6 +8,9 @@
 # seconds out and is never rotated, while the handler keeps the stream open.
 # The server must end each one at the token's exp with UNAUTHENTICATED; a server
 # that checks the token only at open leaves all three open and the leg fails.
+# Java also runs the member port's leg (tacplus#321): a member tunnel stream that
+# is not rotated ends at exp with UNAUTHENTICATED and a reset of its local
+# connection.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -120,6 +123,13 @@ EOF
     java_env="$(java_home_env)"
     (cd "$OUT" && env ${java_env:+"$java_env"} mvn -q -Dtest=StreamExpiryBehaviorTest test) \
       || die "generated Java stream-expiry behavior test failed"
+
+    # The member port's tunnel streams close at exp too, with no exception for
+    # member traffic (tacplus#321): its leg runs in the member port fixture.
+    echo "==> Running the member port's stream-expiry leg"
+    TACPLUS_BIN="$TACPLUS_BIN" TACPLUS_BIN_PREBUILT=1 \
+      bash "$ROOT_DIR/cross-test/memberport/run.sh" --language java --test MemberPortStreamExpiryTest \
+      || die "the member port's stream-expiry leg failed"
     ;;
 esac
 

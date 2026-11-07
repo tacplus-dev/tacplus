@@ -168,9 +168,9 @@ it.
 ### Member Port
 
 A `(spec.member_port)` service's ServiceManager owns a member port
-(tacplus#212), reached through `sm.getMemberPort()` (Java; Go and Rust refuse
-the annotation until tacplus#236 and #237). It is the only path for the
-service's black-box member traffic, and it fails closed.
+(tacplus#212, on gRPC since #321), reached through `sm.getMemberPort()` (Java;
+Go and Rust refuse the annotation until tacplus#322). It is the only path for
+the service's black-box member traffic, and it fails closed.
 
 - **Startup.** `create()` reads `grpcconfig.member_port` before anything else
   and refuses a missing `listen_address` or `target_address`, or a target that is
@@ -178,44 +178,78 @@ service's black-box member traffic, and it fails closed.
   error. After the first auto-TLS delivery it starts listening on
   `listen_address`; if that fails, the attempt fails and `create()` retries it
   with the rest of its initialization.
-- **Inbound.** TLS 1.3 only, ALPN `tacplus-member/1`, with the instance's auto-TLS
-  certificate (a renewal applies from the next handshake). No client
-  certificate is asked for. After a valid `AUTH` from the peer, the port sends
-  its own `AUTH` and only then dials `target_address`, so nothing reaches the
-  protocol (not even a connection) before a valid token.
-- **Outbound.** `forward(remote)` (or `forward(remote, localLoopbackAddress)`)
-  returns a loopback address; each connection to it is tunnelled to the remote
-  member port. The sender verifies the receiver twice before any byte moves: its
-  certificate chains to `trusted_cas` and carries a service SPIFFE ID of the
-  configured trust domain for this service, in this instance's own tenant
-  (tenant-owned) or under `/system` (platform service), and its `AUTH` frame back
-  passes the same check as an inbound one.
-- **Frames.** Every byte between member ports is framed: 1-byte type, 4-byte
-  big-endian length, payload. `AUTH` = 1 (a token, at most 16 KiB), `DATA` = 2
-  (1 to 64 KiB), `CLOSE_WRITE` = 3 (empty; the sender sends no more `DATA`,
-  since TLS close_notify ends both directions). Each side's first frame is
-  `AUTH`. A connection ends cleanly when both sides have sent `CLOSE_WRITE`.
-- **Admission.** A token is admitted only if it verifies against a key of the
-  JWKS, is unexpired (no clock-skew allowance past `exp`), is not a refresh,
-  bootstrap, locality or external token, is a service token with audience
-  `member:<service>` (token use unset, `service` or `access`), names this service, and is in exactly this instance's own
-  namespace (read from its own member token).
-- **Refresh and expiry.** Each side resends `AUTH` in-band whenever its identity
-  manager hands it a newer token (checked at a quarter of the remaining
-  lifetime), with no reconnect. A refreshed token is checked like the first; a
-  failing one drops the connection. A peer whose token reaches `exp` without a
-  newer one is dropped, so revocation takes effect within one token lifetime.
-- **Dropped, with nothing more forwarded:** a first frame that is not `AUTH`, an
-  unknown type, an oversized or empty frame, `DATA` after `CLOSE_WRITE`, a
-  plaintext or non-ALPN peer, a refused token.
-- **Admission deadline.** A connection must finish the TLS handshake and the
-  opening `AUTH` exchange within 10 seconds of being accepted, however slowly it
-  sends; at most 256 connections may be in admission at once, and more are
-  dropped on accept.
-- **Backpressure.** Blocking I/O with one 64 KiB buffer per direction: a slow
-  reader stalls the writer behind it; nothing is buffered without bound and
-  nothing is dropped. Neither direction moves `DATA` for a peer whose token has
-  expired.
+- **Wire.** Its own gRPC listener on `listen_address` (not the service's API
+  server), TLS 1.3 with ALPN `h2` and the instance's auto-TLS certificate (a
+  renewal applies from the next handshake); no client certificate is asked for.
+  It serves one method, `/memberport.MemberTunnel/Open`, a bidi stream of
+  `sys/memberport.proto`'s `MemberChunk{payload, last, session_id, fin}` each
+  way. One loopback connection is one **byte session**, carried by one stream at
+  a time; `payload` is at most 64 KiB.
+- **Admission.** The token goes in the `authorization` metadata when a stream
+  opens, never in a chunk, and is checked once, there. It is admitted only if it
+  verifies against a key of the JWKS, is unexpired (no clock-skew allowance past
+  `exp`), is not a refresh, bootstrap, locality or external token, is a service
+  token with audience `member:<service>` (token use unset, `service` or
+  `access`), names this service, and is in exactly this instance's own namespace
+  (read from its own member token). A bad, missing or expired token ends the
+  stream at once with `UNAUTHENTICATED`; a valid token that is not allowed
+  (another service, another tenant) with `PERMISSION_DENIED`. Neither status
+  carries a description: the reason goes to the server log.
+- **Opening a session.** The client's first chunk is empty. Only then does the
+  server dial `target_address`, so nothing reaches the protocol (not even a
+  connection) before admission; it answers with its own member token in the
+  `tacplus-member-token` response header and a first chunk carrying the new
+  `session_id` (128 random bits). The first chunk must arrive within 10 seconds
+  of the open, the TLS handshake within 10 seconds of the connection, and at most
+  256 streams may be in admission at once.
+- **The sender checks the receiver.** `forward(remote)` (or
+  `forward(remote, localLoopbackAddress)`) returns a loopback address; each
+  connection to it is tunnelled to the remote member port. Before any byte
+  moves, the receiver's certificate must chain to `trusted_cas` and carry a
+  service SPIFFE ID of the configured trust domain for this service, in this
+  instance's own tenant (tenant-owned) or under `/system` (platform service),
+  and the token in its `tacplus-member-token` header must pass the same
+  admission as an inbound one, on every stream (the first and each rotation).
+- **Rotation (make-before-break).** At about 75% of its token's lifetime the
+  client asks its identity manager for a token; once it gets a newer one it
+  opens a new stream whose first chunk carries the `session_id`. The server
+  attaches it only if the session is live, has no rotation pending, and the new
+  token names the same subject (service and namespace); otherwise
+  `PERMISSION_DENIED`, the same for an unknown id. The id alone authorizes
+  nothing. Once the server's first chunk on the new stream echoes the id, the
+  client writes `last = true` on the old stream and stops writing there; the
+  server, reading it, moves its writes to the new stream, writes its own `last`
+  on the old one and ends it OK. Each side reads the old stream to its `last`
+  before taking anything from the new one (no `request()` on the new stream
+  until then), so the bytes keep their order with no sequence numbers, and at
+  most one chunk plus the HTTP/2 window waits on the new stream.
+- **Retries.** An open refused with `UNAUTHENTICATED` is retried once with a
+  fresh token, then fails; `PERMISSION_DENIED` is never retried. A mint that
+  fails, or returns no newer token, is retried every second while the old
+  stream lasts.
+- **Expiry and revocation.** The server ends every stream at its opening token's
+  `exp` with `UNAUTHENTICATED` (no description), as every stream is (#260); the
+  client drops a session whose stream reaches `exp` unrotated. A caller that
+  gets no new token is cut off within one token lifetime.
+- **Faults.** A stream that ends without its `last` (a status, a cancel, a
+  transport error, even an OK close) before the session is done drops the
+  session; the bytes after it are never spliced onto another stream. So do a
+  chunk that is malformed (oversized, a payload after `fin`, a `session_id`
+  after the first chunk), a `last` with no stream to cut over to, and a refused
+  rotation.
+- **End of a session.** `fin = true` is the sender's half-close: its direction of
+  the session is done (the receiver shuts down output on its loopback
+  connection). Once both directions have sent `fin`, the client half-closes the
+  stream and the server closes it OK: a clean end, and both loopback connections
+  close normally.
+- **Local side.** When a session is dropped (refused, expired unrotated, ended
+  without `last`, or the port closes), the port resets its loopback connection
+  (`SO_LINGER` 0): the black-box protocol sees `ECONNRESET`, never a FIN or a
+  hang. A refused inbound stream never opens a loopback connection.
+- **Backpressure.** Manual gRPC flow control, one chunk at a time: a slow local
+  reader stops the `request()`s, which stops the remote sender's stream, which
+  stops its reads of its own loopback connection. Nothing is buffered without
+  bound and nothing is dropped.
 - **Secrets.** Tokens are never logged. A refusal is logged with its reason.
 
 The behaviour is pinned by `cross-test/memberport` (`just memberport`).

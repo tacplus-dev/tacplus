@@ -564,7 +564,7 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		if err != nil {
 			return serviceManagerTemplateData{}, fmt.Errorf("service manager data: parse proto descriptors in %q: %w", config.FlatProtoDir, err)
 		}
-		if err := parser.RefuseMemberPort(dp, config.SelfPackage, "go", "tacplus#236"); err != nil {
+		if err := parser.RefuseMemberPort(dp, config.SelfPackage, "go", "tacplus#322"); err != nil {
 			return serviceManagerTemplateData{}, err
 		}
 		{

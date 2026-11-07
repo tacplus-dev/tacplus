@@ -1,0 +1,56 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+// Package memberport is the wire of the member port (spec.member_port,
+// tacplus#212, #321): the black-box member protocol of a service (Hazelcast's,
+// say) tunnelled between its members as gRPC bidi streams of byte chunks. It is
+// part of the sys contract: tacplus generates both ends, so no service
+// hand-writes it. Field numbers are frozen.
+//
+// The member port serves one method on its own listener
+// (grpcconfig.member_port.listen_address), TLS 1.3 with ALPN h2:
+//
+//   /memberport.MemberTunnel/Open (stream MemberChunk) returns (stream MemberChunk)
+//
+// It is not declared as a service here: it is no rpc of the service's API, has
+// no (spec.rpc) policy, and the generated member port is its only client and
+// server.
+//
+// One stream carries one loopback connection's bytes for the life of the token
+// it opened with: the token goes in the `authorization` metadata at open, never
+// in a chunk, and is checked once, there (audience member:<service>, this
+// service, this instance's namespace). A refused open ends with UNAUTHENTICATED
+// (a bad, missing or expired token) or PERMISSION_DENIED (a valid token not
+// allowed), with no description. The server answers with its own member token in
+// the `tacplus-member-token` response header, which the client checks the same
+// way: the receiver is a member too.
+//
+// The byte session outlives its streams (make-before-break): the client's first
+// chunk on a stream is either empty (a new session: the server dials its
+// loopback target and its first chunk carries the new session_id) or carries a
+// session_id (a rotation: attached only when the new token names the same
+// subject, the server's first chunk echoing the id). The client then writes its
+// final chunk on the old stream with last = true; the server, reading it, writes
+// its own last on the old stream, ends it and writes on the new one. Each side
+// reads the old stream to its last before anything of the new one. A stream that
+// ends without its last, before the session is done, is a fault: the session is
+// dropped, never spliced.
+syntax = "proto3";
+
+package memberport;
+
+// MemberChunk is one message of a member tunnel stream, each way.
+message MemberChunk {
+  // payload is the next bytes of the sender's direction of the byte session, at
+  // most 64 KiB; empty in a control chunk.
+  bytes payload = 1;
+  // last marks the sender's final chunk on this stream: it is cutting over to
+  // the session's next stream and writes nothing more here.
+  bool last = 2;
+  // session_id names the byte session: set on the first chunk of each stream
+  // that opens or joins one, empty after. It authorizes nothing by itself.
+  string session_id = 3;
+  // fin marks the end of the sender's direction of the byte session (a TCP
+  // half-close): no payload follows it on any stream of the session.
+  bool fin = 4;
+}

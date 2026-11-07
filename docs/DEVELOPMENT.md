@@ -578,13 +578,24 @@ the archived SPIFFE_IDENTITY_NORMALIZATION_PLAN (not in this repository)):
   only the per-SMB CA cert and the instance's own member cert. Private keys
   never cross the wire (member key stays on the instance, CA key stays with
   the authority).
-- Member port (`(spec.member_port)`, tacplus#212): server TLS plus kernel tokens,
-  never mTLS. Nothing is forwarded, and the target is not dialled, before a valid
-  `AUTH`; a peer is admitted only as the same service in the same namespace with
-  audience `member:<service>`; the target and local forward addresses are
-  loopback only; tokens are never logged. A language that does not generate the
-  member port must refuse the annotation at generation (`parser.RefuseMemberPort`),
-  never emit a service without it.
+- Member port (`(spec.member_port)`, tacplus#212, on gRPC since #321): server
+  TLS plus kernel tokens, never mTLS. It is `/memberport.MemberTunnel/Open`, a
+  bidi stream of `sys/memberport.proto`'s `MemberChunk` on its own listener; the
+  Java template (`chassis/memberport/MemberPort.java.tmpl`) builds the method
+  descriptor itself, since the tunnel is no rpc of the service's API and carries
+  no `(spec.rpc)` policy. A token is checked only at a stream's open (metadata,
+  never a chunk); nothing is forwarded, and the target is not dialled, before
+  admission and the first chunk; a peer is admitted only as the same service in
+  the same namespace with audience `member:<service>`, and a rotation only for
+  the same subject; refusals are `UNAUTHENTICATED`/`PERMISSION_DENIED` with no
+  description; a stream that ends without `last` drops its session, never
+  splices it; a dropped session resets its loopback connection (`SO_LINGER` 0);
+  the target and local forward addresses are loopback only; tokens are never
+  logged. The ordering rule of a cutover is flow control: no `request()` on the
+  new stream until the old one's `last` has been read, each way. A language that
+  does not generate the member port must refuse the annotation at generation
+  (`parser.RefuseMemberPort`), never emit a service without it; Go and Rust
+  port this version in #322.
 - Every language's generated SPIFFE tests load the shared vector corpus
   (`cross-test/fixtures/spiffe_vectors.json`) so identity behavior cannot
   drift per language.

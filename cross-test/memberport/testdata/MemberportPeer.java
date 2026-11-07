@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * memberport-peer (tacplus#212): the test fixture that stands in for the
+ * memberport-peer (tacplus#212, #321): the test fixture that stands in for the
  * black-box protocol behind a member port. Test code only, never shipped in a
  * service. It talks raw TCP. Every byte it sends is a seeded pseudo-random
  * stream, and the other side checks what it receives byte for byte as it
@@ -147,19 +147,19 @@ final class MemberportPeer {
         try (Socket s = new Socket()) {
             s.connect(address, 10_000);
             s.setSoTimeout(60_000);
-            AtomicLong sendError = new AtomicLong();
+            java.util.concurrent.atomic.AtomicReference<String> sendError = new java.util.concurrent.atomic.AtomicReference<>();
             Thread writer = new Thread(() -> {
                 try {
                     send(s, sendSeed, sendBytes, maxChunk, sendPauseMillis);
                 } catch (Exception e) {
-                    sendError.incrementAndGet();
+                    sendError.set(e.toString());
                 }
             }, "peer-client-send");
             writer.start();
             Result r = receive(s, expectSeed, readPauseMillis);
             writer.join(60_000);
-            if (r.error == null && sendError.get() > 0) {
-                return new Result(r.received, r.firstMismatch, "send failed");
+            if (r.error == null && sendError.get() != null) {
+                return new Result(r.received, r.firstMismatch, "send failed: " + sendError.get());
             }
             return r;
         }
@@ -172,6 +172,8 @@ final class MemberportPeer {
         final long pushSeed;
         final long pushBytes;
         final long expectSeed;
+        final int pushChunk;
+        final long pushPauseMillis;
         volatile long readPauseMillis;
         /** Connections accepted: zero means nothing ever reached the protocol. */
         final AtomicInteger accepted = new AtomicInteger();
@@ -180,6 +182,13 @@ final class MemberportPeer {
         final ConcurrentHashMap<Integer, Result> results = new ConcurrentHashMap<>();
 
         Server(Mode mode, long pushSeed, long pushBytes, long expectSeed) throws IOException {
+            this(mode, pushSeed, pushBytes, expectSeed, 16 * 1024, 0);
+        }
+
+        /** PUSH in chunks of at most {@code pushChunk} bytes, pausing after each. */
+        Server(Mode mode, long pushSeed, long pushBytes, long expectSeed, int pushChunk, long pushPauseMillis) throws IOException {
+            this.pushChunk = pushChunk;
+            this.pushPauseMillis = pushPauseMillis;
             this.mode = mode;
             this.pushSeed = pushSeed;
             this.pushBytes = pushBytes;
@@ -233,7 +242,7 @@ final class MemberportPeer {
                 }
                 Thread writer = new Thread(() -> {
                     try {
-                        send(s, pushSeed, pushBytes, 16 * 1024, 0);
+                        send(s, pushSeed, pushBytes, pushChunk, pushPauseMillis);
                     } catch (Exception ignored) {
                         // The reader's result records the connection's fate.
                     }

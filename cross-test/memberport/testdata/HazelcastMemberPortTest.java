@@ -17,6 +17,7 @@ import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.map.IMap;
 import com.hazelcast.spi.MemberAddressProvider;
+import io.grpc.ManagedChannel;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -29,14 +30,13 @@ import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
  * Two tenants' Hazelcast members through the generated member port
- * (tacplus#212), in-process. Hazelcast binds to loopback only; every member
+ * (tacplus#212, #321), in-process. Hazelcast binds to loopback only; every member
  * reaches another through its own member port's {@code forward}, and is
  * reached through the other's {@code listen}. Each member port delivers to a
  * counting relay in front of Hazelcast, so the test sees exactly what reached
@@ -262,7 +262,7 @@ class HazelcastMemberPortTest {
     @Test
     void sameTenantMembersFormAClusterAndOtherTenantsCannotJoin() throws Exception {
         // Three-second tokens renewed with two seconds left: the cluster lives
-        // through several in-band refreshes during the test.
+        // through several session rotations during the test.
         Member x1 = new Member(X, 3, 2);
         Member x2 = new Member(X, 3, 2);
         Member y1 = new Member(Y, 300, 60);
@@ -288,7 +288,7 @@ class HazelcastMemberPortTest {
         assertEquals("from-x1", x2.hz.<String, String>getMap("records").get("k"), "X's members share data");
         assertNull(y1.hz.<String, String>getMap("records").get("k"), "tenant Y sees none of it");
 
-        // Mid-stream refresh: eight more seconds of traffic spanning several
+        // Rotation mid-stream: eight more seconds of traffic spanning several
         // token lifetimes, with no member ever dropping out.
         int removedBefore = x1.removed.get() + x2.removed.get();
         int mintsBefore = x1.minter.mints.get();
@@ -300,34 +300,30 @@ class HazelcastMemberPortTest {
             i++;
             Thread.sleep(20);
         }
-        assertTrue(x1.minter.mints.get() - mintsBefore >= 3, "tokens were refreshed in-band during the run");
-        assertEquals(removedBefore, x1.removed.get() + x2.removed.get(), "a refresh must not interrupt Hazelcast");
+        assertTrue(x1.minter.mints.get() - mintsBefore >= 3, "the sessions rotated onto new tokens during the run");
+        assertEquals(removedBefore, x1.removed.get() + x2.removed.get(), "a rotation must not interrupt Hazelcast");
         assertEquals(2, x1.clusterSize());
     }
 
     @Test
-    void nothingReachesHazelcastBeforeAValidAuth() throws Exception {
+    void nothingReachesHazelcastBeforeAdmission() throws Exception {
         Member x1 = new Member(X, 300, 60);
         x1.start(List.of());
         MemberPortBehaviorTest probe = new MemberPortBehaviorTest();
         probe.fleet = fleet;
-        // No token, another tenant's token, an expired token, a plaintext peer.
-        byte[][] attempts = {
-            MemberPortBehaviorTest.frameBytes(MemberPort.FRAME_DATA, "HZC".getBytes()),
-            MemberPortBehaviorTest.frameBytes(MemberPort.FRAME_AUTH, MemberPortBehaviorTest.auth(
-                    fleet.mint(MemberPortBehaviorTest.SVC, Y, MemberPortBehaviorTest.AUD, 300))),
-            MemberPortBehaviorTest.frameBytes(MemberPort.FRAME_AUTH, MemberPortBehaviorTest.auth(
-                    fleet.mint(MemberPortBehaviorTest.SVC, X, MemberPortBehaviorTest.AUD, -5))),
+        ManagedChannel ch = probe.rawChannel(x1.portAddress);
+        closers.add(ch::shutdownNow);
+        // No token, another tenant's token, an expired token: each refused, its
+        // bytes never forwarded.
+        String[] tokens = {
+            null,
+            fleet.mint(MemberPortBehaviorTest.SVC, Y, MemberPortBehaviorTest.AUD, 300),
+            fleet.mint(MemberPortBehaviorTest.SVC, X, MemberPortBehaviorTest.AUD, -5),
         };
-        for (byte[] a : attempts) {
-            try (SSLSocket s = probe.rawTls(x1.portAddress, true)) {
-                s.getOutputStream().write(a);
-                s.getOutputStream().write(MemberPortBehaviorTest.frameBytes(MemberPort.FRAME_DATA, "HZC".getBytes()));
-                s.getOutputStream().flush();
-                assertTrue(MemberPortBehaviorTest.dropped(s, 5_000));
-            } catch (IOException dropped) {
-                // Dropped while writing: as good.
-            }
+        for (String t : tokens) {
+            MemberPortBehaviorTest.Raw r = new MemberPortBehaviorTest.Raw(ch, t);
+            r.send(MemberPortBehaviorTest.open()).send(MemberPortBehaviorTest.data("HZC".getBytes()));
+            assertTrue(!r.status(5_000).isOk(), "refused");
         }
         try (Socket plain = new Socket()) {
             plain.connect(x1.portAddress, 5_000);
@@ -336,7 +332,7 @@ class HazelcastMemberPortTest {
             plain.getOutputStream().write(new byte[64]);
             assertTrue(MemberPortBehaviorTest.dropped(plain, 12_000), "a plaintext member is dropped");
         }
-        assertEquals(0, x1.relay.accepted.get(), "no connection may reach Hazelcast before a valid AUTH");
+        assertEquals(0, x1.relay.accepted.get(), "no connection may reach Hazelcast before admission");
         assertEquals(1, x1.clusterSize());
     }
 

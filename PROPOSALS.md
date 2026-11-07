@@ -318,3 +318,5 @@ the looper then marks it `promoted` or `declined` here with the date.
   `build:latest`, #160) would fix it.
 
 ## Promoted / declined
+- **Member port onto gRPC with make-before-break session rotation (Java)** (2026-11-06, #321): promoted 2026-11-05,
+  ROADMAP.md's line for #321 (Jody, #259's split).

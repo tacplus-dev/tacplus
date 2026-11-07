@@ -6,6 +6,7 @@ package com.example.grid.model.chassis.memberport;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -15,6 +16,23 @@ import com.example.grid.model.chassis.key.KeyHelpers;
 import com.example.grid.model.chassis.token.TokenWrapper;
 import com.example.grid.model.types.sys.jwk.JwkOuterClass;
 import com.example.grid.model.types.sys.key.KeyOuterClass;
+import com.example.grid.model.types.sys.memberport.Memberport.MemberChunk;
+import com.google.protobuf.ByteString;
+import io.grpc.CallOptions;
+import io.grpc.ClientCall;
+import io.grpc.ManagedChannel;
+import io.grpc.Metadata;
+import io.grpc.Server;
+import io.grpc.ServerCall;
+import io.grpc.ServerCallHandler;
+import io.grpc.ServerServiceDefinition;
+import io.grpc.Status;
+import io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts;
+import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
+import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
+import io.grpc.netty.shaded.io.netty.handler.ssl.SslContextBuilder;
+import io.grpc.netty.shaded.io.netty.handler.ssl.SslProvider;
+import io.grpc.netty.shaded.io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -34,19 +52,19 @@ import java.util.Base64;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
-import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.TrustManagerFactory;
 import org.bouncycastle.asn1.x500.X500Name;
@@ -64,9 +82,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 /**
- * The generated member port (tacplus#212), driven over real sockets in-process:
- * memberport-peer ↔ member port ↔ member port ↔ memberport-peer, with no
- * Hazelcast. The fleet is faked: a kernel signing key and its JWK, a CA (the
+ * The generated member port (tacplus#212, on gRPC since #321), driven over
+ * real sockets in-process: memberport-peer ↔ member port ↔ member port ↔
+ * memberport-peer, with no Hazelcast, and hand-driven tunnel streams for what a
+ * generated member port never sends. The fleet is faked: a kernel signing key and its JWK, a CA (the
  * fleet trust bundle) and serving certificates with SPIFFE SANs.
  */
 class MemberPortBehaviorTest {
@@ -254,9 +273,10 @@ class MemberPortBehaviorTest {
         }
     }
 
-    // ---- Raw member-protocol client (for faults) ----
+    // ---- Raw member tunnel client (for faults) ----
 
-    SSLSocket rawTls(InetSocketAddress addr, boolean alpn) throws Exception {
+    /** A TLS socket to a member port that trusts the fleet CA; {@code alpn} null offers none. */
+    SSLSocket rawTls(InetSocketAddress addr, String alpn) throws Exception {
         KeyStore ts = KeyStore.getInstance(KeyStore.getDefaultType());
         ts.load(null, null);
         ts.setCertificateEntry("ca", fleet.ca);
@@ -265,9 +285,9 @@ class MemberPortBehaviorTest {
         SSLContext ctx = SSLContext.getInstance("TLSv1.3");
         ctx.init(null, tmf.getTrustManagers(), null);
         SSLSocket s = (SSLSocket) ctx.getSocketFactory().createSocket();
-        if (alpn) {
+        if (alpn != null) {
             SSLParameters p = s.getSSLParameters();
-            p.setApplicationProtocols(new String[] {MemberPort.ALPN});
+            p.setApplicationProtocols(new String[] {alpn});
             s.setSSLParameters(p);
         }
         s.connect(addr, 5_000);
@@ -276,22 +296,87 @@ class MemberPortBehaviorTest {
         return s;
     }
 
-    static void frame(OutputStream out, int type, byte[] payload) throws IOException {
-        frame(out, type, payload.length, payload);
+    /** A gRPC channel to a member port that skips the member port's own checks of the receiver. */
+    ManagedChannel rawChannel(InetSocketAddress addr) throws Exception {
+        ManagedChannel ch = NettyChannelBuilder.forAddress(addr)
+                .sslContext(GrpcSslContexts.configure(SslContextBuilder.forClient(), SslProvider.JDK)
+                        .trustManager(InsecureTrustManagerFactory.INSTANCE).build())
+                .build();
+        closers.add(ch::shutdownNow);
+        return ch;
     }
 
-    static void frame(OutputStream out, int type, int declaredLength, byte[] payload) throws IOException {
-        out.write(type);
-        out.write(declaredLength >>> 24);
-        out.write(declaredLength >>> 16);
-        out.write(declaredLength >>> 8);
-        out.write(declaredLength);
-        out.write(payload);
-        out.flush();
+    /** One member tunnel stream, driven by hand: what a peer that is not a generated member port can send. */
+    static final class Raw {
+        final ClientCall<MemberChunk, MemberChunk> call;
+        final LinkedBlockingQueue<MemberChunk> received = new LinkedBlockingQueue<>();
+        final CompletableFuture<Status> closed = new CompletableFuture<>();
+        final CompletableFuture<Metadata> headers = new CompletableFuture<>();
+
+        Raw(ManagedChannel ch, String token) {
+            call = ch.newCall(MemberPort.OPEN_METHOD, CallOptions.DEFAULT);
+            Metadata md = new Metadata();
+            if (token != null) {
+                md.put(MemberPort.AUTHORIZATION, "Bearer " + token);
+            }
+            call.start(new ClientCall.Listener<MemberChunk>() {
+                @Override
+                public void onHeaders(Metadata h) {
+                    headers.complete(h);
+                }
+
+                @Override
+                public void onMessage(MemberChunk m) {
+                    received.add(m);
+                }
+
+                @Override
+                public void onClose(Status status, Metadata trailers) {
+                    closed.complete(status);
+                }
+            }, md);
+            call.request(1_000_000);
+        }
+
+        synchronized Raw send(MemberChunk c) {
+            call.sendMessage(c);
+            return this;
+        }
+
+        synchronized void cancel() {
+            call.cancel("test: cut off without last", null);
+        }
+
+        MemberChunk next() throws InterruptedException {
+            MemberChunk m = received.poll(10, TimeUnit.SECONDS);
+            if (m == null) {
+                throw new AssertionError("no chunk within 10s; stream status " + closed.getNow(null));
+            }
+            return m;
+        }
+
+        Status status(long timeoutMillis) throws Exception {
+            return closed.get(timeoutMillis, TimeUnit.MILLISECONDS);
+        }
     }
 
-    static byte[] auth(String token) {
-        return token.getBytes(StandardCharsets.UTF_8);
+    static MemberChunk open() {
+        return MemberChunk.getDefaultInstance();
+    }
+
+    static MemberChunk join(String sessionId) {
+        return MemberChunk.newBuilder().setSessionId(sessionId).build();
+    }
+
+    static MemberChunk data(byte[] b) {
+        return MemberChunk.newBuilder().setPayload(ByteString.copyFrom(b)).build();
+    }
+
+    /** Opens a new session with {@code token} and returns its id. */
+    static String openSession(Raw r) throws InterruptedException {
+        MemberChunk first = r.send(open()).next();
+        assertTrue(!first.getSessionId().isEmpty(), "the server's first chunk names the session: " + first);
+        return first.getSessionId();
     }
 
     /** Reads until the peer drops the connection; true when it did within the timeout. */
@@ -301,7 +386,7 @@ class MemberPortBehaviorTest {
         byte[] buf = new byte[4096];
         try {
             while (in.read(buf) >= 0) {
-                // Drain whatever arrived before the drop (the receiver's AUTH).
+                // Drain whatever arrived before the drop.
             }
             return true;
         } catch (java.net.SocketTimeoutException e) {
@@ -309,6 +394,20 @@ class MemberPortBehaviorTest {
         } catch (IOException e) {
             return true;
         }
+    }
+
+    /**
+     * The black-box client saw its connection reset: on a read, or on a write
+     * when the writer met the RST first (a later read then sees EOF).
+     */
+    static boolean reset(MemberportPeer.Result r) {
+        return r.error != null && (r.error.contains("reset") || r.error.contains("Broken pipe"));
+    }
+
+    /** The status of a refused stream: the code, and no reason text. */
+    static void assertRefused(Status.Code code, Status status, String what) {
+        assertEquals(code, status.getCode(), what + ": " + status);
+        assertNull(status.getDescription(), what + ": a refusal carries no reason text");
     }
 
     // ==== Correctness ====
@@ -371,25 +470,26 @@ class MemberPortBehaviorTest {
     }
 
     @Test
-    void longStreamSpansSeveralInBandRefreshes() throws Exception {
-        // 3-second tokens renewed with 2 seconds left: a new token every second.
+    void byteSessionRunsAcrossSeveralTokenLifetimesBothWaysAtOnce() throws Exception {
+        // 3-second tokens renewed with 2 seconds left: the client rotates at 75%
+        // of each lifetime, about every 2.25 seconds.
         Minter am = new Minter(fleet, X, 3, 2);
         Minter bm = new Minter(fleet, X, 3, 2);
         MemberPort a = member(am, new AtomicReference<>(fleet.leaf(X, SVC, "Ed25519")), fleet.jwks::get);
         MemberPort b = member(bm, new AtomicReference<>(fleet.leaf(X, SVC, "Ed25519")), fleet.jwks::get);
-        MemberportPeer.Server server = push(21, 600_000, 22);
+        // Both directions trickle at once for about 8 seconds, so every cutover
+        // has bytes in flight each way.
+        MemberportPeer.Server server = track(new MemberportPeer.Server(MemberportPeer.Mode.PUSH, 21, 800_000, 22, 4096, 20));
         InetSocketAddress fwd = tunnel(a, b, server);
         long start = System.currentTimeMillis();
-        // About 7 seconds of trickle: well past two token lifetimes.
-        MemberportPeer.Result r = MemberportPeer.exchange(fwd, 22, 700_000, 21, 4096, 20, 0);
+        MemberportPeer.Result r = MemberportPeer.exchange(fwd, 22, 800_000, 21, 4096, 20, 0);
         long elapsed = System.currentTimeMillis() - start;
-        assertTrue(r.ok(600_000), "client: " + r);
+        assertTrue(r.ok(800_000), "client: no loss, duplication or reordering: " + r);
         waitFor("server result", 10_000, () -> server.results.size() == 1);
-        assertTrue(server.results.get(1).ok(700_000), "server: " + server.results.get(1));
-        assertTrue(elapsed > 6_000, "the stream must outlive two token lifetimes, took " + elapsed + "ms");
-        assertEquals(1, server.accepted.get(), "the stream must not reconnect");
-        assertTrue(am.mints.get() >= 4 && bm.mints.get() >= 4,
-                "both sides refresh in-band: a=" + am.mints.get() + " b=" + bm.mints.get());
+        assertTrue(server.results.get(1).ok(800_000), "server: " + server.results.get(1));
+        assertTrue(elapsed > 6_500, "the session must outlive two token lifetimes, took " + elapsed + "ms");
+        assertEquals(1, server.accepted.get(), "one byte session: the target was dialled once");
+        assertTrue(am.mints.get() >= 3, "the client rotated onto new tokens: " + am.mints.get() + " mints");
     }
 
     // ==== Backpressure ====
@@ -438,168 +538,210 @@ class MemberPortBehaviorTest {
         }
     }
 
-    // ==== Faults: refused or dropped, nothing forwarded ====
+    // ==== Refusals: fail fast, nothing forwarded ====
 
     InetSocketAddress listenerOnX(MemberportPeer.Server behind) throws Exception {
         return member(X).listen(loopback0(), behind.address());
     }
 
-    void assertRefusedBeforeForwarding(String what, byte[]... frames) throws Exception {
+    /** Opens a stream with {@code token} and asserts how it is refused, and that nothing was dialled. */
+    void assertOpenRefused(Status.Code code, String what, String token) throws Exception {
         MemberportPeer.Server behind = echo();
         InetSocketAddress port = listenerOnX(behind);
-        try (SSLSocket s = rawTls(port, true)) {
-            OutputStream out = s.getOutputStream();
-            try {
-                for (byte[] f : frames) {
-                    out.write(f);
-                }
-                out.flush();
-            } catch (IOException ignored) {
-                // Already dropped.
-            }
-            assertTrue(dropped(s, 5_000), what + ": the connection must be dropped");
-        }
+        Raw r = new Raw(rawChannel(port), token);
+        r.send(open()).send(data(new byte[] {1, 2, 3}));
+        assertRefused(code, r.status(5_000), what);
         Thread.sleep(200);
         assertEquals(0, behind.accepted.get(), what + ": nothing may reach the peer behind the port");
     }
 
-    static byte[] frameBytes(int type, int declaredLength, byte[] payload) throws IOException {
-        java.io.ByteArrayOutputStream b = new java.io.ByteArrayOutputStream();
-        frame(b, type, declaredLength, payload);
-        return b.toByteArray();
-    }
-
-    static byte[] frameBytes(int type, byte[] payload) throws IOException {
-        return frameBytes(type, payload.length, payload);
-    }
-
     @Test
-    void tokenOfAnotherTenantIsRefused() throws Exception {
-        assertRefusedBeforeForwarding("tenant Y's token",
-                frameBytes(MemberPort.FRAME_AUTH, auth(fleet.mint(SVC, Y, AUD, 300))),
-                frameBytes(MemberPort.FRAME_DATA, new byte[] {1, 2, 3}));
-    }
-
-    @Test
-    void noTokenIsRefused() throws Exception {
-        assertRefusedBeforeForwarding("DATA before AUTH", frameBytes(MemberPort.FRAME_DATA, new byte[] {1, 2, 3}));
-        assertRefusedBeforeForwarding("CLOSE_WRITE before AUTH", frameBytes(MemberPort.FRAME_CLOSE_WRITE, new byte[0]));
-    }
-
-    @Test
-    void expiredTokenIsRefused() throws Exception {
+    void badMissingOrExpiredTokensAreUnauthenticated() throws Exception {
+        assertOpenRefused(Status.Code.UNAUTHENTICATED, "no token", null);
+        assertOpenRefused(Status.Code.UNAUTHENTICATED, "garbage token", "not-a-token");
         // Ten seconds past: inside the JWT clock-skew window, still refused.
-        assertRefusedBeforeForwarding("expired token",
-                frameBytes(MemberPort.FRAME_AUTH, auth(fleet.mint(SVC, X, AUD, -10))));
-    }
-
-    @Test
-    void wrongAudienceServiceOrSigningKeyIsRefused() throws Exception {
-        assertRefusedBeforeForwarding("gRPC audience", frameBytes(MemberPort.FRAME_AUTH, auth(fleet.mint(SVC, X, SVC, 300))));
-        assertRefusedBeforeForwarding("another service",
-                frameBytes(MemberPort.FRAME_AUTH, auth(fleet.mint("other", X, AUD, 300))));
+        assertOpenRefused(Status.Code.UNAUTHENTICATED, "expired token", fleet.mint(SVC, X, AUD, -10));
+        assertOpenRefused(Status.Code.UNAUTHENTICATED, "gRPC audience", fleet.mint(SVC, X, SVC, 300));
         ImmutableKey rogue = ImmutableKey.from(KeyHelpers.newEd25519Key());
-        assertRefusedBeforeForwarding("unknown signing key",
-                frameBytes(MemberPort.FRAME_AUTH, auth(fleet.mint(rogue, SVC, X, AUD, 300))));
-        assertRefusedBeforeForwarding("garbage token", frameBytes(MemberPort.FRAME_AUTH, auth("not-a-token")));
+        assertOpenRefused(Status.Code.UNAUTHENTICATED, "unknown signing key", fleet.mint(rogue, SVC, X, AUD, 300));
     }
 
     @Test
-    void garbledOrOversizedFramesAreRefused() throws Exception {
-        assertRefusedBeforeForwarding("unknown frame type", frameBytes(9, new byte[] {1}));
-        assertRefusedBeforeForwarding("oversized AUTH", frameBytes(MemberPort.FRAME_AUTH, 1 << 20, new byte[64]));
-        assertRefusedBeforeForwarding("empty AUTH", frameBytes(MemberPort.FRAME_AUTH, new byte[0]));
+    void validTokensNotAllowedHereArePermissionDenied() throws Exception {
+        assertOpenRefused(Status.Code.PERMISSION_DENIED, "tenant Y's token", fleet.mint(SVC, Y, AUD, 300));
+        assertOpenRefused(Status.Code.PERMISSION_DENIED, "another service", fleet.mint("other", X, AUD, 300));
     }
 
     @Test
-    void plaintextAndNonMemberTlsPeersAreRefused() throws Exception {
+    void aDataChunkCannotOpenAStream() throws Exception {
+        MemberportPeer.Server behind = echo();
+        Raw r = new Raw(rawChannel(listenerOnX(behind)), fleet.mint(SVC, X, AUD, 300));
+        r.send(data(new byte[] {1, 2, 3}));
+        assertRefused(Status.Code.PERMISSION_DENIED, r.status(5_000), "data before the session opens");
+        assertEquals(0, behind.accepted.get());
+    }
+
+    @Test
+    void plaintextAndNonGrpcTlsPeersAreRefused() throws Exception {
         MemberportPeer.Server behind = echo();
         InetSocketAddress port = listenerOnX(behind);
         try (Socket plain = new Socket()) {
             plain.connect(port, 5_000);
             OutputStream out = plain.getOutputStream();
-            out.write(frameBytes(MemberPort.FRAME_AUTH, auth(fleet.mint(SVC, X, AUD, 300))));
+            out.write("HZC".getBytes(StandardCharsets.US_ASCII));
+            out.write(new byte[64]);
             out.flush();
-            assertTrue(dropped(plain, 5_000), "a plaintext peer must be dropped");
+            assertTrue(dropped(plain, 12_000), "a plaintext peer must be dropped");
         }
         assertThrows(IOException.class, () -> {
-            try (SSLSocket noAlpn = rawTls(port, false)) {
-                OutputStream out = noAlpn.getOutputStream();
-                out.write(frameBytes(MemberPort.FRAME_AUTH, auth(fleet.mint(SVC, X, AUD, 300))));
-                out.flush();
-                if (noAlpn.getInputStream().read() < 0) {
+            try (SSLSocket old = rawTls(port, "tacplus-member/1")) {
+                old.getOutputStream().write(new byte[] {1, 0, 0, 0, 1, 0});
+                old.getOutputStream().flush();
+                if (old.getInputStream().read() < 0) {
                     throw new IOException("dropped");
                 }
             }
-        }, "a TLS peer without the member ALPN must be dropped");
+        }, "a #212 TLS-framing peer (ALPN tacplus-member/1) must be refused");
         Thread.sleep(200);
         assertEquals(0, behind.accepted.get(), "nothing may reach the peer behind the port");
     }
 
     @Test
-    void garbledFrameMidStreamDropsAndForwardsNothingAfterIt() throws Exception {
+    void aStreamThatNeverSendsItsFirstChunkIsDroppedAtTheAdmissionDeadline() throws Exception {
         MemberportPeer.Server behind = echo();
-        InetSocketAddress port = listenerOnX(behind);
-        try (SSLSocket s = rawTls(port, true)) {
-            OutputStream out = s.getOutputStream();
-            frame(out, MemberPort.FRAME_AUTH, auth(fleet.mint(SVC, X, AUD, 300)));
-            DataInputStream in = new DataInputStream(s.getInputStream());
-            assertEquals(MemberPort.FRAME_AUTH, in.readUnsignedByte(), "the receiver answers with its own AUTH");
-            byte[] theirs = new byte[in.readInt()];
-            in.readFully(theirs);
-            frame(out, MemberPort.FRAME_DATA, new byte[] {1, 2, 3, 4});
-            assertEquals(MemberPort.FRAME_DATA, in.readUnsignedByte(), "echoed DATA");
-            assertEquals(4, in.readInt());
-            byte[] echoed = new byte[4];
-            in.readFully(echoed);
-            assertArrayEquals(new byte[] {1, 2, 3, 4}, echoed);
-            frame(out, MemberPort.FRAME_DATA, MemberPort.MAX_DATA_BYTES + 1, new byte[0]);
-            assertTrue(dropped(s, 5_000), "an oversized DATA frame drops the connection");
-        }
-        assertEquals(4, behind.bytesReceived.get(), "only the bytes before the bad frame were forwarded");
+        Raw r = new Raw(rawChannel(listenerOnX(behind)), fleet.mint(SVC, X, AUD, 300));
+        long start = System.currentTimeMillis();
+        Status s = r.status(20_000);
+        long elapsed = System.currentTimeMillis() - start;
+        assertTrue(!s.isOk() && elapsed < 14_000, "dropped at the 10-second admission deadline: " + s + " after " + elapsed + "ms");
+        assertEquals(0, behind.accepted.get(), "nothing reached the peer behind the port");
+    }
+
+    // ==== Sessions: binding and faults ====
+
+    @Test
+    void aRotationPresentingAnotherSubjectsTokenIsRefused() throws Exception {
+        MemberportPeer.Server behind = echo();
+        ManagedChannel ch = rawChannel(listenerOnX(behind));
+        Raw first = new Raw(ch, fleet.mint(SVC, X, AUD, 300));
+        String id = openSession(first);
+        Raw otherTenant = new Raw(ch, fleet.mint(SVC, Y, AUD, 300));
+        otherTenant.send(join(id));
+        assertRefused(Status.Code.PERMISSION_DENIED, otherTenant.status(5_000), "tenant Y's token with X's session id");
+        Raw otherService = new Raw(ch, fleet.mint("other", X, AUD, 300));
+        otherService.send(join(id));
+        assertRefused(Status.Code.PERMISSION_DENIED, otherService.status(5_000), "another service's token with the session id");
+        Raw unknown = new Raw(ch, fleet.mint(SVC, X, AUD, 300));
+        unknown.send(join("no-such-session"));
+        assertRefused(Status.Code.PERMISSION_DENIED, unknown.status(5_000), "an unknown session id");
+        // The session itself is untouched by the refused rotations.
+        first.send(data(new byte[] {7, 8, 9}));
+        assertArrayEquals(new byte[] {7, 8, 9}, first.next().getPayload().toByteArray(), "the session still echoes");
+        assertEquals(1, behind.accepted.get());
     }
 
     @Test
-    void expiredTokenWithoutRefreshDropsTheConnection() throws Exception {
+    void anOldStreamCutOffWithoutLastDropsTheSessionAndDoesNotSplice() throws Exception {
         MemberportPeer.Server behind = echo();
-        InetSocketAddress port = listenerOnX(behind);
-        try (SSLSocket s = rawTls(port, true)) {
-            OutputStream out = s.getOutputStream();
-            frame(out, MemberPort.FRAME_AUTH, auth(fleet.mint(SVC, X, AUD, 2)));
-            long start = System.currentTimeMillis();
-            assertTrue(dropped(s, 6_000), "a token that expires unrefreshed drops the connection");
-            long after = System.currentTimeMillis() - start;
-            assertTrue(after < 4_000, "dropped within the token's lifetime plus a beat, took " + after + "ms");
-        }
-        // And through a real member whose identity stops renewing.
-        Minter stuck = new Minter(fleet, X, 2, 1);
-        stuck.neverRenew = true;
-        MemberPort a = member(stuck, new AtomicReference<>(fleet.leaf(X, SVC, "Ed25519")), fleet.jwks::get);
-        MemberportPeer.Server echo = echo();
-        InetSocketAddress fwd = tunnel(a, member(X), echo);
-        MemberportPeer.Result r = MemberportPeer.exchange(fwd, 41, 400_000, 41, 2048, 20, 0);
-        assertTrue(!r.ok(400_000), "the stream must be cut when the token lapses: " + r);
-        assertTrue(r.firstMismatch < 0, "what did arrive is intact: " + r);
+        ManagedChannel ch = rawChannel(listenerOnX(behind));
+        Raw old = new Raw(ch, fleet.mint(SVC, X, AUD, 300));
+        String id = openSession(old);
+        old.send(data(new byte[] {1, 2, 3}));
+        assertArrayEquals(new byte[] {1, 2, 3}, old.next().getPayload().toByteArray());
+        Raw next = new Raw(ch, fleet.mint(SVC, X, AUD, 300));
+        assertEquals(id, next.send(join(id)).next().getSessionId(), "the rotation is attached");
+        // The old stream ends with no last: a fault, not a cutover.
+        old.cancel();
+        next.send(data(new byte[] {4, 5, 6}));
+        Status s = next.status(5_000);
+        assertTrue(!s.isOk(), "the new stream is dropped with the session: " + s);
+        waitFor("the connection behind the port to end", 5_000, () -> behind.results.size() == 1);
+        assertEquals(3, behind.bytesReceived.get(), "nothing sent on the new stream was spliced on");
+        String error = String.valueOf(behind.results.get(1).error);
+        assertTrue(error.contains("reset"), "the connection behind the port is reset, not closed: " + error);
     }
 
     @Test
-    void refreshedTokenOfAnotherTenantDropsTheConnection() throws Exception {
-        MemberportPeer.Server behind = echo();
-        InetSocketAddress port = listenerOnX(behind);
-        try (SSLSocket s = rawTls(port, true)) {
-            OutputStream out = s.getOutputStream();
-            frame(out, MemberPort.FRAME_AUTH, auth(fleet.mint(SVC, X, AUD, 300)));
-            frame(out, MemberPort.FRAME_AUTH, auth(fleet.mint(SVC, Y, AUD, 300)));
-            frame(out, MemberPort.FRAME_DATA, new byte[] {9});
-            assertTrue(dropped(s, 5_000), "a refresh into another tenant drops the connection");
+    void aReceiverEndingItsStreamWithoutLastResetsTheSendersLocalConnection() throws Exception {
+        // A receiver that echoes one chunk, then ends the stream OK with no last:
+        // the sender must not take that for a clean end.
+        MemberPort.Material cert = fleet.leaf(X, SVC, "EC");
+        String token = fleet.mint(SVC, X, AUD, 300);
+        ServerCallHandler<MemberChunk, MemberChunk> handler = (call, headers) -> {
+            Metadata h = new Metadata();
+            h.put(MemberPort.MEMBER_TOKEN, token);
+            call.sendHeaders(h);
+            call.request(1_000_000);
+            return new ServerCall.Listener<MemberChunk>() {
+                boolean first = true;
+
+                @Override
+                public void onMessage(MemberChunk m) {
+                    if (first) {
+                        first = false;
+                        call.sendMessage(join("cut-session"));
+                    } else if (!m.getPayload().isEmpty()) {
+                        call.sendMessage(data(m.getPayload().toByteArray()));
+                        call.close(Status.OK, new Metadata());
+                    }
+                }
+            };
+        };
+        Server server = NettyServerBuilder.forAddress(loopback0())
+                .sslContext(GrpcSslContexts.configure(SslContextBuilder.forServer(cert.key, cert.chain), SslProvider.JDK).build())
+                .addService(ServerServiceDefinition.builder(MemberPort.SERVICE_NAME).addMethod(MemberPort.OPEN_METHOD, handler).build())
+                .build()
+                .start();
+        closers.add(server::shutdownNow);
+        InetSocketAddress fwd = member(X).forward(new InetSocketAddress(InetAddress.getLoopbackAddress(), server.getPort()));
+        try (Socket s = new Socket()) {
+            s.connect(fwd, 5_000);
+            s.setSoTimeout(5_000);
+            s.getOutputStream().write(new byte[] {1, 2, 3});
+            byte[] echoed = new byte[3];
+            new DataInputStream(s.getInputStream()).readFully(echoed);
+            assertArrayEquals(new byte[] {1, 2, 3}, echoed);
+            IOException e = assertThrows(IOException.class, () -> s.getInputStream().read(),
+                    "a stream that ends without last is a fault, not an EOF");
+            assertTrue(String.valueOf(e.getMessage()).contains("reset"), "the local connection is reset: " + e);
         }
-        assertEquals(0, behind.bytesReceived.get(), "nothing after the bad refresh is forwarded");
+    }
+
+    @Test
+    void cutoverWithLastInBothDirectionsLosesNothing() throws Exception {
+        MemberportPeer.Server behind = echo();
+        ManagedChannel ch = rawChannel(listenerOnX(behind));
+        Raw old = new Raw(ch, fleet.mint(SVC, X, AUD, 300));
+        String id = openSession(old);
+        old.send(data(new byte[] {1, 2, 3}));
+        Raw next = new Raw(ch, fleet.mint(SVC, X, AUD, 300));
+        assertEquals(id, next.send(join(id)).next().getSessionId());
+        // Bytes sent on the new stream before the old one's last wait for it.
+        next.send(data(new byte[] {7, 8}));
+        old.send(data(new byte[] {4, 5, 6})).send(MemberChunk.newBuilder().setLast(true).build());
+        java.io.ByteArrayOutputStream onOld = new java.io.ByteArrayOutputStream();
+        while (true) {
+            MemberChunk c = old.next();
+            onOld.write(c.getPayload().toByteArray());
+            if (c.getLast()) {
+                break;
+            }
+        }
+        assertEquals(Status.Code.OK, old.status(5_000).getCode(), "the server ends the old stream after its own last");
+        java.io.ByteArrayOutputStream onNew = new java.io.ByteArrayOutputStream();
+        while (onOld.size() + onNew.size() < 8) {
+            onNew.write(next.next().getPayload().toByteArray());
+        }
+        byte[] all = new byte[8];
+        System.arraycopy(onOld.toByteArray(), 0, all, 0, onOld.size());
+        System.arraycopy(onNew.toByteArray(), 0, all, onOld.size(), onNew.size());
+        assertArrayEquals(new byte[] {1, 2, 3, 4, 5, 6, 7, 8}, all, "in order across the cutover, each way");
     }
 
     // ==== Failure modes ====
 
     @Test
-    void stalledMintDropsTheConnectionAtExpiry() throws Exception {
+    void aMintFailureDropsTheSessionAtExpiry() throws Exception {
         Minter am = new Minter(fleet, X, 3, 2);
         MemberPort a = member(am, new AtomicReference<>(fleet.leaf(X, SVC, "Ed25519")), fleet.jwks::get);
         MemberportPeer.Server echo = echo();
@@ -611,10 +753,53 @@ class MemberPortBehaviorTest {
             MemberportPeer.Result r = MemberportPeer.exchange(fwd, 51, 2_000_000, 51, 2048, 10, 0);
             long elapsed = System.currentTimeMillis() - start;
             assertTrue(!r.ok(2_000_000) && r.firstMismatch < 0, "cut, intact: " + r);
-            assertTrue(elapsed < 8_000, "dropped at the token's expiry, took " + elapsed + "ms");
+            assertTrue(reset(r), "the local connection is reset: " + r);
+            assertTrue(elapsed < 5_000, "dropped at the token's expiry, took " + elapsed + "ms");
         } finally {
             am.stall.countDown();
         }
+    }
+
+    @Test
+    void aRevokedCallerIsCutOffWithinOneLifetime() throws Exception {
+        // The identity is revoked: it gets no new token, only the one in hand.
+        Minter revoked = new Minter(fleet, X, 3, 1);
+        MemberPort a = member(revoked, new AtomicReference<>(fleet.leaf(X, SVC, "Ed25519")), fleet.jwks::get);
+        MemberportPeer.Server echo = echo();
+        InetSocketAddress fwd = tunnel(a, member(X), echo);
+        revoked.token();
+        revoked.neverRenew = true;
+        long start = System.currentTimeMillis();
+        MemberportPeer.Result r = MemberportPeer.exchange(fwd, 41, 2_000_000, 41, 2048, 10, 0);
+        long elapsed = System.currentTimeMillis() - start;
+        assertTrue(!r.ok(2_000_000) && r.firstMismatch < 0, "cut, intact: " + r);
+        assertTrue(elapsed < 4_500, "cut off within one token lifetime, took " + elapsed + "ms");
+        // And a new connection with the expired token in hand is refused at once.
+        MemberportPeer.Result again = MemberportPeer.exchange(fwd, 42, 1000, 42);
+        assertTrue(!again.ok(1000) && again.received == 0, "refused: " + again);
+    }
+
+    @Test
+    void aRefusedTunnelResetsItsLocalConnectionWellUnderASecond() throws Exception {
+        MemberPort x = member(X);
+        MemberportPeer.Server behind = echo();
+        InetSocketAddress xPort = x.listen(loopback0(), behind.address());
+        // Warm up the JVM's TLS and gRPC paths on an admitted tunnel first.
+        assertTrue(MemberportPeer.exchange(member(X).forward(xPort), 1, 1000, 1).ok(1000));
+        InetSocketAddress fromY = member(Y).forward(xPort);
+        try (Socket s = new Socket()) {
+            s.connect(fromY, 5_000);
+            s.getOutputStream().write(new byte[] {1, 2, 3});
+            s.setSoTimeout(5_000);
+            long start = System.currentTimeMillis();
+            IOException e = assertThrows(IOException.class, () -> s.getInputStream().read(),
+                    "the black-box client must see the connection reset");
+            long elapsed = System.currentTimeMillis() - start;
+            assertTrue(!(e instanceof java.net.SocketTimeoutException) && String.valueOf(e.getMessage()).contains("reset"),
+                    "ECONNRESET, not a timeout or EOF: " + e);
+            assertTrue(elapsed < 1_000, "reset well under a second, took " + elapsed + "ms");
+        }
+        assertEquals(1, behind.accepted.get(), "the refused tunnel opened no local connection behind the port");
     }
 
     @Test
@@ -664,10 +849,11 @@ class MemberPortBehaviorTest {
         MemberPort b = member(new Minter(fleet, X, 300, 60), bCert, fleet.jwks::get);
         MemberportPeer.Server echo = echo();
         InetSocketAddress bAddr = b.listen(loopback0(), echo.address());
-        InetSocketAddress fwd = member(X).forward(bAddr);
         for (int round = 0; round < 4; round++) {
             BigInteger expected = ((X509Certificate) bCert.get().chain[0]).getSerialNumber();
             assertEquals(expected, presentedSerial(bAddr), "round " + round + " serves the current certificate");
+            // A new forward is a new channel: its handshake sees this round's certificate.
+            InetSocketAddress fwd = member(X).forward(bAddr);
             for (int i = 0; i < 12; i++) {
                 long seed = round * 100 + i;
                 MemberportPeer.Result r = MemberportPeer.exchange(fwd, seed, 1000, seed);
@@ -677,46 +863,8 @@ class MemberPortBehaviorTest {
         }
     }
 
-    @Test
-    void aTricklingPeerIsDroppedAtTheAdmissionDeadline() throws Exception {
-        MemberportPeer.Server behind = echo();
-        InetSocketAddress port = listenerOnX(behind);
-        try (SSLSocket s = rawTls(port, true)) {
-            byte[] frame = frameBytes(MemberPort.FRAME_AUTH, auth(fleet.mint(SVC, X, AUD, 300)));
-            OutputStream out = s.getOutputStream();
-            long start = System.currentTimeMillis();
-            boolean dropped = false;
-            // One byte every 2 seconds: each read is quick, the whole is not.
-            for (int i = 0; i < frame.length && System.currentTimeMillis() - start < 20_000; i++) {
-                try {
-                    out.write(frame[i]);
-                    out.flush();
-                } catch (IOException e) {
-                    dropped = true;
-                    break;
-                }
-                s.setSoTimeout(2_000);
-                try {
-                    if (s.getInputStream().read() < 0) {
-                        dropped = true;
-                        break;
-                    }
-                } catch (java.net.SocketTimeoutException stillOpen) {
-                    // Expected while the deadline has not passed.
-                } catch (IOException e) {
-                    dropped = true;
-                    break;
-                }
-            }
-            long elapsed = System.currentTimeMillis() - start;
-            assertTrue(dropped, "a peer that trickles its AUTH must be dropped");
-            assertTrue(elapsed < 14_000, "dropped at the 10-second admission deadline, took " + elapsed + "ms");
-        }
-        assertEquals(0, behind.accepted.get(), "nothing reached the peer behind the port");
-    }
-
     BigInteger presentedSerial(InetSocketAddress port) throws Exception {
-        try (SSLSocket s = rawTls(port, true)) {
+        try (SSLSocket s = rawTls(port, "h2")) {
             return ((X509Certificate) s.getSession().getPeerCertificates()[0]).getSerialNumber();
         }
     }
@@ -740,50 +888,56 @@ class MemberPortBehaviorTest {
         assertEquals(0, echo2.accepted.get());
     }
 
-    @Test
-    void receiverAuthOfAnotherTenantIsRefusedBySender() throws Exception {
-        // A fake receiver with a valid tenant-X certificate that answers with
-        // tenant Y's token: the sender must refuse it and send no DATA.
+    /**
+     * A fake receiver with a valid tenant-X certificate: it answers each stream
+     * with {@code token} in its headers and attaches it, then counts the data
+     * chunks it gets.
+     */
+    InetSocketAddress fakeReceiver(String token, AtomicInteger dataChunks) throws Exception {
         MemberPort.Material cert = fleet.leaf(X, SVC, "EC");
-        KeyStore ks = KeyStore.getInstance("PKCS12");
-        ks.load(null, null);
-        ks.setKeyEntry("k", cert.key, "pw".toCharArray(), cert.chain);
-        KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        kmf.init(ks, "pw".toCharArray());
-        SSLContext ctx = SSLContext.getInstance("TLSv1.3");
-        ctx.init(kmf.getKeyManagers(), null, null);
-        AtomicInteger dataFrames = new AtomicInteger();
-        CountDownLatch done = new CountDownLatch(1);
-        try (SSLServerSocket server = (SSLServerSocket) ctx.getServerSocketFactory().createServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
-            SSLParameters p = server.getSSLParameters();
-            p.setApplicationProtocols(new String[] {MemberPort.ALPN});
-            server.setSSLParameters(p);
-            Thread t = new Thread(() -> {
-                try (SSLSocket s = (SSLSocket) server.accept()) {
-                    DataInputStream in = new DataInputStream(s.getInputStream());
-                    in.readUnsignedByte();
-                    in.readFully(new byte[in.readInt()]);
-                    frame(s.getOutputStream(), MemberPort.FRAME_AUTH, auth(fleet.mint(SVC, Y, AUD, 300)));
-                    while (true) {
-                        int type = in.readUnsignedByte();
-                        in.readFully(new byte[in.readInt()]);
-                        if (type == MemberPort.FRAME_DATA) {
-                            dataFrames.incrementAndGet();
-                        }
+        ServerCallHandler<MemberChunk, MemberChunk> handler = (call, headers) -> {
+            Metadata h = new Metadata();
+            h.put(MemberPort.MEMBER_TOKEN, token);
+            call.sendHeaders(h);
+            call.request(1_000_000);
+            return new ServerCall.Listener<MemberChunk>() {
+                boolean first = true;
+
+                @Override
+                public void onMessage(MemberChunk m) {
+                    if (first) {
+                        first = false;
+                        call.sendMessage(join("fake-session"));
+                    } else if (!m.getPayload().isEmpty()) {
+                        dataChunks.incrementAndGet();
                     }
-                } catch (IOException ignored) {
-                    // The sender hung up.
-                } finally {
-                    done.countDown();
                 }
-            });
-            t.setDaemon(true);
-            t.start();
-            InetSocketAddress fwd = member(X).forward((InetSocketAddress) server.getLocalSocketAddress());
-            MemberportPeer.Result r = MemberportPeer.exchange(fwd, 91, 1000, 91);
-            assertTrue(!r.ok(1000) && r.received == 0, "refused: " + r);
-            assertTrue(done.await(5, TimeUnit.SECONDS), "the sender hangs up");
-            assertEquals(0, dataFrames.get(), "the sender sends no DATA to a receiver it refused");
+            };
+        };
+        Server server = NettyServerBuilder.forAddress(loopback0())
+                .sslContext(GrpcSslContexts.configure(SslContextBuilder.forServer(cert.key, cert.chain), SslProvider.JDK).build())
+                .addService(ServerServiceDefinition.builder(MemberPort.SERVICE_NAME).addMethod(MemberPort.OPEN_METHOD, handler).build())
+                .build()
+                .start();
+        closers.add(server::shutdownNow);
+        return new InetSocketAddress(InetAddress.getLoopbackAddress(), server.getPort());
+    }
+
+    @Test
+    void receiverTokenOfAnotherTenantIsRefusedBySender() throws Exception {
+        AtomicInteger dataChunks = new AtomicInteger();
+        InetSocketAddress fwd = member(X).forward(fakeReceiver(fleet.mint(SVC, Y, AUD, 300), dataChunks));
+        MemberportPeer.Result r = MemberportPeer.exchange(fwd, 91, 1000, 91);
+        assertTrue(!r.ok(1000) && r.received == 0, "refused: " + r);
+        Thread.sleep(300);
+        assertEquals(0, dataChunks.get(), "the sender sends no bytes to a receiver it refused");
+        // The receiver's own valid member token is admitted: the same fake then works.
+        AtomicInteger admittedChunks = new AtomicInteger();
+        InetSocketAddress ok = member(X).forward(fakeReceiver(fleet.mint(SVC, X, AUD, 300), admittedChunks));
+        try (Socket s = new Socket()) {
+            s.connect(ok, 5_000);
+            s.getOutputStream().write(new byte[] {1, 2, 3});
+            waitFor("bytes to reach the admitted receiver", 5_000, () -> admittedChunks.get() > 0);
         }
     }
 

@@ -1,0 +1,226 @@
+= init
+> Bash git status | head -20 && git log --oneline -5 && grep -n '^<<<<<<<\|^=======\|^>>>>>>>' PROPOSALS.md && gh issue view 284 --repo tacplus-dev/tacplus --comments | tail -40
+< On branch looper/tacplus-284 Your branch is up to date with 'origin/main'.  Changes not staged for commit:   (use "git add <file>..." to update what will be committed)   (use "git restore <file>..." to discard changes in working directory) 	modified:   PROPOSALS.md 	modified:   STATE.md 	modified:  ...
+> Read /builds/looper/tacplus/issues/284/PROPOSALS.md
+< 1	# Proposals: tacplus 2	 3	Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones into ROADMAP.md (via an agent); 4	the looper then marks it `promoted` or `declined` here with the date. 5	 6	## Open 7	<<<<<<< HEAD 8	- **Run every generated Java MCP gate in current-generati...
+Keep both.
+> Bash sed -i -e '7d;13d;25d' PROPOSALS.md && sed -i '/^<<<<<<< HEAD$/d;/^=======$/d;/^>>>>>>> origin\/main$/d' PROPOSALS.md; sed -n 6,26p PROPOSALS.md; grep -rn '^<<<<<<<\|^>>>>>>>' --include='*' . 2>/dev/null | grep -v '^./.git/' | head; git diff origin/main --stat | tail -3; git log origin/looper/tacplu...
+< ## Open - **Run every generated Java MCP gate in current-generation** (2026-11-04, #284): `<Service>McpTest.java` (the   main-method gate `mcp_dispatch_tests_gen.go` emits beside each Java MCP dispatch) ran nowhere: no gate executed   it, so its tool-reach and stamped-field cases were compile-checke...
+= thinking_tokens
+= thinking_tokens
+> Bash git log v2.6.1..origin/main --oneline; git diff origin/main -- STATE.md; gh pr view 326 --repo tacplus-dev/tacplus --json state,title,body,baseRefName | head -c 2500; echo; gh pr view 316 --repo tacplus-dev/tacplus --json state,title,mergedAt
+< a857460c ROADMAP: approved by Jody 2026-11-06 (#327,#266,#257) ae0ecfcf ROADMAP: #204 (cross-deployment S2S) from Next to Later, parked for a huddle (Jody, 2026-11-06) 38039051 HISTORY.md: #188 (looper) 2923a790 PROPOSALS.md: the nightly scan's proposals (looper) c9ea9ff2 ROADMAP: #259's split, #321...
+= thinking_tokens
+= thinking_tokens
+> Bash git fetch -q origin --tags && for t in v2.6.1 v2.6.0 v2.5.12 v2.5.11; do echo "$t $(git log -1 --format='%h %ci %s' $t)"; git branch -r --contains $t | head -3; done; git tag --sort=-v:refname | grep '^v2\.[56]\.' | head -4; git merge-base --is-ancestor v2.6.1 origin/main && echo "2.6.1 on main"
+< v2.6.1 59419d54 2026-11-05 23:49:17 +0000 Bound the disk the cross-test gates use: prune each leg's build once it passes (#282)   origin/HEAD -> origin/main   origin/looper/tacplus-190   origin/looper/tacplus-204 v2.6.0 87adda9e 2026-11-04 22:16:53 +0000 VERSIONING, CONTRIBUTING: supported lines thr...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash git tag --merged origin/release/2.6 --sort=-v:refname | head -3; git log --oneline v2.6.0..origin/release/2.6 | head; echo ---; git log --oneline v2.6.0..v2.6.1 | head -30; echo; grep -n -i -A12 'backport' docs/VERSIONING.md | head -60
+< v2.6.0 v2.5.0 v2.4.0 7929adfd Merge pull request #325 from tacplus-dev/backport/282-release-2.6 ba19db05 Bound the disk the cross-test gates use: prune each leg's build once it passes (#282) --- 59419d54 Bound the disk the cross-test gates use: prune each leg's build once it passes (#282) b213b777 H...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n -i 'release\|tag' CONTRIBUTING.md | head -30; grep -n -i '^release\|^gates\|tag' justfile | head; ls .github/workflows
+< 42:  `release/MAJOR.MINOR` branch. A bug it cannot reproduce gets a comment and 65:released within the last twelve months, on its `release/MAJOR.MINOR` branch. 67:The current line is 2.6: each `release/2.N` takes fixes only (pull requests, no 68:direct pushes), and a patch release is a `v2.N.P` tag ...
+= thinking_tokens
+= thinking_tokens
+> Bash git diff origin/looper/tacplus-284 --stat | tail -5; go build ./... && go vet ./pkg/... && go test ./pkg/... 2>&1 | grep -v '^ok\|no test files' | tail -20; echo rc=$?
+<  cross-test/w2s-validate/run.sh                     |   1 +  cross-test/wire-corpus/run.sh                      |   1 +  cross-test/zero-rpc-s2s/run.sh                     |   1 +  scripts/cross_test_cargo_target_test.go            | 101 ++++++++  27 files changed, 206 insertions(+), 662 deletions(-...
+I've resolved the PROPOSALS.md conflict by keeping both entries. Now I'm building and testing before committing; the proto sources need generating first.
+> Bash grep -n -B2 -A8 '^gates:' justfile; grep -n '^proto\|^gen\|^build' justfile
+< 169-# installable, use `just gates-container` instead: it runs these same gates 170-# inside the CI base image, whose protoc is pinned well under the ceiling. 171:gates: 172-  #!/usr/bin/env bash 173-  set -uo pipefail 174-  # Hold the tree lock across the WHOLE suite, not once per gate: taking it p...
+> Bash just generate 2>&1 | tail -5 && go vet ./pkg/... && go test ./... 2>&1 | grep -v '^ok\|no test files' | tail -20; echo rc=${PIPESTATUS[0]}
+= task_started
+= task_notification
+< bash scripts/with-tree-lock.sh go generate ./pkg/internal/proto/spec/... go: downloading google.golang.org/grpc v1.83.2 go: downloading golang.org/x/sys v0.47.0 go: downloading google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa rc=0
+Go vet and tests pass. Committing and checkpointing.
+> Bash git status --short | grep -v '^ M' ; git add -A && git status --short | wc -l && git commit -q -F - <<'EOF' A caller's tid is its token's tid claim, never its namespace (#284)  The namespace claim names a tenant (/tenants/<name>) for users, sessions and, since kernel#23, tenant-owned services, so th...
+< ?? cross-test/current-generation/testdata/go/tenant_record_c2s_test.go ?? cross-test/current-generation/testdata/java/TenantRecordC2STest.java 34 8b666e0b A caller's tid is its token's tid claim, never its namespace (#284) [2026-11-06T23:57:44Z] checkpoint of #284 (a step) pushed to looper/tacplus-2...
+= thinking_tokens
+= thinking_tokens
+Fixing the STATE.md line first: it names v2.5.12, which another backport has already taken.
+> Bash python3 - <<'EOF' p='STATE.md'; s=open(p).read() old="""reader read it only, never derive a tid from the namespace (a name), and refuse a caller without it (#284; on main,   and backported to release/2.5 by pull request as v2.5.12 once it merges).""" new="""reader read it only, never derive a tid fr...
+< pid=18849
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash git log --oneline -1 && git status --short | head; cat /tmp/land284.log
+< a4f821d6 A caller's tid is its token's tid claim, never its namespace (#284) [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-)
+= thinking_tokens
+= thinking_tokens
+The land is queued. While it runs, I'm correcting the patch tags named in the two backport PRs.
+> Bash cd /tmp && gh pr view 316 --repo tacplus-dev/tacplus --json body -q .body > /tmp/b316.md; gh pr view 326 --repo tacplus-dev/tacplus --json body -q .body > /tmp/b326.md; grep -n 'v2\.5\.1[0-9]' /tmp/b316.md; grep -n 'v2\.6\.[0-9]' /tmp/b326.md
+< 3:**Patch to cut once this merges: `v2.5.12`** (the next 2.5 patch; v2.5.11 is the newest tag on the branch). Kernel pins it for tacplus-dev/kernel#32. 3:**Patch to cut once this merges: `v2.6.1`** (the next 2.6 patch; v2.6.0 is the newest tag on the branch). Kernel pins it for tacplus-dev/kernel#32...
+> Bash python3 - <<'EOF' import re a=open('/tmp/b316.md').read() a=a.replace("**Patch to cut once this merges: `v2.5.12`** (the next 2.5 patch; v2.5.11 is the newest tag on the branch).", "**Patch to cut once this merges: `v2.5.13`** (the next 2.5 patch; v2.5.12, cut for #282's backport #297 since this pul...
+< **Patch to cut once this merges: `v2.5.13`** (the next 2.5 patch; v2.5.12, cut for #282's backport #297 since this pull request opened, is the newest tag on the branch). Kernel pins it for tacplus-dev/kernel#32. **No tag to cut on this branch once it merges.** The 2.6 patch carrying this fix is `v2....
+= thinking_tokens
+= thinking_tokens
+> Bash gh pr edit 316 --repo tacplus-dev/tacplus --body-file /tmp/b316.md >/dev/null && echo ok; sleep 5; gh pr view 326 --repo tacplus-dev/tacplus --json mergeable,headRefName -q '.mergeable+" "+.headRefName'; cat /tmp/land284.log
+= task_started
+= task_notification
+< ok MERGEABLE backport/284-release-2.6 [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at...
+While the land waits in the queue, I'm running the trace check (rule 13).
+> Bash /usr/local/bin/looper-trace check 2>&1 | tail -15
+= task_started
+= task_notification
+< handler cross-test/server-runtime/client/go/main.go:112 checkPage (inbound: api)   causal cross-test/server-runtime/client/go/main.go:114 ListEventsPaged: DROPS the inbound trace_id handler cross-test/server-runtime/client/go/main.go:137 checkFailClosed (inbound: api)   causal cross-test/server-runt...
+These are the same findings filed earlier as #310 and #311. Checking they're still open, then waiting on the land.
+> Bash gh issue view 310 --repo tacplus-dev/tacplus --json state,title -q '.state+" "+.title'; gh issue view 311 --repo tacplus-dev/tacplus --json state,title -q '.state+" "+.title'
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< OPEN outbound-deadline fixture: mid forwards the trace_id to leaf but no test asserts it arrives; the gate has no just recipe OPEN server-runtime Go driver: four calls with no inbound request lack their `// trace: unrelated:` marker, so looper-trace check fails on main
+< 
+> Bash until ! kill -0 18849 2>/dev/null; do sleep 30; done; cat /tmp/land284.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bd0nr4k00. Output is being written to: /builds/looper/tacplus/homes/looper-284/tmp/claude-61000/-builds-looper-tacplus-issues-284/7a61fc87-c9e3-4ad6-9868-b9a5fec7fde9/tasks/bd0nr4k00.output. You will be notified when it completes. To check interim output, use R...
+= thinking_tokens
+= thinking_tokens
+The land is queued, and I'll be notified when the manager gives its verdict. I'm waiting on that now.
+> Monitor until ! kill -0 18849 2>/dev/null; do sleep 30; done; echo "land exited"; tail -5 /tmp/land284.log
+= permission_denied
+< This Bash command contains multiple operations. The following parts require approval: kill -0 18849, tail -5 /tmp/land284.log
+The background waiter already covers it; I'll wait for its notification.
+> Bash sleep 1; cat /tmp/land284.log | tail -3
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+Still waiting on the manager's verdict for the land, queued 50 minutes ago. I'm still polling.
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log; date -u
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+Still waiting on the land verdict (queued at 23:57Z, now about 1h45m). Polling continues.
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+The background waiter reached its time limit and was stopped. The land itself is still queued (PID 18849), so I'm polling it in the foreground.
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log; date -u
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land284.log; date -u
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+About an hour of run time is left. I'm saving a checkpoint with what remains, then I'll keep waiting.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 284 --checkpoint "Fix a4f821d6 (rebased on main, PROPOSALS resolved) queued for land since 23:57Z 2026-11-06. PR #316 body updated to v2.5.13 (v2.5.12 was taken by #297). Left: land verdict; then full just gates on main (unless land ran full set), ta...
+< [2026-11-07T02:40:43Z] checkpoint of #284 (a step) pushed to looper/tacplus-284:  37 files changed, 1387 insertions(+), 209 deletions(-)
+> Bash git status --short | head; for i in $(seq 1 18); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -3 /tmp/land284.log
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -3 /tmp/land284.log
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -3 /tmp/land284.log; date -u
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -3 /tmp/land284.log; date -u
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -3 /tmp/land284.log; date -u
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+About 15 minutes are left before this run is stopped, and the land is still queued. One more short poll, then I'll wrap up.
+> Bash for i in $(seq 1 14); do kill -0 18849 2>/dev/null || break; sleep 30; done; tail -3 /tmp/land284.log; date -u
+= task_started
+= task_notification
+< [2026-11-06T23:57:52Z] checkpoint of #284 (land queued) pushed to looper/tacplus-284:  37 files changed, 1268 insertions(+), 209 deletions(-) [2026-11-06T23:57:54Z] queued: the manager of tacplus merges looper/tacplus-284 after the lands queued before it, one at a time, and says on the issue what ca...
+= thinking_tokens
+= thinking_tokens
+The fix for #284 is rebased onto main and queued to land. The manager hasn't given a verdict: it's been queued since 23:57Z and this run is about to be stopped, so the issue stays open. The manager will still land it after this run ends and post the result on #284.
+
+**Done this run**
+- **Rebase conflict:** the only conflict was in `PROPOSALS.md`. I kept both entries: main's new floor-check proposal from the nightly scan and this issue's Java MCP gate proposal.
+- **Commit `a4f821d6`:** the `tid` claim fix, rebased onto main. It also corrects the `STATE.md` line, which named a tag that another backport has since taken.
+- **Checks:** `go vet ./pkg/...` and `go test ./...` pass after `just generate`. I didn't run the full `just gates` this run.
+- **PR #316 (release/2.5):** `v2.5.12` was cut for #282's backport (#297) after #316 was opened, so I updated its description to name `v2.5.13` as the tag to cut once it merges.
+- **Trace check:** `looper-trace check` reports only the existing findings in `cross-test/server-runtime` and `cross-test/outbound-deadline`, which are #311 and #310 (both still open). This change touches no service handler.
+
+**Left for the next run** (saved in the checkpoint)
+1. Wait for the land's verdict.
+2. Run the full `just gates` on main, unless the land already ran the full set.
+3. Tag and push `v2.6.2` on main. `v2.6.1` was itself cut on main, and main has taken only planning-file commits since, so the patch comes from main.
+4. Update PR #326 (release/2.6). Its description still names `v2.6.1`, which is taken. It should say that no tag is cut on release/2.6 and that `v2.6.2` from main carries the fix. That is how #282 and its backport #325 were handled. I held this edit until `v2.6.2` actually exists.
+5. Post the outcome comment and close #284.
+= success: The fix for #284 is rebased onto main and queued to land. The manager hasn't given a verdict: it's been queued since 23:57Z and this run is about to be stopped, so the issue stays open. The manager will still land it after this run ends and post the result on #284.
+
+**Done this run**
+- **Rebase conflict:** the only conflict was in `PROPOSALS.md`. I kept both entries: main's new floor-check proposal from the nightly scan and this issue's Java MCP gate proposal.
+- **Commit `a4f821d6`:** the `tid` claim fix, rebased onto main. It also corrects the `STATE.md` line, which named a tag that another backport has since taken.
+- **Checks:** `go vet ./pkg/...` and `go test ./...` pass after `just generate`. I didn't run the full `just gates` this run.
+- **PR #316 (release/2.5):** `v2.5.12` was cut for #282's backport (#297) after #316 was opened, so I updated its description to name `v2.5.13` as the tag to cut once it merges.
+- **Trace check:** `looper-trace check` reports only the existing findings in `cross-test/server-runtime` and `cross-test/outbound-deadline`, which are #311 and #310 (both still open). This change touches no service handler.
+
+**Left for the next run** (saved in the checkpoint)
+1. Wait for the land's verdict.
+2. Run the full `just gates` on main, unless the land already ran the full set.
+3. Tag and push `v2.6.2` on main. `v2.6.1` was itself cut on main, and main has taken only planning-file commits since, so the patch comes from main.
+4. Update PR #326 (release/2.6). Its description still names `v2.6.1`, which is taken. It should say that no tag is cut on release/2.6 and that `v2.6.2` from main carries the fix. That is how #282 and its backport #325 were handled. I held this edit until `v2.6.2` actually exists.
+5. Post the outcome comment and close #284.

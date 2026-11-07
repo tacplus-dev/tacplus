@@ -4,6 +4,19 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **trace_id in 2.7: field 200 on every sys wire message, additive traced helper forms** (2026-11-06, #313 → #327):
+  the hub's split of #313. Every request-building generated helper (state clients' `Fetch`/`Delete`/`Query`, record
+  readers, record-plane and kernel state helpers) gets a form that takes `trace_id`, beside today's, and every sys
+  contract wire message gets field 200 (not `spec.proto` option schemas, `<T>Public` or `TraceEvent`). Unblocks
+  coop#7, oauth#19, blobstore#12, llmproxy#18/#19, mailbox#12, stratum#29. On ROADMAP.md since 2026-11-06.
+- **trace_id in 3.0: one traced signature per helper; a message without field 200 fails generation** (2026-11-06,
+  #313 → #328): drops the untraced forms #327 adds, and turns today's silent skip of a message that lacks field 200
+  or declares `trace_id`/`noop` at another number (`InjectTraceFields`) into an error (a warning from 2.7). Needs a
+  ROADMAP.md line citing #313.
+- **Trace clearing on queue and command state paths** (2026-11-06, #313): v2.6.2 clears `trace_id` where a value is
+  stored (state `Put`/`Set`, store-derived subscriptions, store wrappers, disk helpers) and leaves it on topic
+  publishes, queue offers and commands, which deliver a message to a consumer that propagates it. If a queue is to
+  count as storage (its items persist until taken), the consumer loses the trace; that is a decision, not a fix.
 - **A floor check over every version tacplus emits, and template manifests that take versions from one place**
   (2026-11-06, nightly scan, #338): four nights of scans found advisories in floors the generated manifests declare
   (#264, #309, #312, #338). No scanner sees them: a lockfile resolve, including the proposed `just generated`

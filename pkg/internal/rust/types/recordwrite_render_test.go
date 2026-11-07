@@ -265,3 +265,100 @@ func TestRustRecordApplyRoutePin(t *testing.T) {
 		t.Fatal("the route is bound before the op loop, and each op's route pin follows its tenant pin")
 	}
 }
+
+// A stored row never keeps a trace (#313): the wrapper clears the injected
+// trace_id off every row a write surface request carries — item, and
+// ReplaceIfUnchanged's expected_item (a case of the expected oneof), whose
+// compare value would otherwise mismatch the stored (traceless) row — before
+// the handler, and leaves the request's own trace_id, the call's, alone.
+func TestRustRecordWriteClearsRowTrace(t *testing.T) {
+	put := rustPutXidRowMethod()
+	put.RecordEntry.RowFields, put.RecordEntry.RowOneofs = []string{"item"}, []string{""}
+	got := renderRustRecordWrite(t, put)
+	clear := strings.Index(got, "if let Some(__r) = req.item.as_mut() {\n            __r.trace_id.clear();\n        }")
+	if clear < 0 || !strings.Contains(got, "// A stored row never keeps a trace (#313).") {
+		t.Fatalf("PutXidRow must clear item's trace:\n%s", got)
+	}
+	if floor, call := strings.Index(got, "let __record_required = req.durability;"), strings.Index(got, "self.handler.put_xid_row("); !(floor < clear && clear < call) {
+		t.Fatalf("the trace clear runs after the floor and before the handler: floor %d, clear %d, handler %d", floor, clear, call)
+	}
+	if strings.Contains(got, "req.trace_id.clear()") {
+		t.Errorf("the request's own trace_id is the call's and stays:\n%s", got)
+	}
+
+	// No tenant and no floor: the clear alone still renders, over a mutable req.
+	replace := &parser.MethodInfo{
+		Name: "ReplaceIfUnchangedXidRow", InputType: "ReplaceIfUnchangedXidRowRequest", OutputType: "RecordWriteResult",
+		FullInputType: "query.ReplaceIfUnchangedXidRowRequest", FullOutputType: "query.RecordWriteResult",
+		RecordEntry: &parser.RecordEntry{Record: "ident.XidRow", KeyPath: []string{"item", "xid"}, KeyKind: "string",
+			RowFields: []string{"item", "expected_item"}, RowOneofs: []string{"", "expected"}},
+	}
+	got = renderRustRecordWrite(t, replace)
+	for _, want := range []string{
+		"let mut req = req;",
+		"if let Some(__r) = req.item.as_mut() {",
+		"if let Some(replace_if_unchanged_xid_row_request::Expected::ExpectedItem(__r)) = req.expected.as_mut() {",
+		"let req = req;",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("ReplaceIfUnchangedXidRow wrapper missing %q\n%s", want, got)
+		}
+	}
+
+	// A record type without the injected trace_id generates exactly as before.
+	skipped := mustGenerateRustGRPCWrapper(t, rustRecordWriteService(replace), replace, "query", "vservices", map[string]string{}, "",
+		map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{"ident.XidRow": true}, nil)
+	if strings.Contains(skipped, "__r.trace_id") || strings.Contains(skipped, "#313") || strings.Contains(skipped, "let mut req = req;") {
+		t.Errorf("a record type without the injected trace_id clears nothing:\n%s", skipped)
+	}
+
+	apply := rustRecordApplyMethod()
+	apply.RecordApplyOps[0].RowFields, apply.RecordApplyOps[0].RowOneofs = []string{"item"}, []string{""}
+	apply.RecordApplyOps[1].RowFields, apply.RecordApplyOps[1].RowOneofs = []string{"item"}, []string{""}
+	apply.RecordApplyOps = append(apply.RecordApplyOps, parser.RecordEntry{
+		OpsField: "ops", OpType: "query.RecordOp", OneofName: "op", CaseField: "replace_if_unchanged_xid_row",
+		CaseType: "query.ReplaceIfUnchangedXidRowRequest", Record: "ident.XidRow", RPC: "ReplaceIfUnchangedXidRow",
+		Durability: spec.Durability_DURABILITY_REMOTE, KeyPath: []string{"item", "xid"}, KeyKind: "string",
+		RowFields: []string{"item", "expected_item"}, RowOneofs: []string{"", "expected"},
+	})
+	got = renderRustRecordWrite(t, apply)
+	for _, want := range []string{
+		"if let Some(__r) = __c.item.as_mut() {",
+		"if let Some(replace_if_unchanged_xid_row_request::Expected::ExpectedItem(__r)) = __c.expected.as_mut() {",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Apply wrapper missing %q\n%s", want, got)
+		}
+	}
+	if n := strings.Count(got, "__r.trace_id.clear();"); n != 4 {
+		t.Errorf("Apply must clear exactly the four op rows, got %d:\n%s", n, got)
+	}
+}
+
+// A (spec.service_store) <T>StoreService's Put stores its request as the row
+// (#313): the wrapper clears the request's trace_id after the request trace
+// event has read it, just before the handler, and the trace events after the
+// handler carry trace_id_saved, the trace the call arrived with.
+func TestRustStoreServicePutClearsRowTrace(t *testing.T) {
+	put := &parser.MethodInfo{
+		Name: "Put", InputType: "Task", OutputType: "Empty",
+		FullInputType: "tasks.Task", FullOutputType: "google.protobuf.Empty",
+	}
+	render := func(kind string) string {
+		svc := &parser.ServiceInfo{Name: "TaskStoreService", IsS2S: true, Synthesized: kind != "", SynthesizedKind: kind, Methods: []*parser.MethodInfo{put}}
+		return mustGenerateRustGRPCWrapper(t, svc, put, "tasks", "vservices", map[string]string{}, "",
+			map[string]service.AccountingInfo{}, proto.SkippedTraceTypes{}, nil)
+	}
+	got := render(parser.SynthesizedKindStore)
+	save, event, clear, call := strings.Index(got, "let trace_id_saved = req.trace_id.clone();"), strings.Index(got, "trace_id: req.trace_id.clone(),"),
+		strings.Index(got, "let mut req = req;\n        req.trace_id.clear();"), strings.Index(got, "self.handler.put(")
+	if !(save >= 0 && save < event && event < clear && clear < call) {
+		t.Fatalf("save, request trace event, clear, handler: %d %d %d %d\n%s", save, event, clear, call, got)
+	}
+	if after := got[call:]; strings.Contains(after, "req.trace_id") || strings.Count(after, "trace_id: trace_id_saved.clone(),") != 2 {
+		t.Errorf("both post-handler trace events must carry the saved trace:\n%s", after)
+	}
+	if plain := render(""); strings.Contains(plain, "req.trace_id.clear()") || strings.Contains(plain, "#313") {
+		t.Errorf("a hand-written Put stores nothing the wrapper knows of:\n%s", plain)
+	}
+}

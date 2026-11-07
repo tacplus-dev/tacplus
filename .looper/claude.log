@@ -1,0 +1,173 @@
+= init
+> Bash git status --short | head -30 && git log --oneline -5 && git log --oneline origin/main -3 && grep -n '^<<<<<<<\|^=======\|^>>>>>>>' PROPOSALS.md; gh issue view 300 --repo tacplus-dev/tacplus --comments | tail -20
+<  M PROPOSALS.md  M STATE.md  M cross-test/README.md  M cross-test/cert-stream/testdata/CertStreamBehaviorTest.java  M cross-test/current-generation/run.sh  M cross-test/current-generation/testdata/java/AccountingSinkDurableTest.java  M cross-test/current-generation/testdata/rust/accounting_sink_dura...
+> Read /builds/looper/tacplus/issues/300/PROPOSALS.md
+< 1	# Proposals: tacplus 2	 3	Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones into ROADMAP.md (via an agent); 4	the looper then marks it `promoted` or `declined` here with the date. 5	 6	## Open 7	<<<<<<< HEAD 8	- **Concurrent legs inside the other cross-test runners**...
+Keep both sides.
+> Bash sed -i -e '/^<<<<<<< HEAD$/d' -e '/^=======$/d' -e '/^>>>>>>> origin\/main$/d' PROPOSALS.md && grep -rn '^<<<<<<<\|^>>>>>>>' --include='*' . 2>/dev/null | grep -v '^./.git/' | head; git diff --stat; git diff origin/main --stat | tail -3
+<  PROPOSALS.md                                       |  15 +  STATE.md                                           |   5 +-  cross-test/README.md                               |  24 +  .../testdata/CertStreamBehaviorTest.java           |   8 +-  cross-test/current-generation/run.sh               | 884 ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash git fetch -q origin && git log --oneline origin/main -1 && b=$(git merge-base origin/main origin/looper/tacplus-300) && git log --oneline $b..origin/main | cat && git diff --stat $b origin/main | tail -5 && git log --oneline $b..origin/looper/tacplus-300 | cat
+< a857460c ROADMAP: approved by Jody 2026-11-06 (#327,#266,#257) a857460c ROADMAP: approved by Jody 2026-11-06 (#327,#266,#257) ae0ecfcf ROADMAP: #204 (cross-deployment S2S) from Next to Later, parked for a huddle (Jody, 2026-11-06) 38039051 HISTORY.md: #188 (looper) 2923a790 PROPOSALS.md: the nightly...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash bash -n scripts/gates.sh cross-test/lib/jobs.sh cross-test/current-generation/run.sh cross-test/lib/cargo-target.sh && (cd scripts && timeout 900 go test ./... 2>&1 | tail -5); ls scripts/go.mod go.mod 2>/dev/null
+= task_started
+= task_notification
+< Exit code 2 go: downloading golang.org/x/mod v0.40.0 ok  	github.com/tacplus-dev/tacplus/scripts	19.386s go.mod
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash git add -A && git commit -q -F - <<'EOF' Run the gates and their legs concurrently, bounded, with a cap-independent verdict (#300)  A land ran the full gates serially and used about 1.5 of 16 CPUs, so it took hours. `just gates` now runs its independent gates through scripts/gates.sh with a concurre...
+< c3dc1134 Run the gates and their legs concurrently, bounded, with a cap-independent verdict (#300) a857460c ROADMAP: approved by Jody 2026-11-06 (#327,#266,#257) [2026-11-07T07:55:34Z] checkpoint of #300 (a step) pushed to looper/tacplus-300:  19 files changed, 1403 insertions(+), 471 deletions(-) p...
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Bash until ! kill -0 4017 2>/dev/null; do sleep 20; done; tail -30 /tmp/land300b.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bam9156dt. Output is being written to: /builds/looper/tacplus/homes/looper-300/tmp/claude-61000/-builds-looper-tacplus-issues-300/fb1aa655-1c86-4d91-ab70-d62afb593386/tasks/bam9156dt.output. You will be notified when it completes. To check interim output, use R...
+Resolved the PROPOSALS.md conflict, recommitted #300 as c3dc1134, and queued the land; waiting for its verdict.
+> Bash tail -5 /tmp/land300b.log
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+Queued; waiting for the manager's verdict.
+
+<br>
+> Bash until ! kill -0 4017 2>/dev/null; do sleep 30; done; tail -15 /tmp/land300b.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: buoelen1q). Output is being written to: /builds/looper/tacplus/homes/looper-300/tmp/claude-61000/-builds-looper-tacplus-issues-300/fb1aa655-1c86-4d91-ab70-d62afb593386/tasks/buoelen1q.output. You will be notified w...
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log; date -u
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log; date -u
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log; date -u
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log; date -u; git -C /builds/looper/tacplus/issues/300 log --oneline -3 origin/main | cat
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log; date -u
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log; date -u
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+Still waiting on the manager's verdict for the land, which is queued behind other lands since 07:55Z. I'll keep polling.
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log; date -u
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log; date -u
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log; date -u
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+= thinking_tokens
+= thinking_tokens
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 300 --checkpoint "c3dc1134 (whole #300, PROPOSALS conflict resolved) committed and land queued 07:55Z (log /tmp/land300b.log). LEFT: land verdict (if it failed: fix and re-land), outcome comment, close." 2>&1 | tail -2 for i in $(seq 1 18); do kill -...
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log; date -u
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log; date -u
+= task_started
+= task_notification
+< [2026-11-07T10:38:09Z] checkpoint of #300 (a step) pushed to looper/tacplus-300:  20 files changed, 1503 insertions(+), 471 deletions(-) [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z...
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+= thinking_tokens
+= thinking_tokens
+> Bash git status --short | head; for i in $(seq 1 18); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log; date -u
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log; date -u
+> Bash for i in $(seq 1 19); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -4 /tmp/land300b.log; date -u
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash for i in $(seq 1 12); do kill -0 4017 2>/dev/null || break; sleep 30; done; tail -3 /tmp/land300b.log; date -u
+= task_started
+= task_notification
+< [2026-11-07T07:55:36Z] checkpoint of #300 (land queued) pushed to looper/tacplus-300:  20 files changed, 1408 insertions(+), 471 deletions(-) [2026-11-07T07:55:37Z] queued: the manager of tacplus merges looper/tacplus-300 after the lands queued before it, one at a time, and says on the issue what ca...
+#300 isn't on main yet: it has been waiting in the land queue since 07:55Z and is still there as my time runs out, so I have no verdict, haven't commented on the issue and haven't closed it.
+
+- **Conflict:** the branch conflicted with main only in `PROPOSALS.md`: two sets of new proposals added in the same place. I kept both, and nothing else needed changing.
+- **Commit:** `c3dc1134` is the whole #300 change as one commit on top of the current main. Main had only changed docs (`ROADMAP.md`, `HISTORY.md`, `PROPOSALS.md`) since the last land attempt, so the code is the same as what was queued then. It does what the issue asks:
+  - `just gates` runs the gates concurrently up to a cap (`GATES_JOBS`), keeps each gate's output, writes the log in a fixed order and prints each gate's wall time.
+  - current-generation runs its fixtures and language legs with the same cap.
+  - `scripts/gates_test.go` runs the gates with two different caps and checks the verdict is the same.
+  - It also fixes the timing assumptions in the stream-expiry, cert-stream, accounting-sink and DiskStoreTest tests that broke when gates ran side by side.
+- **Checks I ran:** a syntax check of the changed shell scripts, and `go test` in `scripts/` (`ok … scripts 19.386s`). I did not run the full `just gates` in this run; the land runs the full set before it merges.
+- **Checkpoint:** pushed at 10:38Z. It says the land is queued and what is left: get the verdict (fix and land again if it fails), post the outcome comment, close the issue.
+
+If my time runs out first, the manager still lands it and posts the verdict on the issue, and the next run finishes the issue.
+= success: #300 isn't on main yet: it has been waiting in the land queue since 07:55Z and is still there as my time runs out, so I have no verdict, haven't commented on the issue and haven't closed it.
+
+- **Conflict:** the branch conflicted with main only in `PROPOSALS.md`: two sets of new proposals added in the same place. I kept both, and nothing else needed changing.
+- **Commit:** `c3dc1134` is the whole #300 change as one commit on top of the current main. Main had only changed docs (`ROADMAP.md`, `HISTORY.md`, `PROPOSALS.md`) since the last land attempt, so the code is the same as what was queued then. It does what the issue asks:
+  - `just gates` runs the gates concurrently up to a cap (`GATES_JOBS`), keeps each gate's output, writes the log in a fixed order and prints each gate's wall time.
+  - current-generation runs its fixtures and language legs with the same cap.
+  - `scripts/gates_test.go` runs the gates with two different caps and checks the verdict is the same.
+  - It also fixes the timing assumptions in the stream-expiry, cert-stream, accounting-sink and DiskStoreTest tests that broke when gates ran side by side.
+- **Checks I ran:** a syntax check of the changed shell scripts, and `go test` in `scripts/` (`ok … scripts 19.386s`). I did not run the full `just gates` in this run; the land runs the full set before it merges.
+- **Checkpoint:** pushed at 10:38Z. It says the land is queued and what is left: get the verdict (fix and land again if it fails), post the outcome comment, close the issue.
+
+If my time runs out first, the manager still lands it and posts the verdict on the issue, and the next run finishes the issue.

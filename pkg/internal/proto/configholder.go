@@ -1174,7 +1174,11 @@ func GenerateTenantConfig(sourceProtoDir, flatProtoDir string, dirs ...string) e
 		fieldNum   int32
 	}
 	var slices []sliceEntry
-	for relPath, fileDesc := range dp.GetAllFiles() {
+	// Files in path order, not the map's: a legacy registry assigns a new
+	// slice's field here, and the same inputs must number the same way.
+	files := dp.GetAllFiles()
+	for _, relPath := range sortedFilePaths(files) {
+		fileDesc := files[relPath]
 		if IsInfraProtoFile(relPath, fileDesc) {
 			continue
 		}
@@ -1256,6 +1260,16 @@ func GenerateTenantConfig(sourceProtoDir, flatProtoDir string, dirs ...string) e
 	return nil
 }
 
+// sortedFilePaths returns files' paths in order.
+func sortedFilePaths(files map[string]*parser.FileDescriptor) []string {
+	paths := make([]string, 0, len(files))
+	for p := range files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 // GenerateProjectConfig scans flatProtoDir for messages annotated with
 // (spec.config_slice) project scope, assigns stable field numbers from the registry,
 // and writes generated/project_config.proto into each of dirs.
@@ -1284,7 +1298,11 @@ func GenerateProjectConfig(sourceProtoDir, flatProtoDir string, dirs ...string) 
 		fieldNum   int32
 	}
 	var slices []sliceEntry
-	for relPath, fileDesc := range dp.GetAllFiles() {
+	// Files in path order, not the map's: a legacy registry assigns a new
+	// slice's field here, and the same inputs must number the same way.
+	files := dp.GetAllFiles()
+	for _, relPath := range sortedFilePaths(files) {
+		fileDesc := files[relPath]
 		if IsInfraProtoFile(relPath, fileDesc) {
 			continue
 		}

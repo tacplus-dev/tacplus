@@ -1,8 +1,9 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-05 by looper (#213).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-06 by looper (#282).
 
-- **Version / line:** v2.6.0 (latest release, 2026-11-05, at 87adda9e; `release/2.6` cut at it); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
+- **Version / line:** v2.6.1 (latest release, 2026-11-06, tagged on main at 59419d54: v2.6.0 plus #282's gate-harness fix, which
+  reached `release/2.6` with #325); v2.6.0 (2026-11-05, at 87adda9e) cut `release/2.6`; main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
   generated write surface on the record query plane's S2S half (Get/Put/InsertIfAbsent/ReplaceIfUnchanged/Delete,
   Watch<T>Changes, the atomic Apply with canonical lock order), per-record-type durability (MEMORY/LOCAL/REMOTE),
@@ -105,9 +106,11 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-05 by lo
   `cross-test/redact` (`just redact`, in the gates) against a hand-built fixture. The legacy egress redaction
   (`(spec.redact)`, `(spec.data_entitlement)`, `Sanitize<T>`, `<T>Entitlement`) is deprecated (generation warns),
   removed in 3.0. Gaps: no cross-package sensitive tree, no oneof leaves, no client-only target (PROPOSALS.md).
-- **Released / deployed:** v2.6.0 is the newest release: the binaries and `checksums.txt`, and
-  `ghcr.io/tacplus-dev/tacplus/build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c`
-  (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.
+- **Released / deployed:** v2.6.1 is the newest release: the binaries and `checksums.txt`, and
+  `ghcr.io/tacplus-dev/tacplus/build:2.6.1@sha256:91f42995e0e3d6f959a7f75177caf94b2aded90fc36c8492dbcd320ca0d187f5`
+  (also `build:2.6`). Its compiler is v2.6.0's; it changes only the gate harness (#282). v2.6.0's
+  `build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c` was the first release with no
+  tacplus image (#193). Not deployed.
 - **Known gaps:** The member port needs kernel to mint `member:<svc>` (tacplus-dev/kernel#30) before Stratum adopts
   it (stratum#17); its ServiceManager wiring is compiled, not run (KNOWN_TEST_GAPS MP-1); Go and Rust do not generate
   it (#259 replaces it in all three). The redo service and the per-tenant Stratum that implement the redo contract are their repos'

@@ -30,6 +30,11 @@ import (
 // bundles.
 const openjmlProver = "z3_4_7"
 
+// openjmlTimeoutMillis bounds each proof attempt. OpenJML 21-0.23 hands the
+// value to z3 as milliseconds, though its help says seconds: 600 gave up on a
+// 15-second proof as UNKNOWN.
+const openjmlTimeoutMillis = "300000"
+
 // jmlSpecLineRe matches a JML method-spec line the generator writes.
 var jmlSpecLineRe = regexp.MustCompile(`^\s*//@\s*(requires|ensures)\b(.*?);?\s*$`)
 
@@ -207,9 +212,8 @@ func runOpenJmlEsc(path, classpath, specsDir string, methods []jmlMethod) string
 		"--esc",
 		"--progress",
 		"-nowarn",
-		// No --timeout: OpenJML 21-0.23 hands z3 a limit far below the seconds
-		// asked for (600 gave up on a 25-second proof as UNKNOWN in 14).
 		"--prover", openjmlProver,
+		"--timeout", openjmlTimeoutMillis,
 		"--specs-path", specsDir,
 		"-cp", classpath,
 		"--method", strings.Join(names, ","),

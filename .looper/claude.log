@@ -1,0 +1,342 @@
+= init
+> Bash cd /builds/looper/tacplus/issues/214; gh issue view 214 --repo tacplus-dev/tacplus --comments | tail -20; cat pkg/protosrc/resolve.go | grep -n "findLatestPatchTag\|compareSemverTags" ; git tag --sort=-v:refname | head -5; git branch -r | grep release; git log --oneline v2.6.1..origin/main | head -4...
+< association:	member edited:	false status:	none -- The looper of tacplus holds this issue back for now: both change depends-resolution (#205, starting; it goes first: land-pending). It plans again as each running issue ends, and every 5m while they run. Plan record: job https://gitlab.com/tacplus-dev...
+> Bash cd /builds/looper/tacplus/issues/214; git log --oneline v2.6.1..origin/main | wc -l; git log --oneline v2.6.1..origin/main | grep -v -i "history\|proposals\|roadmap\|state" ; sed -n 300,420p pkg/protosrc/resolve.go; grep -n "func\|PATCH\|regexp" pkg/fleet/version.go | head -30; ls pkg/protosrc/
+< 3 		if strings.HasPrefix(tag, "v") { 			gitTag = tag 		} 		if err := gitIn(dir, auth, "fetch", "origin", "--tags"); err != nil { 			return fmt.Errorf("git fetch --tags failed: %w", err) 		} 		if err := gitIn(dir, auth, "checkout", gitTag); err != nil { 			return fmt.Errorf("git checkout %s failed: %...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/214; grep -rn "compareSemverTags\|findLatestPatchTag" --include=*.go . ; grep -n "func Test\|git\b\|\"tag\"" pkg/protosrc/resolve_test.go | head -50; for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo $v $(git log -1 --format=%ci v$v.0); done
+< ./pkg/protosrc/resolve_test.go:83:			got := compareSemverTags(tt.a, tt.b) ./pkg/protosrc/resolve_test.go:85:				t.Errorf("compareSemverTags(%q, %q) = %d, want sign %d", tt.a, tt.b, got, tt.want) ./pkg/protosrc/resolve.go:323:		latestTag, err := findLatestPatchTag(dir, prefix) ./pkg/protosrc/resolve....
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/214; sed -n 1,200p docs/VERSIONING.md | grep -n -i "backport\|release/\|patch\|tag" | head -40; gh pr list --repo tacplus-dev/tacplus --state all --search "313 in:title" --limit 10; sed -n 60,90p pkg/protosrc/resolve_test.go; sed -n 226,330p pkg/protosrc/resolve_test...
+< 8:tacplus releases are `MAJOR.MINOR.PATCH` git tags `vMAJOR.MINOR.PATCH` 9:(`.github/workflows/release.yml` builds the binaries from the tag). 11:- **A patch is fixes only.** A new feature, a new annotation, a new generated 12:  surface or a changed generated surface never goes into a patch. A patch...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/214; sed -n 230,300p pkg/protosrc/resolve.go; sed -n 1,25p pkg/protosrc/resolve.go
+< 	// Held across clone+fetch+checkout: the whole sequence mutates this one 	// directory, so a concurrent build must queue behind it, not interleave. 	unlock, err := lockCache(dir) 	if err != nil { 		return nil, err 	} 	defer unlock()  	// Normalize X.Y.latest → X.Y for resolution 	resolvedTag := tag...
+= thinking_tokens
+= thinking_tokens
+Plan: add a fixture-repo test (fails now), then filter `findLatestPatchTag` to plain `vX.Y.PATCH` tags.
+> Edit /builds/looper/tacplus/issues/214/pkg/protosrc/resolve_test.go
+< The file /builds/looper/tacplus/issues/214/pkg/protosrc/resolve_test.go has been updated successfully.
+> Bash cd /builds/looper/tacplus/issues/214; go test ./pkg/protosrc/ -run TestFindLatestPatchTag 2>&1 | tail -8
+= task_started
+= task_notification
+< go: downloading go.uber.org/zap v1.27.1 go: downloading go.uber.org/multierr v1.11.0 --- FAIL: TestFindLatestPatchTagSkipsPreReleases (0.03s)     resolve_test.go:253: findLatestPatchTag(1.2) = "v1.2.10-rc.1", want v1.2.3     resolve_test.go:265: findLatestPatchTag(1.4) = "v1.4.0-rc.1", want an error...
+= thinking_tokens
+= thinking_tokens
+Fails as expected. Now the fix.
+> Bash cd /builds/looper/tacplus/issues/214; python3 - <<'EOF' p='pkg/protosrc/resolve_test.go' s=open(p).read() s=s.replace('''	for _, args := range [][]string{{"-C", repo, "tag", "v1.4.0-rc.1"}} { 		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil { 			t.Fatalf("git %v: %v\\n%s", ...
+< pkg/internal/common/model/model_test.go pkg/internal/go/types/stateclient_failclosed_test.go pkg/internal/proto/validate_c2s_topic_identity_test.go pkg/internal/proto/vservice_scan_test.go pkg/internal/python/types/naming_test.go ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	1.310s diff --git a/p...
+= thinking_tokens
+= thinking_tokens
+Test passes. Now commit, checkpoint, and run the gates.
+> Bash cd /builds/looper/tacplus/issues/214; grep -n "^gates\|^[a-z-]*:" justfile | head -30; git add -A; git commit -qm "protosrc: a MAJOR.MINOR line resolves to its latest patch release, never a pre-release (#214)  findLatestPatchTag listed vX.Y.* and ranked v1.2.3-rc.1 above v1.2.3 (the comparison read ...
+< 33:default: install 35:generate: 38:build: generate 42:install: generate 54:test: generate soundness 58:soundness: 61:vet: 66:example: 74:site: site-venv 81:site-serve: site-venv 85:site-venv: 94:current-generation: 97:current-generation-go: 100:current-generation-java: 103:current-generation-rust: ...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/214; sed -n 171,204p justfile; nohup just gates > /tmp/gates-214.log 2>&1 & echo $!
+< gates:   #!/usr/bin/env bash   set -uo pipefail   # Hold the tree lock across the WHOLE suite, not once per gate: taking it per   # gate would let another job interleave a regeneration between two of them.   # The nested `just` calls below re-enter this same lock.   if [[ "${TACPLUS_TREE_LOCK:-}" !=...
+Meanwhile, I'll check that the bug exists on each release branch and look at a prior backport PR's description as a template.
+> Bash cd /builds/looper/tacplus/issues/214; git fetch -q origin; for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "== $v $(git describe --tags --abbrev=0 origin/release/$v)"; git show origin/release/$v:pkg/protosrc/resolve.go | grep -c "tags := strings.Fields(string(output))"; done; gh pr view 336 --repo tac...
+< == 2.0 v2.0.19 1 == 2.1 v2.1.12 1 == 2.2 v2.2.9 1 == 2.3 v2.3.11 1 == 2.4 v2.4.11 1 == 2.5 v2.5.12 1 == 2.6 v2.6.0 1 Backport of #313 to release/2.6. It is a correctness and privacy fix, and the hub's split on #313 (2026-11-06) ships this half (items 3 and 4) as a patch on every supported line. The ...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/214; git ls-remote --tags origin | grep -E "v2\.[0-6]\.[0-9]+$" | awk '{print $2}' | sort -V | awk -F/ '{print $3}' | tr '\n' ' '; echo; gh issue view 313 --repo tacplus-dev/tacplus --json state,title -q '.state+" "+.title'; gh pr list --repo tacplus-dev/tacplus --st...
+< v2.0.0 v2.0.1 v2.0.2 v2.0.3 v2.0.4 v2.0.5 v2.0.6 v2.0.7 v2.0.8 v2.0.9 v2.0.10 v2.0.11 v2.0.12 v2.0.13 v2.0.14 v2.0.15 v2.0.16 v2.0.17 v2.0.18 v2.0.19 v2.1.0 v2.1.1 v2.1.2 v2.1.3 v2.1.4 v2.1.5 v2.1.6 v2.1.7 v2.1.8 v2.1.9 v2.1.10 v2.1.11 v2.1.12 v2.2.0 v2.2.1 v2.2.2 v2.2.3 v2.2.4 v2.2.5 v2.2.6 v2.2.7 ...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/214; gh pr view 330 --repo tacplus-dev/tacplus --json body -q .body | sed -n 1,4p; gh pr view 316 --repo tacplus-dev/tacplus --json body -q .body | sed -n 1,5p; tail -3 /tmp/gates-214.log
+< Backport of #313 to release/2.0. It is a correctness and privacy fix, and the hub's split on #313 (2026-11-06) ships this half (items 3 and 4) as a patch on every supported line. The fix on main is #313, landed by the looper.  **Patch to cut once this merges: `v2.0.19`** (the next 2.0 patch; v2.0.18...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Gates running. Preparing the backport branches in side worktrees meanwhile.
+> Bash cd /builds/looper/tacplus/issues/214; C=$(git rev-parse HEAD); for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do d=$HOME/bp-$v; git worktree add -q -b backport/214-release-$v $d origin/release/$v 2>&1|tail -1; (cd $d && git cherry-pick -x $C >/dev/null 2>&1 && go test ./pkg/protosrc/ 2>&1 | tail -1 || echo "...
+= task_started
+= task_notification
+< FAIL FAIL FAIL FAIL FAIL FAIL ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	1.289s
+> Bash cd $HOME/bp-2.0; git status --short; go test ./pkg/protosrc/ 2>&1 | tail -15
+< # github.com/tacplus-dev/tacplus/pkg/protosrc [github.com/tacplus-dev/tacplus/pkg/protosrc.test] pkg/protosrc/resolve.go:310:13: undefined: regexp FAIL	github.com/tacplus-dev/tacplus/pkg/protosrc [build failed] FAIL Shell cwd was reset to /builds/looper/tacplus/issues/214
+Older lines don't import `regexp`; add it on those branches.
+> Bash for v in 2.0 2.1 2.2 2.3 2.4 2.5; do cd $HOME/bp-$v; grep -q '"regexp"' pkg/protosrc/resolve.go || sed -i 's|^\t"path/filepath"$|\t"path/filepath"\n\t"regexp"|' pkg/protosrc/resolve.go; gofmt -l pkg/protosrc; r=$(go vet ./pkg/protosrc/ 2>&1 && go test ./pkg/protosrc/ 2>&1 | tail -1); echo "$v $r"; g...
+= task_started
+= task_notification
+< 2.0 ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	1.771s 2.1 ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	1.556s 2.2 ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	1.879s 2.3 ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	1.887s 2.4 ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	2.215s ...
+= thinking_tokens
+= thinking_tokens
+> Bash for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do cd $HOME/bp-$v; echo "$v $(go build ./... 2>&1 | tail -1) $(git log --oneline -1 | cut -c1-60)"; done; grep "^===" /tmp/gates-214.log | tail -4
+= task_started
+= task_notification
+< 2.0 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sys 8ce7d96a protosrc: a MAJOR.MINOR line resolves to its latest 2.1 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sys 815eb558 protosrc: a MAJOR.MINOR line resolves to its latest 2.2 	go get github.com/tacplus-dev/tacplus/targe...
+= thinking_tokens
+= thinking_tokens
+`./...` needs generated targets; build the non-generated packages instead.
+> Bash for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do cd $HOME/bp-$v; echo "$v $(go build ./pkg/... ./cmd/... 2>&1 | tail -1)rc=$?"; done
+< 2.0 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sysrc=0 2.1 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sysrc=0 2.2 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sysrc=0 2.3 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sysrc=0 2.4 	go get github.com/t...
+> Bash for v in 2.0 2.6; do cd $HOME/bp-$v; go build ./pkg/protosrc/ ./cmd/tacplus/ 2>&1 | tail -3; echo "$v rc=$?"; go list ./cmd/... 2>/dev/null | head -3; done
+< stat /builds/looper/tacplus/homes/looper-214/bp-2.0/cmd/tacplus: directory not found 2.0 rc=0 github.com/tacplus-dev/tacplus/cmd github.com/tacplus-dev/tacplus/cmd/build github.com/tacplus-dev/tacplus/cmd/registry stat /builds/looper/tacplus/homes/looper-214/bp-2.6/cmd/tacplus: directory not found 2...
+> Bash for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do cd $HOME/bp-$v; go build ./cmd/ ./pkg/protosrc/ ./pkg/generator/... 2>&1 | tail -2; echo "$v rc=${PIPESTATUS[0]}"; done
+< 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sys pattern ./pkg/generator/...: lstat ./pkg/generator/: no such file or directory 2.0 rc=1 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sys pattern ./pkg/generator/...: lstat ./pkg/generator/: no such file or directory 2.1 rc=1 	g...
+= thinking_tokens
+= thinking_tokens
+The touched package builds, vets and tests green on each backport branch; the rest needs the generated tree, which is out of scope for these branches. Waiting on main's gates.
+> Bash sleep 240; grep "^===" /tmp/gates-214.log | tail -3
+< <tool_use_error>Blocked: sleep 240 followed by: grep "^===" /tmp/gates-214.log tail -3. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain shorter sleeps to work around this bl...
+> Bash until grep -q "OVERALL" /tmp/gates-214.log || ! kill -0 5032 2>/dev/null; do sleep 20; done; grep "^===" /tmp/gates-214.log | grep -v "^=== [a-z-]* ===$"
+= background_tasks_changed
+= task_started
+< Command running in background with ID: b00z062r0. Output is being written to: /builds/looper/tacplus/homes/looper-214/tmp/claude-61000/-builds-looper-tacplus-issues-214/ccbbb06a-4784-4a67-a22d-d8415b8ba446/tasks/b00z062r0.output. You will be notified when it completes. To check interim output, use R...
+= thinking_tokens
+= thinking_tokens
+While gates run: a follow-up worth recording is the two separate tag resolvers (protosrc vs fleet). Checking PROPOSALS.md format.
+> Bash cd /builds/looper/tacplus/issues/214; head -30 PROPOSALS.md; grep -n "protosrc\|version.go\|resolver" PROPOSALS.md | head
+< # Proposals: tacplus  Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones into ROADMAP.md (via an agent); the looper then marks it `promoted` or `declined` here with the date.  ## Open - **A floor check over every version tacplus emits, and template manifests that take v...
+> Edit /builds/looper/tacplus/issues/214/PROPOSALS.md
+< The file /builds/looper/tacplus/issues/214/PROPOSALS.md has been updated successfully.
+> Bash cd /builds/looper/tacplus/issues/214; grep -n -i "pre-release\|prerelease\|depends.*latest patch" STATE.md | head; /usr/local/bin/looper-trace check 2>&1 | tail -5
+= task_started
+= task_notification
+< 91:  pre-releases excluded, and to that release's image on ghcr.io by digest; `fleet.lock` records version, commit and 124:  `depends`/`src` at a line can take a pre-release (#214). The record plane's tenant checks assume a tenant's FINDING dropped-trace cross-test/server-runtime/client/go/main.go:1...
+= thinking_tokens
+= thinking_tokens
+STATE.md line 124 names this gap; update it.
+> Bash cd /builds/looper/tacplus/issues/214; sed -n 120,128p STATE.md; /usr/local/bin/looper-trace check 2>&1 | grep FINDING | cut -d: -f1-3 | sort -u; gh issue list --repo tacplus-dev/tacplus --state all --search "server-runtime trace_id" --limit 5
+= task_started
+= task_notification
+<   `just verify-changed <sha>` says whether the nightly needs it; the pipeline that runs them on release tags and   nightly is tacplus-dev/looper#74, its nightly off until #211 and #257 pass. The new build image (Kani, cargo-fuzz, the launcher) is verified by   images.yml once pushed; the launcher an...
+> Bash cd /builds/looper/tacplus/issues/214; gh issue list --repo tacplus-dev/tacplus --state open --search "outbound-deadline" --limit 5; python3 - <<'EOF' p='STATE.md' s=open(p).read() s=s.replace("  `depends`/`src` at a line can take a pre-release (#214). The record plane","  The record plane") open(p,'...
+< 310	OPEN	outbound-deadline fixture: mid forwards the trace_id to leaf but no test asserts it arrives; the gate has no just recipe	bug, approved	2026-11-04T00:28:13Z 283	OPEN	Release-line build images build:2.0–2.5 are never rebuilt: each carries 156 fixed HIGH Debian findings (12 ImageMagick CVEs)	b...
+All trace findings are pre-existing and already filed (#310, #311). Committing the planning-file updates.
+> Bash cd /builds/looper/tacplus/issues/214; git commit -qam "STATE.md, PROPOSALS.md: #214's gap closed; one version resolver proposed  Co-Authored-By: Claude <noreply@anthropic.com>"; git log --oneline -3; /usr/local/bin/repo-looper --repo tacplus --issue 214 --checkpoint "Fix+test+docs committed on main ...
+< b413c34c STATE.md, PROPOSALS.md: #214's gap closed; one version resolver proposed ba249077 protosrc: a MAJOR.MINOR line resolves to its latest patch release, never a pre-release (#214) 2923a790 PROPOSALS.md: the nightly scan's proposals (looper) [2026-11-06T20:38:14Z] checkpoint of #214 (a step) pus...
+= thinking_tokens
+= thinking_tokens
+Starting the land in parallel with the local gates (the change is small; the land re-runs gates anyway).
+> Bash cd /builds/looper/tacplus/issues/214; nohup /usr/local/bin/repo-looper --repo tacplus --issue 214 --land > /tmp/land-214.log 2>&1 & echo $!
+< 25349
+> Bash until ! kill -0 25349 2>/dev/null; do sleep 30; done; tail -30 /tmp/land-214.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bo4eir911. Output is being written to: /builds/looper/tacplus/homes/looper-214/tmp/claude-61000/-builds-looper-tacplus-issues-214/ccbbb06a-4784-4a67-a22d-d8415b8ba446/tasks/bo4eir911.output. You will be notified when it completes. To check interim output, use R...
+Both the gates and the land are running in the background; I'll continue when they report.
+> Bash tail -3 /tmp/land-214.log; grep "^===" /tmp/gates-214.log | tail -2
+< [2026-11-06T20:38:20Z] checkpoint of #214 (land queued) pushed to looper/tacplus-214:  8 files changed, 369 insertions(+), 6 deletions(-) === test rc=0 === === current-generation ===
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -2 /tmp/land-214.log
+= task_started
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-06T20:38:20Z] checkpoint of #214 (land queued) pushed to looper/tacplus-214:  8 files changed, 369 insertions(+), 6 deletions(-) [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -1 /tmp/land-214.log
+= task_started
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -1 /tmp/land-214.log
+= task_started
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+> Bash tail -c 1500 /tmp/gates-214.log; ps -o pid,etime,cmd --ppid $(pgrep -u $(id -u) -f "just gates" | head -1) 2>/dev/null | head
+< ust cross-test fixture     PASS rust      Removed 601 files, 3.2GiB total ==> Checking config defaults parity across go, java, rust     PASS config defaults parity (11 constants matched across go/java/rust) ==> Checking config defaults BEHAVIORAL parity across go, java, rust     PASS config defaults...
+Progressing. Continuing to wait.
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -1 /tmp/land-214.log
+= task_started
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -1 /tmp/land-214.log
+= task_started
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+> Bash tail -c 600 /tmp/gates-214.log; date
+< xture ==> Compiling rust record-egress fixture     PASS rust record-egress      Removed 600 files, 3.2GiB total     Removed 16M fixture tree recordegress-rust ==> Generating go record-egress HOST fixture ==> Compiling go record-egress HOST fixture     PASS go record-egress host     Removed 14M fixtu...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -1 /tmp/land-214.log
+= task_started
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -1 /tmp/land-214.log
+= task_started
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -1 /tmp/land-214.log; tail -c 200 /tmp/gates-214.log
+= task_started
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. xtur...
+Still waiting on the local gates (in current-generation, ~1h in) and the land queue.
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -1 /tmp/land-214.log
+= task_started
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -1 /tmp/land-214.log
+= task_started
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -1 /tmp/land-214.log; tail -c 150 /tmp/gates-214.log; date
+= task_started
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.  (st...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Time is a factor (gates ~2h in, run ends ~00:25 UTC), so I'll open the backport PRs now; the fix content is final.
+> Bash cd /builds/looper/tacplus/issues/214; declare -A NEXT=([2.0]=v2.0.20 [2.1]=v2.1.13 [2.2]=v2.2.10 [2.3]=v2.3.12 [2.4]=v2.4.12 [2.5]=v2.5.13 [2.6]=v2.6.3); for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do cd $HOME/bp-$v last=$(git describe --tags --abbrev=0 origin/release/$v) extra=""; [ $v != 2.6 ] && extra=...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= vcs_state_changed
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/342 https://github.com/tacplus-dev/tacplus/pull/343 https://github.com/tacplus-dev/tacplus/pull/344 https://github.com/tacplus-dev/tacplus/pull/345 https://github.com/tacplus-dev/tacplus/pull/346 https://github.com/tacplus-dev/tacplus/pull/347 https://gith...
+> Bash gh pr view 342 --repo tacplus-dev/tacplus --json body -q .body | sed -n 3,12p; /usr/local/bin/repo-looper --repo tacplus --issue 214 --checkpoint "Fix landed-queued; backport PRs #342-#348 (release/2.0-2.6) open; local gates running; left: land verdict, tag v2.6.2 once gates green, outcome comment, ...
+< **Patch to cut once this merges: the next unused 2.0 tag, `v2.0.20`** (v2.0.19 is the newest tag on the branch; if another backport's patch takes `v2.0.20` first, the next one).  ## What it fixes `protosrc.findLatestPatchTag`, which resolves `depends: name@X.Y` and `src` at a line, listed `vX.Y.*` a...
+= thinking_tokens
+= thinking_tokens
+> Bash for v in 2.0 2.1 2.2 2.3 2.4 2.5; do cd $HOME/bp-$v; echo "$v $(git show HEAD -- pkg/protosrc/resolve.go | grep -c '^+	"regexp"')"; done
+< 2.0 1 2.1 1 2.2 1 2.3 1 2.4 1 2.5 1 Shell cwd was reset to /builds/looper/tacplus/issues/214
+Accurate. Back to waiting on the gates and land.
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -1 /tmp/land-214.log
+= task_started
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -1 /tmp/land-214.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+(Those were only my watcher loops timing out; the gates and land processes are still running.)
+> Bash kill -0 5032 && echo gates-alive; kill -0 25349 && echo land-alive; timeout 580 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -1 /tmp/land-214.log
+= task_started
+= task_notification
+< gates-alive land-alive === test rc=0 === === current-generation === [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still l...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -1 /tmp/land-214.log; tail -c 120 /tmp/gates-214.log; date
+= task_started
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.  fix...
+= thinking_tokens
+= thinking_tokens
+Local gates won't finish before my limit (~00:25 UTC); the land runs the full set itself (no gates.yaml), so its verdict can serve for the tag. Checking the queue.
+> Bash gh issue view 214 --repo tacplus-dev/tacplus --json comments,labels -q '.labels[].name, (.comments[-1] | .createdAt+" "+.body[0:300])'
+< bug approved looper:landing 2026-11-06T21:57:51Z This issue was `looper:in-progress`, but it has no looper job created, pending, waiting or running in tacplus-dev/looper: the run that held it is gone (killed with its runner, say). The label is removed, so the next run takes it, resuming from its bra...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -1 /tmp/land-214.log
+= task_started
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-214.log || ! kill -0 25349 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates-214.log | tail -2; tail -1 /tmp/land-214.log
+= task_started
+= task_notification
+< === current-generation rc=2 === === determinism === [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after yo...
+> Bash grep -n "FAIL\|error\|Error" /tmp/gates-214.log | grep -v "PASS" | tail -20
+< 155:- streaming/error-path trace and accounting completeness is covered by consumer-contract runtime cases. 161:include timeouts, structured errors, and streaming-method stubs. 168:- `swift W2S structured errors` ✓ (pkg/templates/swift/types/W2SClient.swift.tmpl) 169:- `csharp W2S structured errors`...
+> Bash sed -n 660,700p /tmp/gates-214.log
+<     PASS go tenant-slice     Removed 11M fixture tree tenantslice-go ==> Generating java tenant-slice fixture ==> Compiling java tenant-slice fixture     PASS java tenant-slice     Removed 52M fixture tree tenantslice-java ==> Generating rust tenant-slice fixture ==> Compiling rust tenant-slice fixt...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'until ! kill -0 25349 2>/dev/null; do sleep 15; done'; tail -1 /tmp/land-214.log; grep "^=== .*rc=" /tmp/gates-214.log; date
+= task_started
+= task_notification
+< [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === protoc-check rc=0 === === soundness rc=0 === ...
+> Bash timeout 590 bash -c 'until ! kill -0 25349 2>/dev/null; do sleep 15; done'; tail -1 /tmp/land-214.log; grep "^=== .*rc=\|OVERALL" /tmp/gates-214.log | tail -6; date
+= task_started
+= task_notification
+< [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === c2d-server rc=0 === === zero-rpc-s2s rc=0 ===...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cat > /tmp/c214.md <<'EOF' Progress on #214 (looper run, not finished: the land is still queued as the run's time runs out; the next run finishes it).  - Fix on `looper/tacplus-214`, queued to land: `ba249077` (protosrc: `findLatestPatchTag` takes only `vX.Y.PATCH` tags, by number; test `TestFindLat...
+< https://github.com/tacplus-dev/tacplus/issues/214#issuecomment-6698885610 [2026-11-06T23:47:04Z] checkpoint of #214 (a step) pushed to looper/tacplus-214:  8 files changed, 534 insertions(+), 6 deletions(-)
+> Bash timeout 590 bash -c 'until ! kill -0 25349 2>/dev/null; do sleep 15; done'; tail -3 /tmp/land-214.log; date
+= task_started
+= task_notification
+< [2026-11-06T20:38:20Z] checkpoint of #214 (land queued) pushed to looper/tacplus-214:  8 files changed, 369 insertions(+), 6 deletions(-) [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came o...
+> Bash timeout 590 bash -c 'until ! kill -0 25349 2>/dev/null; do sleep 15; done'; tail -1 /tmp/land-214.log; date
+= task_started
+= task_notification
+< [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. Sat Nov  7 00:06:48 UTC 2026
+> Bash timeout 540 bash -c 'until ! kill -0 25349 2>/dev/null; do sleep 15; done'; tail -1 /tmp/land-214.log; date
+= task_started
+= task_notification
+< [2026-11-06T20:38:21Z] queued: the manager of tacplus merges looper/tacplus-214 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. Sat Nov  7 00:15:50 UTC 2026
+= thinking_tokens
+= thinking_tokens
+About 9 minutes are left, so I'm saving a final checkpoint and stopping here.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 214 --checkpoint "DONE: fix+test (ba249077), docs (b413c34c), land queued since 20:38Z (the manager lands it after this run); backport PRs #342-#348 open; progress comment posted. LEFT: confirm land verdict on the issue; if landed with full gates gre...
+< [2026-11-07T00:15:56Z] checkpoint of #214 (a step) pushed to looper/tacplus-214:  8 files changed, 551 insertions(+), 6 deletions(-)
+#214 is fixed and queued to land, but it isn't finished: the land hadn't reached a verdict when my time ran out. `v2.6.2` isn't tagged and the issue is still open.
+
+**The fix:** `findLatestPatchTag` in `pkg/protosrc/resolve.go` now takes only `vX.Y.PATCH` tags, ranked by number, the way the fleet build already resolves versions.
+- A line that has only pre-releases is now an error.
+- A pre-release is still used when it is named exactly.
+- The new test `TestFindLatestPatchTagSkipsPreReleases` builds a fixture repo with `v1.2.3`, `v1.2.3-rc.1`, `v1.2.4-rc.1`, `v1.2.10-rc.1` and `v1.20.0`. Before the fix, `1.2` resolved to `v1.2.10-rc.1`; now it resolves to `v1.2.3`.
+- Commits: `ba249077` (fix and test) and `b413c34c`, which removes the gap from STATE.md and adds a PROPOSALS.md entry for one version resolver shared by protosrc and fleet.
+
+**Gates (local `just gates`):** every gate passed except `current-generation`. All of its fixtures passed, but it was thrown out because I committed the STATE/PROPOSALS edits while it was running. A re-run takes about 2.5 hours, so I didn't do one; the land's own full gate run will decide.
+
+**Land:** queued with the manager since 20:38 UTC, which will finish the merge after this run ends.
+
+**Backports:** PRs are open against every supported release branch: #342 (2.0), #343 (2.1), #344 (2.2), #345 (2.3), #346 (2.4), #347 (2.5) and #348 (2.6). Each one names the next unused patch tag to cut once it merges. Branches 2.0 to 2.5 also needed the `regexp` import added. On each, `go vet` and `go test ./pkg/protosrc/` pass; I didn't run the full gates on them.
+
+**Trace check:** my change touches no handlers. `looper-trace check` fails on main with 9 findings, all already filed as #310 and #311.
+
+**Left for the next run** (in the final checkpoint and in a progress comment on the issue):
+1. Read the land verdict.
+2. If it landed with the full gates green, tag `v2.6.2` on main at the landed commit (main has had no features since `v2.6.1`) and push it.
+3. Post the outcome comment and close #214.
+= success: #214 is fixed and queued to land, but it isn't finished: the land hadn't reached a verdict when my time ran out. `v2.6.2` isn't tagged and the issue is still open.
+
+**The fix:** `findLatestPatchTag` in `pkg/protosrc/resolve.go` now takes only `vX.Y.PATCH` tags, ranked by number, the way the fleet build already resolves versions.
+- A line that has only pre-releases is now an error.
+- A pre-release is still used when it is named exactly.
+- The new test `TestFindLatestPatchTagSkipsPreReleases` builds a fixture repo with `v1.2.3`, `v1.2.3-rc.1`, `v1.2.4-rc.1`, `v1.2.10-rc.1` and `v1.20.0`. Before the fix, `1.2` resolved to `v1.2.10-rc.1`; now it resolves to `v1.2.3`.
+- Commits: `ba249077` (fix and test) and `b413c34c`, which removes the gap from STATE.md and adds a PROPOSALS.md entry for one version resolver shared by protosrc and fleet.
+
+**Gates (local `just gates`):** every gate passed except `current-generation`. All of its fixtures passed, but it was thrown out because I committed the STATE/PROPOSALS edits while it was running. A re-run takes about 2.5 hours, so I didn't do one; the land's own full gate run will decide.
+
+**Land:** queued with the manager since 20:38 UTC, which will finish the merge after this run ends.
+
+**Backports:** PRs are open against every supported release branch: #342 (2.0), #343 (2.1), #344 (2.2), #345 (2.3), #346 (2.4), #347 (2.5) and #348 (2.6). Each one names the next unused patch tag to cut once it merges. Branches 2.0 to 2.5 also needed the `regexp` import added. On each, `go vet` and `go test ./pkg/protosrc/` pass; I didn't run the full gates on them.
+
+**Trace check:** my change touches no handlers. `looper-trace check` fails on main with 9 findings, all already filed as #310 and #311.
+
+**Left for the next run** (in the final checkpoint and in a progress comment on the issue):
+1. Read the land verdict.
+2. If it landed with the full gates green, tag `v2.6.2` on main at the landed commit (main has had no features since `v2.6.1`) and push it.
+3. Post the outcome comment and close #214.

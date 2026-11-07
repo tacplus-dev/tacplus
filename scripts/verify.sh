@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Formal verification of the generated code (tacplus#275): Kani for Rust, JBMC
-# for Java. Go is not formally verified, by decision.
+# Formal verification of the generated code (tacplus#275): Kani for Rust,
+# OpenJML ESC for Java (#257). Go is not formally verified, by decision.
 #
 # Usage:  scripts/verify.sh [rust|java]...      (default: rust java)
 #
@@ -12,6 +12,9 @@
 #
 # For each language the base fixture (cross-test/proto) is generated with the
 # checkout's tacplus, and `tacplus verify` runs every harness generated into it.
+# For Java those are the JML specs on the generated validators, which ESC proves
+# in the Maven module that compiles them: a compile pom is written beside the
+# generated code (cross-test/lib/java-compile.sh).
 # Each language runs even when another failed; a failure prints the language's
 # verification-report.md (each harness, its status and its counterexample).
 #
@@ -64,6 +67,11 @@ EOF
     echo "=== verify $l: FAIL (generation; log: $dir/generate.log) ===" >&2
     fail=1
     continue
+  fi
+  if [[ "$l" == java ]]; then
+    # shellcheck source=../cross-test/lib/java-compile.sh
+    source "$ROOT/cross-test/lib/java-compile.sh"
+    write_java_compile_pom "$dir/pom.xml" "$dir/tacplus"
   fi
   echo "==> tacplus verify ($l)"
   (cd "$dir" && "$TACPLUS_BIN" verify) 2>&1 | tee "$dir/verify.log"

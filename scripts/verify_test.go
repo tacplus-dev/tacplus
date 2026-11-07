@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// Formal verification (Kani, JBMC) is not a gate (tacplus#275): it runs in
+// Formal verification (Kani, OpenJML) is not a gate (tacplus#275): it runs in
 // `just verify`, which the build pipeline runs on every release tag and nightly
 // when something it depends on changed. Nothing `just gates` reaches may run it.
 
@@ -23,7 +23,7 @@ var (
 	scriptRef    = regexp.MustCompile(`[A-Za-z0-9_./-]+\.sh\b`)
 	// What runs a verifier: the verifiers themselves, `tacplus verify` (a
 	// built binary or the launcher), and the verify recipe and its script.
-	verifierRun = regexp.MustCompile(`cargo kani|\bjbmc\b|tacplus"? verify\b|TACPLUS_BIN"? verify\b|scripts/verify\.sh|\bjust verify\b`)
+	verifierRun = regexp.MustCompile(`cargo kani|\bjbmc\b|\bopenjml\b|tacplus"? verify\b|TACPLUS_BIN"? verify\b|scripts/verify\.sh|\bjust verify\b`)
 )
 
 // justRecipes reads the justfile's recipes: name -> header dependencies and body.
@@ -165,6 +165,7 @@ func TestVerifyChanged(t *testing.T) {
 		{"the base image", []string{"images/base.Dockerfile"}, "run"},
 		{"the verify script", []string{"scripts/verify.sh"}, "run"},
 		{"the change detection", []string{"scripts/verify-changed.sh"}, "run"},
+		{"the Java fixture's pom", []string{"cross-test/lib/java-compile.sh"}, "run"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

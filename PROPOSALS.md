@@ -4,6 +4,13 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Self-tests wait on state, not the clock, wherever the work fsyncs** (2026-11-07, #341): the durable accounting
+  spool's Go and Java self-tests waited a fixed 1s (or slept 300ms) for fsync'd appends, and main went red when a
+  loaded runner disk was slower. #341 fixed those two. Other hand-written fixture self-tests and generated
+  `_test` templates that sleep or poll against an RPC-sized bound for disk work (redo log, append log, cursor and
+  snapshot writes) have the same exposure. Audit them: wait on the observable state, with a generous hang bound
+  separate from any timing assertion. A cheap way to find them is #341's reproduction: a 100ms sleep before each
+  fsync in a scratch copy of the generated diskstore, then run the self-tests.
 - **A floor check over every version tacplus emits, and template manifests that take versions from one place**
   (2026-11-06, nightly scan, #338): four nights of scans found advisories in floors the generated manifests declare
   (#264, #309, #312, #338). No scanner sees them: a lockfile resolve, including the proposed `just generated`

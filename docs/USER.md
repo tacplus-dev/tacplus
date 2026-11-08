@@ -2257,7 +2257,8 @@ refused. The repo must be on github.com, and a private package needs `GH_TOKEN` 
 github.com.
 
 `dependencies.yaml` beside it holds the language and tool pins for everything
-generated from the fleet's merged protos. `tacplus fleet build` then:
+generated from the fleet's merged protos (its `tools.node` is the `engines.node` of every
+generated TypeScript chassis package, `>=22.0.0` when it has none). `tacplus fleet build` then:
 
 1. unions the registries, refusing a name or id that appears in two;
 2. resolves each service's version to its exact release and that release's image (above),

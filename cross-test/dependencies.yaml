@@ -1,7 +1,7 @@
 tools:
     go: "1.23"
     java: "17"
-    node: '>=18.0.0'
+    node: '>=22.0.0'
     python: '>=3.8'
     rust-edition: "2021"
     typescript: ^5.3.3

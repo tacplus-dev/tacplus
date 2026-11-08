@@ -1,0 +1,69 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// CODE GENERATED - DO NOT EDIT
+
+package ip
+
+import "testing"
+
+// Pins the byte packing of the IP protos (encoding/binary, #359) and that a
+// port out of range is refused rather than truncated.
+
+func TestIPRoundTrip(t *testing.T) {
+	for _, s := range []string{"192.168.1.1", "0.0.0.0", "255.255.255.255", "2001:db8::1", "::", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe"} {
+		a, err := ParseIPAddr(s)
+		if err != nil {
+			t.Fatalf("ParseIPAddr(%q): %v", s, err)
+		}
+		if got := FormatIPAddr(a); got != s {
+			t.Errorf("FormatIPAddr(ParseIPAddr(%q)) = %q", s, got)
+		}
+	}
+	v4, err := ParseIPv4("10.1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v4.Addr != 0x0a010203 {
+		t.Errorf("ParseIPv4(10.1.2.3).Addr = %#x, want 0x0a010203", v4.Addr)
+	}
+	for _, s := range []string{"10.0.0.0/8", "2001:db8::/32", "192.168.1.0/24"} {
+		n, err := ParseIPNet(s)
+		if err != nil {
+			t.Fatalf("ParseIPNet(%q): %v", s, err)
+		}
+		if got := FormatIPNet(n); got != s {
+			t.Errorf("FormatIPNet(ParseIPNet(%q)) = %q", s, got)
+		}
+	}
+}
+
+func TestBroadcastAddr(t *testing.T) {
+	for in, want := range map[string]string{
+		"192.168.1.0/24": "192.168.1.255",
+		"10.0.0.0/8":     "10.255.255.255",
+		"10.1.2.3/32":    "10.1.2.3",
+		"0.0.0.0/0":      "255.255.255.255",
+	} {
+		n, err := ParseIPNet(in)
+		if err != nil {
+			t.Fatalf("ParseIPNet(%q): %v", in, err)
+		}
+		if got := FormatIPAddr(BroadcastAddr(n)); got != want {
+			t.Errorf("BroadcastAddr(%s) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestFormatIPPortOutOfRange(t *testing.T) {
+	p, err := ParseIPPort("10.0.0.1:8443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := FormatIPPort(p); got != "10.0.0.1:8443" {
+		t.Errorf("FormatIPPort = %q, want 10.0.0.1:8443", got)
+	}
+	p.Port = 65536 + 8443
+	if got := FormatIPPort(p); got != "" {
+		t.Errorf("FormatIPPort of port %d = %q, want \"\" (not truncated to 8443)", p.Port, got)
+	}
+}

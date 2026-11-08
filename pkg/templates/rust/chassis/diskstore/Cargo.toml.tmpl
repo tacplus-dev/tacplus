@@ -5,11 +5,14 @@
 name = "diskstore"
 version = "1.0.0"
 edition = "2021"
+{{- if .License}}
+license = "{{.License}}"
+{{- end}}
+publish = false
 {{- if .Author}}
 authors = [{{printf "%q" .Author}}]
 {{- end}}
 description = "Typed disk persistence: atomic snapshots (UC1) and a redo-log WAL with compaction (UC2)"
-license = "Proprietary"
 
 [dependencies]
 # Serialization (records are JSON; generated ToJSON/FromJSON produce/consume it)

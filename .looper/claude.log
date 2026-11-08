@@ -1,0 +1,400 @@
+<     site/.venv/bin/pip install --quiet -r site/requirements.txt     touch site/.venv/.installed   fi  current-generation:   {{lock}} bash cross-test/current-generation/run.sh  current-generation-go:   {{lock}} bash cross-test/current-generation/run.sh --language go  current-generation-java:   {{lock...
+> Bash cd /builds/looper/tacplus/issues/368; grep -n -i kitchensink docs/DEVELOPMENT.md STATE.md pkg/runner/runner_test.go | head; ls cross-test; ls cross-test/current-generation; cat cross-test/proto/tacplus.yaml 2>/dev/null | head -30
+< docs/DEVELOPMENT.md:496:`run`. A new input of `scripts/verify.sh` (a fixture, a kitchensink proto set, docs/DEVELOPMENT.md:498:The kitchensink release gate (#196) follows the same split. STATE.md:131:  checks get none, and #196 still moves verification to a kitchensink proto set. Formal verification...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/368; ls cross-test/proto | head; find cross-test -name tacplus.yaml | head; sed -n 1,80p cross-test/current-generation/run.sh
+< common2 dependencies.yaml libraries2 services2 #!/usr/bin/env bash set -euo pipefail  ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)" # shellcheck source=../lib/cargo-target.sh source "$ROOT_DIR/cross-test/lib/cargo-target.sh" # shellcheck source=../lib/tree-guard.sh source "$ROOT_DIR/cross-test/lib...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/368; grep -rn '"rust/chassis' --include=*.go pkg | grep -v _test; sed -n 240,300p pkg/internal/rust/types/libs.go
+< pkg/internal/rust/types/libs.go:225:	langFS, err := fs.Sub(templates.FS, "rust/chassis") 		}  		// Read template content 		content, err := fs.ReadFile(langFS, path) 		if err != nil { 			return fmt.Errorf("failed to read template %s: %w", path, err) 		}  		// Parse and execute template 		tmpl, err :=...
+> Bash cd /builds/looper/tacplus/issues/368; sed -n 280,330p pkg/internal/common/header/header_test.go
+< 	} 	return b }  const testCopyright = "Copyright (c) 2026 Example Inc\nSPDX-License-Identifier: Apache-2.0"  func withTestCopyright(t *testing.T) { 	t.Helper() 	SetCopyright(testCopyright) 	t.Cleanup(func() { SetCopyright("") }) }  func TestCopyright_Unset(t *testing.T) { 	SetCopyright("") 	if got :...
+Writing the failing tests first: a `header.License()` unit test, then a generator test over every Rust crate manifest.
+> Edit /builds/looper/tacplus/issues/368/pkg/internal/common/header/header_test.go
+< The file /builds/looper/tacplus/issues/368/pkg/internal/common/header/header_test.go has been updated successfully.
+> Edit /builds/looper/tacplus/issues/368/pkg/internal/common/header/header.go
+< The file /builds/looper/tacplus/issues/368/pkg/internal/common/header/header.go has been updated successfully.
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/368; grep -rln "writeRustLibTemplates\|func writeRust\|WriteLib" pkg/internal/rust/types/*.go | head; grep -n "^func " pkg/internal/rust/types/libs.go; grep -rn "cross-test/proto\"\|\"proto\")" pkg/internal/rust/types/*_test.go | head
+< pkg/internal/rust/types/extraction_gen.go pkg/internal/rust/types/map.go pkg/internal/rust/types/redact_gen.go pkg/internal/rust/types/release_gen.go pkg/internal/rust/types/timeseries_gen.go pkg/internal/rust/types/validation.go 38:func toProstRPCEnumName(enumName string) string { 45:func writeLibT...
+> Bash cd /builds/looper/tacplus/issues/368; grep -rn "writeLibTemplates(" pkg --include=*_test.go | head -5; grep -rln "cross-test" pkg --include=*_test.go | head
+< pkg/internal/python/types/generator_test.go:274:	if err := writeLibTemplates(cfg, nil, nil, []string{cfg.ServiceLabel()}); err != nil { pkg/internal/go/types/lib_templates_regression_test.go:23:	if err := writeLibTemplates(cfg, []string{cfg.ServiceLabel()}, nil); err != nil { pkg/internal/typescript...
+> Bash cd /builds/looper/tacplus/issues/368; sed -n 1,60p pkg/internal/go/types/lib_templates_regression_test.go; sed -n 45,80p pkg/internal/rust/types/libs.go
+< // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0  package types  import ( 	"os" 	"path/filepath" 	"strings" 	"testing"  	"github.com/tacplus-dev/tacplus/pkg/internal/tactype" 	"github.com/tacplus-dev/tacplus/templates" )  func TestWriteLibTemplatesAlwaysWritesGrpcServer(t *tes...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/368; grep -n "func (c \*Config) LangDir\|func (c \*Config) ServiceLabel" -A8 pkg/internal/tactype/*.go | head -30; sed -n 57,110p pkg/internal/rust/types/cargo.go
+< pkg/internal/tactype/config.go:328:func (c *Config) ServiceLabel() string { pkg/internal/tactype/config.go-329-	// The service's proto package is its identity everywhere else — kernel's pkg/internal/tactype/config.go-330-	// service ids, the gateway's routes, every token audience — so it is the pkg/...
+Now the generator test.
+> Write /builds/looper/tacplus/issues/368/pkg/internal/rust/types/cargo_license_test.go
+< File created successfully at: /builds/looper/tacplus/issues/368/pkg/internal/rust/types/cargo_license_test.go (file state is current in your context — no need to Read it back)
+= thinking_tokens
+= thinking_tokens
+> Edit /builds/looper/tacplus/issues/368/pkg/internal/rust/types/cargo_license_test.go
+< The file /builds/looper/tacplus/issues/368/pkg/internal/rust/types/cargo_license_test.go has been updated successfully. (file state is current in your context — no need to Read it back)
+> Bash cd /builds/looper/tacplus/issues/368; go test ./pkg/internal/common/header/ -run TestLicense 2>&1 | tail -3; go test ./pkg/internal/rust/types/ -run 'TestRustGeneratedCrates' 2>&1 | tail -15
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/pkg/internal/common/header	0.010s go: downloading go.uber.org/zap v1.27.1 go: downloading gopkg.in/yaml.v3 v3.0.1 go: downloading google.golang.org/protobuf v1.36.11 go: downloading go.uber.org/multierr v1.11.0 # github.com/tacplus-dev/tacplus/pkg/internal/rust/ty...
+> Bash cd /builds/looper/tacplus/issues/368; sed -n 35,42p justfile; just generate 2>&1 | tail -5; go test ./pkg/internal/rust/types/ -run 'TestRustGeneratedCrates' 2>&1 | tail -15
+= task_started
+= task_notification
+< generate:   {{lock}} go generate ./pkg/internal/proto/spec/...  build: generate   mkdir -p bin   {{lock}} go build -trimpath -ldflags="-s -w" -o bin/tacplus .  install: generate bash scripts/with-tree-lock.sh go generate ./pkg/internal/proto/spec/...     cargo_license_test.go:111: /builds/looper/tac...
+Tests fail as expected. Now the templates and data.
+> Bash cd /builds/looper/tacplus/issues/368; for f in pkg/templates/rust/chassis/*/Cargo.toml.tmpl pkg/templates/rust/types/cargo.toml.tmpl pkg/templates/rust/types/types_cargo.toml.tmpl; do n=$(grep -c '^edition = ' $f); [ "$n" = 1 ] || echo "BAD $f $n" python3 - "$f" <<'EOF' import sys,re p=sys.argv[1]; ...
+<  pkg/templates/rust/types/types_cargo.toml.tmpl           |  4 ++++  24 files changed, 119 insertions(+) [package] name = "logger" version = "1.0.0" edition = "2021" {{- if .License}} license = "{{.License}}" {{- end}} publish = false {{- if .Author}} authors = [{{printf "%q" .Author}}] {{- end}}
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/368; python3 - <<'EOF' import re p='pkg/internal/rust/types/libs.go'; s=open(p).read() s=s.replace('''		Author                      string // first line of the configured header; manifests omit authors when empty 	}{''','''		Author                      string // firs...
+< 6:import ( 7:	"fmt" 8:	"io/fs" 9:	"os" 10:	"path/filepath" 11:	"sort" 12:	"strings" 14:	"go.uber.org/zap" 16:	"github.com/tacplus-dev/tacplus/pkg/internal/common/packages" 17:	"github.com/tacplus-dev/tacplus/pkg/internal/common/tmplutil" 18:	"github.com/tacplus-dev/tacplus/pkg/internal/tactype" 19:	...
+> Bash cd /builds/looper/tacplus/issues/368; sed -i 's#^\t"github.com/tacplus-dev/tacplus/pkg/internal/common/packages"#\t"github.com/tacplus-dev/tacplus/pkg/internal/common/header"\n&#' pkg/internal/rust/types/cargo.go; gofmt -l pkg/; go test ./pkg/internal/rust/types/ ./pkg/internal/common/header/ 2>&1 |...
+= task_started
+= task_notification
+< pkg/internal/common/model/model_test.go pkg/internal/go/types/stateclient_failclosed_test.go pkg/internal/proto/validate_c2s_topic_identity_test.go pkg/internal/proto/vservice_scan_test.go pkg/internal/python/types/naming_test.go         license = "Proprietary"              cargo_license_test.go:108...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/368; grep -rn -B3 -A3 'license\b\|license =' pkg/templates/rust | grep -v "{{.License}}" | grep -i "license\s*=" ; git log -S'license = "Proprietary"' --oneline -- pkg/templates/rust | tail -3
+< pkg/templates/rust/chassis/httpclient/Cargo.toml.tmpl:16:license = "Proprietary" pkg/templates/rust/chassis/diskstore/Cargo.toml.tmpl:16:license = "Proprietary" df6d35b6 Initial commit
+> Bash cd /builds/looper/tacplus/issues/368; sed -n 1,20p pkg/templates/rust/chassis/httpclient/Cargo.toml.tmpl; sed -n 1,20p pkg/templates/rust/chassis/diskstore/Cargo.toml.tmpl
+< # Copyright (c) 2026 Jody Scott # SPDX-License-Identifier: Apache-2.0  [package] name = "httpclient" version = "1.0.0" edition = "2021" {{- if .License}} license = "{{.License}}" {{- end}} publish = false {{- if .Author}} authors = [{{printf "%q" .Author}}] {{- end}} description = "Typed HTTP client...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/368; sed -i '/^license = "Proprietary"$/d' pkg/templates/rust/chassis/httpclient/Cargo.toml.tmpl pkg/templates/rust/chassis/diskstore/Cargo.toml.tmpl; go test ./pkg/internal/rust/types/ 2>&1 | tail -5
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/pkg/internal/rust/types	35.211s
+= thinking_tokens
+= thinking_tokens
+Generator tests pass. Now generating the full cross-test proto set in Rust to run cargo-deny with looper-scan's default policy against it.
+> Bash cd /builds/looper/tacplus/issues/368; grep -n "rust" cross-test/current-generation/run.sh | head -40; grep -rn "header:" cross-test --include=*.sh --include=*.yaml | head
+< 44:  --language LANG   Run one service language: go, java, rust 101:all_languages=(go java rust) 104:  go|java|rust ) languages=("$LANG_FILTER") ;; 726:assert_rust_lock_advisory_free() { 751:run_rust_spiffe_self_tests() { 761:  (cd "$output" && cargo test -p key -p jwk -p token) >"$log_dir/rust-key-...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/368; sed -n 700,750p cross-test/current-generation/run.sh; grep -n "assert_rust_lock_advisory_free\|\"\$TACPLUS_BIN\"\|tacplus.yaml" cross-test/current-generation/run.sh | head -20
+<   # The event-bus backpressure and accounting-sink fixtures' self-tests, copied in by   # install_backpressure_selftests and install_accounting_sink_selftests, so they are   # present exactly in those builds.   local bp_name bp_test bp_class   for bp_name in SubscribeBackpressureTest W2SBackpressure...
+> Bash cd /builds/looper/tacplus/issues/368; sed -n 124,145p cross-test/current-generation/run.sh; grep -n "write_.*yaml\|^generate\|^run_rust\|assert_rust_lock_advisory_free \"" cross-test/current-generation/run.sh | head -30
+< write_config() {   local dir="$1"   local language="$2"    mkdir -p "$dir"   cat > "$dir/tacplus.yaml" <<EOF language: "$language" pkg: "com.gitlab.example.dummy.proto" src: "$PROTO_SRC" output-dir: "tacplus" EOF }  write_c2sonly_config() {   local dir="$1"   local language="$2"    mkdir -p "$dir"  ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/368; grep -rn "cargo-deny\|cargo-audit" images Dockerfile cross-test/*.sh scripts 2>/dev/null | head
+< (Bash completed with no output)
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/368; sed -n 1035,1070p cross-test/current-generation/run.sh
+<         }       else         (cd "$compile_dir" && mvn -q -DskipTests compile) >"$log_dir/maven-compile.log" 2>&1 || {           dump_step_log "$log_dir/maven-compile.log"           return 1         }       fi       assert_clean_log "$log_dir/maven-compile.log"       run_java_generated_self_tests "$...
+> Bash cd /builds/looper/tacplus/issues/368; grep -n '"\$TACPLUS_BIN"' cross-test/current-generation/run.sh | head -3; go build -o /tmp/tp368 . && W=$(mktemp -d /tmp/ks368.XXXX) && echo $W && cat > $W/tacplus.yaml <<EOF language: "rust" pkg: "com.gitlab.example.dummy.proto" src: "$PWD/cross-test/proto" out...
+= task_started
+= task_notification
+< 115:if [[ -z "$TACPLUS_BIN" ]]; then 118:  (cd "$ROOT_DIR" && go generate ./pkg/internal/proto/spec/... && go build -o "$TACPLUS_BIN" .) 121:if [[ "$TACPLUS_BIN" == */* ]]; then go: downloading github.com/spf13/cobra v1.10.2 go: downloading github.com/BurntSushi/toml v1.6.0 go: downloading golang.or...
+> Bash cd /builds/looper/tacplus/issues/368; grep -n 'TACPLUS_BIN" ' cross-test/current-generation/run.sh | head -3; cd /tmp/ks368.qIyY && /tmp/tp368 generate > gen.log 2>&1; echo rc=$?; tail -3 gen.log; find . -name Cargo.toml | grep -v target | head -40
+< 115:if [[ -z "$TACPLUS_BIN" ]]; then 118:  (cd "$ROOT_DIR" && go generate ./pkg/internal/proto/spec/... && go build -o "$TACPLUS_BIN" .) 121:if [[ "$TACPLUS_BIN" == */* ]]; then rc=1 Error: unknown command "generate" for "tacplus" Run 'tacplus --help' for usage. Shell cwd was reset to /builds/looper...
+> Bash cd /builds/looper/tacplus/issues/368; grep -n 'TACPLUS_BIN"' cross-test/current-generation/run.sh | sed -n 4,8p
+< 122:  TACPLUS_BIN="$(cd "$(dirname "$TACPLUS_BIN")" && pwd)/$(basename "$TACPLUS_BIN")" 2319:  if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$PROTO_SRC" >"$log" 2>&1); then 2629:    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" bui...
+> Bash cd /tmp/ks368.qIyY && /tmp/tp368 build --config tacplus.yaml --src /builds/looper/tacplus/issues/368/cross-test/proto > gen.log 2>&1; echo rc=$?; tail -3 gen.log; find . -name Cargo.toml -not -path '*/target/*' | head -40
+= task_started
+= task_notification
+< rc=0 2026-11-08T14:20:47.369Z	INFO	generation complete	{"language": "RUST"} 2026-11-08T14:20:47.370Z	INFO	formatting files with codefile.IndentCode	{"ext": ".rs", "count": 307} 2026-11-08T14:20:47.534Z	INFO	build complete	{"output": "/tmp/ks368.qIyY/tacplus/model", "mode": "0.0.0-SNAPSHOT"} ./tacplu...
+= thinking_tokens
+= thinking_tokens
+22 crates, matching the issue's list. Running cargo-deny with looper-scan's default policy.
+> Bash cd /tmp/ks368.qIyY/tacplus/model && (cargo generate-lockfile > /tmp/ks368.qIyY/lock.log 2>&1; echo lock rc=$?); sed -n '/^default_deny_toml/,/^}/p' /usr/local/bin/looper-scan | sed '1,2d;$d' | sed '$d' > /tmp/ks368.qIyY/deny.toml; cat /tmp/ks368.qIyY/deny.toml | head -3; cargo-deny --manifest-path C...
+= task_started
+= task_notification
+< lock rc=0 # looper-scan's default (looper#49): a repository's own deny.toml replaces it. [advisories] version = 2 deny rc=1               │   └── proto-model v1.0.0 (*)               └── token v0.1.0                   ├── grpcserver v1.0.0 (*)                   ├── proto-model v1.0.0 (*)            ...
+Licenses now pass. Advisories fail — checking which, and whether that's pre-existing.
+> Bash grep -E "^(error|warning)\[" -A3 /tmp/ks368.qIyY/deny.log | grep -v "^--" | head -40
+< warning[license-not-encountered]: license was not encountered   ┌─ /tmp/ks368.qIyY/deny.toml:9:84   │ 9 │          "Zlib", "0BSD", "CC0-1.0", "Unicode-3.0", "Unicode-DFS-2016", "BSL-1.0", "MPL-2.0", "Unlicense", "CDLA-Permissive-2.0"] warning[license-not-encountered]: license was not encountered   ┌...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/368; gh issue list --repo tacplus-dev/tacplus --state all --search "unmaintained OR rustls-pemfile OR serde_yaml OR backoff OR cargo-deny" --limit 20; grep -n -i "unmaintained\|rustls-pemfile\|serde_yaml\|backoff\|cargo-deny" PROPOSALS.md STATE.md ROADMAP.md | head
+< 308	OPEN	Generated Rust chassis depends on rustls-pemfile, unmaintained (RUSTSEC-2025-0134, no fix): move to rustls-pki-types PemObject	bug, approved	2026-11-04T00:28:12Z 320	OPEN	Generated Rust chassis and model depend on deprecated serde_yaml 0.9, which locks unmaintained unsafe-libyaml (RUSTSEC-2...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/368; git log --format='%h %s' v2.6.1..origin/main; for n in 321 211 283 350; do gh issue view $n --repo tacplus-dev/tacplus --json number,labels,title -q '"\(.number) \([.labels[].name]|join(",")) \(.title)"'; done; git log --oneline -3 origin/release/2.6; git tag -l...
+< 8be9ef5c Build image: build gh from source with golang.org/x/net 0.62.0 (#350) 685a0d79 HISTORY.md: #190 (looper) e0ead97c Member port onto gRPC with make-before-break session rotation (Java) (#321) fac1cc2d Generated Rust Kani harnesses compile and verify (#211) 8d3ffc18 Images: a run on release/X....
+= thinking_tokens
+= thinking_tokens
+Main has feature #321, so no patch from main; the fix goes as backport PRs to each release line. Checking lines and their latest tags.
+> Bash cd /builds/looper/tacplus/issues/368; git fetch -q --tags origin; for l in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$l .0=$(git log -1 --format=%cs v$l.0 2>/dev/null) latest=$(git tag -l "v$l.*" --sort=-v:refname | head -1)"; done; ls docs; grep -n -i "backport\|release/" CONTRIBUTING.md | head -20
+< 2.0 .0=2026-10-15 latest=v2.0.20 2.1 .0=2026-10-20 latest=v2.1.14 2.2 .0=2026-10-25 latest=v2.2.11 2.3 .0=2026-10-25 latest=v2.3.13 2.4 .0=2026-10-27 latest=v2.4.13 2.5 .0=2026-10-28 latest=v2.5.14 2.6 .0=2026-11-04 latest=v2.6.3 AGENT.md.tmpl API.md CONSUMER_NEUTRAL_ANALYSIS.md DEVELOPMENT.md INSTA...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/368; sed -n 55,100p CONTRIBUTING.md; gh pr list --repo tacplus-dev/tacplus --state all --limit 8 --json number,title,state,baseRefName,headRefName
+< launchd agent on a developer's machine that runs every 24 hours under that developer's own Claude login, and `scripts/fix-looper/run.sh notify [N]` makes it run now (for issue N). `.github/workflows/nightly-fixes.yml` is the same job as a GitHub Action, on demand only until the repository has an `AN...
+> Bash cd /builds/looper/tacplus/issues/368; gh pr view 367 --repo tacplus-dev/tacplus --json body -q .body
+< Backport of #352 to release/2.6. It is a wire-compatibility bug fix (hub triage 2026-11-07: approved, priority high), shipped as a patch on every supported line that generates tenant/project config slices. The fix on main is #352 (landing through the looper's manager; to be released on main as `v2.6...
+= thinking_tokens
+= thinking_tokens
+Now docs: where USER.md describes `header:` and generated manifests.
+> Bash cd /builds/looper/tacplus/issues/368; grep -rn -i "author of\|package manifests\|manifest.*author\|authors" docs/USER.md docs/DEVELOPMENT.md README.src.md docs/snippets 2>/dev/null | head
+< (Bash completed with no output)
+> Bash cd /builds/looper/tacplus/issues/368; grep -rn "header" docs/USER.md | grep -i "yaml\|copyright\|spdx\|stamp" | head; grep -rn "^header\|  header:" docs/*.md | head
+< (Bash completed with no output)
+> Bash cd /builds/looper/tacplus/issues/368; grep -rln "SPDX\|header:" docs site --include=*.md 2>/dev/null | head; grep -rn "header" docs/USER.md | head -5
+< 2052:alg, not the header, selects the verification method. `none`, HMAC (`HS*`), 2053:RSA-PSS (`PS*`), another family's alg and a missing or non-string header `alg`
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/368; grep -n "output-dir\|^#.*tacplus.yaml\|cargo-deny\|Cargo.toml" docs/USER.md | head -20
+< 109:## tacplus.yaml Reference 113:Only `language` and `output-dir` are required. `pkg` is commonly set explicitly, but may be derived from the host project when omitted. 120:| `output-dir` | string | Yes | Output subdirectory relative to project dir | 129:Given a canonical `pkg` (e.g. `com.example.m...
+> Read /builds/looper/tacplus/issues/368/docs/USER.md
+< 109	## tacplus.yaml Reference 110	 111	`tacplus.yaml` is the project-local generation config. It should declare only facts that cannot logically be defined in proto: the target language, generated package/module name, output location, proto source, config composition, and which client transport surf...
+> Edit /builds/looper/tacplus/issues/368/docs/USER.md
+< The file /builds/looper/tacplus/issues/368/docs/USER.md has been updated successfully.
+> Edit /builds/looper/tacplus/issues/368/pkg/tacplusyaml/tacplusyaml.go
+< The file /builds/looper/tacplus/issues/368/pkg/tacplusyaml/tacplusyaml.go has been updated successfully.
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Docs updated. Checking PROPOSALS/STATE for related entries before adding follow-ups.
+> Bash cd /builds/looper/tacplus/issues/368; sed -n 1,12p PROPOSALS.md; sed -n 56,64p PROPOSALS.md; sed -n 186,198p PROPOSALS.md; grep -n "Jody Scott" pkg/templates/rust -r | grep -v "^[^:]*\.rs\.tmpl" | head
+< # Proposals: tacplus  Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones into ROADMAP.md (via an agent); the looper then marks it `promoted` or `declined` here with the date.  ## Open - **Kani harnesses beyond integer bounds** (2026-11-06, #211): the generated Rust harn...
+> Bash cd /builds/looper/tacplus/issues/368; grep -rl "Copyright (c) 2026 Jody Scott" /tmp/ks368.qIyY/tacplus | wc -l; grep -rl "Copyright (c) 2026 Jody Scott" /tmp/ks368.qIyY/tacplus | head
+< 121 /tmp/ks368.qIyY/tacplus/model/proto/libraries2/database.proto /tmp/ks368.qIyY/tacplus/model/proto/libraries2/cache.proto /tmp/ks368.qIyY/tacplus/model/proto/common2/user.proto /tmp/ks368.qIyY/tacplus/model/proto/common2/product.proto /tmp/ks368.qIyY/tacplus/model/proto/services2/inventory.proto ...
+> Bash cd /builds/looper/tacplus/issues/368; grep -rl "Copyright (c) 2026 Jody Scott" /tmp/ks368.qIyY/tacplus | grep -v "\.proto$" | head -20
+< /tmp/ks368.qIyY/tacplus/model/chassis/grpcserver/src/authorizer.rs /tmp/ks368.qIyY/tacplus/model/chassis/grpcserver/src/spiffe.rs /tmp/ks368.qIyY/tacplus/model/chassis/grpcserver/src/lib.rs /tmp/ks368.qIyY/tacplus/model/chassis/jwk/src/lib.rs /tmp/ks368.qIyY/tacplus/model/chassis/jwk/src/jwk.rs /tmp...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Starting `just gates` detached while I write the PROPOSALS entry.
+> Bash cd /builds/looper/tacplus/issues/368; nohup just gates > /tmp/gates368.log 2>&1 & echo $! > /tmp/gates368.pid; cat /tmp/gates368.pid
+< 8050
+> Edit /builds/looper/tacplus/issues/368/PROPOSALS.md
+< The file /builds/looper/tacplus/issues/368/PROPOSALS.md has been updated successfully.
+> Bash cd /builds/looper/tacplus/issues/368; grep -n -i "license\|cargo-deny\|Rust" STATE.md | head -20
+< 9:  `(spec.record).s2s_write`, `(spec.record_store).no_bus_ingest` (#163); Go, Java and Rust wrappers guard durability, 12:  `mcp.McpRequest.tenant`, stamped from the caller's token by the Go/Java/Rust MCP carrier, never from the model (#170). 18:  id, so a restarted writer keeps its chain (#143; Go...
+> Read /builds/looper/tacplus/issues/368/STATE.md
+< 24	  (else `GITHUB_TOKEN`) and no other host; `CI_JOB_TOKEN` still goes only to `CI_SERVER_HOST` (#191; released as 25	  v2.4.2 and v2.5.1). 26	  The generated Rust chassis signs and verifies RSA and ECDSA with aws-lc-rs: the `rsa` crate (RUSTSEC-2023-0071, 27	  Marvin) and the elliptic-curve 0.13 s...
+> Read /builds/looper/tacplus/issues/368/STATE.md
+< 33	  tokio-tungstenite 0.30 (#215; backported to release/2.0 through release/2.5 by pull request, each line's next 34	  patch once it merges). 35	  The generated Go, Java and Rust servers end every streaming rpc at the `exp` of the token it opened with,
+> Edit /builds/looper/tacplus/issues/368/STATE.md
+< The file /builds/looper/tacplus/issues/368/STATE.md has been updated successfully.
+> Bash cd /builds/looper/tacplus/issues/368; /usr/local/bin/looper-trace check 2>&1 | tail -5; git status --short; /usr/local/bin/repo-looper --repo tacplus --issue 368 --checkpoint "Fix written (header.License, license+publish=false in all 24 Rust Cargo templates, tests, USER.md/STATE/PROPOSALS); just gat...
+= task_started
+= task_notification
+< FINDING dropped-trace cross-test/server-runtime/client/go/main.go:114: checkPage's call ListEventsPaged is caused by the request but does not carry its trace_id (api); propagate it, or, if the request does not cause the call, say so where it is made: `// trace: unrelated: <why>` FINDING untested cro...
+= thinking_tokens
+= thinking_tokens
+Trace check: 9 findings, none in code this change touches. Viewing them all and checking whether they're already filed.
+> Bash cd /builds/looper/tacplus/issues/368; /usr/local/bin/looper-trace check 2>&1 | grep -v "^  " | cut -c1-200 | head -30; gh issue list --repo tacplus-dev/tacplus --state open --search "trace_id in:title" --limit 10
+= task_started
+= task_notification
+< looper-trace: /builds/looper/tacplus/issues/368 handler cross-test/outbound-deadline/fixture/rust/main.rs:124 get_public_contract (inbound: req) handler cross-test/server-runtime/client/go/main.go:73 checkUnary (inbound: api) handler cross-test/server-runtime/client/go/main.go:88 checkServerStream (...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/368; sed -n 60,95p cross-test/server-runtime/client/go/main.go
+< 	defer cancel()  	checkUnary(ctx, api, lang) 	checkServerStream(ctx, api, lang) 	checkPage(ctx, api, lang) 	checkFailClosed(ctx, api, lang)  	fmt.Printf("go generated client OK against %s generated server (%s)\n", lang, addr) }  // checkUnary: auth_disabled unary. The generated remote wrapper valida...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Those 8 server-runtime findings are a test client driving calls (`api` is a client, not an inbound request), so not handlers; the outbound-deadline one is already #310. Committing while gates run.
+> Bash cd /builds/looper/tacplus/issues/368; git add -A && git commit -q -F - <<'EOF' Rust generator: every generated crate declares license and publish = false (#368)  cargo-deny refuses a crate that declares no license, so every Rust service's security floor failed on the 22 crates tacplus generates (tac...
+< c3505828 Rust generator: every generated crate declares license and publish = false (#368)
+= thinking_tokens
+= thinking_tokens
+Now preparing the backports in a separate worktree so the running gates aren't disturbed.
+> Bash cd /builds/looper/tacplus/issues/368; git worktree add -q /tmp/bp368 origin/release/2.6 2>&1 | tail -2; cd /tmp/bp368 && git checkout -q -b backport/368-release-2.6 && git cherry-pick c3505828 2>&1 | tail -3; git status --short | head
+< hint: To abort and get back to the state before "git cherry-pick", hint: run "git cherry-pick --abort". hint: Disable this message with "git config advice.mergeConflict false" UU PROPOSALS.md M  STATE.md M  docs/USER.md M  pkg/internal/common/header/header.go M  pkg/internal/common/header/header_tes...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /tmp/bp368; gh pr view 367 --repo tacplus-dev/tacplus --json files -q '.files[].path' | head -20
+< cmd/registry/cmd.go docs/USER.md pkg/internal/proto/configholder.go pkg/internal/proto/slice_field_registry_test.go pkg/registry/global.go pkg/registry/global_test.go pkg/registry/registry.go Shell cwd was reset to /builds/looper/tacplus/issues/368
+Backports leave the planning files to main. Dropping PROPOSALS/STATE from the 2.6 backport and testing.
+> Bash cd /tmp/bp368; git checkout -q HEAD -- PROPOSALS.md STATE.md 2>&1; git status --short | grep -v "^M " ; GIT_EDITOR=true git cherry-pick --continue 2>&1 | tail -1; git show --stat HEAD | tail -3; just generate >/dev/null 2>&1; go test ./pkg/internal/common/header/ ./pkg/internal/rust/types/ ./pkg/tac...
+= task_started
+= task_notification
+< A  pkg/internal/rust/types/cargo_license_test.go  create mode 100644 pkg/internal/rust/types/cargo_license_test.go  pkg/templates/rust/types/cargo.toml.tmpl           |   4 +  pkg/templates/rust/types/types_cargo.toml.tmpl     |   4 +  29 files changed, 242 insertions(+), 3 deletions(-) ok  	github....
+= thinking_tokens
+= thinking_tokens
+2.6 backport passes its tests. Checking gates progress, then the older lines.
+> Bash grep "^===" /tmp/gates368.log; tail -2 /tmp/gates368.log | cut -c1-200
+< === protoc-check === === protoc-check rc=0 === === soundness === === soundness rc=0 === === test === === test rc=0 === === current-generation === ==> Building local tacplus binary ==> Generating go cross-test fixture
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /tmp/bp368; for l in 2.5 2.4 2.3 2.2 2.1 2.0; do git checkout -q -b backport/368-release-$l origin/release/$l || break; git cherry-pick c3505828 >/dev/null 2>&1; git checkout -q HEAD -- PROPOSALS.md STATE.md 2>/dev/null; echo "== $l: $(git status --short | grep -v '^[MA] ' | tr '\n' ' ')"; git ch...
+= task_started
+= task_notification
+< == 2.5: UU docs/USER.md UU pkg/tacplusyaml/tacplusyaml.go  == 2.4: DU PROPOSALS.md DU STATE.md UU docs/USER.md UU pkg/tacplusyaml/tacplusyaml.go  == 2.3: DU PROPOSALS.md DU STATE.md UU docs/USER.md UU pkg/tacplusyaml/tacplusyaml.go  == 2.2: DU PROPOSALS.md DU STATE.md UU docs/USER.md UU pkg/tacplusy...
+= thinking_tokens
+= thinking_tokens
+Only the doc/comment lines conflict. Looking at how `header` reads on the oldest line.
+> Bash cd /tmp/bp368; for l in 2.0 2.5; do echo "== $l"; git show origin/release/$l:pkg/tacplusyaml/tacplusyaml.go | grep -n "Header " ; git show origin/release/$l:docs/USER.md | grep -n '^| `tacplus`\|^| `header`' | cut -c1-120; git show origin/release/$l:pkg/internal/common/header/header.go | grep -n "fu...
+< == 2.0 50:	Header     string        `yaml:"header,omitempty"`      // free-form text stamped as a comment at the top of every generated file (e.g. a copyright line and an SPDX identifier); its first line is also the author of generated package manifests. Unset: generated code carries no copyright li...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash mkdir -p /tmp/bp368tools; cat > /tmp/bp368tools/fix.py <<'EOF' import re, sys row = "| `header` | string | No | Free-form text stamped as a comment at the top of every generated file, e.g. a copyright line and an `SPDX-License-Identifier:` line. Its first line is the author of generated package mani...
+= task_started
+= task_notification
+< 2.5 b259c439 status=0  29 files changed, 242 insertions(+), 3 deletions(-) 2.4 7f5a7f94 status=0  29 files changed, 242 insertions(+), 3 deletions(-) 2.3 36c75e2a status=0  29 files changed, 242 insertions(+), 3 deletions(-) 2.2 d6d2394e status=0  29 files changed, 242 insertions(+), 3 deletions(-) ...
+= thinking_tokens
+= thinking_tokens
+Clean on every line. Verifying the doc placement and running the focused tests per line.
+> Bash cd /tmp/bp368; git diff HEAD~1 -- docs/USER.md | head -15; git diff HEAD~1 --stat -- PROPOSALS.md STATE.md
+< diff --git a/docs/USER.md b/docs/USER.md index 83cabc95..f7d1bb33 100644 --- a/docs/USER.md +++ b/docs/USER.md @@ -116,6 +116,7 @@ Only `language` and `output-dir` are required. `pkg` is commonly set explicitly,  | `language` | string | Yes | Full-service targets: `go`, `rust`, `java`. Full-client t...
+Good. Running the focused tests on each line (sequentially, same worktree).
+> Bash cd /tmp/bp368; for l in 2.5 2.4 2.3 2.2 2.1 2.0; do git checkout -q backport/368-release-$l; just generate >/dev/null 2>&1; echo "== $l"; go vet ./pkg/internal/rust/types/ ./pkg/internal/common/header/ 2>&1 | tail -2; go test ./pkg/internal/common/header/ ./pkg/internal/rust/types/ ./pkg/tacplusyaml...
+= task_started
+= task_notification
+< == 2.5 ok  	github.com/tacplus-dev/tacplus/pkg/internal/common/header	(cached) ok  	github.com/tacplus-dev/tacplus/pkg/internal/rust/types	25.002s ok  	github.com/tacplus-dev/tacplus/pkg/tacplusyaml	0.016s == 2.4 ok  	github.com/tacplus-dev/tacplus/pkg/internal/common/header	(cached) ok  	github.com...
+= thinking_tokens
+= thinking_tokens
+All six older lines pass. Checking the gates.
+> Bash grep "^===" /tmp/gates368.log | tail -4; tail -1 /tmp/gates368.log | cut -c1-200
+< === soundness rc=0 === === test === === test rc=0 === === current-generation === ==> Compiling java cross-test fixture
+Checkpointing, then queuing the land (it re-runs the gates itself) while my local gates continue.
+> Bash cd /builds/looper/tacplus/issues/368; /usr/local/bin/repo-looper --repo tacplus --issue 368 --checkpoint "Fix committed c3505828; local just gates running; backport branches backport/368-release-2.0..2.6 prepared locally in /tmp/bp368 (tested), not pushed; left: land, push backports + PRs, comment, ...
+< [2026-11-08T14:27:26Z] checkpoint of #368 (a step) pushed to looper/tacplus-368:  33 files changed, 710 insertions(+), 3 deletions(-) 32997
+= thinking_tokens
+= thinking_tokens
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Bash until grep -q "OVERALL" /tmp/gates368.log || ! kill -0 8050 2>/dev/null; do sleep 20; done; grep "^===" /tmp/gates368.log | grep rc=; tail -3 /tmp/land368.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: buhkqji0v. Output is being written to: /builds/looper/tacplus/homes/looper-368/tmp/claude-61000/-builds-looper-tacplus-issues-368/57ad1526-ef47-433a-ab3c-a2cfc8cd967e/tasks/buhkqji0v.output. You will be notified when it completes. To check interim output, use R...
+Local `just gates` and the land are both running; I'll be notified when the gates finish.
+> Bash until grep -qiE "landed|merged|refus|fail|error|nothing" /tmp/land368.log || ! kill -0 32997 2>/dev/null; do sleep 30; done; tail -15 /tmp/land368.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bn3qv4uel. Output is being written to: /builds/looper/tacplus/homes/looper-368/tmp/claude-61000/-builds-looper-tacplus-issues-368/57ad1526-ef47-433a-ab3c-a2cfc8cd967e/tasks/bn3qv4uel.output. You will be notified when it completes. To check interim output, use R...
+Waiting on both: the local gates run and the land's verdict.
+= success: Waiting on both: the local gates run and the land's verdict.
+= task_updated
+= task_notification
+= background_tasks_changed
+= init
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash date -u; grep "^===" /tmp/gates368.log | grep -E "rc=|OVERALL"; tail -2 /tmp/gates368.log | cut -c1-200; kill -0 8050 && echo gates-running; tail -5 /tmp/land368.log
+< Sun Nov  8 16:27:34 UTC 2026 === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust redo-contract fixture (redo) ==> Compiling rust redo-contract fixture (redo) gates-running [2026-11-08T14:27:28Z] checkpoint of #368 (land queued) pushed to looper/tacplus-368:  34 fil...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Two hours in, the local gates are still on current-generation and the land is still queued. With about 1.6h left, I'll open the backport PRs now rather than wait.
+> Bash cd /tmp/bp368; git fetch -q --tags origin; for l in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$l latest=$(git tag -l "v$l.*" --sort=-v:refname | head -1) base_moved=$(git rev-list --count backport/368-release-$l..origin/release/$l)"; done
+< 2.0 latest=v2.0.20 base_moved=0 2.1 latest=v2.1.14 base_moved=0 2.2 latest=v2.2.11 base_moved=0 2.3 latest=v2.3.13 base_moved=0 2.4 latest=v2.4.13 base_moved=0 2.5 latest=v2.5.14 base_moved=0 2.6 latest=v2.6.3 base_moved=0 Shell cwd was reset to /builds/looper/tacplus/issues/368
+> Bash cd /tmp/bp368; for l in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do latest=$(git tag -l "v$l.*" --sort=-v:refname | head -1); p=${latest##*.}; next="v$l.$((p+1))" git push -q origin backport/368-release-$l 2>&1 | grep -v "^remote:" | tail -1 body=$(cat <<EOF Backport of #368 to release/$l. A bug fix (approved, ...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= vcs_state_changed
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/384 https://github.com/tacplus-dev/tacplus/pull/385 https://github.com/tacplus-dev/tacplus/pull/386 https://github.com/tacplus-dev/tacplus/pull/387 https://github.com/tacplus-dev/tacplus/pull/388 https://github.com/tacplus-dev/tacplus/pull/389 https://gith...
+Backport PRs #384–#390 are open. Checkpointing, then waiting on the gates and the land (bounded to my remaining time).
+> Bash cd /builds/looper/tacplus/issues/368; /usr/local/bin/repo-looper --repo tacplus --issue 368 --checkpoint "Fix c3505828 queued to land; backport PRs #384-#390 (release/2.0..2.6) open; local just gates still running; left: land verdict, outcome comment, Blocked-by #308/#319/#320 (cargo-deny advisories...
+= task_started
+= task_notification
+< [2026-11-08T16:28:18Z] checkpoint of #368 (a step) pushed to looper/tacplus-368:  34 files changed, 759 insertions(+), 3 deletions(-)
+> Bash end=$(( $(date +%s) + 3600 )); until grep -q "OVERALL" /tmp/gates368.log || ! kill -0 8050 2>/dev/null || [ $(date +%s) -gt $end ]; do sleep 30; if [ $(wc -l < /tmp/land368.log) -gt 2 ]; then break; fi; done; date -u; grep -E "rc=|OVERALL" /tmp/gates368.log; tail -4 /tmp/land368.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: b0fsicdjj. Output is being written to: /builds/looper/tacplus/homes/looper-368/tmp/claude-61000/-builds-looper-tacplus-issues-368/57ad1526-ef47-433a-ab3c-a2cfc8cd967e/tasks/b0fsicdjj.output. You will be notified when it completes. To check interim output, use R...
+Waiting for the gates or the land verdict (at most an hour).
+= success: Waiting for the gates or the land verdict (at most an hour).
+= task_updated
+= task_notification
+= background_tasks_changed
+= init
+> Bash cat /builds/looper/tacplus/homes/looper-368/tmp/claude-61000/-builds-looper-tacplus-issues-368/57ad1526-ef47-433a-ab3c-a2cfc8cd967e/tasks/b0fsicdjj.output; tail -3 /tmp/gates368.log | cut -c1-200
+< Sun Nov  8 17:28:22 UTC 2026 === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=0 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=0 === === memberport rc=0 === [2026-11-08T14:27:28Z] checkpoint of #368 (land queued) pushed to loope...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The gates are 9 of 16 through, all green so far. The land is still queued. About 38 minutes remain, so I'll give the gates another ~15 minutes and then write the outcome.
+> Bash end=$(( $(date +%s) + 900 )); until grep -q "OVERALL" /tmp/gates368.log || [ $(date +%s) -gt $end ] || [ $(wc -l < /tmp/land368.log) -gt 2 ]; do sleep 20; done; date -u; grep -E "rc=|OVERALL" /tmp/gates368.log | tail -8; tail -3 /tmp/land368.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b83l83pvh). Output is being written to: /builds/looper/tacplus/homes/looper-368/tmp/claude-61000/-builds-looper-tacplus-issues-368/57ad1526-ef47-433a-ab3c-a2cfc8cd967e/tasks/b83l83pvh.output. You will be notified w...
+> Bash until grep -q "OVERALL" /tmp/gates368.log || [ $(date -u +%H%M) -ge 1744 ]; do sleep 15; done; date -u; grep -E "rc=|OVERALL" /tmp/gates368.log | tail -8; tail -3 /tmp/land368.log; gh issue view 368 --repo tacplus-dev/tacplus --comments | tail -5
+< Sun Nov  8 17:38:33 UTC 2026 === claims-provenance rc=0 === === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc=0 === === jwk-alg rc=0 === === redact rc=0 === === tacplus-script rc=0 === === OVERALL fail=0 === [2026-11-08T14:27:28Z] checkpoint of #368 (land queued) pushed to looper...
+= thinking_tokens
+= thinking_tokens
+Local `just gates` all pass (`OVERALL fail=0`). The land is still queued behind others. I'll post the status comment and write the Blocked-by outcome.
+> Bash cd /builds/looper/tacplus/issues/368; git worktree remove --force /tmp/bp368; gh issue comment 368 --repo tacplus-dev/tacplus --body-file - <<'EOF' **Fix written, gated locally, queued to land; backports open. Waiting on #308, #319, #320 for the cargo-deny acceptance.**  ## What changed c3505828 on ...
+= task_updated
+= task_notification
+= background_tasks_changed
+< https://github.com/tacplus-dev/tacplus/issues/368#issuecomment-6724798636 Blocked-by: #308 Blocked-by: #319 Blocked-by: #320
+The fix is done and passes locally, but it has not reached main yet, and the issue stays open: cargo-deny can't fully pass on the generated output until three other open bugs are fixed.
+
+**Fix (commit c3505828, queued to land since 14:27Z, no verdict yet):** every Cargo.toml the Rust generator writes now has `publish = false`. That covers all 22 crates named in the issue. When `header:` in tacplus.yaml has an `SPDX-License-Identifier:` line, each crate also gets that value as its `license`; with no such line there is no `license` field. The httpclient and diskstore templates had `license = "Proprietary"`, which cargo-deny also refuses, so that line is gone.
+
+**Tests:**
+- `TestLicense` covers reading the SPDX value from the header.
+- Two generator tests generate every Cargo.toml and check `license` and `publish = false`, with and without an SPDX line in the header. They fail if a manifest template isn't covered.
+- Local `just gates`: every gate passed (`OVERALL fail=0`). I don't know which gates the land will run until the manager gives its verdict; if this run ends first, it still lands it.
+
+**cargo-deny on the kitchensink's Rust output (looper-scan's default policy):** I generated the full cross-test proto set (cross-test/proto) in Rust with an Apache-2.0 header. Licenses, bans and sources now pass. Advisories still fail on four unmaintained crates, each already an open bug: `rustls-pemfile` (#308), `backoff` and `instant` (#319), `unsafe-libyaml` via serde_yaml (#320). I wrote `Blocked-by` lines for those three, so the issue is picked up again once they close; the next run re-runs cargo-deny and closes it.
+
+**Patch releases:** main has taken a feature since v2.6.1 (#321), so I didn't tag a patch from main. I opened backport PRs #384–#390 for release/2.0 through release/2.6. Each names the tag to cut once it merges (v2.0.21 up to v2.6.4). On every line the focused tests pass; full `just gates` was not run on any release branch.
+
+**Trace check:** this change touches no handlers. `looper-trace check` flags 9 things. One is already #310. The other eight are in a cross-test client, a test program that calls a service rather than serving requests, so I didn't file them.
+
+**Decision for Jody (in PROPOSALS.md):** the chassis crates are tacplus's own Apache-2.0 code. As the issue asks, they now take the license from the consumer's header. So a service with a proprietary header, or none, gets chassis crates that don't say Apache-2.0. The alternative is to always declare Apache-2.0 on them. A second proposal adds a cargo-deny licenses check to the current-generation gate, so this kind of break is caught here rather than in a service's scan.
+
+The status is posted as a comment on the issue.
+= success: The fix is done and passes locally, but it has not reached main yet, and the issue stays open: cargo-deny can't fully pass on the generated output until three other open bugs are fixed.
+
+**Fix (commit c3505828, queued to land since 14:27Z, no verdict yet):** every Cargo.toml the Rust generator writes now has `publish = false`. That covers all 22 crates named in the issue. When `header:` in tacplus.yaml has an `SPDX-License-Identifier:` line, each crate also gets that value as its `license`; with no such line there is no `license` field. The httpclient and diskstore templates had `license = "Proprietary"`, which cargo-deny also refuses, so that line is gone.
+
+**Tests:**
+- `TestLicense` covers reading the SPDX value from the header.
+- Two generator tests generate every Cargo.toml and check `license` and `publish = false`, with and without an SPDX line in the header. They fail if a manifest template isn't covered.
+- Local `just gates`: every gate passed (`OVERALL fail=0`). I don't know which gates the land will run until the manager gives its verdict; if this run ends first, it still lands it.
+
+**cargo-deny on the kitchensink's Rust output (looper-scan's default policy):** I generated the full cross-test proto set (cross-test/proto) in Rust with an Apache-2.0 header. Licenses, bans and sources now pass. Advisories still fail on four unmaintained crates, each already an open bug: `rustls-pemfile` (#308), `backoff` and `instant` (#319), `unsafe-libyaml` via serde_yaml (#320). I wrote `Blocked-by` lines for those three, so the issue is picked up again once they close; the next run re-runs cargo-deny and closes it.
+
+**Patch releases:** main has taken a feature since v2.6.1 (#321), so I didn't tag a patch from main. I opened backport PRs #384–#390 for release/2.0 through release/2.6. Each names the tag to cut once it merges (v2.0.21 up to v2.6.4). On every line the focused tests pass; full `just gates` was not run on any release branch.
+
+**Trace check:** this change touches no handlers. `looper-trace check` flags 9 things. One is already #310. The other eight are in a cross-test client, a test program that calls a service rather than serving requests, so I didn't file them.
+
+**Decision for Jody (in PROPOSALS.md):** the chassis crates are tacplus's own Apache-2.0 code. As the issue asks, they now take the license from the consumer's header. So a service with a proprietary header, or none, gets chassis crates that don't say Apache-2.0. The alternative is to always declare Apache-2.0 on them. A second proposal adds a cargo-deny licenses check to the current-generation gate, so this kind of break is caught here rather than in a service's scan.
+
+The status is posted as a comment on the issue.

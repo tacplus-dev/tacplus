@@ -116,12 +116,14 @@ func TestValidateHostTenantOwned_RefusesWithoutALabel(t *testing.T) {
 	}
 }
 
-// The redo contract (#163 D5) is the sys contract host_tenant_owned exists
-// for. Parsed alone, with spec.proto only, as every record store generates it:
-// both rpcs are tenant-routed by "tenant", open to callers of any tenant (each
-// tenant's store calls the redo instance in the restore tenant), and hosted at
-// "redo".
-func TestSysRedoContract_GeneratesAloneTenantRouted(t *testing.T) {
+// The redo contract (#163 D5), parsed alone, with spec.proto only, as every
+// record store generates it. redo is a /system service (tacplus-dev/roadmap
+// decisions/s2s-never-crosses-tenants-2026-10-31.md, addendum 2026-11-07;
+// #258): stratum -> redo is tenant -> /system, so neither rpc is tenant-routed
+// nor flagged RPC_FLAG_ANY_TENANT (which never admits another tenant's
+// service), and the host is not declared tenant-owned. redo keeps each
+// tenant's log apart by the caller's tid, from its token.
+func TestSysRedoContract_GeneratesAloneAsASystemService(t *testing.T) {
 	redo, err := os.ReadFile(filepath.Join("..", "..", "..", "proto", "sys", "redo.proto"))
 	if err != nil {
 		t.Fatalf("read sys/redo.proto: %v", err)
@@ -143,8 +145,8 @@ func TestSysRedoContract_GeneratesAloneTenantRouted(t *testing.T) {
 	if svc == nil {
 		t.Fatal("sys/redo.proto declares no redolog.Redo")
 	}
-	if !svc.IsS2S || svc.HostLabel != "redo" || !svc.HostTenantOwned {
-		t.Fatalf("redolog.Redo: IsS2S=%v HostLabel=%q HostTenantOwned=%v, want an S2S surface hosted by tenant-owned \"redo\"",
+	if !svc.IsS2S || svc.HostLabel != "redo" || svc.HostTenantOwned {
+		t.Fatalf("redolog.Redo: IsS2S=%v HostLabel=%q HostTenantOwned=%v, want an S2S surface hosted by the /system service \"redo\"",
 			svc.IsS2S, svc.HostLabel, svc.HostTenantOwned)
 	}
 	want := map[string]bool{"Append": false, "Replay": false}
@@ -153,8 +155,8 @@ func TestSysRedoContract_GeneratesAloneTenantRouted(t *testing.T) {
 			t.Fatalf("redolog.Redo has an unexpected rpc %s; the contract is frozen", m.Name)
 		}
 		want[m.Name] = true
-		if m.RouteField == nil || m.RouteField.Field != "tenant" || !m.AnyTenant {
-			t.Fatalf("redolog.Redo.%s: RouteField=%+v AnyTenant=%v, want route field \"tenant\" and RPC_FLAG_ANY_TENANT", m.Name, m.RouteField, m.AnyTenant)
+		if m.RouteField != nil || m.AnyTenant {
+			t.Fatalf("redolog.Redo.%s: RouteField=%+v AnyTenant=%v, want neither: redo is a /system service", m.Name, m.RouteField, m.AnyTenant)
 		}
 		if strings.Join(m.AuthServices, ",") != "stratum" {
 			t.Fatalf("redolog.Redo.%s: auth_services = %v, want [stratum] (the record store calls it)", m.Name, m.AuthServices)

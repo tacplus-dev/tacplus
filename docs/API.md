@@ -748,14 +748,14 @@ numbers are frozen.
 - `Append(stream RedoAppend) returns (stream RedoAck)` and
   `Replay(RedoReplayRequest) returns (stream RedoReplayEntry)`, `RPC_PRINCIPAL_SERVICE`,
   `auth_services: ["stratum"]`.
-- Both are tenant-routed through `(spec.service_s2s).host_tenant_owned`: `route_field:
-  "tenant"` (the redo instance's tid) and `RPC_FLAG_ANY_TENANT`, so the generated client
-  takes the tid when it opens the `Append` stream and every message must name it, and
-  the generated server refuses a call routed to another tenant and admits a caller of
-  any tenant. `registry.json` carries both on each rpc.
-- The tenant a write belongs to is the caller's verified identity, never a request
-  field; ordering, acks, compaction and isolation are the host's behaviour, not the
-  wrapper's.
+- redo is a `/system` service (#258; tacplus-dev/roadmap
+  `decisions/s2s-never-crosses-tenants-2026-10-31.md`): a store's call is tenant →
+  `/system`, so neither rpc is tenant-routed nor `RPC_FLAG_ANY_TENANT`, and
+  `registry.json` carries neither. Field 1 of `RedoAppend` and `RedoReplayRequest`, the
+  old route tenant, is reserved.
+- The tenant a write belongs to is the caller's verified tid, from its token, never a
+  request field; ordering, acks, compaction and isolation are the host's behaviour, not
+  the wrapper's.
 
 ### PAGE Contract
 

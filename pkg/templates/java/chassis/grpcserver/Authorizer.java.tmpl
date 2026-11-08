@@ -603,7 +603,7 @@ public class Authorizer {
     private final Set<String> methodAuthAnyService = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<String, List<Pattern>> methodActorPatterns = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> methodTargetNamespaceField = new ConcurrentHashMap<>();
-    /** Methods declaring RPC_FLAG_ANY_TENANT: a caller of any tenant passes the tenant door. */
+    /** Methods declaring RPC_FLAG_ANY_TENANT: a user of any tenant passes the tenant door. */
     private final Set<String> methodAnyTenant = ConcurrentHashMap.newKeySet();
     /** The instance's own tenant namespace ("/tenants/&lt;t&gt;"), or "" for a shared instance. */
     private volatile String hostTenant = "";
@@ -722,8 +722,9 @@ public class Authorizer {
 
     /**
      * Registers RPC_FLAG_ANY_TENANT for a method: on a tenant-owned instance a
-     * caller of any tenant passes the tenant door for that rpc ("any
-     * authenticated user of any tenant may call this"). It widens nothing else:
+     * user of any tenant passes the tenant door for that rpc ("any
+     * authenticated user of any tenant may call this"); another tenant's service
+     * never does (S2S never crosses tenants). It widens nothing else:
      * the token, its audience, auth_services, entitlements and
      * target_namespace_field are checked exactly as before. Without it the door
      * admits only members of the instance's own tenant (and /system).
@@ -841,14 +842,27 @@ public class Authorizer {
         return !tenant.isEmpty() && tenant.indexOf('/') < 0;
     }
 
-    /** The tenant-owned instance's door check. */
-    private void checkHostTenant(String callerNamespace) throws ProtoException {
+    /**
+     * The tenant-owned instance's door check. {@code methodKey} is the method
+     * being called (null when unknown): an RPC_FLAG_ANY_TENANT method opens the
+     * door to users of any tenant; an unknown method keeps it shut. S2S never
+     * crosses tenants: another tenant's service or workload is refused on every
+     * method, an RPC_FLAG_ANY_TENANT one included.
+     */
+    private void checkHostTenant(TokenWrapper tw, String methodKey) throws ProtoException {
         String host = hostTenant;
         if (host.isEmpty()) return;
-        String caller = callerNamespace == null ? "" : callerNamespace;
+        String caller = tw.getNamespace() == null ? "" : tw.getNamespace();
         if (Spiffe.isAtOrBelow("/system", caller) || Spiffe.isAtOrBelow(caller, host)) {
             return;
         }
+        String subType = tw.getSubType();
+        if ("service".equals(subType) || "workload".equals(subType)) {
+            throw ProtoException.newErrPermissionDenied(null,
+                    "service caller namespace \"" + caller + "\" is not at-or-above this instance's tenant \"" + host
+                    + "\": S2S never crosses tenants");
+        }
+        if (methodKey != null && methodAnyTenant.contains(methodKey)) return;
         throw ProtoException.newErrPermissionDenied(null,
                 "caller namespace \"" + caller + "\" is not at-or-above this instance's tenant \"" + host + "\"");
     }
@@ -1112,9 +1126,7 @@ public class Authorizer {
             throw ProtoException.newErrPermissionDenied(null,
                     "token audience \"" + aud + "\" is not accepted by service \"" + SERVICE_NAME + "\"");
         }
-        if (methodKey == null || !methodAnyTenant.contains(methodKey)) {
-            checkHostTenant(tw.getNamespace());
-        }
+        checkHostTenant(tw, methodKey);
 
         // Signature, expiry, token class and audience all checked: this is the
         // only place a token becomes readable as the caller's identity.

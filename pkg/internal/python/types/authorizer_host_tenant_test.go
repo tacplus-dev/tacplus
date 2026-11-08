@@ -75,7 +75,7 @@ class TokenWrapper:
     def get_custom_field(self, n): return ""
     def get_audience(self): return self.c["aud"]
     def get_namespace(self): return self.c.get("ns", "")
-    def get_sub_type(self): return "service"
+    def get_sub_type(self): return self.c.get("st", "service")
     def service_path(self): return self.c["sub"]
     def get_act(self): return ""
 `)
@@ -172,7 +172,9 @@ func write(t *testing.T, path, body string) {
 // only ("any authenticated user of any tenant"); the default keeps it ("members
 // of the target tenant only"). The token, audience and auth_services are still
 // enforced on the opened rpc, and authenticate() (auth_any_user, stream open)
-// honours it when told the method.
+// honours it when told the method. Issue #258: it opens the door to other
+// tenants' users only; another tenant's service or workload is refused on it
+// too (S2S never crosses tenants).
 func TestPythonAuthorizerAnyTenantOpensTheDoorForThatRpcOnly(t *testing.T) {
 	py, root := pyAuthorizerHarness(t)
 	script := `
@@ -192,8 +194,8 @@ a.set_method_auth("demo.Demo/Open", ["caller-svc"])
 a.set_method_any_tenant("demo.Demo/Open")
 a.set_host_namespace("/tenants/beta")
 
-def md(ns, aud="demo", sub="caller-svc"):
-    return {"authorization": "Bearer " + json.dumps({"aud": aud, "sub": sub, "ns": ns})}
+def md(ns, aud="demo", sub="caller-svc", st="service"):
+    return {"authorization": "Bearer " + json.dumps({"aud": aud, "sub": sub, "ns": ns, "st": st})}
 
 def code(call):
     try:
@@ -202,23 +204,30 @@ def code(call):
         return e.code
     return None
 
-for ns in ("/tenants/acme", "/tenants/beta", "/users/u1", "/system"):
+# Users of any tenant pass the opened door.
+for ns in ("/tenants/acme/users/u1", "/tenants/beta", "/users/u1", "/system"):
+    assert code(lambda: a.authenticate(md(ns, st="user"), None, "/demo.Demo/Open")) is None, ns
+    assert code(lambda: a.authenticate(md(ns, st="user"), full_method="/demo.Demo/Open")) is None, ns
+# Services: the instance's own tenant and /system only, ANY_TENANT or not.
+for ns in ("/tenants/beta", "/system"):
     assert code(lambda: a.authorize(md(ns), "/demo.Demo/Open", None)) is None, ns
     assert code(lambda: a.authenticate(md(ns), None, "/demo.Demo/Open")) is None, ns
-    assert code(lambda: a.authenticate(md(ns), full_method="/demo.Demo/Open")) is None, ns
+for st in ("service", "workload"):
+    for ns in ("/tenants/acme", "/users/u1"):
+        assert code(lambda: a.authorize(md(ns, st=st), "/demo.Demo/Open", None)) == "PERMISSION_DENIED", (st, ns)
+        assert code(lambda: a.authenticate(md(ns, st=st), None, "/demo.Demo/Open")) == "PERMISSION_DENIED", (st, ns)
 
 # The default door still stands on every other rpc, and without a method.
-assert code(lambda: a.authorize(md("/tenants/acme"), "/demo.Demo/Do", None)) == "PERMISSION_DENIED"
-assert code(lambda: a.authenticate(md("/tenants/acme"), None, "/demo.Demo/Do")) == "PERMISSION_DENIED"
-assert code(lambda: a.authenticate(md("/tenants/acme"))) == "PERMISSION_DENIED"
+assert code(lambda: a.authenticate(md("/tenants/acme", st="user"), None, "/demo.Demo/Do")) == "PERMISSION_DENIED"
+assert code(lambda: a.authenticate(md("/tenants/acme", st="user"))) == "PERMISSION_DENIED"
 # A same-named rpc of another service is not opened.
 a.set_method_auth("other.Demo/Open", ["caller-svc"])
-assert code(lambda: a.authorize(md("/tenants/acme"), "/other.Demo/Open", None)) == "PERMISSION_DENIED"
+assert code(lambda: a.authenticate(md("/tenants/acme", st="user"), None, "/other.Demo/Open")) == "PERMISSION_DENIED"
 
 # Opening the door widens nothing else.
-assert code(lambda: a.authorize(md("/tenants/acme", aud="other"), "/demo.Demo/Open", None)) == "PERMISSION_DENIED"
-assert code(lambda: a.authorize(md("/tenants/acme", sub="intruder"), "/demo.Demo/Open", None)) == "PERMISSION_DENIED"
-assert code(lambda: a.authenticate(md("/tenants/acme"), "/tenants/zeta", "/demo.Demo/Open")) == "PERMISSION_DENIED"
+assert code(lambda: a.authenticate(md("/tenants/acme", aud="other", st="user"), None, "/demo.Demo/Open")) == "PERMISSION_DENIED"
+assert code(lambda: a.authorize(md("/tenants/beta", sub="intruder"), "/demo.Demo/Open", None)) == "PERMISSION_DENIED"
+assert code(lambda: a.authenticate(md("/tenants/acme", st="user"), "/tenants/zeta", "/demo.Demo/Open")) == "PERMISSION_DENIED"
 print("ok")
 `
 	mod := filepath.Join(t.TempDir(), "any_tenant_check.py")

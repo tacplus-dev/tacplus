@@ -67,7 +67,7 @@ export class TokenWrapper {
   getCustomField() { return ''; }
   getAudience() { return this.c.aud; }
   getNamespace() { return this.c.ns ?? ''; }
-  getSubType() { return 'service'; }
+  getSubType() { return this.c.st ?? 'service'; }
   getAct() { return ''; }
   getSubject() { return this.c.sub; }
   servicePath() { return this.c.sub; }
@@ -159,7 +159,9 @@ console.log('ok');
 // Issue #170: RPC_FLAG_ANY_TENANT opens the tenant-owned door for that rpc
 // only ("any authenticated user of any tenant"); the default keeps it ("members
 // of the target tenant only"). Token, audience and auth_services still hold on
-// the opened rpc, and authenticate() honours it when told the method.
+// the opened rpc, and authenticate() honours it when told the method. Issue
+// #258: it opens the door to other tenants' users only; another tenant's
+// service or workload is refused on it too (S2S never crosses tenants).
 func TestTypeScriptAuthorizerAnyTenantOpensTheDoorForThatRpcOnly(t *testing.T) {
 	node, root, put := tsAuthorizerHarness(t)
 	put("check.mjs", `
@@ -173,7 +175,8 @@ a.setMethodAuth('other.Demo/Open', ['caller-svc']);
 a.setMethodAnyTenant('demo.Demo/Open');
 a.setHostNamespace('/tenants/beta');
 
-const md = (ns, aud = 'demo', sub = 'caller-svc') => ({ authorization: 'Bearer ' + JSON.stringify({ aud, sub, ns }) });
+const md = (ns, aud = 'demo', sub = 'caller-svc', st = 'service') => ({ authorization: 'Bearer ' + JSON.stringify({ aud, sub, ns, st }) });
+const user = (ns, aud = 'demo') => md(ns, aud, 'caller-svc', 'user');
 async function code(call) {
   try { await call(); return null; } catch (e) { return e.code ?? e.message; }
 }
@@ -181,17 +184,25 @@ function expect(got, want, what) {
   if (got !== want) throw new Error(what + ': want ' + want + ', got ' + got);
 }
 
-for (const ns of ['/tenants/acme', '/tenants/beta', '/users/u1', '/system']) {
-  expect(await code(() => a.authorize(md(ns), '/demo.Demo/Open', undefined)), null, 'authorize Open ' + ns);
-  expect(await code(() => a.authenticate(md(ns), undefined, '/demo.Demo/Open')), null, 'authenticate Open ' + ns);
+for (const ns of ['/tenants/acme/users/u1', '/tenants/beta', '/users/u1', '/system']) {
+  expect(await code(() => a.authenticate(user(ns), undefined, '/demo.Demo/Open')), null, 'authenticate Open user ' + ns);
 }
-expect(await code(() => a.authorize(md('/tenants/acme'), '/demo.Demo/Do', undefined)), 7, 'default door on Do');
-expect(await code(() => a.authenticate(md('/tenants/acme'), undefined, '/demo.Demo/Do')), 7, 'default door on authenticate Do');
-expect(await code(() => a.authenticate(md('/tenants/acme'))), 7, 'default door without a method');
-expect(await code(() => a.authorize(md('/tenants/acme'), '/other.Demo/Open', undefined)), 7, 'same-named rpc of another service');
-expect(await code(() => a.authorize(md('/tenants/acme', 'other'), '/demo.Demo/Open', undefined)), 7, 'audience still enforced');
-expect(await code(() => a.authorize(md('/tenants/acme', 'demo', 'intruder'), '/demo.Demo/Open', undefined)), 7, 'auth_services still enforced');
-expect(await code(() => a.authenticate(md('/tenants/acme'), '/tenants/zeta', '/demo.Demo/Open')), 7, 'target namespace still enforced');
+for (const ns of ['/tenants/beta', '/system']) {
+  expect(await code(() => a.authorize(md(ns), '/demo.Demo/Open', undefined)), null, 'authorize Open service ' + ns);
+  expect(await code(() => a.authenticate(md(ns), undefined, '/demo.Demo/Open')), null, 'authenticate Open service ' + ns);
+}
+for (const st of ['service', 'workload']) {
+  for (const ns of ['/tenants/acme', '/users/u1']) {
+    expect(await code(() => a.authorize(md(ns, 'demo', 'caller-svc', st), '/demo.Demo/Open', undefined)), 7, 'S2S never crosses tenants: authorize ' + st + ' ' + ns);
+    expect(await code(() => a.authenticate(md(ns, 'demo', 'caller-svc', st), undefined, '/demo.Demo/Open')), 7, 'S2S never crosses tenants: authenticate ' + st + ' ' + ns);
+  }
+}
+expect(await code(() => a.authenticate(user('/tenants/acme'), undefined, '/demo.Demo/Do')), 7, 'default door on authenticate Do');
+expect(await code(() => a.authenticate(user('/tenants/acme'))), 7, 'default door without a method');
+expect(await code(() => a.authenticate(user('/tenants/acme'), undefined, '/other.Demo/Open')), 7, 'same-named rpc of another service');
+expect(await code(() => a.authenticate(user('/tenants/acme', 'other'), undefined, '/demo.Demo/Open')), 7, 'audience still enforced');
+expect(await code(() => a.authorize(md('/tenants/beta', 'demo', 'intruder'), '/demo.Demo/Open', undefined)), 7, 'auth_services still enforced');
+expect(await code(() => a.authenticate(user('/tenants/acme'), '/tenants/zeta', '/demo.Demo/Open')), 7, 'target namespace still enforced');
 console.log('ok');
 `)
 	out, err := exec.Command(node, "--experimental-strip-types", "--no-warnings", filepath.Join(root, "check.mjs")).CombinedOutput()

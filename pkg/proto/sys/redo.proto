@@ -7,31 +7,29 @@
 // store calls it through its generated client, so neither side hand-writes it
 // (tacplus#163 D5). Field numbers are frozen.
 //
-// The redo service is tenant-owned and runs in the reserved restore tenant;
-// every tenant's record store reaches it by a tenant-to-tenant call, routed by
-// the request's tenant field (the target, the redo instance's tenant), and
-// opens its tenant door with RPC_FLAG_ANY_TENANT. The tenant a write BELONGS
-// to is never a request field: it is the caller's identity
-// (spiffe://<td>/tenants/<id>/services/...). The redo service keys every log
-// by trust domain and that tenant, and refuses to read or write any other
-// tenant's.
+// The redo service is a /system service (tacplus-dev/roadmap
+// decisions/s2s-never-crosses-tenants-2026-10-31.md, addendum 2026-11-07):
+// every tenant's record store reaches it by a tenant -> /system call, fixed at
+// build time, so neither rpc is tenant-routed nor opened with
+// RPC_FLAG_ANY_TENANT. redo is the tenants' logs' custodian: the tenant a
+// write BELONGS to is never a request field, it is the caller's tid, from its
+// token. The redo service keys every log by trust domain and that tenant, and
+// refuses to read or write any other tenant's.
 syntax = "proto3";
 
 package redolog;
 
 import "sys/spec.proto";
 
-// Redo is the record store's redo log, hosted by the service at routing label
-// "redo". host_tenant_owned: that service is tenant-owned, which this contract
-// cannot learn from the host's proto because a record store generates without
-// it.
+// Redo is the record store's redo log, hosted by the /system service at
+// routing label "redo".
 service Redo {
-  option (spec.service_s2s) = {label: "redo", host_tenant_owned: true};
+  option (spec.service_s2s) = {label: "redo"};
 
   // Append opens a tenant's append stream: the record store sends each write
   // it is about to apply, in order, and the redo service acks it per
-  // durability level. One stream per store instance writing a tenant; every
-  // message on it names the same route tenant.
+  // durability level. One stream per store instance writing a tenant: the
+  // caller's.
   //
   // Order: seq is the tenant log's position, 1 for the first append of an
   // empty log, and each append's seq is exactly one more than the last one
@@ -48,7 +46,7 @@ service Redo {
   // on a full restart by definition), and an append asking for it is refused
   // (INVALID_ARGUMENT).
   rpc Append(stream RedoAppend) returns (stream RedoAck) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["stratum"], route_field: "tenant", flags: [RPC_FLAG_ANY_TENANT]};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["stratum"]};
   }
 
   // Replay streams the caller's tenant log: the compacted snapshot (one PUT
@@ -57,7 +55,7 @@ service Redo {
   // every start, before it serves; restore is to the latest state. The next
   // append's seq is one more than the last seq replayed (1 for an empty log).
   rpc Replay(RedoReplayRequest) returns (stream RedoReplayEntry) {
-    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["stratum"], route_field: "tenant", flags: [RPC_FLAG_ANY_TENANT]};
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["stratum"]};
   }
 }
 
@@ -99,10 +97,10 @@ message RedoChange {
 // RedoAppend is one store operation: a single write, or an Apply of several
 // ops, which the log keeps all or nothing, as the store applied it.
 message RedoAppend {
-  // tenant is the TARGET tenant's tid, the redo instance's own (restore), the
-  // route field. It is not the tenant the write belongs to: that is the
-  // caller's identity.
-  string tenant = 1 [(spec.assert_max_size) = 8];
+  // Field 1 was the route tenant while redo lived in the restore tenant;
+  // redo is a /system service now and the log is the caller's tid's (#258).
+  reserved 1;
+  reserved "tenant";
   // seq is the tenant log position of this operation; see Append.
   uint64 seq = 2;
   // changes are the operation's entry changes, in the store's canonical lock
@@ -122,9 +120,10 @@ message RedoAck {
 
 // RedoReplayRequest asks for the caller's tenant log.
 message RedoReplayRequest {
-  // tenant is the TARGET tenant's tid, the redo instance's own (restore), the
-  // route field. The log replayed is the caller's own tenant's.
-  string tenant = 1 [(spec.assert_max_size) = 8];
+  // Field 1 was the route tenant while redo lived in the restore tenant;
+  // the log replayed is the caller's tid's (#258).
+  reserved 1;
+  reserved "tenant";
 }
 
 // RedoReplayEntry is one operation of a replay.

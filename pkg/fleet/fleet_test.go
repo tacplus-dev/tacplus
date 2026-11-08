@@ -450,17 +450,18 @@ func TestIsSysPackage_KnowsEveryEmbeddedSysPackage(t *testing.T) {
 	}
 }
 
-// The fleet is where a contract's host_tenant_owned meets its real host: the
-// sys redo contract (redolog.Redo) says the service at label "redo" is
-// tenant-owned, and a fleet whose redo is a shared service is refused instead
-// of routing every call to per-tenant instances that do not exist.
-func TestValidateFleetChecksHostTenantOwnedAgainstTheHost(t *testing.T) {
+// The fleet is where a sys contract meets its real host: the redo contract
+// (redolog.Redo) is not tenant-routed, because redo is a /system service
+// (#258), so a fleet whose redo is tenant-owned is refused (its rpcs would
+// need a route field) instead of serving per-tenant instances no store can
+// reach without crossing tenants.
+func TestValidateFleetChecksTheRedoHostIsASystemService(t *testing.T) {
 	for _, tc := range []struct {
 		option string
 		ok     bool
 	}{
-		{`{name: "redo"}`, false},
-		{`{name: "redo", tenant_owned: true, pinned_tenant: "restore"}`, true},
+		{`{name: "redo"}`, true},
+		{`{name: "redo", tenant_owned: true, pinned_tenant: "restore"}`, false},
 	} {
 		merged := t.TempDir()
 		write(t, filepath.Join(merged, "registry.yaml"), "services:\n    - name: redo\n      id: 1\n")
@@ -469,8 +470,8 @@ func TestValidateFleetChecksHostTenantOwnedAgainstTheHost(t *testing.T) {
 		if tc.ok && err != nil {
 			t.Fatalf("%s: validateFleet: %v", tc.option, err)
 		}
-		if !tc.ok && (err == nil || !strings.Contains(err.Error(), "host_tenant_owned") || !strings.Contains(err.Error(), "redolog.Redo")) {
-			t.Fatalf("%s: validateFleet err = %v, want the host_tenant_owned refusal for redolog.Redo", tc.option, err)
+		if !tc.ok && (err == nil || !strings.Contains(err.Error(), "route_field") || !strings.Contains(err.Error(), "Redo.Append")) {
+			t.Fatalf("%s: validateFleet err = %v, want the tenant-routing refusal for redolog.Redo", tc.option, err)
 		}
 	}
 }

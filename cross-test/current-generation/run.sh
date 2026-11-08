@@ -2969,10 +2969,10 @@ if [[ -d "$TENANTROUTE_PROTO_SRC" ]]; then
 fi
 
 # redo-contract fixture (issue #163 D5): the sys contract redolog.Redo is
-# tenant-routed by its host_tenant_owned, so stratum, generated without the
-# host's proto, carries its route field in registry.json and the routed client;
-# redo, which hosts it by label, gets its server wrapper (a sys contract's
-# wrapper was never written in Go) with the route check and the any-tenant door.
+# hosted by the /system service redo (#258: stratum -> redo is tenant ->
+# /system), so neither side's registry.json routes it by tenant nor opens it to
+# any tenant; redo, which hosts it by label, gets its server wrapper (a sys
+# contract's wrapper was never written in Go).
 if [[ -d "$REDO_PROTO_SRC" ]]; then
   for language in "${languages[@]}"; do
     for self in stratum redo; do
@@ -2990,14 +2990,14 @@ if [[ -d "$REDO_PROTO_SRC" ]]; then
       fi
       output_root="$(resolve_output_root "$dir/tacplus")"
       assert_spiffe_soundness "$dir/tacplus"
-      python3 - "$output_root/registry.json" <<'REDO_PY' || die "redo-contract fixture ($language, $self): registry.json does not route redolog.Redo by tenant"
+      python3 - "$output_root/registry.json" <<'REDO_PY' || die "redo-contract fixture ($language, $self): registry.json routes redolog.Redo by tenant or opens it to any tenant"
 import json, sys
 want = {"/redolog.Redo/Append", "/redolog.Redo/Replay"}
 seen = set()
 def walk(o):
     if isinstance(o, dict):
         if o.get("grpc_path") in want and "rpc_verb" in o:  # an rpc entry, not one of its surfaces
-            if o.get("route_field") != "tenant" or o.get("any_tenant") is not True:
+            if o.get("route_field") or o.get("any_tenant"):
                 sys.exit("%s: route_field=%r any_tenant=%r" % (o["grpc_path"], o.get("route_field"), o.get("any_tenant")))
             seen.add(o["grpc_path"])
         for v in o.values():

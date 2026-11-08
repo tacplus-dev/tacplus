@@ -219,7 +219,7 @@ package redo;
 
 import "sys/spec.proto";
 
-option (spec.service) = {name: "redo", tenant_owned: true, pinned_tenant: "restore"};
+option (spec.service) = {name: "redo"};
 `
 	if err := os.WriteFile(filepath.Join(dir, "services", "redo.proto"), []byte(host), 0644); err != nil {
 		t.Fatalf("write redo proto: %v", err)

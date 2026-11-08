@@ -3,8 +3,8 @@
 // The redo-contract fixture's CALLER (issue #163 D5): a per-tenant record
 // store that calls the sys redo contract, redolog.Redo, through its generated
 // client. Generated from this proto alone, plus sys/: the redo host's proto is
-// not in the run, and the contract's host_tenant_owned is what makes its rpcs
-// tenant-routed (route field "tenant", the restore tenant's tid).
+// not in the run. redo is a /system service (#258), so the contract's rpcs are
+// not tenant-routed: a tenant's store calls /system, never another tenant.
 
 syntax = "proto3";
 

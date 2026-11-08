@@ -5,9 +5,10 @@
 # its member port, and run the memberport-peer tests (peer <-> member port <->
 # member port <-> peer: correctness, session rotation across token lifetimes,
 # backpressure, refusals and their statuses, faults, failure modes, the
-# sender's checks of the receiver), the member port's stream-expiry leg and the
-# Hazelcast integration test (two tenants' members through the port; Hazelcast
-# 5.7.0, Stratum's version). MEMBERPORT_SOAK=1 adds the opt-in soak, which
+# sender's checks of the receiver), the config check (a non-loopback
+# target_address is refused before startup, #258), the member port's
+# stream-expiry leg and the Hazelcast integration test (two tenants' members
+# through the port; Hazelcast 5.7.0, Stratum's version). MEMBERPORT_SOAK=1 adds the opt-in soak, which
 # prints the overhead against a direct connection. --test <classes> runs only
 # those (cross-test/stream-expiry runs MemberPortStreamExpiryTest this way).
 #
@@ -19,7 +20,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROTO_SRC="$ROOT_DIR/cross-test/memberport/proto"
 LANGUAGE="java"
-TESTS="MemberPortBehaviorTest,MemberPortStreamExpiryTest,HazelcastMemberPortTest"
+TESTS="MemberPortBehaviorTest,MemberPortConfigTest,MemberPortStreamExpiryTest,HazelcastMemberPortTest"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --language) LANGUAGE="$2"; shift 2 ;;

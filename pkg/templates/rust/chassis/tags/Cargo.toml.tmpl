@@ -2,6 +2,10 @@
 name = "tags"
 version = "0.1.0"
 edition = "2021"
+{{- if .License}}
+license = "{{.License}}"
+{{- end}}
+publish = false
 description = "Kubernetes-style tag set and selector helpers"
 
 [dependencies]

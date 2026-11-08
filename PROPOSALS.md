@@ -344,6 +344,14 @@ the looper then marks it `promoted` or `declined` here with the date.
   `tacplus pin` list all releases), but the release page and `/releases/latest` send people to 2.2. Passing
   `--latest=false` unless the tag is the newest `v*` (the rule `scripts/images-tags.sh` already applies to
   `build:latest`, #160) would fix it.
+- **A gate that refuses protojson/prototext layout in generators, and a cross-binary determinism check** (2026-11-08,
+  #307): `registry.json` flipped between one and two spaces after `:` from release to release, and between amd64 and
+  arm64 builds of one release, because protojson's `Multiline` layout adds a space when a hash of the binary is odd
+  (protobuf's internal/detrand). #307 gives `registry.json` its own formatter and a golden test. Nothing stops the next
+  generator from writing protojson's or prototext's layout (`Multiline`, `Indent`, `protojson.Format`,
+  `prototext.Format`) into a generated file: a soundness rule could refuse it under `pkg/internal`. `cross-test/determinism`
+  compares two runs of one binary, which agree even with the defect; it could also run a second binary of the same
+  source that differs only in a padded `-X` string, so the hash differs.
 
 ## Promoted / declined
 - **Member port onto gRPC with make-before-break session rotation (Java)** (2026-11-06, #321): promoted 2026-11-05,

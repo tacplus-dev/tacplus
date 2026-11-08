@@ -143,6 +143,12 @@ type javaSubscriptionEntry struct {
 	// routing-only consumer is by construction not the record's store.
 	RoutingOnly      bool
 	EnvelopeTypeName string // e.g. "TopologyEventRoutingEnvelope"
+	// ClearStoredTrace is true for a store-derived subscription (the store's
+	// write path) over a source carrying the injected trace_id: the dispatch
+	// clears the event's trace_id before the handler, so a stored value never
+	// keeps a trace (#313). A declared subscription keeps the trace for its
+	// handler to propagate.
+	ClearStoredTrace bool
 }
 
 // javaTargetServiceEntry describes a unique target service for ServiceConnection creation.
@@ -579,6 +585,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 
 			RoutingOnly:      sub.RoutingOnly,
 			EnvelopeTypeName: event.TypeName + boundaries.RoutingEnvelopeSuffix,
+			ClearStoredTrace: sub.StoreIngest && sub.SourceCarriesTrace && !sub.RoutingOnly,
 		})
 	}
 

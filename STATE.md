@@ -1,8 +1,8 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-06 by looper (#211).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by looper (#313).
 
-- **Version / line:** v2.6.0 (latest release, 2026-11-05, at 87adda9e; `release/2.6` cut at it); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
+- **Version / line:** v2.6.2 (latest release, 2026-11-07, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
   generated write surface on the record query plane's S2S half (Get/Put/InsertIfAbsent/ReplaceIfUnchanged/Delete,
   Watch<T>Changes, the atomic Apply with canonical lock order), per-record-type durability (MEMORY/LOCAL/REMOTE),
@@ -57,6 +57,13 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-06 by lo
   cargo-fuzz too, and its `tacplus` is `images/tacplus.sh`, which runs exactly the pinned binary, checked against
   `checksums.txt`, and refuses a repository with no pin or a pin of another line. `tacplus verify` reports Go as
   skipped.
+  Trace propagation, the patch half of #313 (`tacplus-dev/roadmap:decisions/trace-propagation-2026-11-03.md`): every
+  generated projection and transformation output copies its source's `trace_id`, and every generated store path
+  clears field 200 before it persists (the record dispatch, the service_store disk helpers, the store wrappers and the
+  record write surface, the record store's subscriptions, state `Put`/`Set`), in Go, Java and Rust
+  (`cross-test/trace-carry`, in `just gates`; on main for 2.7, and backported to release/2.0 through release/2.6 by pull requests #330-#336, each line's next patch).
+  Gap: sys contract messages mostly lack field 200, and helpers that build their own request take no `trace_id`
+  (#327, 2.7); a message without field 200 is not yet refused (#328, 3.0).
   The build image's docker-buildx is built from the v0.38.1 source with moby/go-archive 0.3.3 and golang.org/x/net
   0.62.0 (CVE-2026-17106, CVE-2026-78669, CVE-2026-78661, CVE-2026-97045; `tacplus-smoke` checks the floors)
   (#190; backported to release/2.0 through release/2.5 by pull request, as v2.0.13, v2.1.6, v2.2.3, v2.3.5, v2.4.4

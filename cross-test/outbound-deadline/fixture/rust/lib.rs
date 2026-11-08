@@ -12,7 +12,8 @@
 // The fixture supplies only the generated handler trait impl. Dispatch,
 // validation, the outbound timeout and the outbound retry are generated code.
 //
-// Two facts are checked, and both are about what the generated runtime does:
+// Three facts are checked. The first two are about what the generated runtime
+// does:
 //
 //   1. WIRE: the grpc-timeout that leaf receives must not exceed the 5 s budget
 //      the root set. The generated client overwrites the inbound budget with
@@ -20,7 +21,14 @@
 //   2. LIFETIME: leaf's handler must stop when the root's deadline passes. It
 //      must not run on to its 14 s sleep.
 //
-// Prints the event log, then exits non-zero if either fact fails.
+// The third is about mid's handler, the one hop with a causal downstream call:
+//
+//   3. TRACE: leaf must receive exactly the trace_id the root sent to mid. Mid
+//      forwards its inbound request, so the trace_id it received is carried;
+//      a mid that rebuilt the request without it would fail here.
+//
+// The chain is one test, outbound_deadline_chain, which the gate runs with
+// `cargo test`. It prints the event log, then fails if any fact fails.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -47,6 +55,7 @@ const ROOT_BUDGET: Duration = Duration::from_secs(5);
 const LEAF_DELAY: Duration = Duration::from_secs(14);
 // Slack for scheduling and loopback latency when comparing against the budget.
 const SLACK: Duration = Duration::from_millis(1000);
+const ROOT_TRACE_ID: &str = "trace-outbound-deadline";
 
 type EventStream = std::pin::Pin<Box<dyn Stream<Item = Result<ContractEvent, tonic::Status>> + Send>>;
 
@@ -128,6 +137,7 @@ impl ContractApiHandler for Handler {
     ) -> Result<ContractResponse, tonic::Status> {
         match self.role {
             Role::Leaf => {
+                self.events.record(format!("leaf received trace_id={}", req.trace_id));
                 let mut life = Lifetime::start(self.events.clone());
                 tokio::time::sleep(LEAF_DELAY).await;
                 life.finished = true;
@@ -240,17 +250,17 @@ fn valid_request() -> ContractRequest {
         item_id: "item-123".to_string(),
         mode: ContractMode::Read as i32,
         tags: vec!["one".to_string()],
+        trace_id: ROOT_TRACE_ID.to_string(),
         ..Default::default()
     }
 }
 
 fn fail(msg: String) -> ! {
-    println!("outbound-deadline rust FAILED: {msg}");
-    std::process::exit(1);
+    panic!("outbound-deadline rust FAILED: {msg}");
 }
 
-#[tokio::main]
-async fn main() {
+#[tokio::test(flavor = "multi_thread")]
+async fn outbound_deadline_chain() {
     let events = Arc::new(Events { t0: Instant::now(), lines: Mutex::new(Vec::new()) });
 
     let leaf_addr = serve("leaf", Handler { role: Role::Leaf, leaf: None, events: events.clone() }, events.clone()).await;
@@ -266,7 +276,9 @@ async fn main() {
     // budget on the request. The generated code under test is mid's outbound
     // client and leaf's server wrapper.
     let mut root = ContractApiClient::new(connect(mid_addr).await);
-    let mut req = tonic::Request::new(valid_request());
+    let request = valid_request();
+    let sent_trace_id = request.trace_id.clone();
+    let mut req = tonic::Request::new(request);
     req.set_timeout(ROOT_BUDGET);
 
     let started = Instant::now();
@@ -334,9 +346,27 @@ async fn main() {
         Some(leaf_end) => println!("FACT 2 lifetime: ok, leaf handler ended at {leaf_end} ms (root deadline {} ms)", ROOT_BUDGET.as_millis()),
     }
 
+    // FACT 3 (trace): leaf must receive the trace_id the root sent to mid.
+    let want = format!("leaf received trace_id={sent_trace_id}");
+    let trace_line = events
+        .lines
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(_, m)| m.starts_with("leaf received trace_id="))
+        .map(|(_, m)| m.clone())
+        .unwrap_or_else(|| fail("leaf never recorded a trace_id".to_string()));
+    if trace_line != want {
+        failures.push(format!(
+            "FACT 3 trace: {trace_line:?}, but the root sent trace_id={sent_trace_id}; mid dropped the inbound trace_id on its causal call to leaf"
+        ));
+    } else {
+        println!("FACT 3 trace: ok, {trace_line:?} is the root's trace_id");
+    }
+
     if !failures.is_empty() {
         fail(failures.join("\n  "));
     }
 
-    println!("outbound-deadline rust OK: both facts hold");
+    println!("outbound-deadline rust OK: all three facts hold");
 }

@@ -30,6 +30,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class AccountingSinkDurableTest {
     // EMIT_BOUND_MS is how long an RPC completion may take to hand its record to the sink.
     private static final long EMIT_BOUND_MS = 1000;
+    // SETTLE_BOUND_MS is how long the drain thread may take to append or drop the
+    // records a check emitted. Every append fsyncs, so it bounds the disk, not the RPC:
+    // a hang detector, generous for a slow runner disk, not a timing assertion.
+    private static final long SETTLE_BOUND_MS = 60_000;
 
     private static Accounting.Event event(int i) {
         return Accounting.Event.newBuilder()
@@ -74,7 +78,7 @@ public final class AccountingSinkDurableTest {
                                         int n) throws InterruptedException {
         List<String> got = new ArrayList<>();
         for (int i = 0; i < n; i++) {
-            Accountingrecord.AccountingRecord rec = queue.poll(EMIT_BOUND_MS, TimeUnit.MILLISECONDS);
+            Accountingrecord.AccountingRecord rec = queue.poll(SETTLE_BOUND_MS, TimeUnit.MILLISECONDS);
             check(rec != null, "record " + i + " of " + n + " did not reach the publisher; got " + got);
             got.add(rec.getRequestId());
             sink.ack();
@@ -91,7 +95,7 @@ public final class AccountingSinkDurableTest {
     // waitForCursor polls the spool cursor until it reads want. A sink writes its
     // cursor on shutdown, so a restart must wait for it.
     private static void waitForCursor(Path dir, int want) throws Exception {
-        long deadline = System.currentTimeMillis() + EMIT_BOUND_MS;
+        long deadline = System.currentTimeMillis() + SETTLE_BOUND_MS;
         Path cursor = dir.resolve("accounting-spool").resolve("cursor");
         while (true) {
             String raw = Files.exists(cursor) ? new String(Files.readAllBytes(cursor), StandardCharsets.UTF_8).trim() : "";
@@ -101,6 +105,17 @@ public final class AccountingSinkDurableTest {
             check(System.currentTimeMillis() < deadline, "spool cursor did not reach " + want + " (last read \"" + raw + "\")");
             Thread.sleep(10);
         }
+    }
+
+    // newlines counts the complete lines in a spool log's bytes.
+    private static int newlines(byte[] raw) {
+        int n = 0;
+        for (byte b : raw) {
+            if (b == '\n') {
+                n++;
+            }
+        }
+        return n;
     }
 
     // The publisher acknowledges three of five records, then the process stops. A new
@@ -147,7 +162,7 @@ public final class AccountingSinkDurableTest {
         }
         expectNoMore(queue);
         Path log = dir.resolve("accounting-spool").resolve("records.log");
-        long deadline = System.currentTimeMillis() + EMIT_BOUND_MS;
+        long deadline = System.currentTimeMillis() + SETTLE_BOUND_MS;
         while (Files.exists(log)) {
             check(System.currentTimeMillis() < deadline, "log " + log + " was not removed after every record was acknowledged");
             Thread.sleep(10);
@@ -164,13 +179,29 @@ public final class AccountingSinkDurableTest {
         try {
             AtomicBoolean stop = new AtomicBoolean(false);
             BlockingQueue<Accountingrecord.AccountingRecord> queue = new ArrayBlockingQueue<>(1);
-            AccountingManager.EventBusSink sink = durable(queue, tempDir(), stop);
+            Path dir = tempDir();
+            AccountingManager.EventBusSink sink = durable(queue, dir, stop);
             final int emitted = 40;
             emitAll(sink, emitted);
-            // Let the drain thread take everything in its spool before counting.
-            Thread.sleep(300);
-            long dropped = sink.droppedCount();
+            // Wait until the drain thread has decided every record: appended to the log
+            // or dropped. Each append fsyncs, so how long that takes is the disk's
+            // business (issue #341); the wait is on that state, never on a time bound.
+            Path log = dir.resolve("accounting-spool").resolve("records.log");
+            long deadline = System.currentTimeMillis() + SETTLE_BOUND_MS;
+            byte[] raw;
+            long dropped;
+            while (true) {
+                raw = Files.exists(log) ? Files.readAllBytes(log) : new byte[0];
+                dropped = sink.droppedCount();
+                if (newlines(raw) + dropped == emitted) {
+                    break;
+                }
+                check(System.currentTimeMillis() < deadline, "after " + SETTLE_BOUND_MS + " ms the spool had logged "
+                        + newlines(raw) + " and dropped " + dropped + " of " + emitted + " records");
+                Thread.sleep(10);
+            }
             check(dropped > 0, "emitted " + emitted + " records past a 1024-byte disk bound, none were dropped");
+            check(raw.length <= 1024, "spool log holds " + raw.length + " bytes past its 1024-byte disk bound");
 
             long delivered = 0;
             Accountingrecord.AccountingRecord rec;

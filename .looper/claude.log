@@ -1,0 +1,400 @@
+< The file /builds/looper/tacplus/issues/258/cross-test/memberport/run.sh has been updated successfully.
+> Bash cd /builds/looper/tacplus/issues/258; git diff -- pkg/templates/go docs/USER.md; ls; cat justfile | head -80
+< diff --git a/docs/USER.md b/docs/USER.md index 4c7351d5..6f4e7ec8 100644 --- a/docs/USER.md +++ b/docs/USER.md @@ -1292,8 +1292,23 @@ namespace claim stays `/tenants/<name>`, like its tenant's users'. A shared serv  instance, running in `/system`, is unchanged. An instance that cannot read its  own ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; find . -name redo.proto -not -path './target/*' | head; grep -rn 'ANY_TENANT' --include=*.proto pkg | grep -v '^pkg/proto/sys/spec.proto' | head; grep -rn -i 'redo' docs/RECORD_EVENT_MODEL.md docs/API.md | grep -i -n 'tenant\|restore\|ANY' | head -40
+< ./pkg/proto/sys/redo.proto ./cross-test/proto-redo/host/services/redo.proto pkg/proto/sys/redo.proto:13:// opens its tenant door with RPC_FLAG_ANY_TENANT. The tenant a write BELONGS pkg/proto/sys/redo.proto:51:    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["stratum"], rou...
+> Bash cd /builds/looper/tacplus/issues/258; sed -n 1,75p pkg/proto/sys/redo.proto; echo ----; sed -n 345,380p docs/RECORD_EVENT_MODEL.md; echo ----; sed -n 735,775p docs/API.md; cat cross-test/proto-redo/host/services/redo.proto | head -30; ls cross-test/proto-redo
+< // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0  // Package redolog is the contract between the record store and the redo service: // the record store's durability (the log is the database). It is part of the // sys contract: tacplus defines it, the redo service hosts it, the...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; gh api repos/tacplus-dev/roadmap/contents/decisions/s2s-never-crosses-tenants-2026-10-31.md -H 'Accept: application/vnd.github.raw'; sed -n 75,200p pkg/proto/sys/redo.proto | grep -n -B3 -A3 tenant
+< # S2S never crosses tenants (Jody, 2026-10-31)  Jody, 2026-10-31: "S2S is defined at build time where C2S is defined at runtime (with a build time entitlement system). So we have no way for S2S across different tenants and we don't want it. We do allow tenants to dial into the system and technically...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+I've resolved the `run.sh` conflict. Next I'm applying Jody's decision that redo is a `/system` service: `redolog.Redo` drops its tenant routing and `RPC_FLAG_ANY_TENANT`.
+> Bash cd /builds/looper/tacplus/issues/258; grep -rln 'proto-redo\|redolog\|RedoAppend' --exclude-dir=target --exclude-dir=.git . | head -30; ls -R cross-test/proto-redo | head -30
+< ./pkg/proto/sys/redo.proto ./pkg/fleet/fleet_test.go ./pkg/fleet/fleet.go ./pkg/templates/python/chassis/diskstore/__init__.py.tmpl ./pkg/templates/python/chassis/diskstore/schedule.py.tmpl ./pkg/templates/go/chassis/diskstore/error.go.tmpl ./pkg/templates/rust/chassis/diskstore/src/archive.rs.tmpl ...
+> Bash cd /builds/looper/tacplus/issues/258; grep -n -i 'redo' pkg/internal/common/parser/host_tenant_owned_test.go pkg/fleet/fleet.go pkg/fleet/fleet_test.go pkg/internal/go/types/servicewrapper.go docs/USER.md STATE.md docs/STABILITY_REVIEW.md pkg/internal/common/tmplutil/generated_audit_regression_test....
+< pkg/internal/common/parser/host_tenant_owned_test.go:119:// The redo contract (#163 D5) is the sys contract host_tenant_owned exists pkg/internal/common/parser/host_tenant_owned_test.go:122:// tenant's store calls the redo instance in the restore tenant), and hosted at pkg/internal/common/parser/hos...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; grep -n -i 'redo' cross-test/current-generation/run.sh | head -60; sed -n 425,480p pkg/fleet/fleet_test.go; grep -n -B5 -A25 'host_tenant_owned' pkg/fleet/fleet.go | head -80
+< 30:REDO_PROTO_SRC="$ROOT_DIR/cross-test/proto-redo" 313:# The redo-contract fixture (issue #163 D5), built as stratum (the record store, 314:# from its own proto alone: the redo host's proto is not in the run) or as redo 315:# (the host, which serves the sys contract redolog.Redo by its label). 316:...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; grep -rn 'func ValidateHostTenantOwned' -A60 pkg/internal/common/parser/ | head -80; sed -n 2990,3012p cross-test/current-generation/run.sh
+< pkg/internal/common/parser/tenant_route.go:126:func ValidateHostTenantOwned(dp *DescriptorParser) error { pkg/internal/common/parser/tenant_route.go-127-	if dp == nil { pkg/internal/common/parser/tenant_route.go-128-		return nil pkg/internal/common/parser/tenant_route.go-129-	} pkg/internal/common/p...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; grep -n 'func IsTenantRouted' -A30 pkg/internal/common/parser/tenant_route.go; sed -n 186,215p pkg/internal/common/parser/tenant_route.go; sed -n 100,170p pkg/internal/common/parser/host_tenant_owned_test.go
+< 83:func IsTenantRouted(fd *FileDescriptor, svc *ServiceDescriptor, tenantOwned map[string]bool) bool { 84-	if (svc.Synthesized && svc.SynthesizedKind != SynthesizedKindRecordMap) || !(svc.IsS2S || svc.IsC2S) { 85-		return false 86-	} 87-	if svc.HostLabel != "" && svc.HostTenantOwned { 88-		return tr...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; python3 - <<'EOF' p='pkg/internal/common/parser/host_tenant_owned_test.go' s=open(p).read() old_head=s[s.index('// The redo contract (#163 D5) is the sys contract host_tenant_owned exists'):s.index('func TestSysRedoContract_GeneratesAloneTenantRouted')] s=s.repl...
+< # github.com/tacplus-dev/tacplus/pkg/fleet pkg/internal/common/parser/descriptor.go:20:2: no required module provides package github.com/tacplus-dev/tacplus/target/proto/spec/sys; to add it: 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sys FAIL	github.com/tacplus-dev/tacplus/pkg/fleet [s...
+I've flipped the redo contract tests to expect a `/system` host. Now I'm generating the spec descriptors so the tests can run.
+> Bash cd /builds/looper/tacplus/issues/258; just generate 2>&1 | tail -3; go test ./pkg/fleet/ -run TestValidateFleetChecksTheRedoHost 2>&1 | tail -5; go test ./pkg/internal/common/parser/ -run TestSysRedoContract 2>&1 | tail -5
+= task_started
+= task_notification
+< bash scripts/with-tree-lock.sh go generate ./pkg/internal/proto/spec/...     fleet_test.go:471: {name: "redo"}: validateFleet: fleet: host_tenant_owned errors:           redolog.Redo: (spec.service_s2s).host_tenant_owned, but its host "redo", loaded in this run, does not declare (spec.service).tenan...
+Fail as expected. Now the proto.
+> Bash cd /builds/looper/tacplus/issues/258; python3 - <<'EOF' p='pkg/proto/sys/redo.proto' s=open(p).read() s=s.replace('''// The redo service is tenant-owned and runs in the reserved restore tenant; // every tenant's record store reaches it by a tenant-to-tenant call, routed by // the request's tenant fi...
+< 11:// decisions/s2s-never-crosses-tenants-2026-10-31.md, addendum 2026-11-07): 12:// every tenant's record store reaches it by a tenant -> /system call, fixed at 13:// build time, so neither rpc is tenant-routed nor opened with 14:// RPC_FLAG_ANY_TENANT. redo is the tenants' logs' custodian: the ten...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; sed -n 100,120p pkg/internal/go/types/servicewrapper.go; grep -rn 'redolog\|RedoAppend\|Redo' pkg/internal/common/tmplutil/generated_audit_regression_test.go pkg/internal/proto/configholder.go pkg/internal/proto/health_state_marker_test.go | head; cat cross-test...
+< 	var generated []generatedServiceWrapper 	// Track directories where sanitizedContext helper has been written 	sanitizedContextDirs := make(map[string]bool)  	for _, svc := range servicesInfo { 		// Skip lib services (e.g., LockService, MapService, GrpcServerService) — 		// they are internal infrast...
+> Bash cd /builds/looper/tacplus/issues/258; sed -n 195,240p pkg/internal/proto/health_state_marker_test.go; sed -n 2965,2980p cross-test/current-generation/run.sh
+< 		t.Fatal("a ServiceHealth-annotated message whose instances field is not instance_keyed must NOT be recognized as the shared health root") 	} 	if cfg.HealthStateName != "" { 		t.Errorf("HealthStateName = %q, want empty (near-miss not recognized)", cfg.HealthStateName) 	} }  // A service that serves...
+> Bash cd /builds/looper/tacplus/issues/258; python3 - <<'EOF' import re def sub(p, old, new):     s=open(p).read()     assert old in s, (p, old[:60])     s=s.replace(old,new); open(p,'w').write(s) sub('pkg/internal/proto/health_state_marker_test.go','option (spec.service) = {name: "redo", tenant_owned: tr...
+< 2961:      grep -Eq '"route_field": *"target_tenant"' "$output_root/registry.json" \ 2962:        || die "tenant-route fixture ($language, $self): registry.json does not carry crew's route_field" 3000:            if o.get("route_field") or o.get("any_tenant"): 3001:                sys.exit("%s: rout...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; sed -n 1340,1365p docs/USER.md; sed -n 10,18p STATE.md; sed -n 125,133p STATE.md
+<   } } ```  - **A tid** is exactly 8 characters of `[0-9a-z]`. All-digit ids are reserved for   the platform (`people` is `00000001`). A tenant's instances carry it in their   subject, `spiffe://<td>/tenants/<tid>/services/<svc>` (kernel#23); their   namespace claim names the tenant by name, `/tenant...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; python3 - <<'EOF' def sub(p, old, new):     s=open(p).read()     assert old in s, (p, old[:70])     s=s.replace(old,new); open(p,'w').write(s) sub('docs/USER.md','''  tenant-routed from its host's proto, when that is in the run. A contract whose   callers genera...
+< (Bash completed with no output)
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Redo is now a `/system` contract in the proto, tests, fixtures and docs. Next I'm reviewing the earlier door fix in the other languages and finding where the cross-test legs belong.
+> Bash cd /builds/looper/tacplus/issues/258; git diff pkg/templates/java/chassis/grpcserver/Authorizer.java.tmpl pkg/templates/rust/chassis/grpcserver/src/authorizer.rs.tmpl | head -250
+< diff --git a/pkg/templates/java/chassis/grpcserver/Authorizer.java.tmpl b/pkg/templates/java/chassis/grpcserver/Authorizer.java.tmpl index fb745bda..3aede2a8 100644 --- a/pkg/templates/java/chassis/grpcserver/Authorizer.java.tmpl +++ b/pkg/templates/java/chassis/grpcserver/Authorizer.java.tmpl @@ -6...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; grep -rn -i 'sub_type\|subtype' pkg/proto/sys/token.proto | head -20; grep -rn '"workload"\|"service"' pkg/templates/go/chassis/grpcserver/authorizer.go.tmpl | head
+< 31:  JWT_PAYLOAD_TYPE_SUB = 2 [(spec.json_return_value) = "sub"];  // sub - Stable principal id (or relative path) for the selected sub_type; never a full SPIFFE URI. Services: the service label. Workloads: "<service-path>/workloads/<name>". Users: the stable IDP subject (or its opaque_segment). Cli...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; nohup go test ./... > /tmp/258-gotest.log 2>&1 & echo $!; ls cross-test; grep -rln 'ANY_TENANT\|any_tenant\|AnyTenant' cross-test | head -20
+< 6126 CONSUMER_TEST_PLAN.md README.md TESTS.md accounting-identity c2d-server cert-stream chaos claims-provenance consumer-contract consumer-smoke current-generation dependencies.yaml determinism endpoint-latency external-token fixtures justfile jwk-alg keepalive-rust lib mcp-floor-version memberport...
+> Bash cd /builds/looper/tacplus/issues/258; cat cross-test/proto-tenantroute/services/crew.proto | head -60; ls -R cross-test/proto-tenantroute; grep -n 'tenantroute\|TENANTROUTE' cross-test/current-generation/run.sh | head -30
+< // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0 // The tenant-routing fixture's TENANT-OWNED service (issue #170). // // crew runs one instance per tenant. Every rpc names the request field that // carries the target tenant's id, (spec.rpc).route_field, and that field alone /...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; ls -R cross-test/zero-rpc-s2s | head -40; head -60 cross-test/zero-rpc-s2s/run.sh; ls cross-test/lib cross-test/server-runtime
+< cross-test/zero-rpc-s2s: fixture run.sh  cross-test/zero-rpc-s2s/fixture: main.rs #!/usr/bin/env bash # Copyright (c) 2026 Jody Scott # SPDX-License-Identifier: Apache-2.0 # # Zero-rpc (client-only) Rust host gate (#94, addendum to #64). # # Generates the Rust model of cross-test/proto-zerorpc (a se...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; grep -rn 'AuthorizerBehaviorTest\|authorizer_behavior\|TestAuthorizer' cross-test/*/run.sh cross-test/justfile justfile | head -20
+< cross-test/consumer-contract/run.sh:3740:    let auth = Arc::new(TestAuthorizer::new()); cross-test/consumer-contract/run.sh:3838:    let auth = Arc::new(TestAuthorizer::new()); cross-test/consumer-contract/run.sh:4999:struct TestAuthorizer { cross-test/consumer-contract/run.sh:5005:impl TestAuthori...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; sleep 60; tail -5 /tmp/258-gotest.log; grep -n '^gates\|^[a-z-]*gates' -A30 justfile | head -60
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/pkg/tacplusyaml	0.034s ok  	github.com/tacplus-dev/tacplus/pkg/verification	0.017s ok  	github.com/tacplus-dev/tacplus/pkg/version	0.029s ok  	github.com/tacplus-dev/tacplus/scripts	2.979s ?   	github.com/tacplus-dev/tacplus/target/proto/spec/sys	[no test files] 1...
+> Bash cd /builds/looper/tacplus/issues/258; grep -n 'FAIL' /tmp/258-gotest.log | head; /usr/local/bin/repo-looper --repo tacplus --issue 258 --checkpoint "Resolved run.sh conflict (MemberPortConfigTest in default TESTS). Applied Jody's 2026-11-07 decision: sys/redo.proto is a /system contract (no host_ten...
+< [2026-11-08T17:44:09Z] checkpoint of #258 (a step) pushed to looper/tacplus-258:  24 files changed, 948 insertions(+), 203 deletions(-)
+Go unit tests pass and the work is checkpointed. Starting the full `just gates` run in the background.
+> Bash cd /builds/looper/tacplus/issues/258; nohup just gates > /tmp/258-gates.log 2>&1 & echo $!
+< 17114
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; git fetch -q --tags origin; git log --oneline v2.6.1..origin/main | head -40; git branch -r | grep release; git log -1 --format=%ci v2.6.0 2>/dev/null; grep -n -i 'release\|tag' CONTRIBUTING.md | head -20
+< 55ab0b53 HISTORY.md: releases (looper) 73720eca HISTORY.md: #321 (looper) 54ceaf15 trace_id: projections copy it, every generated store path clears it (#313) 8be9ef5c Build image: build gh from source with golang.org/x/net 0.62.0 (#350) 685a0d79 HISTORY.md: #190 (looper) e0ead97c Member port onto gR...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; git tag -l 'v2.6*' 'v2.5*'; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b: $(git grep -l 'methodAnyTenant' origin/release/$b -- pkg/templates/go/chassis/grpcserver/authorizer.go.tmpl | wc -l) $(git grep -c RPC_FLAG_ANY_TENANT origin/release/$b -- pkg/proto/s...
+< v2.5.0 v2.5.1 v2.5.10 v2.5.11 v2.5.12 v2.5.13 v2.5.14 v2.5.15 v2.5.2 v2.5.3 v2.5.4 v2.5.5 v2.5.6 v2.5.7 v2.5.8 v2.5.9 v2.6.0 v2.6.1 v2.6.2 v2.6.3 v2.6.4 2.0: 0  2.1: 0  2.2: 0  2.3: 0  2.4: 0  2.5: 1 origin/release/2.5:pkg/proto/sys/redo.proto:3 2.6: 1 origin/release/2.6:pkg/proto/sys/redo.proto:3
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Lines 2.5 and 2.6 carry the bug; 2.0–2.4 don't. While the gates run, I'm doing the trace check and reviewing the Python/TS diffs.
+> Bash cd /builds/looper/tacplus/issues/258; /usr/local/bin/looper-trace check 2>&1 | tail -8; git diff pkg/templates/python pkg/templates/typescript | head -120
+= task_started
+= task_notification
+< FINDING untested cross-test/server-runtime/client/go/main.go:73: checkUnary makes causal downstream calls (GetPublicContract) but no test asserts that its trace_id arrives on them FINDING dropped-trace cross-test/server-runtime/client/go/main.go:89: checkServerStream's call ListEvents is caused by t...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; /usr/local/bin/looper-trace check 2>&1 | grep -c FINDING; /usr/local/bin/looper-trace check 2>&1 | grep FINDING | grep -v server-runtime/client; gh issue list --repo tacplus-dev/tacplus --state all --search "looper-trace server-runtime" --json number,title,state...
+= task_started
+= task_notification
+< 9 FINDING untested cross-test/outbound-deadline/fixture/rust/main.rs:124: get_public_contract makes causal downstream calls (get_public_contract) but no test asserts that its trace_id arrives on them [{"number":311,"state":"OPEN","title":"server-runtime Go driver: four calls with no inbound request ...
+> Bash cd /builds/looper/tacplus/issues/258; gh issue list --repo tacplus-dev/tacplus --state open --search "outbound-deadline trace" --json number,title | head -5
+< [{"number":310,"title":"outbound-deadline fixture: mid forwards the trace_id to leaf but no test asserts it arrives; the gate has no just recipe"},{"number":368,"title":"Rust generator: generated crates' Cargo.toml declare no license and no publish = false, so every Rust service's cargo-deny fails (...
+> Bash sleep 240; tail -5 /tmp/258-gates.log
+< <tool_use_error>Blocked: sleep 240 followed by: tail -5 /tmp/258-gates.log. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain shorter sleeps to work around this block.</tool_u...
+Both trace findings are already filed (#310, #311). Now I'll wait on the gates.
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Monitor tail -n +1 -f /tmp/258-gates.log | grep -E --line-buffered '^=== .* rc=|OVERALL|Killed|No space'
+= permission_denied
+< This Bash command contains multiple operations. The following part requires approval: tail -n +1 -f /tmp/258-gates.log
+> Bash until grep -q 'OVERALL' /tmp/258-gates.log || ! kill -0 17114 2>/dev/null; do sleep 20; done; grep -E '^=== .* rc=|OVERALL' /tmp/258-gates.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: b0jju7013. Output is being written to: /builds/looper/tacplus/homes/looper-258/tmp/claude-61000/-builds-looper-tacplus-issues-258/a86dbd60-d82e-4f29-9331-b23a5336d829/tasks/b0jju7013.output. You will be notified when it completes. To check interim output, use R...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash until grep -q 'OVERALL' /tmp/258-gates.log || ! kill -0 17114 2>/dev/null; do sleep 30; done; grep -E '^=== .* rc=|OVERALL' /tmp/258-gates.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bo6m316su). Output is being written to: /builds/looper/tacplus/homes/looper-258/tmp/claude-61000/-builds-looper-tacplus-issues-258/a86dbd60-d82e-4f29-9331-b23a5336d829/tasks/bo6m316su.output. You will be notified w...
+> Bash grep -E '^=== .* rc=' /tmp/258-gates.log; tail -3 /tmp/258-gates.log
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===     PASS java ==> Generating rust cross-test fixture ==> Compiling rust cross-test fixture
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 580 bash -c 'until grep -q OVERALL /tmp/258-gates.log || ! kill -0 17114 2>/dev/null; do sleep 30; done'; grep -E '^=== .* rc=' /tmp/258-gates.log; tail -2 /tmp/258-gates.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=1 === === determinism rc=0 === === cert-stream rc=0 === 2026-11-08T18:04:52.737Z	INFO	build complete	{"output": "/builds/looper/tacplus/homes/looper-258/tmp/tmp.1psonj3YXp/tacplus/model", "mode": "0.0.0-SNAP...
+> Bash grep -n -E 'ERROR|FAIL|panicked|error\[' /tmp/258-gates.log | head -30
+< 486:error[E0277]: `token::Token` doesn't implement `std::fmt::Debug`
+> Bash sed -n 480,520p /tmp/258-gates.log
+<    Compiling tonic v0.14.9    Compiling tonic-prost v0.14.9    Compiling proto-model-types v1.0.0 (/builds/looper/tacplus/issues/258/target/cross-test/current-generation/rust/tacplus/model/types)    Compiling token v0.1.0 (/builds/looper/tacplus/issues/258/target/cross-test/current-generation/rust/t...
+= thinking_tokens
+= thinking_tokens
+Rust's generated test doesn't compile (`expect_err` on a `Token` result). Fixing the template.
+> Bash cd /builds/looper/tacplus/issues/258; grep -n 'expect_err' pkg/templates/rust/chassis/grpcserver/src/authorizer.rs.tmpl | sed -n 1,40p; grep -n 'fn check_caller_at_or_below_method\|fn authenticate_method\|fn authenticate(' pkg/templates/rust/chassis/grpcserver/src/authorizer.rs.tmpl
+< 1899:            .expect_err("default rpc: authenticate_method keeps the door"); 1901:            .expect_err("a check that names no rpc keeps the door"); 1950:                .expect_err("ANY_TENANT: authenticate_method refuses another tenant's service"); 1954:                .expect_err("ANY_TENAN...
+> Bash cd /builds/looper/tacplus/issues/258; sed -n 1940,1975p pkg/templates/rust/chassis/grpcserver/src/authorizer.rs.tmpl; sed -n 465,472p pkg/templates/rust/chassis/grpcserver/src/authorizer.rs.tmpl
+<             ),         ] {             let err = beta                 .authorize_grpc(TEST_METHOD, METHOD, Some(&foreign), &empty_md())                 .await                 .err()                 .expect("ANY_TENANT: another tenant's service is refused at the door");             assert_eq!(err.cod...
+> Edit /builds/looper/tacplus/issues/258/pkg/templates/rust/chassis/grpcserver/src/authorizer.rs.tmpl
+< The file /builds/looper/tacplus/issues/258/pkg/templates/rust/chassis/grpcserver/src/authorizer.rs.tmpl has been updated successfully.
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash cd /builds/looper/tacplus/issues/258; sed -n 1,95p cross-test/justfile | grep -n 'current-generation' ; grep -n '^current-generation' -A6 justfile
+< 10:default: current-generation consumer-build 12:current-generation: 13:    bash {{root}}/current-generation/run.sh 15:current-generation-go: 16:    bash {{root}}/current-generation/run.sh --language go 18:current-generation-java: 19:    bash {{root}}/current-generation/run.sh --language java 21:cur...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The rest of the gates keep running. Once they finish, I'll rerun `current-generation` with the fix.
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/258-gates.log || ! kill -0 17114 2>/dev/null; do sleep 30; done'; grep -E '^=== .* rc=' /tmp/258-gates.log | tail -4
+= task_started
+= task_notification
+< === claims-provenance rc=0 === === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc=0 ===
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/258-gates.log || ! kill -0 17114 2>/dev/null; do sleep 20; done'; grep -E '^=== .* rc=|OVERALL' /tmp/258-gates.log; grep -n 'MemberPortConfigTest\|Tests run' /tmp/258-gates.log | head
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=1 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=0 === === memberport rc=0 === === claims-provenance rc=0 === === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+All other gates pass. I'm rerunning `current-generation` now, then I'll run `MemberPortConfigTest` on its own to confirm it actually runs.
+> Bash cd /builds/looper/tacplus/issues/258; nohup just current-generation > /tmp/258-cg.log 2>&1 & echo $!
+< 81552
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL' /tmp/258-cg.log | head
+= task_started
+= task_notification
+<          real coverage is pkg/internal/java/types/tls_degrade_template_test.go) ==> Generating go c2s-only fixture ==> Compiling go c2s-only fixture
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL' /tmp/258-cg.log | head
+= task_started
+= task_notification
+<     Removed 12M fixture tree healthonly-rust ==> Generating rust zero-rpc fixture ==> Compiling rust zero-rpc fixture
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL' /tmp/258-cg.log | head
+= task_started
+= task_notification
+<     Removed 49M fixture tree requiresdevice-java ==> Generating rust requires-device fixture ==> Compiling rust requires-device fixture
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL' /tmp/258-cg.log | head
+= task_started
+= task_notification
+<     Removed 62M fixture tree recordegress-java ==> Generating rust record-egress fixture ==> Compiling rust record-egress fixture
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL' /tmp/258-cg.log | head
+= task_started
+= task_notification
+<     Removed 62M fixture tree recordegress-host-java ==> Generating rust record-egress HOST fixture ==> Compiling rust record-egress HOST fixture
+`current-generation` is still running. It has passed the Rust authorizer fix, and the remaining fixture legs (tenant-route, redo) are still to come.
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL' /tmp/258-cg.log | head
+= task_started
+= task_notification
+<     Removed 49M fixture tree accountingsink-java ==> Generating rust accounting-sink fixture ==> Compiling rust accounting-sink fixture
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL' /tmp/258-cg.log | head
+= task_started
+= task_notification
+<     Removed 47M fixture tree ownerdefault-java ==> Generating rust owner-default fixture ==> Compiling rust owner-default fixture
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL' /tmp/258-cg.log | head
+= task_started
+= task_notification
+<     Removed 47M fixture tree quorumwrite-java ==> Generating rust quorum-write fixture ==> Compiling rust quorum-write fixture
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL' /tmp/258-cg.log | head
+= task_started
+= task_notification
+<     Removed 47M fixture tree epochload-java ==> Generating rust epoch-load fixture ==> Compiling rust epoch-load fixture
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL' /tmp/258-cg.log | head
+= task_started
+= task_notification
+<     PASS java tenant-route (crew)     Removed 47M fixture tree tenantroute-crew-java ==> Generating rust tenant-route fixture (harbor)
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL|redo-contract' /tmp/258-cg.log | head
+= task_started
+= task_notification
+<     Removed 12M fixture tree tenantroute-harbor-rust ==> Generating rust tenant-route fixture (crew) ==> Compiling rust tenant-route fixture (crew)
+`current-generation` is on the tenant-route fixtures, with no failures so far. The redo-contract legs come next.
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL|PASS .*redo' /tmp/258-cg.log | head
+= task_started
+= task_notification
+<     Removed 46M fixture tree redo-redo-java ==> Generating rust redo-contract fixture (stratum) ==> Compiling rust redo-contract fixture (stratum) 157:    PASS go redo-contract (stratum) 161:    PASS go redo-contract (redo) 165:    PASS java redo-contract (stratum) 169:    PASS java redo-contract (r...
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL' /tmp/258-cg.log | head
+= task_started
+= task_notification
+<     Removed 12M fixture tree tenantrecord-tstratum-go ==> Generating go tenant-record fixture (tmessaging) ==> Compiling go tenant-record fixture (tmessaging)
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL' /tmp/258-cg.log | head
+= task_started
+= task_notification
+<     Removed 54M fixture tree tenantrecord-tmessaging-java ==> Generating rust tenant-record fixture (tstratum) ==> Compiling rust tenant-record fixture (tstratum)
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL' /tmp/258-cg.log | head; kill -0 81552 2>/dev/null && echo running || echo done
+= task_started
+= task_notification
+<     Removed 12M fixture tree tenantslice-go ==> Generating java tenant-slice fixture ==> Compiling java tenant-slice fixture running
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL' /tmp/258-cg.log | head; kill -0 81552 2>/dev/null && echo running || echo done
+= task_started
+= task_notification
+<     Removed 53M fixture tree tenantslice-owner-java ==> Generating rust tenant-slice owner fixture ==> Compiling rust tenant-slice owner fixture running
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL' /tmp/258-cg.log | head; kill -0 81552 2>/dev/null && echo running || echo done
+= task_started
+= task_notification
+<     Removed 53M fixture tree tenantslice-config-owner-java ==> Generating rust tenant-slice config owner fixture ==> Compiling rust tenant-slice config owner fixture running
+`current-generation` is still running and is on the last fixture group (tenant-slice). Nothing has failed.
+> Bash timeout 590 bash -c 'while kill -0 81552 2>/dev/null; do sleep 20; done'; tail -3 /tmp/258-cg.log; grep -n -E 'ERROR|error\[|FAIL' /tmp/258-cg.log | head; kill -0 81552 2>/dev/null && echo running || echo done
+= task_started
+= task_notification
+<      Removed 594 files, 2.7GiB total     Removed 14M fixture tree tenantslice-config-owner-rust ==> Current cross-test generation and compile passed done
+= thinking_tokens
+= thinking_tokens
+`current-generation` passes. Checking that the new behaviour tests ran, then confirming `MemberPortConfigTest` on its own.
+> Bash cd /builds/looper/tacplus/issues/258; grep -n -i 'never_admits\|NeverAdmits\|AuthorizerBehaviorTest\|grpcserver' /tmp/258-cg.log | head; nohup bash cross-test/memberport/run.sh --test MemberPortConfigTest > /tmp/258-mp.log 2>&1 & echo $!
+< 190312
+> Bash cd /builds/looper/tacplus/issues/258; grep -n 'go test\|cargo test\|mvn' cross-test/current-generation/run.sh | head -20; grep -n -c 'ok  \|test result' /tmp/258-cg.log
+< 514:    (cd "$compile_dir" && env "$java_env" mvn -q dependency:build-classpath -Dmdep.outputFile="$classpath_file") >"$classpath_log" 2>&1 || { 519:    (cd "$compile_dir" && mvn -q dependency:build-classpath -Dmdep.outputFile="$classpath_file") >"$classpath_log" 2>&1 || { 761:  (cd "$output" && car...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/258; grep -n 'go test\|go vet' cross-test/current-generation/run.sh | head; ls target/cross-test/current-generation/ 2>/dev/null | head
+< 19:# (gitlab.com/example/dummy/vault/...), which `go vet ./...` in this repo cannot 761:  (cd "$output" && cargo test -p key -p jwk -p token) >"$log_dir/rust-key-test.log" 2>&1 || { 767:  (cd "$output" && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" cargo test -p spiffe)...
+> Bash cd /builds/looper/tacplus/issues/258; grep -rn 'authorizer_behavior_test' --include=*.go --include=*.sh pkg cross-test scripts | grep -v '_test.go.tmpl' | head
+< cross-test/current-generation/testdata/go/user_and_listed_service_test.go:6:// lives IN that package to reuse the generated authorizer_behavior_test.go
+> Bash cd /builds/looper/tacplus/issues/258; grep -n 'testdata/go\|run_go_tests\|go_test\b\|"go" test\|go test' cross-test/current-generation/run.sh cross-test/lib/*.sh | head; grep -n 'GOFLAGS\|  go ' cross-test/current-generation/run.sh | head
+< cross-test/current-generation/run.sh:761:  (cd "$output" && cargo test -p key -p jwk -p token) >"$log_dir/rust-key-test.log" 2>&1 || { cross-test/current-generation/run.sh:767:  (cd "$output" && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" cargo test -p spiffe) >"$log_di...
+> Bash cd /builds/looper/tacplus/issues/258; grep -n 'user_and_listed_service_test\|"\$go_bin" test\|go_cmd.*test\| test ' cross-test/current-generation/run.sh | head
+< 761:  (cd "$output" && cargo test -p key -p jwk -p token) >"$log_dir/rust-key-test.log" 2>&1 || { 767:  (cd "$output" && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" cargo test -p spiffe) >"$log_dir/rust-spiffe-test.log" 2>&1 || { 776:  (cd "$output" && cargo test -p htt...
+I'm checking how `current-generation` runs the generated Go tests, so I can be sure the new Go door test executed.
+> Grep go(_bin)?"? test|GO.*test -|\btest \./
+< 761:  (cd "$output" && cargo test -p key -p jwk -p token) >"$log_dir/rust-key-test.log" 2>&1 || { 767:  (cd "$output" && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" cargo test -p spiffe) >"$log_dir/rust-spiffe-test.log" 2>&1 || { 776:  (cd "$output" && cargo test -p htt...
+> Grep GOWORK=off .*test|go test|chassis/grpcserver
+< 544:[Omitted long matching line] 585:  rw_test="$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/RecordWriteGuardTest.java' -print -quit)" 598:  tr_test="$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/TenantRecordRouteTest.java' -print -quit)" 612:  uls_test="$(...
+> Grep testdata/go|go_model_test|run_go
+< cross-test/jwk-alg/run.sh:209:run_go() { cross-test/c2d-server/run.sh:67:run_go() { cross-test/c2d-server/run.sh:179:    go) run_go ;; cross-test/redact/run.sh:222:run_go() { cross-test/wire-corpus/run.sh:213:run_go() { cross-test/current-generation/testdata/rust/record_write_guard_test.rs:9:// betw...
+> Bash cd /builds/looper/tacplus/issues/258; grep -n 'record_write_guard_test.go\|TESTDATA.*go\b' cross-test/current-generation/run.sh | head -5
+< 1986:      cp "$SELFTESTS_SRC/go/record_write_guard_test.go" "$(dirname "$s2s")/"
+> Bash cd /builds/looper/tacplus/issues/258; sed -n 1975,2000p cross-test/current-generation/run.sh; grep -n 'go_vet_and_test\|go_test_model\|"go" in\|go)$' cross-test/current-generation/run.sh | head
+<   for want in \     "asks for a durability below the record type's declared floor RECORD_DURABILITY_REMOTE" \     'acked the write below the durability the request required' \     'is out of canonical lock order (record type full name, then key, each entry once)' \     'names a tenant other than the...
+> Bash cd /builds/looper/tacplus/issues/258; sed -n 1000,1015p cross-test/current-generation/run.sh; sed -n 1135,1150p cross-test/current-generation/run.sh
+<   log_dir="$(dirname "$base")"    case "$language" in     go)       # NEW-22: 53955c71 made the go lib walk unconditional, so the       # serviceconnection chassis is emitted for every go build. Nothing       # asserted its PRESENCE — its absence still compiles, so a revert of that       # change wa...
+= thinking_tokens
+= thinking_tokens
+The generated Go, Java and Rust behaviour tests (with the new door tests) all run inside `current-generation`, which passed. Checking the standalone `MemberPortConfigTest` run.
+> Bash timeout 500 bash -c 'while kill -0 190312 2>/dev/null; do sleep 10; done'; tail -5 /tmp/258-mp.log
+= task_started
+= task_notification
+< 2026-11-08T21:16:11.299Z	INFO	formatting files with codefile.IndentCode	{"ext": ".java", "count": 204} 2026-11-08T21:16:11.570Z	INFO	build complete	{"output": "/builds/looper/tacplus/homes/looper-258/tmp/tmp.UZmmMo7sRz/tacplus/model", "mode": "0.0.0-SNAPSHOT"} ==> Generation must refuse (spec.member...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+I'm close to the time limit, so I'm committing and landing now.
+> Bash cd /builds/looper/tacplus/issues/258; git add -A cross-test docs pkg STATE.md && git status --short | head -30 && git commit -q -F - <<'EOF' S2S never crosses tenants: the door refuses another tenant's service on every rpc (#258)  RPC_FLAG_ANY_TENANT opened a tenant-owned instance's door to every ca...
+< M  STATE.md M  cross-test/current-generation/run.sh M  cross-test/memberport/run.sh A  cross-test/memberport/testdata/MemberPortConfigTest.java M  cross-test/proto-redo/caller/services/stratum.proto M  cross-test/proto-redo/host/services/redo.proto M  docs/API.md M  docs/RECORD_EVENT_MODEL.md M  doc...
+> Bash cd /builds/looper/tacplus/issues/258; nohup /usr/local/bin/repo-looper --repo tacplus --issue 258 --land > /tmp/258-land.log 2>&1 & echo $!
+< 191117
+= thinking_tokens
+= thinking_tokens
+The land is queued. Posting the status comment and writing the outcome while the queue runs.
+> Bash cd /builds/looper/tacplus/issues/258; cat > /tmp/258-comment.md <<'EOF' Points 1 and 3 are done, in commit `92d72691` on `looper/tacplus-258`. It is queued to land on main (the manager posts its verdict here). Point 2 waits for #284.  **Point 1: the door (Go, Java, Rust, Python, TypeScript)** - A te...
+< https://github.com/tacplus-dev/tacplus/issues/258#issuecomment-6727245623 [2026-11-08T21:17:13Z] checkpoint of #258 (land queued) pushed to looper/tacplus-258:  25 files changed, 1194 insertions(+), 203 deletions(-) [2026-11-08T21:17:14Z] queued: the manager of tacplus merges looper/tacplus-258 afte...
+> Bash echo 'Blocked-by: #284' > /builds/gXYQvlSPm/6/tacplus-dev/looper/looper-runs/20261108T173954Z-issue-258/outcome; cat /builds/gXYQvlSPm/6/tacplus-dev/looper/looper-runs/20261108T173954Z-issue-258/outcome
+< Blocked-by: #284
+Points 1 and 3 of #258 are committed (`92d72691`) and queued to land on main; the manager hasn't given its verdict yet and will post it on the issue. Point 2 waits for #284, so the issue stays open and the outcome file says `Blocked-by: #284`.
+
+**Done:**
+- **The `run.sh` conflict:** I kept main's version and added `MemberPortConfigTest` to the default member-port test list.
+- **Point 1 (the door):** in Go, Java, Rust, Python and TypeScript, a tenant-owned instance now refuses another tenant's service or workload token on every rpc, including `RPC_FLAG_ANY_TENANT` ones. Users of any tenant still pass a flagged rpc, and the instance's own tenant and `/system` still pass. The behaviour tests that admitted another tenant's service now refuse it. For Go, Java and Rust those tests are generated and run by `cross-test/current-generation`, which serves as this point's cross-test legs.
+- **Redo as a `/system` service (Jody's decision):** `sys/redo.proto` is no longer tenant-routed or flagged `RPC_FLAG_ANY_TENANT`. Its old routing field (`tenant`, field 1) is now reserved. The fixtures, the fleet and parser tests, and the docs (RECORD_EVENT_MODEL.md, API.md, USER.md, STATE.md) follow. Stratum must stop setting that field (tacplus-dev/redo#1, tacplus-dev/stratum#2).
+- **USER.md:** the tenant section states the rule and links the decision.
+- **Point 3 (member port):** `MemberPortConfigTest` pins it. Running it alone passed, so it does run.
+
+**Gates:** the first `just gates` run passed every gate except `current-generation`, where my new Rust test didn't compile. I fixed it and reran `current-generation` alone, which passed; I did not rerun the full set. The land reruns its own gates.
+
+**Not done:**
+- **Point 2** waits for #284 (still open).
+- **No patch tag or backport PRs yet.** Only release/2.5 and release/2.6 have the bug. On those lines redo is still a tenant service in `restore`, so backporting the door fix alone would refuse every stratum at redo. Changing redo's contract in a patch would break stratum code built on those lines. My issue comment proposes that the run doing point 2 cut both backports, and asks Jody whether those lines should take the redo contract change as a patch.
+
+**Trace check:** no handler changed. Its 9 findings are in cross-test driver code and are already filed (#310, #311).
+= success: Points 1 and 3 of #258 are committed (`92d72691`) and queued to land on main; the manager hasn't given its verdict yet and will post it on the issue. Point 2 waits for #284, so the issue stays open and the outcome file says `Blocked-by: #284`.
+
+**Done:**
+- **The `run.sh` conflict:** I kept main's version and added `MemberPortConfigTest` to the default member-port test list.
+- **Point 1 (the door):** in Go, Java, Rust, Python and TypeScript, a tenant-owned instance now refuses another tenant's service or workload token on every rpc, including `RPC_FLAG_ANY_TENANT` ones. Users of any tenant still pass a flagged rpc, and the instance's own tenant and `/system` still pass. The behaviour tests that admitted another tenant's service now refuse it. For Go, Java and Rust those tests are generated and run by `cross-test/current-generation`, which serves as this point's cross-test legs.
+- **Redo as a `/system` service (Jody's decision):** `sys/redo.proto` is no longer tenant-routed or flagged `RPC_FLAG_ANY_TENANT`. Its old routing field (`tenant`, field 1) is now reserved. The fixtures, the fleet and parser tests, and the docs (RECORD_EVENT_MODEL.md, API.md, USER.md, STATE.md) follow. Stratum must stop setting that field (tacplus-dev/redo#1, tacplus-dev/stratum#2).
+- **USER.md:** the tenant section states the rule and links the decision.
+- **Point 3 (member port):** `MemberPortConfigTest` pins it. Running it alone passed, so it does run.
+
+**Gates:** the first `just gates` run passed every gate except `current-generation`, where my new Rust test didn't compile. I fixed it and reran `current-generation` alone, which passed; I did not rerun the full set. The land reruns its own gates.
+
+**Not done:**
+- **Point 2** waits for #284 (still open).
+- **No patch tag or backport PRs yet.** Only release/2.5 and release/2.6 have the bug. On those lines redo is still a tenant service in `restore`, so backporting the door fix alone would refuse every stratum at redo. Changing redo's contract in a patch would break stratum code built on those lines. My issue comment proposes that the run doing point 2 cut both backports, and asks Jody whether those lines should take the redo contract change as a patch.
+
+**Trace check:** no handler changed. Its 9 findings are in cross-test driver code and are already filed (#310, #311).

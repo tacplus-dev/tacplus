@@ -570,7 +570,13 @@ GCS sink and their ServiceManager does not read `archive` (see
   workload's ambient identity (Application Default Credentials). No key is read
   from config. The sink is compiled in only when the project pins
   `com.google.cloud:google-cloud-storage` in `dependencies.yaml`; a service that
-  sets `archive` in a build without that pin fails at startup.
+  sets `archive` in a build without that pin fails at startup. Pin 2.76.0 or
+  later (2.75.0 resolves jackson-databind 2.18.3, with seventeen advisories),
+  and pin what the SDK still resolves below its advisories under the build's
+  `<dependencyManagement>`: `com.google.guava:guava` 33.7.2-jre
+  (GHSA-xxph-c9ww-hj94) and the `io.opentelemetry:opentelemetry-bom` 1.67.0,
+  `type` pom, `scope` import (GHSA-ccrj-gw8r-854m, opentelemetry-api).
+  `cross-test/lib/java-compile.sh` pins the same.
 - **Observability.** A failed upload logs a `WARNING` with the object name and
   retry delay. `RedoLog.shipPending()` (objects not yet shipped, the lag) and
   `RedoLog.shipFailures()` (failed attempts) report the same numbers to code.

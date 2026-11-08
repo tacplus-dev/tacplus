@@ -69,7 +69,7 @@ aws-lc-rs = "1"
 {{- else}}
 ed25519-dalek = { version = "3", features = ["pkcs8"] }
 {{- end}}
-rand = "0.8"
+rand = "0.8.6"
 # Pinned rather than taken from dependencies.yaml, like rmcp above: the
 # generated ServiceManager reads certificates through the x509-cert 0.3 API, the
 # line the x509 chassis crate signs with (digest 0.11; 0.2 locked block-buffer

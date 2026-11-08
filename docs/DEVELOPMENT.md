@@ -407,6 +407,13 @@ grep -rn '"\^[0-9]\+\.[0-9]\+' pkg/internal/ --include='*.go'
   from dependency/config registries.
 - Do not commit generated descriptor output or build products that should be
   produced under ignored target directories.
+- Do not write a generated file with `protojson`'s or `prototext`'s layout
+  (`Multiline`, `Indent`, `Format`). They add random whitespace on purpose,
+  seeded from a hash of the running binary, so the same input gives different
+  bytes from one release or architecture to the next (#307). Marshal compactly
+  and lay out the result with our own formatter, as `registry.json` does
+  (`canonicalJSON`, pinned by `testdata/registry.golden.json`).
+  `encoding/json`'s `MarshalIndent` is stable and is fine.
 
 ### Required Patterns
 

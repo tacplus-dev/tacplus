@@ -57,6 +57,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   cargo-fuzz too, and its `tacplus` is `images/tacplus.sh`, which runs exactly the pinned binary, checked against
   `checksums.txt`, and refuses a repository with no pin or a pin of another line. `tacplus verify` reports Go as
   skipped.
+  `registry.json`'s layout is tacplus's own (#307): before, protojson chose one or two spaces after each `:` from a
+  hash of the binary, so it flipped between patches and between amd64 and arm64. Now it is always two (2.5.8's
+  format), pinned by a golden test on every supported line.
   Trace propagation, the patch half of #313 (`tacplus-dev/roadmap:decisions/trace-propagation-2026-11-03.md`): every
   generated projection and transformation output copies its source's `trace_id`, and every generated store path
   clears field 200 before it persists (the record dispatch, the service_store disk helpers, the store wrappers and the

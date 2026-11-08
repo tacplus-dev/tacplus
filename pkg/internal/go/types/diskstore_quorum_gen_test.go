@@ -32,6 +32,7 @@ func renderGoDiskStoresForTest(t *testing.T, store diskStoreEntry) string {
 		Imports:          []diskStoreImport{{Alias: "vault_pb", Path: "example.com/svc/types/services/vault"}},
 		Stores:           []diskStoreEntry{store},
 		AnyRedo:          true,
+		AnyTraced:        store.ClearTrace,
 	}); err != nil {
 		t.Fatalf("execute: %v", err)
 	}

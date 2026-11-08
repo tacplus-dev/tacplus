@@ -37,7 +37,7 @@ func renderJavaPinned(name, in, out string, stream bool) string {
 		FullInputType: "keeper." + in, FullOutputType: "keeper." + out, ServerStreaming: stream}
 	return generateJavaGRPCWrapperSurface(m, "KeeperStateService", "keeper", "Keeper."+in, "Keeper."+out,
 		"Helpers", "Helpers", false, false, map[string]service.AccountingInfo{}, "keeper", "services",
-		map[string]string{}, proto.SkippedTraceTypes{}, javaPinSanitizer(), nil, nil, false, false)
+		map[string]string{}, proto.SkippedTraceTypes{}, javaPinSanitizer(), nil, nil, false, false, false)
 }
 
 func TestJavaTenantPin_EveryReadRPCResolvesAndFilters(t *testing.T) {
@@ -139,7 +139,7 @@ func TestJavaTenantPin_ConfigReadsResolveAndFilterTheTenantMap(t *testing.T) {
 			FullInputType: "keeper." + in, FullOutputType: "keeper.KeeperConfig", ServerStreaming: stream}
 		return generateJavaGRPCWrapperSurface(m, "KeeperConfigStateService", "keeper", "Keeper."+in, "Keeper.KeeperConfig",
 			"Helpers", "Helpers", false, false, map[string]service.AccountingInfo{}, "keeper", "services",
-			map[string]string{}, proto.SkippedTraceTypes{}, san, nil, nil, false, false)
+			map[string]string{}, proto.SkippedTraceTypes{}, san, nil, nil, false, false, false)
 	}
 	const resolve = "final TenantPin __pin = TenantPin.resolveConfig(Auth.verifiedTokenFromContext());"
 	for _, c := range []struct {

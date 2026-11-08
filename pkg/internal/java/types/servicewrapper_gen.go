@@ -890,7 +890,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 			}
 		}
 		effectiveAuthAnyUser := method.AuthAnyUser
-		grpcMethods.WriteString(generateJavaGRPCWrapperSurface(method, serviceName, svc.GrpcName, inputType, outputType, inputHelpers, outputHelpers, effectiveAuthAnyUser, method.AuthDisabled || svc.AuthDisabled || svc.IsC2D, accountingMap, info.Package, svc.ParentDir, info.CrossPackageTypes, skippedTraceTypes, san, crossPkgHelpers, crossPkgOuterClasses, svc.IsC2S, recordPlaneS2S))
+		grpcMethods.WriteString(generateJavaGRPCWrapperSurface(method, serviceName, svc.GrpcName, inputType, outputType, inputHelpers, outputHelpers, effectiveAuthAnyUser, method.AuthDisabled || svc.AuthDisabled || svc.IsC2D, accountingMap, info.Package, svc.ParentDir, info.CrossPackageTypes, skippedTraceTypes, san, crossPkgHelpers, crossPkgOuterClasses, svc.IsC2S, recordPlaneS2S, svc.SynthesizedKind == parser.SynthesizedKindStore))
 		grpcMethods.WriteString("\n")
 
 		// Per-method policy is keyed by the SERVICE-QUALIFIED identifier the
@@ -1432,7 +1432,7 @@ func javaMinGroupSizeUnenforceable(method *parser.MethodInfo, san *javaEgressSan
 // as the plain spelling because most callers (and every render test) are asking
 // about a shape the (spec.store_principal) row filter has nothing to say about.
 func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers string, authAnyUser bool, authDisabled bool, accountingMap map[string]service.AccountingInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, skippedTraceTypes proto.SkippedTraceTypes, san *javaEgressSanitizer, crossPkgHelpers map[string]string, crossPkgOuterClasses map[string]string) string {
-	return generateJavaGRPCWrapperSurface(method, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers, authAnyUser, authDisabled, accountingMap, servicePackage, parentDir, crossPkgTypes, skippedTraceTypes, san, crossPkgHelpers, crossPkgOuterClasses, false, false)
+	return generateJavaGRPCWrapperSurface(method, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers, authAnyUser, authDisabled, accountingMap, servicePackage, parentDir, crossPkgTypes, skippedTraceTypes, san, crossPkgHelpers, crossPkgOuterClasses, false, false, false)
 }
 
 // generateJavaGRPCWrapperSurface is the wrapper renderer. isC2S is what decides
@@ -1446,7 +1446,10 @@ func generateJavaGRPCWrapper(method *parser.MethodInfo, serviceName, grpcName, i
 // fleet-wide, /tenants/<t> peers pinned to themselves. It never affects
 // (spec.store_principal), which stays c2s-only: a peer service is not a user.
 // See recordnamespace_gen.go.
-func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers string, authAnyUser bool, authDisabled bool, accountingMap map[string]service.AccountingInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, skippedTraceTypes proto.SkippedTraceTypes, san *javaEgressSanitizer, crossPkgHelpers map[string]string, crossPkgOuterClasses map[string]string, isC2S bool, recordPlaneS2S bool) string {
+//
+// storeService marks a (spec.service_store) <T>StoreService, whose Put stores
+// its request as the row: the wrapper clears the trace off it (#313).
+func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpcName, inputType, outputType, inputHelpers, outputHelpers string, authAnyUser bool, authDisabled bool, accountingMap map[string]service.AccountingInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, skippedTraceTypes proto.SkippedTraceTypes, san *javaEgressSanitizer, crossPkgHelpers map[string]string, crossPkgOuterClasses map[string]string, isC2S bool, recordPlaneS2S bool, storeService bool) string {
 	// Use protoc's naming convention: lowercase first letter only.
 	// e.g. "ExecuteDQL" → "executeDQL" (not "executeDql").
 	// A snake_case round-trip would mangle all-caps acronyms — and this name is
@@ -1554,6 +1557,19 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 
 	// Trace handling for unary methods with user-defined request/response types.
 	inputHasTrace := javaTypeHasTraceFields(method.FullInputType, servicePackage, parentDir, crossPkgTypes, skippedTraceTypes)
+	// rowTrace: does a record type carry the injected trace_id the write
+	// surface clears off a stored row (#313)?
+	rowTrace := func(record string) bool {
+		return javaTypeHasTraceFields(record, servicePackage, parentDir, crossPkgTypes, skippedTraceTypes)
+	}
+	// A <T>StoreService's Put stores its request as the row (#313): the trace
+	// is cleared off it just before the handler, and the trace events after
+	// the handler carry the trace the call arrived with, saved there.
+	storePutTrace := storeService && method.Name == "Put" && inputHasTrace && !emptyInput && !handlerEmpty
+	traceIDExpr := "request.getTraceId()"
+	if storePutTrace {
+		traceIDExpr = "__traceId"
+	}
 
 	// Build trace-aware auth check for Java
 	var traceAuthCheck string
@@ -1637,20 +1653,20 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 		traceResponseAppend = fmt.Sprintf(`
             if (isTracing) {
                 publishTrace(Trace.TraceEvent.newBuilder()
-                        .setTraceId(request.getTraceId())
+                        .setTraceId(%s)
                         .setRound(traceRound())
                         %s.setKind(Trace.TraceEventKind.TRACE_EVENT_KIND_INTERNAL_RESPONSE)
                         .build());
-            }`, traceRpcCall)
+            }`, traceIDExpr, traceRpcCall)
 		traceResponseErrorAppend = fmt.Sprintf(`
                 if (isTracing) {
                     publishTrace(Trace.TraceEvent.newBuilder()
-                            .setTraceId(request.getTraceId())
+                            .setTraceId(%s)
                             .setRound(traceRound())
                             %s.setKind(Trace.TraceEventKind.TRACE_EVENT_KIND_INTERNAL_RESPONSE)
                             .setError(handlerEx.getMessage() == null ? handlerEx.toString() : handlerEx.getMessage())
                             .build());
-                }`, traceRpcCall)
+                }`, traceIDExpr, traceRpcCall)
 	}
 
 	// Use trace-aware auth when input has trace fields
@@ -1942,8 +1958,8 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 			// per-op guards run after the request is validated and pinned, and
 			// before the handler; their post halves run first on the response
 			// (below), ahead of any egress transform.
-			inputValidation += javaRecordEntryPre(method, "            ") +
-				javaRecordApplyPre(method, serviceName, servicePackage, parentDir, authDisabled, "            ")
+			inputValidation += javaRecordEntryPre(method, "            ", rowTrace) +
+				javaRecordApplyPre(method, serviceName, servicePackage, parentDir, authDisabled, "            ", rowTrace)
 		}
 
 		if outputHelpers != "" && !emptyOutput {
@@ -2021,6 +2037,15 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 		// handler call, so it is spliced in right after the debug line every
 		// unary shape shares.
 		deviceGate := javaRequiresDeviceGate(method, servicePackage, serviceName)
+		// A <T>StoreService's Put: the trace comes off the row last, after the
+		// request trace event (traceAppend) has read it, just before the handler.
+		if storePutTrace {
+			deviceGate += `
+            // A stored row never keeps a trace (#313); the call's trace is kept for
+            // its trace events.
+            final String __traceId = request.getTraceId();
+            request = request.toBuilder().clearTraceId().build();`
+		}
 
 		// Tenant-pinned read (#130): resolve and gate beside the device gate,
 		// filter ahead of response validation.
@@ -2580,7 +2605,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 
 		// Watch<T>Changes (#163): the tenant pin of the record write surface,
 		// after request validation and before the handler opens the source.
-		watchInputValidation := streamInputValidation + javaRecordEntryPre(method, "            ")
+		watchInputValidation := streamInputValidation + javaRecordEntryPre(method, "            ", rowTrace)
 
 		// Splice the (spec.store_principal) refusal into the send path. Done on
 		// the rendered text rather than as a format verb because the guard is a

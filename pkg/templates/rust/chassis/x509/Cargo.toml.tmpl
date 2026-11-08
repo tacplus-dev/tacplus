@@ -2,6 +2,10 @@
 name = "x509"
 version = "0.1.0"
 edition = "2021"
+{{- if .License}}
+license = "{{.License}}"
+{{- end}}
+publish = false
 description = "X.509 certificate management"
 
 [dependencies]

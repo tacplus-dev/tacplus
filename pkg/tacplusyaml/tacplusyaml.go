@@ -95,7 +95,7 @@ type Config struct {
 	States      string        `yaml:"states,omitempty"`       // "all": this project generates from every service's config and state (the kernel holds them all); unset: its own and its depends'. See CheckScope
 	Records     string        `yaml:"records,omitempty"`      // "all": this project generates from every (spec.record) in the fleet (the record store subscribes to them all); unset: its own and its depends'. See CheckScope
 	Contribute  *Contribute   `yaml:"contribute,omitempty"`   // what a kind: service project contributes to its fleet's gateway: a webapp module and clients, each built by a fixed recipe. See CheckContribute
-	Header      string        `yaml:"header,omitempty"`       // free-form text stamped as a comment at the top of every generated file (e.g. a copyright line and an SPDX identifier); its first line is also the author of generated package manifests. Unset: generated code carries no copyright line
+	Header      string        `yaml:"header,omitempty"`       // free-form text stamped as a comment at the top of every generated file (e.g. a copyright line and an SPDX identifier); its first line is also the author of generated package manifests, and its SPDX-License-Identifier the license of generated Cargo manifests. Unset: generated code carries no copyright line
 }
 
 // Exists returns true if tacplus.yaml exists in dir.

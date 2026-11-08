@@ -32,6 +32,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-06 by lo
   current-generation checks; the model crate pins x509-cert 0.3 itself, and the fixtures and the example pin
   tokio-tungstenite 0.30 (#215; backported to release/2.0 through release/2.5 by pull request, each line's next
   patch once it merges).
+  Every generated Rust crate's Cargo.toml declares `publish = false` and, when tacplus.yaml's `header:` carries an
+  `SPDX-License-Identifier:`, that expression as its `license`, so cargo-deny's licenses check passes them (#368;
+  backported to release/2.0 through release/2.6 by pull request, each line's next patch once it merges).
   The generated Go, Java and Rust servers end every streaming rpc at the `exp` of the token it opened with,
   `UNAUTHENTICATED` (API.md, Client Send Contract); they checked it only at open, so an expired or revoked caller
   kept its stream (#260, `cross-test/stream-expiry`, in `just gates`; Rust does not yet cover handler

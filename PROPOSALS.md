@@ -4,6 +4,18 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Chassis crates' license is tacplus's, not the consumer's header** (2026-11-08, #368): every generated Rust crate
+  now declares the SPDX expression of tacplus.yaml's `header:` as its `license` (none when the header names none),
+  as #368 asks. The chassis crates (am, grpcserver, httpclient, ...) are tacplus's own Apache-2.0 source copied into
+  the output, and their `.rs` files keep tacplus's `Copyright (c) 2026 Jody Scott` / Apache-2.0 header whatever the
+  consumer's header says. A consumer with a proprietary header (or none) gets a chassis crate whose manifest says
+  otherwise. Declaring `license = "Apache-2.0"` on the chassis crates always, and the header's license only on the
+  `<svc>-model` and `<svc>-model-types` crates, would match the source; it is a choice for Jody.
+- **cargo-deny on the generated sample in current-generation** (2026-11-08, #368): nothing in the gates runs
+  cargo-deny on the Rust tacplus emits, so #368 (22 unlicensed crates) was found by a service's scan
+  (tacplus-dev/mailbox#15). `cargo-deny check licenses sources bans` with looper-scan's default policy needs no
+  advisory database and is deterministic; with cargo-deny in the build image it could run after `cargo check` in
+  current-generation. The advisories check would then follow #308, #319 and #320 (today's four unmaintained crates).
 - **Kani harnesses beyond integer bounds** (2026-11-06, #211): the generated Rust harnesses now prove only that
   `validate()` refuses each integer/enum bound, and skip a message whose `validate()` reaches the regex crate (Kani
   0.68 panics compiling it), a nested message, a map field (prost's `HashMap` default makes a syscall Kani does not

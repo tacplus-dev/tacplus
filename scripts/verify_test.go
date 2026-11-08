@@ -226,15 +226,18 @@ func TestVerifyChangedRunsWhenInDoubt(t *testing.T) {
 }
 
 // fakeTacplus is a tacplus stand-in for verify.sh: `build` records the config
-// it generated from, and `verify` writes a verification report, or fails as
-// FAKE_VERIFY_FAIL (a language) says, or writes none for FAKE_VERIFY_NONE.
+// it generated from (Java into a src/main/java tree, as the generator does), and
+// `verify` writes a verification report, or fails as FAKE_VERIFY_FAIL (a
+// language) says, or writes none for FAKE_VERIFY_NONE. Java's verify fails
+// without the compile pom verify.sh writes (ESC runs in the Maven module).
 const fakeTacplus = `#!/usr/bin/env bash
 set -euo pipefail
 lang="$(sed -n 's/^language: *"\{0,1\}\([a-z]*\)"\{0,1\}$/\1/p' tacplus.yaml)"
 echo "$1 $lang $PWD" >>"$FAKE_LOG"
 case "$1" in
-  build) mkdir -p tacplus ;;
+  build) mkdir -p tacplus; [[ "$lang" == java ]] && mkdir -p tacplus/gen/src/main/java; true ;;
   verify)
+    if [[ "$lang" == java && ! -f pom.xml ]]; then echo "no pom.xml" >&2; exit 1; fi
     [[ "${FAKE_VERIFY_NONE:-}" == "$lang" ]] && exit 0
     if [[ "${FAKE_VERIFY_FAIL:-}" == "$lang" ]]; then
       printf '# Formal Verification Report\n### harness_%s\n**Status:** FAILED\ncounterexample\n' "$lang" >verification-report.md

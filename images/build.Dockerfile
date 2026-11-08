@@ -148,7 +148,12 @@ ARG GRPCIO_TOOLS_VERSION
 LABEL org.opencontainers.image.title="tacplus build" \
       org.opencontainers.image.description="tacplus base plus protoc and every plugin, grpcio-tools, JBMC/OpenJML, just, the docker CLI and gcloud: the image the tacplus gates run in" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus"
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends dnsutils iproute2 jbmc patch ripgrep \
+# A value unique to each images.yml run (#369): it is part of this layer's
+# cache key, so every run upgrades the OS packages. Without it the registry
+# cache hands back the last run's layer, with its packages, for as long as
+# the base image has not moved: v2.6.2's arm64 image was v2.6.1's.
+ARG APT_REFRESH=
+RUN : "${APT_REFRESH}" && apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends dnsutils iproute2 jbmc patch ripgrep \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=fetch /opt/protoc/bin/protoc /opt/protoc/bin/protoc-gen-grpc-java /usr/local/bin/
 COPY --from=fetch /opt/protoc/include /usr/local/include

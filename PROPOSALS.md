@@ -4,6 +4,17 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Images on Google Artifact Registry through WIF, ghcr.io deprecated from 2.6** (2026-11-07, #223; parked by
+  the hub 2026-11-07): publish `base`, `build` and the services' release images to the public
+  `us-docker.pkg.dev/jody1-328023/tacplus`, pushed by the GitLab publish job with a short-lived GCP token from its
+  `id_token` (WIF), so no registry token exists to store or renew. Here: `pkg/ghcr` becomes a registry client that
+  follows the `WWW-Authenticate` challenge (so it pulls anonymously from Artifact Registry as well as ghcr.io),
+  `tacplus pin` and the fleet build name the new images, and CI, the launcher and the docs move to them. Open
+  questions in #223: who builds base/build, whether `build` drops amd64 (the GitHub CI that runs inside it is
+  amd64), the fleet's images for owners other than tacplus-dev, name collisions in the flat repository, the service
+  tag form, and how build:2.6.0 gets there. Parked: Jody chose ghcr.io release images pushed by GitHub Actions with
+  `GITHUB_TOKEN` for now (tacplus-dev/roadmap decisions/ci-on-gitlab-2026-10-27.md, addendum); revisited with
+  tacplus-dev/looper#17, the GitLab build pipeline.
 - **trace_id in 2.7: field 200 on every sys wire message, additive traced helper forms** (2026-11-06, #313 → #327):
   the hub's split of #313. Every request-building generated helper (state clients' `Fetch`/`Delete`/`Query`, record
   readers, record-plane and kernel state helpers) gets a form that takes `trace_id`, beside today's, and every sys

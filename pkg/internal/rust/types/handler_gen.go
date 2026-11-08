@@ -230,6 +230,12 @@ type subscriptionEntry struct {
 	// order.
 	DispatchFn string
 	Inserts    []rustTimeseriesInsertEntry
+	// ClearStoredTrace is true for a store-derived subscription (the store's
+	// write path) over a source carrying the injected trace_id: the dispatch
+	// clears the event's trace_id before the handler, so a stored value never
+	// keeps a trace (#313). A declared subscription keeps the trace for its
+	// handler to propagate.
+	ClearStoredTrace bool
 }
 
 // rustTimeseriesInsertEntry is one typed timeseries insert callback the
@@ -546,6 +552,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 			RoutingOnly:       sub.RoutingOnly,
 			EnvelopeTypeName:  typeName + boundaries.RoutingEnvelopeSuffix,
 			DispatchFn:        dispatchFn,
+			ClearStoredTrace:  sub.StoreIngest && sub.SourceCarriesTrace && !sub.RoutingOnly,
 			Inserts:           inserts,
 		})
 	}

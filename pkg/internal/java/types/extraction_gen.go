@@ -44,6 +44,7 @@ type javaExtractionProjection struct {
 	ExtractMethod string // "extract<Projection>From<Source>"
 	Fields        []javaExtractionField
 	Variants      []javaExtractionVariant // non-empty: extracted only when one is set
+	CarriesTrace  bool                    // the row copies the source's trace_id, cleared before insert
 }
 
 type javaExtractionVariant struct {
@@ -108,6 +109,7 @@ func generateJavaExtractionHelpers(config *tactype.Config, allFiles []model.Prot
 				TypeFqn:       javaTimeseriesTypeFqn(config, dp, fileByPkg, protoDir, srcDir, p.File.Package+"."+p.Message.Name),
 				FieldName:     strutil.ToLowerFirst(p.Message.Name),
 				ExtractMethod: "extract" + p.Message.Name + "From" + g.Source.Name,
+				CarriesTrace:  p.CarriesTrace,
 			}
 			for _, f := range p.Fields {
 				proj.Fields = append(proj.Fields, javaExtractionField{Statement: javaExtractionStatement("event", f)})

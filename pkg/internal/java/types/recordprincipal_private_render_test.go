@@ -63,7 +63,7 @@ func renderRecordPrincipalPrivate(m *parser.MethodInfo, isC2S bool) string {
 		"Helpers", "Helpers", false, true,
 		map[string]service.AccountingInfo{}, "query", "vservices",
 		map[string]string{}, proto.SkippedTraceTypes{},
-		recordPrincipalPrivateSanitizer(), nil, nil, isC2S, false,
+		recordPrincipalPrivateSanitizer(), nil, nil, isC2S, false, false,
 	)
 }
 

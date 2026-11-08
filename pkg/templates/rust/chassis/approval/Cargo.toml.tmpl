@@ -2,6 +2,10 @@
 name = "approval"
 version = "1.0.0"
 edition = "2021"
+{{- if .License}}
+license = "{{.License}}"
+{{- end}}
+publish = false
 description = "Generated runtime support for (spec.rpc).requires_device — the device-only approval check"
 
 [dependencies]

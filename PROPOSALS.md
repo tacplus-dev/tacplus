@@ -87,7 +87,12 @@ the looper then marks it `promoted` or `declined` here with the date.
 - **Run outbound-deadline in the gates** (2026-11-03, #310): `cross-test/outbound-deadline/run.sh` (the issue #38
   deadline and lifetime facts, and with #310 the trace fact) has no recipe and runs in no gate or workflow, so a
   regression there is invisible. #310 adds the recipe; joining the mandatory `gates` set is a cost decision (one
-  more Rust model build per gates run).
+  more Rust model build per gates run). It had already rotted unseen: since #161 the consumer-contract tree
+  generates ContractApi only with `grpc-servers: all`, so the fixture no longer compiled until #310 set it.
+- **server-runtime and keepalive-rust have likely rotted the same way** (2026-11-08, #310): both generate the
+  consumer-contract tree without `grpc-servers: all` and import the `contract::contractclient` modules (and `c2sm`)
+  it then drops, as outbound-deadline did, and neither has a recipe or runs in any gate. Each needs the setting, a
+  recipe, and a run to confirm; then the same gates cost decision.
 - **Decide whether `assert_float` with only `not_in` refuses NaN** (2026-11-02, #256): a field with any of
   `gt`/`ge`/`lt`/`le` now refuses NaN in every validating language, and `in` always refused it (no candidate is
   within epsilon of NaN). A field whose only constraint is `not_in` still accepts NaN, which is arguably right (NaN

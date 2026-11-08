@@ -22,7 +22,8 @@ import (
 // (FNV-1a of nodeID). It is stable across restarts and well-distributed so
 // replicas don't collide.
 func RollOffset(nodeID string, interval time.Duration) time.Duration {
-	secs := uint64(interval / time.Second)
+	// A non-positive interval is one second, not a wrapped-around uint64.
+	secs := int64(interval / time.Second)
 	if secs < 1 {
 		secs = 1
 	}
@@ -31,7 +32,8 @@ func RollOffset(nodeID string, interval time.Duration) time.Duration {
 		h ^= uint64(b)
 		h *= 0x00000100000001b3
 	}
-	return time.Duration(h%secs) * time.Second
+	// #nosec G115 -- secs is in [1, MaxInt64], so h%secs is below MaxInt64.
+	return time.Duration(h%uint64(secs)) * time.Second
 }
 
 // RunRollScheduler runs the periodic roll loop for a redo log. snapshot returns

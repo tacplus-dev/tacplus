@@ -170,6 +170,7 @@ func (c *{{.ClientName}}) outboundBackoff(attempt int) time.Duration {
 			break
 		}
 	}
+	// #nosec G404 -- retry jitter only spreads retries apart; it needs no unpredictability.
 	return backoff/2 + time.Duration(mrand.Int63n(int64(backoff)/2+1))
 }
 

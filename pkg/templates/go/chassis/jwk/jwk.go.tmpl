@@ -46,6 +46,7 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rsa"
+	"math"
 	"math/big"
 	"slices"
 
@@ -130,10 +131,13 @@ func NewImmutableJwk(x *protoJwk.Jwk) (*ImmutableJwk, error) {
 			return protoerrors.NewErrMissingInvalidData(nil, "invalid RSA modulus")
 		}
 
-		e := int(big.NewInt(0).SetBytes(byteE).Uint64())
-		if e <= 0 {
+		// An exponent past int32 is refused, not truncated into another one
+		// (crypto/rsa refuses one past 2^31-1 too).
+		bigE := new(big.Int).SetBytes(byteE)
+		if bigE.Sign() <= 0 || !bigE.IsInt64() || bigE.Int64() > math.MaxInt32 {
 			return protoerrors.NewErrMissingInvalidData(nil, "invalid RSA exponent")
 		}
+		e := int(bigE.Int64())
 
 		i.publicKey = &rsa.PublicKey{N: n, E: e}
 		i.proto.Kty = wrapperKey.KeyType_KEY_TYPE_RSA

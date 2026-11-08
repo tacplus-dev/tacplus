@@ -1,0 +1,99 @@
+= init
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue view 261 --repo tacplus-dev/tacplus --comments | tail -40; ls; git log --oneline -3 origin/looper/tacplus-261 2>&1 | head
+< edited:	false status:	none -- The looper of tacplus holds this issue back for now: both change images-publishing (#283, starting; it goes first: land-pending). It plans again as each running issue ends, and every 5m while they run. Plan record: job https://gitlab.com/tacplus-dev/looper/-/jobs/177112...
+= thinking_tokens
+= thinking_tokens
+> Bash ls -a images images/* scripts .github 2>/dev/null | head -80; ls -a; git remote -v
+< images/base.Dockerfile images/build.Dockerfile images/smoke-pipeline.sh images/smoke.sh images/tacplus.sh images/tacplus_test.sh  .github: . .. ISSUE_TEMPLATE workflows  images: . .. base.Dockerfile build.Dockerfile smoke-pipeline.sh smoke.sh tacplus.sh tacplus_test.sh  scripts: . .. check-registry-...
+> Bash ls .github/workflows; cat images/build.Dockerfile images/base.Dockerfile; cat scripts/images-tags.sh scripts/images-plan.sh
+< ci.yml images.yml nightly-fixes.yml nightly-gates.yml nightly-security.yml planning-files.yml release.yml site.yml # tacplus build image, ghcr.io/tacplus-dev/tacplus/build:X.Y, one per release # line, rebuilt on every patch of it (#193): the base image plus every tool # that generating, building, te...
+= thinking_tokens
+= thinking_tokens
+> Bash grep -rn -i "macos\|tart\b\|darwin" --include=*.yml --include=*.md --include=*.sh --include=justfile . | grep -v "^./site\|HISTORY.md" | head -60
+< ./justfile:292:# retries are jittered, capped by a retry budget, and never start past the ./roadmap/DATA_SEARCH_PLAN.md:454:  GraphNodeMatch start = 1; ./roadmap/LANGUAGE_PARITY.md:29:| Durable accounting spool (`grpcconfig.disk_persistence` set: the spool is an append-only log that survives a resta...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /tmp; gh issue view 195 --repo tacplus-dev/tacplus | head -80; gh repo view tacplus-dev/build 2>&1 | head -30; which glab tart; env | grep -i -E "gitlab|token|CI_" | sed 's/=.*/=.../'
+< title:	Fleet builder: gather service webapp pieces and clients, build the merged webapp, build the fleet's gateway state:	OPEN author:	jodydadescott (Jody Scott) labels:	approved, feature comments:	20 assignees:	 projects:	 milestone:	 issue-type:	 parent:	 sub-issues:	 sub-issues-completed:	 blocke...
+Reading the issue context: the Mac runner lives in a GitLab project (tacplus-dev/build), so I'm checking what access this run has to it.
+> Bash cd /tmp; glab auth status 2>&1 | head; glab api projects/tacplus-dev%2Fbuild 2>&1 | head -c 600; echo; glab api "projects/tacplus-dev%2Fbuild/repository/tree?path=mac-runner" 2>&1 | head -c 1500
+< gitlab.com   x gitlab.com: API call failed: GET https://gitlab.com/api/v4/user: 401 {message: 401 Unauthorized}   ✓ Git operations for gitlab.com configured to use ssh protocol.   ✓ API calls for gitlab.com are made over https protocol.   ✓ REST API Endpoint: https://gitlab.com/api/v4/   ✓ GraphQL E...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /tmp; gh issue view 36 --repo tacplus-dev/looper 2>&1 | head -60; gh repo list tacplus-dev --limit 50 2>&1 | head -40
+< title:	Build pipeline: a manual macOS smoke job on the Mac runner (tag macos, Tart VM): arm64, sw_vers, Xcode, Swift state:	CLOSED author:	jodydadescott (Jody Scott) labels:	approved, feature comments:	8 assignees:	 projects:	 milestone:	 issue-type:	 parent:	 sub-issues:	 sub-issues-completed:	 blo...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /tmp; gh issue view 36 --repo tacplus-dev/looper --comments 2>&1 | sed -n '20,200p' | grep -v "^$" | head -120
+<    macos-smoke:      stage: plan      rules:        - if: $BUILD_SMOKE == "true"          when: manual      tags: [macos]      image: ghcr.io/cirruslabs/macos-tahoe-xcode:27.1      timeout: 30m      variables: {GIT_STRATEGY: none}      script:        - set -eu        - test "$(uname -m)" = arm64    ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /tmp; gh api repos/tacplus-dev/roadmap/contents/decisions --jq '.[].name' | grep -i -E "mac|darwin|swift|image|build" ; gh api repos/tacplus-dev/roadmap/contents/ROADMAP.md -H 'Accept: application/vnd.github.raw' | grep -n -i -E "mac|261|darwin" ; grep -n -i -E "mac|261" /builds/looper/tacplus/is...
+< builds-in-containers-2026-11-03.md deterministic-builds-2026-10-27.md tacplus-images-2026-10-27.md 19:- macOS build image per release line (`macos-build:X.Y`, pinned like `build:X.Y`: Rust, Go, just, protoc, tacplus), built on the Mac runner, for #195's darwin builds (#261) (Jody, 2026-10-31) 34:- *...
+> Bash cd /tmp; gh api repos/tacplus-dev/roadmap/contents/decisions/tacplus-images-2026-10-27.md -H 'Accept: application/vnd.github.raw' | head -80; gh api repos/tacplus-dev/looper/contents/ci/build.gitlab-ci.yml -H 'Accept: application/vnd.github.raw' | grep -n -B3 -A25 "macos"
+< # tacplus: a binary, and one build image per release line (DECIDED 2026-10-27)  Jody, 2026-10-27. This replaces the earlier version of this record (a small compiler image plus a big build image).  - **There is no tacplus image.** tacplus is a **binary**, published with each release (`tacplus-X-Y-Z-<...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n -i -E "ghcr|login|token|registry|platforms|runs-on" .github/workflows/images.yml | head -30; grep -n -i "image" docs/VERSIONING.md | head -30
+< 5:# ghcr.io for linux/amd64 and linux/arm64. There is no tacplus image any more 49:  NS: ghcr.io/${{ github.repository }} 54:    runs-on: ubuntu-latest 96:    runs-on: ubuntu-latest 121:      - uses: docker/login-action@v3 123:          registry: ghcr.io 125:          password: ${{ secrets.GITHUB_TO...
+= thinking_tokens
+= thinking_tokens
+Findings so far: this run can't do the issue's required first step, and the issue leaves open decisions that only Jody can make. I'm writing them up on the issue as `needs-decision`.
+> Bash cat > /tmp/c261.md <<'EOF' **Stopping before any change: this needs decisions, and the spike can't be run from here.** Nothing is committed.  I read the issue, looper#36 (the Mac runner and `macos-smoke`), tacplus-dev/looper `ci/build.gitlab-ci.yml`, `images/*.Dockerfile`, `.github/workflows/images....
+< https://github.com/tacplus-dev/tacplus/issues/261#issuecomment-6728636957 https://github.com/tacplus-dev/tacplus/issues/261
+= thinking_tokens
+= thinking_tokens
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 261 --checkpoint "No change made. Stopped with needs-decision (comment 6728636957): registry and WIF (A), guest vs host push (B), where the jobs live and who runs the Mac spike (C), job VM disk size (D), exact Rust pin (E), versions.env as the source...
+< remote:      https://github.com/tacplus-dev/tacplus/pull/new/looper/tacplus-261         remote:  [2026-11-08T23:25:35Z] checkpoint of #261 (a step) pushed to looper/tacplus-261:  2 files changed, 333 insertions(+)
+= thinking_tokens
+= thinking_tokens
+> Bash git fetch -q origin looper/tacplus-261 && git diff --stat origin/main origin/looper/tacplus-261; git status --short
+<  .looper/claude.log |  64 +++++++++++++  .looper/prompt.md  | 269 +++++++++++++++++++++++++++++++++++++++++++++++++++++  2 files changed, 333 insertions(+)
+I stopped without making any changes: issue #261 can't move forward from this run. I've labelled it `needs-decision` and posted the questions on it ([comment](https://github.com/tacplus-dev/tacplus/issues/261#issuecomment-6728636957)). Nothing was committed or landed.
+
+**Why I stopped:**
+- **The spike can't be run from here.** The issue says to run it first, on the Mac runner. That runner belongs to the GitLab project tacplus-dev/build, which only runs protected-ref jobs started from the web. This run has no GitLab token (the API returns 401) and can't see that project (404), the same limit looper#36 hit.
+- **Most of the work is in other repositories.** The build and verify jobs and the move of `macos-smoke` go in tacplus-dev/looper's `ci/build.gitlab-ci.yml`. The wrapper that refuses host mounts goes in the GitLab project's `mac-runner/`. The job VM's disk size is set in the runner's host config. Only the install script, the version pins and the docs belong in this repository.
+
+**Decisions I asked for, with my recommendations:**
+- **A. Registry:** use GCP Artifact Registry through the existing workload identity setup. The images are on ghcr.io today, but a GitLab job can't get a ghcr.io push token that way without a stored GitHub credential, which the issue rules out.
+- **B. Who pushes:** the issue contradicts itself. Its body has the guest push the image, but Jody's later comment has `tart push` run on the host. I recommend the guest; pushing from the host would put a registry credential there.
+- **C. Who does what:** the pipeline jobs go in tacplus-dev/looper, and someone with access to the GitLab project runs the spike and adds the wrapper. I asked whether I should open the looper issue.
+- **D. Disk size:** it has to be set in the runner's host config, since the wrapper will refuse jobs that try to set it. I asked whether it applies to this one job or to all `macos` jobs.
+- **E. Matching Rust versions:** `build.Dockerfile` uses the floating `rust:1`, so `build:X.Y`'s Rust changes on each rebuild. The acceptance criterion that both images have the same Rust needs an exact pin.
+- **F. One source of truth:** an `images/versions.env` that both images read, with a test that fails if `build.Dockerfile`'s pins drift from it. I can build that here once A–E are settled.
+
+The checkpoint on `looper/tacplus-261` contains only the looper's own run files (`.looper/`). Once Jody answers and removes the label, the next run picks this up again.
+= success: I stopped without making any changes: issue #261 can't move forward from this run. I've labelled it `needs-decision` and posted the questions on it ([comment](https://github.com/tacplus-dev/tacplus/issues/261#issuecomment-6728636957)). Nothing was committed or landed.
+
+**Why I stopped:**
+- **The spike can't be run from here.** The issue says to run it first, on the Mac runner. That runner belongs to the GitLab project tacplus-dev/build, which only runs protected-ref jobs started from the web. This run has no GitLab token (the API returns 401) and can't see that project (404), the same limit looper#36 hit.
+- **Most of the work is in other repositories.** The build and verify jobs and the move of `macos-smoke` go in tacplus-dev/looper's `ci/build.gitlab-ci.yml`. The wrapper that refuses host mounts goes in the GitLab project's `mac-runner/`. The job VM's disk size is set in the runner's host config. Only the install script, the version pins and the docs belong in this repository.
+
+**Decisions I asked for, with my recommendations:**
+- **A. Registry:** use GCP Artifact Registry through the existing workload identity setup. The images are on ghcr.io today, but a GitLab job can't get a ghcr.io push token that way without a stored GitHub credential, which the issue rules out.
+- **B. Who pushes:** the issue contradicts itself. Its body has the guest push the image, but Jody's later comment has `tart push` run on the host. I recommend the guest; pushing from the host would put a registry credential there.
+- **C. Who does what:** the pipeline jobs go in tacplus-dev/looper, and someone with access to the GitLab project runs the spike and adds the wrapper. I asked whether I should open the looper issue.
+- **D. Disk size:** it has to be set in the runner's host config, since the wrapper will refuse jobs that try to set it. I asked whether it applies to this one job or to all `macos` jobs.
+- **E. Matching Rust versions:** `build.Dockerfile` uses the floating `rust:1`, so `build:X.Y`'s Rust changes on each rebuild. The acceptance criterion that both images have the same Rust needs an exact pin.
+- **F. One source of truth:** an `images/versions.env` that both images read, with a test that fails if `build.Dockerfile`'s pins drift from it. I can build that here once A–E are settled.
+
+The checkpoint on `looper/tacplus-261` contains only the looper's own run files (`.looper/`). Once Jody answers and removes the label, the next run picks this up again.

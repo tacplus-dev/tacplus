@@ -50,8 +50,8 @@ SDKs:
 
 | image | contents | rebuilt when |
 |---|---|---|
-| `ghcr.io/tacplus-dev/tacplus/base` | OS and every SDK tacplus is built and tested with: Go, Java (JDK, Maven), Rust, Python, Node (TypeScript), Swift, .NET | on a schedule, or when an SDK pin changes |
-| `ghcr.io/tacplus-dev/tacplus/build` | `base` plus every tool: protoc and every plugin, grpcio-tools, JBMC and OpenJML, just, the docker CLI, gcloud. The one image the gates run in: CI, the nightly gates, `just gates-container`. Not for consumers. | when a tool pin changes |
+| `ghcr.io/tacplus-dev/tacplus/base` | OS and every SDK tacplus is built and tested with: Go, Java (JDK, Maven), Rust, Python, Node (TypeScript), Swift, .NET | weekly (`latest` from main, each supported line's `X.Y` from its release branch), or when an SDK pin changes |
+| `ghcr.io/tacplus-dev/tacplus/build` | `base` plus every tool: protoc and every plugin, grpcio-tools, JBMC and OpenJML, just, the docker CLI, gcloud. The one image the gates run in: CI, the nightly gates, `just gates-container`. Not for consumers. | every release (built fresh), weekly for each supported line from its release branch, and when a tool pin changes |
 | `ghcr.io/tacplus-dev/tacplus/tacplus` | the tacplus binary and the protoc plugins for every language that needs its own (Go, Java, TypeScript, Rust, Swift, Python); C# needs none, its generated project runs Grpc.Tools from NuGet | every push to `main` and every release |
 
 A consumer's build does not start `FROM` the tacplus image. It runs it as its
@@ -80,6 +80,18 @@ cut after `2.3.1` moves `2.0` and leaves `2` and `latest` alone.
 A release also tags the `build` image it was produced with by the same policy
 (`2.1.3`, `2.1`, `2`), and a release job runs in `build:X.Y` of its own line,
 never in `build:latest`.
+
+A line's images are rebuilt every week from its own branch (#283), so they
+take every Debian security fix (`apt-get upgrade`) without waiting for a
+patch. The weekly run on `main` dispatches `images.yml` on each supported
+`release/X.Y` (a minor released within the last twelve months), and that run
+builds `base` and `build` from the branch and pushes `base:X.Y`, `build:X.Y`
+and the dated tag, nothing else: never `latest`, `main`, `X` or any `X.Y.Z`,
+and no tacplus image. So `build:X.Y` (and `base:X.Y`) may move without a new
+`X.Y.Z`; every `X.Y.Z` stays the image of that release, immutable. A dispatch
+on a release branch is always such a line rebuild. A patch tag builds its
+`build` fresh (`apt-get upgrade`), from its line's `base:X.Y`, never
+re-tagging the line's older image.
 
 The definitions are `images/base.Dockerfile`, `images/build.Dockerfile` and
 `images/tacplus.Dockerfile`; `images/smoke.sh` ships in the build and

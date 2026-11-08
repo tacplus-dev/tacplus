@@ -64,6 +64,15 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   and on stop the socket is removed and the handler's shutdown runs once.
   Does not run `Run()` itself (`docs/KNOWN_TEST_GAPS.md` C2D-1). Local
   (`just c2d-server`, part of `just gates`); not yet in CI.
+- `trace-carry` (`cross-test/trace-carry/run.sh`): `trace_id` across
+  projections and stores (#313) in the generated Go, Java and Rust. Every leg
+  drives its generated code over the same model: a transformation's
+  extraction and `<Source>ToProjections` carry the source's `trace_id`; the
+  record dispatch hands its store the row with field 200 empty, read back raw
+  from the bytes (Go, Java) or the row JSON (Rust); a `service_store` write
+  through the generated disk helpers (snapshot and redo record), read back raw
+  from the file and the record, holds no trace, and the caller's message keeps
+  its own. Local (`just trace-carry`, part of `just gates`); not yet in CI.
 - `mcp-floor-version` (`cross-test/mcp-floor-version/run.sh`): rmcp floor gate
   for the generated Rust MCP dispatch — generates a service owning one
   `RPC_PRINCIPAL_MCP` tool, pins `rmcp` to the EXACT version

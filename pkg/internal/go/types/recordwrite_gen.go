@@ -149,10 +149,33 @@ func goRecordCallerNs() string {
 `
 }
 
+// goRecordRowTraceClear renders the clear of the injected trace_id off every
+// row a write surface request carries (#313): item, and ReplaceIfUnchanged's
+// expected_item, so a row is stored without the trace of the call that wrote
+// it, and a compare value carrying one still matches the stored row. Empty for
+// a record type without the injected trace_id (rowTrace false) and for a
+// key-addressed request. The request's own trace_id is the call's and stays.
+func goRecordRowTraceClear(base string, e *parser.RecordEntry, rowTrace func(string) bool, indent string) string {
+	if len(e.RowFields) == 0 || rowTrace == nil || !rowTrace(e.Record) {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s// A stored row never keeps a trace (#313).\n", indent)
+	for _, f := range e.RowFields {
+		fmt.Fprintf(&b, `%[1]sif __r := %[2]s.Get%[3]s(); __r != nil {
+%[1]s	__r.TraceId = ""
+%[1]s}
+`, indent, base, toGoFieldName(f))
+	}
+	return b.String()
+}
+
 // goRecordEntryPre renders the pre-handler half of the guard for a write
 // surface RPC addressing one record type: its tenant pin, then — on a write —
-// refuse below the floor and stamp the floor when unset.
-func goRecordEntryPre(method *parser.MethodInfo, failStmt string) string {
+// refuse below the floor and stamp the floor when unset, then clear the trace
+// off the rows it carries. rowTrace reports whether a record type carries the
+// injected trace_id.
+func goRecordEntryPre(method *parser.MethodInfo, failStmt string, rowTrace func(string) bool) string {
 	e := method.RecordEntry
 	if e == nil {
 		return ""
@@ -174,6 +197,9 @@ func goRecordEntryPre(method *parser.MethodInfo, failStmt string) string {
 	}
 `, int32(e.Durability), method.Name, recordDurabilityName(e.Durability), failStmt)
 	}
+	if c := goRecordRowTraceClear("req", e, rowTrace, "\t"); c != "" {
+		b.WriteString("\n" + c)
+	}
 	return b.String()
 }
 
@@ -191,8 +217,9 @@ func goRecordWritePost(method *parser.MethodInfo) string {
 
 // goRecordApplyPre renders Apply's pre-handler guard: per op, the case, its
 // authorization, its floor, and its place in the canonical lock order; then the
-// Apply's effective durability.
-func goRecordApplyPre(method *parser.MethodInfo, svc *parser.ServiceInfo, servicePackage, parentDir string, skipAuth bool) string {
+// Apply's effective durability. Each op's rows have their trace cleared, as
+// on its single-type RPC.
+func goRecordApplyPre(method *parser.MethodInfo, svc *parser.ServiceInfo, servicePackage, parentDir string, skipAuth bool, rowTrace func(string) bool) string {
 	ops := method.RecordApplyOps
 	if len(ops) == 0 {
 		return ""
@@ -229,7 +256,8 @@ func goRecordApplyPre(method *parser.MethodInfo, svc *parser.ServiceInfo, servic
 			%[6]s
 `, caseType, auth, op.Record, int32(op.Durability), inner, keySet,
 			goRecordTenantPin(inner, op.NamespacePath, method.Name, "Apply ("+op.CaseField+")", "\t\t\t", "return nil,")+
-				goRecordRoutePin(inner, op.NamespacePath, goRecordRoute(method), "Apply ("+op.CaseField+")", "\t\t\t", "return nil,"))
+				goRecordRoutePin(inner, op.NamespacePath, goRecordRoute(method), "Apply ("+op.CaseField+")", "\t\t\t", "return nil,")+
+				goRecordRowTraceClear(inner, &op, rowTrace, "\t\t\t"))
 		if len(op.NamespacePath) > 0 {
 			hasTenant = true
 		}

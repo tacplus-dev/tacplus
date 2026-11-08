@@ -779,6 +779,12 @@ impl {{.StateRootName}}ClientInner {
 {{if not $.ReadOnly}}
     /// Puts a single entry into the {{.FieldName}} collection via Put RPC.
     pub async fn put_{{.FieldName}}(&self, key: String, value: {{.TypeName}}) -> Result<(), tonic::Status> {
+{{- if .ClearTrace}}
+        // A stored value never keeps a trace (#313). `value` is the caller's
+        // owned copy, so clearing it here never touches the caller's message.
+        let mut value = value;
+        value.trace_id = String::new();
+{{- end}}
         let req = self.authorized_request({{.FieldPascal}}PutRequest { key, value: Some(value), lock_counter: 0, ..Default::default() }).await?;
         let mut stub = {{$.StateServiceClientType}}::new(self.channel.clone());
         stub.put_{{.FieldName}}(req).await?;
@@ -994,6 +1000,12 @@ impl {{$.StateRootName}}{{.FieldPascal}}Accessor {
 {{if not $.ReadOnly}}
     /// Updates the {{.TypeName}} via the state service (Set RPC).
     pub async fn set(&self, value: {{.TypeName}}) -> Result<{{.TypeName}}, tonic::Status> {
+{{- if .ClearTrace}}
+        // A stored value never keeps a trace (#313). `value` is the caller's
+        // owned copy, so clearing it here never touches the caller's message.
+        let mut value = value;
+        value.trace_id = String::new();
+{{- end}}
         let req = self.inner.authorized_request(value).await?;
         let mut stub = {{$.StateServiceClientType}}::new(self.inner.channel.clone());
         let response = stub.set_{{.FieldName}}(req).await?;

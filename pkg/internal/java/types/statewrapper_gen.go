@@ -54,6 +54,11 @@ type javaCollectionBoundary struct {
 	KeyFieldName   string // camelCase: "playerId"
 	KeyFieldPascal string // PascalCase: "PlayerId"
 
+	// ClearTrace is true when the item type carries the injected trace_id:
+	// put<F> sends a copy with it cleared, so a stored value never keeps a
+	// trace (#313).
+	ClearTrace bool
+
 	// MaxEntries is the client-side snapshot safety limit: the field's
 	// (spec.eviction_max_size) when declared, else the shared default.
 	MaxEntries int64
@@ -438,6 +443,7 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 				JavaType:       javaType,
 				KeyFieldName:   keyFieldName,
 				KeyFieldPascal: keyFieldPascal,
+				ClearTrace:     proto.FieldTypeCarriesInjectedTrace(dp, fileDesc.Package, field.Type, config.SkippedTraceTypes),
 
 				MaxEntries: boundaries.CollectionSafetyLimit(field),
 			})

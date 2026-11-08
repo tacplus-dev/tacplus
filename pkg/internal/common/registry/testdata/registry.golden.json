@@ -1,0 +1,30 @@
+{
+  "$schema": "registry.schema.json",
+  "name":  "types",
+  "children":  [
+    {
+      "name":  "accounting_method",
+      "full_path":  "generated/accounting_method",
+      "types":  [
+        {
+          "fqn":  "accounting_method.AccountingMethod",
+          "name":  "AccountingMethod",
+          "package":  "accounting_method",
+          "description":  "Quotes \"inside\", a key-like \"k\": \"v\", a tab\t, <html> & \\ backslash, é,  .",
+          "schema_json":  "{\n  \"name\": \"AccountingMethod\",\n  \"fields\": []\n}"
+        }
+      ]
+    },
+    {
+      "name":  "empty",
+      "full_path":  "generated/empty"
+    }
+  ],
+  "docs":  {
+    "a.md":  "",
+    "b.md":  "# B\n"
+  },
+  "build":  {
+    "tacplus_version":  "1.2.3"
+  }
+}

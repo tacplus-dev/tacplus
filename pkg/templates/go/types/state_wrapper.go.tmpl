@@ -685,6 +685,13 @@ func (w *{{$s.FieldName}}Wrapper) Set(ctx context.Context, v *{{TypeRef $s.GoTyp
 	if err := {{ValidateRef $s.GoType $s.IsCrossPackage}}(v); err != nil {
 		return nil, err
 	}
+{{- if $s.ClearTrace}}
+	// A stored value never keeps a trace (#313).
+	if v != nil {
+		v = proto.Clone(v).(*{{TypeRef $s.GoType $s.IsCrossPackage}})
+		v.TraceId = ""
+	}
+{{- end}}
 	return w.parent.stateStub.Set{{$s.FieldName}}(ctx, v)
 }
 {{end}}{{/* end if not ReadOnly */}}
@@ -802,6 +809,13 @@ func (c *{{$.ClientTypeName}}) FetchAll{{$c.FieldName}}(ctx context.Context) (ma
 // Put{{$c.FieldName}} inserts or updates a {{$c.TypeName}} in the {{$c.FieldName}} collection via Put RPC.
 // Returns the previous value (nil if the key was new).
 func (c *{{$.ClientTypeName}}) Put{{$c.FieldName}}(ctx context.Context, key string, value *{{TypeRef $c.GoType $c.IsCrossPackage}}) (*{{TypeRef $c.GoType $c.IsCrossPackage}}, error) {
+{{- if $c.ClearTrace}}
+	// A stored value never keeps a trace (#313).
+	if value != nil {
+		value = proto.Clone(value).(*{{TypeRef $c.GoType $c.IsCrossPackage}})
+		value.TraceId = ""
+	}
+{{- end}}
 	resp, err := c.stateStub.Put{{$c.FieldName}}(ctx, &types.{{$c.FieldName}}PutRequest{Key: key, Value: value})
 	if err != nil {
 		return nil, err

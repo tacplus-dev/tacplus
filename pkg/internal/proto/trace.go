@@ -193,6 +193,61 @@ func InjectTraceFields(tempProtoDir, inputDir string) (SkippedTraceTypes, error)
 	return skipped, nil
 }
 
+// CarriesInjectedTrace reports whether the message typeFqn (e.g.
+// "ballsports.Player"), as parsed by dp from the post-injection proto
+// directory, carries the trace_id InjectTraceFields added. False for a type
+// that is not found, lives in an infra proto (never injected), was recorded in
+// skipped (a <T>Public view, or a message defining its own trace_id/noop), or
+// simply has no trace_id at field 200.
+//
+// Storage paths use it to decide, at generation time, whether to clear the
+// trace before persisting: a stored value never keeps a trace (#313).
+func CarriesInjectedTrace(dp *parser.DescriptorParser, typeFqn string, skipped map[string]bool) bool {
+	if dp == nil || typeFqn == "" || skipped[typeFqn] {
+		return false
+	}
+	idx := strings.LastIndex(typeFqn, ".")
+	if idx <= 0 {
+		return false
+	}
+	pkg, name := typeFqn[:idx], typeFqn[idx+1:]
+	for relPath, fileDesc := range dp.GetAllFiles() {
+		if fileDesc == nil || fileDesc.Package != pkg {
+			continue
+		}
+		for i := range fileDesc.Messages {
+			msg := &fileDesc.Messages[i]
+			if msg.Name != name {
+				continue
+			}
+			if IsInfraProtoFile(relPath, fileDesc) {
+				return false
+			}
+			for _, f := range msg.Fields {
+				if f.Number == traceIDFieldNumber && f.Name == traceIDFieldName {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return false
+}
+
+// FieldTypeCarriesInjectedTrace is CarriesInjectedTrace for a message field's
+// type as the descriptor parser reports it: bare ("Player", resolved in
+// filePackage) or package-qualified ("ballsports.Player").
+func FieldTypeCarriesInjectedTrace(dp *parser.DescriptorParser, filePackage, fieldType string, skipped map[string]bool) bool {
+	fieldType = strings.TrimPrefix(fieldType, ".")
+	if fieldType == "" {
+		return false
+	}
+	if !strings.Contains(fieldType, ".") {
+		fieldType = filePackage + "." + fieldType
+	}
+	return CarriesInjectedTrace(dp, fieldType, skipped)
+}
+
 func eventBusTraceRPCMessages(relPath string, fileDesc *parser.FileDescriptor) map[string]bool {
 	if fileDesc == nil || !IsEventBusSupportProto(relPath) {
 		return nil

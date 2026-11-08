@@ -21,6 +21,10 @@ func Handle{{.SourceType}}(ctx context.Context, event *{{.SourceQualifier}}{{.So
 	// {{.TypeName}} — timeseries projection.
 	if insert{{.TypeName}} != nil {
 		if row := Extract{{.TypeName}}From{{$.SourceType}}(event); row != nil {
+{{- if .CarriesTrace}}
+			// A stored row never keeps a trace (#313).
+			row.TraceId = ""
+{{- end}}
 			if err := insert{{.TypeName}}(ctx, row); err != nil {
 				return fmt.Errorf("insert {{.TypeName}}: %w", err)
 			}

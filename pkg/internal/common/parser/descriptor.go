@@ -328,6 +328,8 @@ type RecordEntry struct {
 	KeyPath       []string        // field path from the stamped message to the entry key (e.g. ["item", "row_id"]); nil when it carries none
 	KeyKind       string          // proto kind of the key: "string", "int64", "uint64", ...; "" without a key
 	NamespacePath []string        // field path from the stamped message to the tenant field (e.g. ["item", "namespace"]); nil when the record declares none
+	RowFields     []string        // the stamped message's fields carrying a whole row of the record type, in field order (e.g. ["item", "expected_item"]); nil on a key-addressed one
+	RowOneofs     []string        // beside each RowFields entry, the oneof it is a case of (e.g. ["", "expected"]); "" for none
 
 	// Apply op only.
 	OpsField  string // the request's repeated RecordOp field holding the ops (e.g. "ops")

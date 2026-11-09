@@ -21,6 +21,9 @@ current-generation-java:
 current-generation-rust:
     bash {{root}}/current-generation/run.sh --language rust
 
+current-generation-typescript:
+    bash {{root}}/current-generation/run.sh --language typescript
+
 determinism:
     bash {{root}}/determinism/run.sh
 

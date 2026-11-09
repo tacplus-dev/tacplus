@@ -103,6 +103,9 @@ current-generation-java:
 current-generation-rust:
   {{lock}} bash cross-test/current-generation/run.sh --language rust
 
+current-generation-typescript:
+  {{lock}} bash cross-test/current-generation/run.sh --language typescript
+
 determinism:
   {{lock}} bash cross-test/determinism/run.sh
 

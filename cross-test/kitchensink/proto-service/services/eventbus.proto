@@ -1,0 +1,31 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// Stand-in EventBus broker for the kitchensink's service member (tacplus#196).
+//
+// A (spec.record) or (spec.event) synthesizes a topic carrying the broker tag
+// "eventbus", which needs a loaded gRPC service of that identity. It also
+// carries the broker's own topic root, as the fleet's eventbus does.
+
+syntax = "proto3";
+
+package eventbus;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "eventbus"};
+
+message EventBusPing {}
+
+// A topic root the broker dispatches: (spec.service_event).label.
+message TraceEventBus {
+  option (spec.service_event) = {label: "eventbus"};
+  EventBusPing trace_events = 1 [(spec.topic) = true];
+}
+
+service EventBusBroker {
+  option (spec.service_s2s) = {};
+
+  rpc Ping(EventBusPing) returns (EventBusPing) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}

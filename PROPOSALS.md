@@ -17,14 +17,6 @@ the looper then marks it `promoted` or `declined` here with the date.
   stored (state `Put`/`Set`, store-derived subscriptions, store wrappers, disk helpers) and leaves it on topic
   publishes, queue offers and commands, which deliver a message to a consumer that propagates it. If a queue is to
   count as storage (its items persist until taken), the consumer loses the trace; that is a decision, not a fix.
-- **Kani harnesses beyond integer bounds** (2026-11-06, #211): the generated Rust harnesses now prove only that
-  `validate()` refuses each integer/enum bound, and skip a message whose `validate()` reaches the regex crate (Kani
-  0.68 panics compiling it), a nested message, a map field (prost's `HashMap` default makes a syscall Kani does not
-  model) or a sensitive check; they stub `std::fmt::format`, which Kani cannot finish. Wider coverage: bounded
-  strings/bytes (`kani::vec::any_vec` behind `String::from_utf8`) for the size checks; same-package nested messages
-  (the generator can see their validators); a stub of `RandomState::new` for map fields; regex validators stubbed by
-  `#[kani::stub]` with the claim restricted to the other fields. The "accepts every value inside the bounds" claim
-  needs a model of every check of the message, which #196's kitchensink is the place for.
 - **A floor check over every version tacplus emits, and template manifests that take versions from one place**
   (2026-11-06, nightly scan, #338): four nights of scans found advisories in floors the generated manifests declare
   (#264, #309, #312, #338). No scanner sees them: a lockfile resolve, including the proposed `just generated`
@@ -39,9 +31,6 @@ the looper then marks it `promoted` or `declined` here with the date.
 - **Verification only under the nightly set in gates.yaml** (2026-11-04, #275): once tacplus-dev/looper#48 maps
   tacplus, its `gates.yaml` lists `just verify` under the nightly and release sets only, never a land's. tacplus has no
   gates.yaml yet, so #275 landed without it.
-- **`just verify` covers only cross-test/proto** (2026-11-04, #275): it generates the base fixture in Rust and Java and
-  verifies its harnesses. The kitchensink (#196) is the set meant to cover every feature; when it lands, `scripts/verify.sh`
-  generates it instead and `scripts/verify-changed.sh` watches it.
 - **Redact<T> across packages, and the sys types that hold secrets** (2026-11-04, #274): a sensitive tree must stay
   in one proto package (a sensitive field whose type is in another package is refused at generation), and no sys
   type carries `(spec.sensitive)` yet, though several hold secret material (`sys/token.proto` tokens,
@@ -52,9 +41,6 @@ the looper then marks it `promoted` or `declined` here with the date.
   and C# generate neither `Redact<T>` nor the required/entropy check of a sensitive field (the issue asks for them
   "where useful"). A client that sends a secret could check its entropy before sending, and a client-side tool could
   show a redacted view. Needs a decision on which targets get which half.
-- **Kani harness for a message with a required sensitive field** (2026-11-04, #274): the generated Rust proof harness
-  asserts that a default message validates, which a required sensitive field makes false, so `proof.go` skips the
-  harness for such a message. A harness that builds a valid value first would keep it covered.
 - **Sensitive leaves in a oneof** (2026-11-04, #274): `(spec.sensitive)` on a oneof member, and a sensitive tree that
   reaches a string/bytes/message oneof member, are refused at generation. Supporting them is per-language oneof
   plumbing (Go wrapper structs, prost enums, Java cases), like the legacy Sanitize<T> recursion has.
@@ -117,6 +103,31 @@ the looper then marks it `promoted` or `declined` here with the date.
   then retries successfully, failed `current-generation` and the land of #255. Pre-fetching the crates
   (`cargo fetch`) before the checked build, or not counting cargo's retry warnings, would keep a network blip from
   failing a 3h gate run.
+- **Swift server-streaming on Linux** (2026-11-08, #196): the generated Swift W2S client reads SSE with
+  `URLSession.bytes(for:)`, which Linux's FoundationNetworking lacks, so the kitchensink found that a Swift model with a
+  server-streaming rpc did not compile on Linux. It now compiles there, and a streaming call throws
+  `W2SClientError.stream` naming why; Apple platforms are unchanged. A `URLSessionDataDelegate` that feeds the bytes
+  it receives into the SSE parser would stream on Linux too, if a Linux Swift client ever needs it.
+- **Coverage-guided Java fuzzing** (2026-10-31, #196): the kitchensink fuzzes the generated Java with a seeded
+  mutation loop (`cross-test/kitchensink/fuzz/java`), not a coverage-guided engine, because the build image has none.
+  Jazzer in the build image (as cargo-fuzz is for Rust) would find deeper bugs, and services could fuzz their own Java
+  the same way.
+- **More of the kitchensink under Kani** (2026-10-31, #196; 2026-11-06, #211): the kitchensink's Rust harnesses
+  (`cross-test/kitchensink/verify/rust`, run by `just verify`) prove `Bounds` (every integer width, net port,
+  numeric range/ne/in/multiple_of, enum defined) and the bound four messages down in `Deep`, stubbing
+  `std::fmt::format` as #211's generated harnesses did. Not proved, fuzzed only: the string-format validators
+  (`assert_email`, `assert_fqdn`, `assert_host`, `assert_semver`) reach `regex`, on which Kani 0.68 panics; `Sizes`
+  has a map field (prost's `HashMap` default makes a syscall Kani does not model) and strings, which Kani has no
+  `Arbitrary` for. A `#[kani::stub]` of `Regex::is_match` and of `RandomState::new`, and bounded strings
+  (`kani::vec::any_vec` behind `String::from_utf8`), would let Kani prove the rest. The harnesses have not run
+  under Kani in a land (#275 keeps Kani out of the gates): the first `just verify` after #196 is their first run.
+- **Coverage across options** (2026-10-31, #196): the coverage manifest records each option, its enum values, and
+  the combination of enum values inside one option (an RPC's principal and exposure). Combinations across options
+  (a record that is also tenant-owned and REMOTE-durable, say) are not recorded; if the generator grows behaviour
+  that depends on such pairs, `pkg/coverage` should name them too.
+- **Run the fleet's protos against the coverage manifest before a release** (2026-10-31, #196): this run checked
+  every fleet service's `proto/` against the manifest by hand and covered the gaps (`proto-service`). A nightly job
+  doing the same against the fleet repos would show a gap before a release turns it into a failed service build.
 - **Refuse a `contribute.webapp` from the gateway itself** (2026-10-31, #195): the gateway's own webapp is the base at
   `/`, not a contribution, but the fleet build does not know which listed service is the gateway until
   `tacplus fleet gateway` requires one (part 3). It should then refuse a `webapp` contribution from it by name.

@@ -212,8 +212,9 @@ gates-container:
   docker run --rm -v "$PWD:/workspace" -w /workspace "$image" \
     bash -c 'git config --global --add safe.directory /workspace && just gates'
 
-# Formal verification (#275): Kani on the generated Rust and JBMC on the
-# generated Java of cross-test/proto (Go is not formally verified, by decision).
+# Formal verification (#275): Kani on the generated Rust of the kitchensink,
+# through its own harnesses (#196); Java waits for #257 (Go is not formally
+# verified, by decision).
 # NOT a gate, and `just gates` must never reach it (scripts/verify_test.go): it
 # needs the build image's verifiers and far more memory and time than a land.
 # The build pipeline runs it on every release tag, and nightly when
@@ -234,6 +235,28 @@ verify-changed SHA="":
 # output with two real tacplus builds. Under dash (POSIX sh) when installed.
 tacplus-script: generate
   {{lock}} bash images/tacplus_test.sh
+
+# The kitchensink (tacplus#196), the release gate: its own members
+# (cross-test/kitchensink/proto, proto-service) generated and compiled, and the
+# Go, Rust and Java fuzzed (KITCHENSINK_FUZZ_SECONDS a target). Kani proves its
+# Rust in `just verify`. Needs the build image's tools: `just
+# kitchensink-container` runs it there. The other members are the mandatory
+# gates' fixtures. Not in `gates`: the Release workflow and the nightly run it.
+kitchensink:
+  {{lock}} bash cross-test/kitchensink/run.sh
+
+kitchensink-container:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd {{justfile_directory()}}
+  image="${TACPLUS_BUILD_IMAGE:-ghcr.io/tacplus-dev/tacplus/build:latest}"
+  docker run --rm -v "$PWD:/workspace" -w /workspace "$image" \
+    bash -c 'git config --global --add safe.directory /workspace && just generate && just kitchensink'
+
+# Rewrite pkg/coverage/kitchensink.json, the coverage manifest `tacplus build`
+# checks a service against, from cross-test/kitchensink/members.yaml.
+kitchensink-manifest: generate
+  {{lock}} go run ./cmd/kitchensinkmanifest
 
 # The generated member port (tacplus#212, on gRPC since #321): Java's
 # memberport-peer, stream-expiry and Hazelcast tests over real sockets; Go and

@@ -78,12 +78,5 @@ x509-cert = "0.3"
 {{- end}}
 
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(kani)'] }
 unused_imports = "allow"
 unused_comparisons = "allow"
-
-# The Kani harnesses in helpers.rs stub std::fmt::format (tacplus#211): Kani
-# cannot finish formatting a validate() error message, and no harness depends on
-# its text. Read by cargo kani only.
-[package.metadata.kani.unstable]
-stubbing = true

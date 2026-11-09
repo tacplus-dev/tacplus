@@ -21,6 +21,8 @@ integration-test/go/test/integrationtest
 # Output of the go coverage tool
 *.out
 coverage/
+# ...but not the kitchensink coverage package (tacplus#196).
+!pkg/coverage/
 *.coverprofile
 
 # Go workspace file

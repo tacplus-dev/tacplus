@@ -18,10 +18,10 @@ depends=(
   pkg/                      # the generator, its templates and registries, the embedded protos, the verifier driver
   cmd/verify/               # `tacplus verify`
   main.go go.mod go.sum     # the compiler itself
-  cross-test/proto/         # the fixture verification generates
-  cross-test/dependencies.yaml
+  cross-test/kitchensink/proto/   # the kitchensink member verification generates (its pins included)
+  cross-test/kitchensink/verify/  # and the harnesses it runs
   images/base.Dockerfile    # the toolchain pins: the SDKs,
-  images/build.Dockerfile   # Kani and JBMC
+  images/build.Dockerfile   # Kani
   scripts/verify.sh scripts/verify-changed.sh
 )
 

@@ -1,0 +1,17 @@
+# Managed by tacplus — do not edit IDs manually.
+services:
+    - name: kssvc
+      id: 1
+    - name: eventbus
+      id: 2
+    - name: kskernel
+      id: 3
+    - name: ksgateway
+      id: 4
+    - name: ksopa
+      id: 5
+    - name: ksstratum
+      id: 6
+vservices:
+    - name: ksquery
+      field_id: 31

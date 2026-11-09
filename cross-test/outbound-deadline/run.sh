@@ -12,6 +12,9 @@
 #
 # Standalone, like server-runtime: it needs the go and cargo toolchains, so it
 # is NOT part of `just test`.
+# --allow-uncovered: this fixture is not a kitchensink member in every language
+# this test generates (cross-test/kitchensink/members.yaml); it tests a
+# behaviour, not a release's coverage (tacplus#196).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -47,7 +50,7 @@ src: "$PROTO_SRC"
 output-dir: "model"
 EOF
 echo "==> Generating rust model"
-(cd "$MODEL_DIR" && "$TACPLUS_BIN" build --config tacplus.yaml --src "$PROTO_SRC" --tag latest) >"$MODEL_DIR/generate.log" 2>&1 || {
+(cd "$MODEL_DIR" && "$TACPLUS_BIN" build --config tacplus.yaml --src "$PROTO_SRC" --tag latest --allow-uncovered) >"$MODEL_DIR/generate.log" 2>&1 || {
   cat "$MODEL_DIR/generate.log" >&2
   die "rust generation failed"
 }

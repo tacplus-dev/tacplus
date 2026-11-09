@@ -1,0 +1,216 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// The kitchensink's own member (tacplus#196): the edge cases no other fixture
+// carries, and the messages the release gate formally verifies (Kani, JBMC)
+// and fuzzes (Go, Rust, Java). cross-test/kitchensink/members.yaml lists it
+// with the fixtures the kitchensink folds in.
+//
+// The verify and fuzz harnesses under cross-test/kitchensink/{verify,fuzz}
+// name these messages and fields: rename one and change them too.
+
+syntax = "proto3";
+
+package kitchensink;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "kitchensink"};
+// The member is a client of its own API, so the client-only targets (swift,
+// csharp, typescript) have a surface to generate and the service targets
+// carry the C2S and W2S clients too.
+option (spec.grpc_c2s_client) = {service: "kitchensink.KitchensinkApi"};
+option (spec.grpc_w2s_client) = {service: "kitchensink.KitchensinkApi"};
+
+// An empty message: validates, encodes to nothing, decodes from nothing.
+message Empty {}
+
+enum Mode {
+  MODE_UNSPECIFIED = 0;
+  MODE_ON = 1;
+  MODE_OFF = 2;
+}
+
+// Numeric bounds, every comparison form, on every integer width. The verify
+// harnesses prove validate() accepts exactly the declared ranges.
+message Bounds {
+  int32 port = 1 [(spec.assert_net_port) = true];
+  int32 gt_zero = 2 [(spec.assert_gt) = 0];
+  int64 ge_minus_ten = 3 [(spec.assert_ge) = -10];
+  uint32 lt_hundred = 4 [(spec.assert_lt) = 100];
+  uint64 le_thousand = 5 [(spec.assert_le) = 1000];
+  int32 window = 6 [(spec.assert_numeric) = {ge: 1, le: 64}];
+  int64 not_seven = 7 [(spec.assert_numeric) = {ne: 7}];
+  int32 one_of = 8 [(spec.assert_numeric) = {in: [1, 2, 4, 8]}];
+  int32 even = 9 [(spec.assert_numeric) = {multiple_of: 2}];
+  Mode mode = 10 [(spec.assert_enum_defined) = true];
+  bool flag = 11;
+}
+
+// Size bounds at their limits: strings, bytes, repeated and map, the element
+// bound on a repeated string, and a minimum.
+message Sizes {
+  string name = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 8];
+  bytes blob = 2 [(spec.assert_max_size) = 16];
+  repeated int32 counts = 3 [(spec.assert_max_size) = 4];
+  repeated string tags = 4 [(spec.assert_max_size) = 3, (spec.assert_element_max_size) = 5];
+  map<string, string> labels = 5 [(spec.assert_max_size) = 2, (spec.assert_element_max_size) = 4];
+  string code = 6 [(spec.assert_min_size) = 2, (spec.assert_max_size) = 4];
+  optional string nickname = 7 [(spec.assert_max_size) = 6];
+}
+
+// Floats: a closed range on a double and an open one on a float.
+message Floats {
+  double ratio = 1 [(spec.assert_float) = {ge: 0.0, le: 1.0}];
+  float positive = 2 [(spec.assert_float) = {gt: 0.0}];
+}
+
+// Formats: the string checks a validator implements by parsing.
+message Formats {
+  string email = 1 [(spec.assert_email) = true];
+  string fqdn = 2 [(spec.assert_fqdn) = true];
+  string host = 3 [(spec.assert_host) = true];
+  string version = 4 [(spec.assert_semver) = true];
+  string listen = 5 [(spec.assert_listen_addr) = true];
+  string encoded = 6 [(spec.assert_base64) = true];
+}
+
+// Conditional requirements.
+message Conditional {
+  bool disable_tls = 1;
+  string cert_path = 2 [(spec.required_if_false) = "disable_tls"];
+  bool enable_cors = 3;
+  string cors_origin = 4 [(spec.required_if_true) = "enable_cors"];
+  Mode mode = 5;
+  string on_reason = 6 [(spec.required_if_eq) = {field: "mode", value: "MODE_ON"}];
+}
+
+// Every scalar kind, singular, repeated and proto3 optional, and the map
+// shapes: the generator maps each to a different type in every language.
+message Scalars {
+  double f_double = 1;
+  float f_float = 2;
+  int32 f_int32 = 3;
+  int64 f_int64 = 4;
+  uint32 f_uint32 = 5;
+  uint64 f_uint64 = 6;
+  sint32 f_sint32 = 7;
+  sint64 f_sint64 = 8;
+  fixed32 f_fixed32 = 9;
+  fixed64 f_fixed64 = 10;
+  sfixed32 f_sfixed32 = 11;
+  sfixed64 f_sfixed64 = 12;
+  bool f_bool = 13;
+  string f_string = 14;
+  bytes f_bytes = 15;
+  Mode f_enum = 16;
+  Empty f_message = 17;
+}
+
+message RepeatedScalars {
+  repeated double f_double = 1 [(spec.assert_max_size) = 8];
+  repeated float f_float = 2 [(spec.assert_max_size) = 8];
+  repeated int32 f_int32 = 3 [(spec.assert_max_size) = 8];
+  repeated int64 f_int64 = 4 [(spec.assert_max_size) = 8];
+  repeated uint32 f_uint32 = 5 [(spec.assert_max_size) = 8];
+  repeated uint64 f_uint64 = 6 [(spec.assert_max_size) = 8];
+  repeated sint32 f_sint32 = 7 [(spec.assert_max_size) = 8];
+  repeated sint64 f_sint64 = 8 [(spec.assert_max_size) = 8];
+  repeated fixed32 f_fixed32 = 9 [(spec.assert_max_size) = 8];
+  repeated fixed64 f_fixed64 = 10 [(spec.assert_max_size) = 8];
+  repeated sfixed32 f_sfixed32 = 11 [(spec.assert_max_size) = 8];
+  repeated sfixed64 f_sfixed64 = 12 [(spec.assert_max_size) = 8];
+  repeated bool f_bool = 13 [(spec.assert_max_size) = 8];
+  repeated string f_string = 14 [(spec.assert_max_size) = 8];
+  repeated bytes f_bytes = 15 [(spec.assert_max_size) = 8];
+  repeated Mode f_enum = 16 [(spec.assert_max_size) = 8];
+  repeated Empty f_message = 17 [(spec.assert_max_size) = 8];
+}
+
+message OptionalScalars {
+  optional double f_double = 1;
+  optional float f_float = 2;
+  optional int32 f_int32 = 3;
+  optional int64 f_int64 = 4;
+  optional uint32 f_uint32 = 5;
+  optional uint64 f_uint64 = 6;
+  optional sint32 f_sint32 = 7;
+  optional sint64 f_sint64 = 8;
+  optional fixed32 f_fixed32 = 9;
+  optional fixed64 f_fixed64 = 10;
+  optional sfixed32 f_sfixed32 = 11;
+  optional sfixed64 f_sfixed64 = 12;
+  optional bool f_bool = 13;
+  optional string f_string = 14;
+  optional bytes f_bytes = 15;
+  optional Mode f_enum = 16;
+}
+
+message Maps {
+  map<string, string> string_string = 1 [(spec.assert_max_size) = 8];
+  map<string, int64> string_int64 = 2 [(spec.assert_max_size) = 8];
+  map<string, double> string_double = 3 [(spec.assert_max_size) = 8];
+  map<string, bytes> string_bytes = 4 [(spec.assert_max_size) = 8];
+  map<string, bool> string_bool = 5 [(spec.assert_max_size) = 8];
+  map<string, Mode> string_enum = 6 [(spec.assert_max_size) = 8];
+  map<string, Empty> string_message = 7 [(spec.assert_max_size) = 8];
+  map<int32, int64> int32_int64 = 8 [(spec.assert_max_size) = 8];
+  map<int64, string> int64_string = 9 [(spec.assert_max_size) = 8];
+  map<uint32, string> uint32_string = 10 [(spec.assert_max_size) = 8];
+  map<uint64, string> uint64_string = 11 [(spec.assert_max_size) = 8];
+  map<bool, string> bool_string = 12 [(spec.assert_max_size) = 8];
+}
+
+// Field names that are keywords in a generated language.
+message Keywords {
+  string type = 1;
+  int32 match = 2;
+  bool class = 3;
+  string import = 4;
+  int64 async = 5;
+}
+
+// Deep nesting: four levels of messages, with a repeated and a oneof on the way.
+message Level3 {
+  int32 value = 1 [(spec.assert_ge) = 0];
+}
+
+message Level2 {
+  Level3 leaf = 1;
+  repeated Level3 leaves = 2 [(spec.assert_max_size) = 4];
+}
+
+message Level1 {
+  Level2 inner = 1;
+  oneof choice {
+    Level2 left = 2;
+    string right = 3;
+  }
+}
+
+message Deep {
+  Level1 root = 1;
+}
+
+message GetBoundsRequest {
+  Bounds bounds = 1;
+  Sizes sizes = 2;
+  Deep deep = 3;
+}
+
+message GetBoundsResponse {
+  Bounds bounds = 1;
+}
+
+service KitchensinkApi {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  // GetBounds returns the bounds it was sent, once the request validates.
+  rpc GetBounds(GetBoundsRequest) returns (GetBoundsResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
+  }
+
+  // Ping answers an empty request with an empty response, unauthenticated.
+  rpc Ping(Empty) returns (Empty) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_PUBLIC_NO_AUTH]};
+  }
+}

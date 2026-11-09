@@ -1,0 +1,37 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// The kitchensink's service member (tacplus#196): an API gateway, as the
+// fleet's gateway is declared. A file of its own, since (spec.service).gateway
+// and the client-reachable minting proxy are a whole service's shape.
+
+syntax = "proto3";
+
+package ksgateway;
+
+import "sys/spec.proto";
+import "sys/host.proto";
+import "sys/tokenrequest.proto";
+
+// (spec.service).gateway, and a file-level (spec.state_imports).source.
+option (spec.service) = {name: "ksgateway", gateway: true};
+option (spec.state_imports) = {source: "kskernel.Identity"};
+option (spec.grpc_s2s_client) = {service: "minter.Minter"};
+
+// Config defaults: (spec.default_bool) and (spec.default_host) with host and port.
+message Config {
+  option (spec.grpc_config) = {service_name: "ksgateway"};
+
+  bool enable_http = 1 [(spec.default_bool) = true];
+  host.Host listener = 2 [(spec.default_host) = {host: "0.0.0.0", port: 8443}];
+}
+
+// Mint is the client-reachable minting proxy: (spec.token_minter).proxy, and
+// an RPC that authenticates its own caller (RPC_FLAG_SELF_AUTHENTICATES).
+service Mint {
+  option (spec.service_c2s) = {};
+  option (spec.token_minter) = {proxy: true};
+
+  rpc MintToken(tokenrequest.TokenMintRequest) returns (tokenrequest.TokenMintResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_SELF_AUTHENTICATES]};
+  }
+}

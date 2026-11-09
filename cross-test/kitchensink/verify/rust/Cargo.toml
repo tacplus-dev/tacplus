@@ -1,0 +1,24 @@
+# Kani harnesses over the generated Rust validate() of the kitchensink member
+# (tacplus#196). scripts/verify.sh (`just verify`) copies this crate to
+# <work>/rust/verify/proof, generates cross-test/kitchensink/proto into
+# <work>/rust/gen/model and runs `tacplus verify` in <work>/rust/verify; the
+# path below is the generated types crate, relative to that copy.
+[package]
+name = "kitchensink-proof"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+kitchensink-model-types = { path = "../../gen/model/types" }
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(kani)'] }
+
+# The harnesses stub std::fmt::format (as tacplus#211's did): Kani cannot
+# finish formatting a validate() error message, and no harness depends on its
+# text. Read by cargo kani only.
+[package.metadata.kani.unstable]
+stubbing = true
+
+[workspace]

@@ -11,6 +11,9 @@
 # Go + protoc. Other languages use the same recipe via --language <lang>; their
 # generated output is asserted for the seam and compiled with that language's
 # toolchain (rust: cargo, java: mvn, typescript: tsc, python: grpc_tools venv).
+# --allow-uncovered: this fixture is not a kitchensink member in every language
+# this gate generates (cross-test/kitchensink/members.yaml); it tests a
+# behaviour, not a release's coverage (tacplus#196).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -41,7 +44,7 @@ output-dir: "tacplus"
 EOF
 
 echo "==> Generating SMB fixture ($LANGUAGE)"
-(cd "$WORK" && TACPLUS_PYTHON="${TACPLUS_PYTHON:-python3}" "$TACPLUS_BIN" build --config tacplus.yaml --src "$PROTO_SRC") \
+(cd "$WORK" && TACPLUS_PYTHON="${TACPLUS_PYTHON:-python3}" "$TACPLUS_BIN" build --config tacplus.yaml --src "$PROTO_SRC" --allow-uncovered) \
   || die "generation failed for $LANGUAGE"
 
 OUT="$WORK/tacplus/model"

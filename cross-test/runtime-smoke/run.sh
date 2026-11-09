@@ -22,6 +22,9 @@
 #
 # Separate from consumer-contract because it needs go build + python + node
 # runtimes CONCURRENTLY (server and clients live in different generations).
+# --allow-uncovered: this fixture is not a kitchensink member in every language
+# this test generates (cross-test/kitchensink/members.yaml); it tests a
+# behaviour, not a release's coverage (tacplus#196).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -234,7 +237,7 @@ generate_model() {
   local log="$dir/generate.log"
   echo "==> Generating $language model"
   write_config "$dir" "$language" "$proto_src"
-  (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$proto_src" --tag latest) >"$log" 2>&1 || {
+  (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$proto_src" --tag latest --allow-uncovered) >"$log" 2>&1 || {
     cat "$log" >&2
     die "$language generation failed"
   }

@@ -93,7 +93,8 @@ func contentNeedsSpecProto(content string) bool {
 		if trimmed == `import "sys/spec.proto";` {
 			continue
 		}
-		if strings.Contains(line, "spec.") {
+		// A comment that names a spec option needs no import.
+		if strings.Contains(stripProtoLineComment(line), "spec.") {
 			return true
 		}
 	}

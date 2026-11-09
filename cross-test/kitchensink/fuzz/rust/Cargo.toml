@@ -1,0 +1,37 @@
+# cargo-fuzz targets over the generated Rust of the kitchensink member
+# (tacplus#196). cross-test/kitchensink/run.sh copies this crate to
+# <model>/types/fuzz, inside the generated types crate, and runs every target
+# with `cargo +$RUST_NIGHTLY fuzz run`.
+[package]
+name = "kitchensink-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+prost = "0.14"
+kitchensink-model-types = { path = ".." }
+
+[[bin]]
+name = "bounds"
+path = "fuzz_targets/bounds.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "sizes"
+path = "fuzz_targets/sizes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "requests"
+path = "fuzz_targets/requests.rs"
+test = false
+doc = false
+
+[workspace]

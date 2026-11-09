@@ -53,7 +53,8 @@ func tsRequiredZeroCheck(field model.Field, tsFieldName string) string {
 }
 
 // generateTypeScriptValidationFunction generates a validate function for a message
-func generateTypeScriptValidationFunction(b *strings.Builder, msg model.Message) error {
+// enums are the proto file's enums, to name an enum value as protobuf-es does.
+func generateTypeScriptValidationFunction(b *strings.Builder, msg model.Message, enums []model.Enum) error {
 	funcName := fmt.Sprintf("validate%s", msg.Name)
 
 	fmt.Fprintf(b, `/**
@@ -644,7 +645,7 @@ export function %s(m: %s | undefined, depth = 0): void {
 		throw newErrMissingInvalidData(undefined, `+"`field %s is required when %s is %s`"+`);
 	}
 
-`, fieldName, condFieldSnake, condValue, condFieldTS, enumType, condValue, tsRequiredZeroCheck(field, fieldName), fieldName, condFieldSnake, condValue)
+`, fieldName, condFieldSnake, condValue, condFieldTS, enumType, tsEnumValueName(enumType, condValue, enums), tsRequiredZeroCheck(field, fieldName), fieldName, condFieldSnake, condValue)
 					} else {
 						fmt.Fprintf(b, `	// Validate %s (required_if_eq: %s=%s)
 	if (m.%s === "%s" && %s) {
@@ -1671,4 +1672,35 @@ func tsFloatMessageList(values []float64) string {
 
 func upperSnakeCaseToCamelCase(s string) string {
 	return tsProtoFieldName(s)
+}
+
+// tsEnumValueName is the name protobuf-es gives value of enum enumType: the
+// proto name without the prefix every value of the enum shares (MODE_ON of
+// Mode is Mode.ON), unless a value lacks it or would be left empty or start
+// with a digit (protobuf-es findEnumSharedPrefix). An enum not among enums (one
+// of another package) keeps the proto name.
+func tsEnumValueName(enumType, value string, enums []model.Enum) string {
+	for _, e := range enums {
+		if e.Name != enumType {
+			continue
+		}
+		var snake strings.Builder
+		for i, r := range e.Name {
+			if i > 0 && r >= 'A' && r <= 'Z' {
+				snake.WriteByte('_')
+			}
+			snake.WriteRune(r)
+		}
+		prefix := strings.ToLower(snake.String()) + "_"
+		for _, v := range append(e.Values, model.EnumValue{Name: value}) {
+			if len(v.Name) <= len(prefix) || strings.ToLower(v.Name[:len(prefix)]) != prefix {
+				return value
+			}
+			if c := v.Name[len(prefix)]; c >= '0' && c <= '9' {
+				return value
+			}
+		}
+		return value[len(prefix):]
+	}
+	return value
 }

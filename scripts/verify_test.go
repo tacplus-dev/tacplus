@@ -152,12 +152,15 @@ func TestVerifyChanged(t *testing.T) {
 		{"nothing changed", nil, "skip"},
 		{"docs only", []string{"docs/USER.md", "README.md", "STATE.md"}, "skip"},
 		{"another gate's cross-test", []string{"cross-test/jwk-alg/run.sh"}, "skip"},
+		{"a gate fixture verification no longer generates", []string{"cross-test/proto/services2/x.proto"}, "skip"},
+		{"the kitchensink's fuzz harnesses", []string{"cross-test/kitchensink/fuzz/java/Fuzz.java"}, "skip"},
 		{"the justfile", []string{"justfile"}, "skip"},
 		{"the generator", []string{"pkg/internal/rust/types/proof.go"}, "run"},
 		{"a template", []string{"pkg/internal/java/types/templates/x.tmpl"}, "run"},
 		{"an embedded proto", []string{"pkg/proto/sys/spec.proto"}, "run"},
-		{"the verified fixture's protos", []string{"cross-test/proto/services2/x.proto"}, "run"},
-		{"the fixture's dependency pins", []string{"cross-test/dependencies.yaml"}, "run"},
+		{"the verified kitchensink's protos", []string{"cross-test/kitchensink/proto/services/x.proto"}, "run"},
+		{"the kitchensink's dependency pins", []string{"cross-test/kitchensink/proto/dependencies.yaml"}, "run"},
+		{"the kitchensink's Kani harnesses", []string{"cross-test/kitchensink/verify/rust/src/lib.rs"}, "run"},
 		{"the verify command", []string{"cmd/verify/cmd.go"}, "run"},
 		{"the compiler's dependencies", []string{"go.mod"}, "run"},
 		{"the compiler entry", []string{"main.go"}, "run"},
@@ -265,45 +268,60 @@ func runVerify(t *testing.T, env []string, args ...string) (string, string, erro
 }
 
 func TestVerify(t *testing.T) {
-	t.Run("generates and verifies rust and java", func(t *testing.T) {
+	t.Run("generates the kitchensink and runs its rust harnesses", func(t *testing.T) {
 		out, calls, err := runVerify(t, nil)
 		if err != nil {
 			t.Fatalf("verify.sh: %v\n%s", err, out)
 		}
-		for _, want := range []string{"build rust ", "verify rust ", "build java ", "verify java "} {
-			if !strings.Contains(calls, want) {
-				t.Errorf("verify.sh did not run %q; calls:\n%s", want, calls)
-			}
+		lines := strings.Split(strings.TrimSpace(calls), "\n")
+		if len(lines) != 2 || !strings.HasPrefix(lines[0], "build rust ") || !strings.HasPrefix(lines[1], "verify rust ") {
+			t.Fatalf("want build rust then verify rust; calls:\n%s", calls)
 		}
-		if strings.Contains(calls, " go ") {
-			t.Errorf("verify.sh verified Go, which is not formally verified by design; calls:\n%s", calls)
+		// tacplus#196: the generator is verified on the kitchensink, through
+		// its own harness crate; no harness is generated into the model.
+		buildDir := strings.TrimPrefix(lines[0], "build rust ")
+		verifyDir := strings.TrimPrefix(lines[1], "verify rust ")
+		if _, err := os.Stat(filepath.Join(buildDir, "proto", "services", "kitchensink.proto")); err != nil {
+			t.Errorf("verify.sh did not generate cross-test/kitchensink/proto: %v", err)
 		}
-	})
-	t.Run("one language", func(t *testing.T) {
-		out, calls, err := runVerify(t, nil, "java")
+		if _, err := os.Stat(filepath.Join(verifyDir, "proof", "src", "lib.rs")); err != nil {
+			t.Errorf("verify.sh did not run tacplus verify over cross-test/kitchensink/verify/rust: %v", err)
+		}
+		// The harness crate's path dependency must reach the generated types crate.
+		manifest, err := os.ReadFile(filepath.Join(verifyDir, "proof", "Cargo.toml"))
 		if err != nil {
-			t.Fatalf("verify.sh java: %v\n%s", err, out)
+			t.Fatal(err)
 		}
-		if strings.Contains(calls, "rust") {
-			t.Errorf("verify.sh java ran rust; calls:\n%s", calls)
+		dep := regexp.MustCompile(`kitchensink-model-types = \{ path = "([^"]+)" \}`).FindSubmatch(manifest)
+		if dep == nil {
+			t.Fatalf("the harness crate names no generated types crate:\n%s", manifest)
+		}
+		if got, want := filepath.Clean(filepath.Join(verifyDir, "proof", string(dep[1]))), filepath.Join(buildDir, "model", "types"); got != want {
+			t.Errorf("the harness crate depends on %s, the kitchensink is generated to %s", got, want)
 		}
 	})
-	t.Run("a failed harness fails it and is reported, and the other language still runs", func(t *testing.T) {
-		out, calls, err := runVerify(t, []string{"FAKE_VERIFY_FAIL=rust"})
+	t.Run("java waits for its validators to be provable", func(t *testing.T) {
+		out, calls, err := runVerify(t, nil, "java")
+		if err == nil || !strings.Contains(out, "#257") {
+			t.Fatalf("verify.sh java: want a refusal naming tacplus#257, got err %v\n%s", err, out)
+		}
+		if calls != "" {
+			t.Errorf("verify.sh java ran tacplus; calls:\n%s", calls)
+		}
+	})
+	t.Run("a failed harness fails it and is reported", func(t *testing.T) {
+		out, _, err := runVerify(t, []string{"FAKE_VERIFY_FAIL=rust"})
 		if err == nil {
 			t.Fatalf("verify.sh passed with a failed rust harness\n%s", out)
 		}
 		if !strings.Contains(out, "harness_rust") || !strings.Contains(out, "counterexample") {
 			t.Errorf("the failure does not show the report (harness, counterexample):\n%s", out)
 		}
-		if !strings.Contains(calls, "verify java ") {
-			t.Errorf("a rust failure stopped java; calls:\n%s", calls)
-		}
 	})
 	t.Run("no harness verified fails it", func(t *testing.T) {
-		out, _, err := runVerify(t, []string{"FAKE_VERIFY_NONE=java"})
+		out, _, err := runVerify(t, []string{"FAKE_VERIFY_NONE=rust"})
 		if err == nil || !strings.Contains(out, "no harness") {
-			t.Fatalf("verify.sh passed though java verified no harness (err %v)\n%s", err, out)
+			t.Fatalf("verify.sh passed though rust verified no harness (err %v)\n%s", err, out)
 		}
 	})
 	t.Run("an unknown language is refused", func(t *testing.T) {

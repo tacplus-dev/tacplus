@@ -126,9 +126,10 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   documented cross-language difference: the fail-closed leg returns
   `UNAUTHENTICATED` from the java host and `PERMISSION_DENIED` from the rust
   host, because java emits a concrete default `Authorizer` while rust emits only
-  the trait. Local/manual (`just -f cross-test/justfile server-runtime`, or
-  `server-runtime-clients` for the client half alone); not in CI, not in
-  `just test`, not in the nightly matrix.
+  the trait. Part of `just gates` (`just server-runtime`; one leg at a time
+  with `just -f cross-test/justfile server-runtime-java` and its siblings, or
+  `server-runtime-clients` for the client half alone) since #455, where it was
+  found not building on main; not in `just test`.
 - `keepalive-rust` (`cross-test/keepalive-rust/run.sh`): keepalive regression
   for the generated RUST server (issue #29). The Rust server applies no HTTP/2
   permit policy, unlike Go and Java. A generated Rust C2S client pings every

@@ -106,9 +106,14 @@ Deliberately deferred:
 
 ## Notes
 
-- Local/manual, like `w2s-validate`. It is **not** part of `just test` and not
-  wired into CI or `nightly-matrix.sh`: it needs the go, maven and cargo
-  toolchains concurrently, and `just test` must stay fast.
+- Part of `just gates` (`just server-runtime`), like `w2s-validate`, since
+  #455: no gate ran it, and it stopped building on main unnoticed. It is
+  **not** part of `just test`: it needs the go, maven and cargo toolchains
+  concurrently, and `just test` must stay fast.
+- Generation uses `grpc-servers: all`, as consumer-contract does: the shared
+  proto tree holds several services, and without it generation is scoped to
+  contractclient's own contract file, which drops `ContractApi`, the C2S client
+  manager and the types the drivers import.
 - Generated outputs go to a temporary work directory. Use `--keep` plus
   `--workdir` to preserve them.
 - `--server LANG` and `--client LANG` each narrow the run to that half; with

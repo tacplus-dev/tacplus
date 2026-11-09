@@ -60,6 +60,11 @@ type topicBoundary struct {
 	TypeName       string // PascalCase message type: "EventData"
 	GoType         string // "EventData" or "pkg_pb.EventData"
 	IsCrossPackage bool
+	// HasPublish / HasSubscribe: the state service declares PublishTo<Field> /
+	// SubscribeTo<Field> (proto.StateTopicRPCSurface). The wrapper calls only
+	// those, or it does not compile.
+	HasPublish   bool
+	HasSubscribe bool
 }
 
 // queueBoundary describes a FIFO queue field in the state root.
@@ -133,6 +138,7 @@ type stateClientData struct {
 	StateImports          []stateImportField
 	CrossImports          []crossImportEntry
 	TraceTypesPath        string // import path for trace types (types/sys/trace)
+	EventBusSupportPath   string // import path for eventbus_support (topic Publish/Subscribe)
 	ReadOnly              bool   // true for :ro (accessors only, no mutators)
 	WriteOnce             bool   // true for :worm (write-once read-many: set/add/publish but no delete)
 }
@@ -1005,6 +1011,21 @@ func generateStateWrapper(config *tactype.Config, svc ServiceInfo, stateRoot *pa
 	var stateImports []stateImportField
 	seenPkgs := make(map[string]bool)
 
+	// Which topic RPCs the state service declares depends on every topic of the
+	// root, so it is read from the full root, not a narrowed one.
+	fullRoot := stateRoot
+	for i := range fileDesc.Messages {
+		if fileDesc.Messages[i].Name == stateRoot.Name {
+			fullRoot = &fileDesc.Messages[i]
+			break
+		}
+	}
+	var allFiles map[string]*parser.FileDescriptor
+	if dp != nil {
+		allFiles = dp.GetAllFiles()
+	}
+	topicRPCs := proto.StateTopicRPCSurface(allFiles, fullRoot)
+
 	fieldsToClassify := stateRoot.Fields
 
 	for _, field := range fieldsToClassify {
@@ -1121,16 +1142,19 @@ func generateStateWrapper(config *tactype.Config, svc ServiceInfo, stateRoot *pa
 
 		// Topic: pub/sub broadcast boundary
 		if _, ok := field.Annotations["topic"]; ok {
+			rpcs := topicRPCs[field.Name]
 			topics = append(topics, topicBoundary{
 				FieldName:      fieldPascal,
 				TypeName:       typeName,
 				GoType:         goType,
 				IsCrossPackage: isCrossPackage,
+				HasPublish:     rpcs.Publish,
+				HasSubscribe:   rpcs.Subscribe,
 			})
 			// Only import cross-package types for writable clients (Publish uses the type).
 			// Read-only clients only have Subscribe which returns a stream type from the
 			// state service package — no direct reference to the topic's message type.
-			if !svc.ReadOnly {
+			if !svc.ReadOnly && rpcs.Publish {
 				markCross()
 			}
 			continue
@@ -1283,6 +1307,7 @@ func generateStateWrapper(config *tactype.Config, svc ServiceInfo, stateRoot *pa
 		StateImports:          stateImports,
 		CrossImports:          crossImports,
 		TraceTypesPath:        traceTypesPath,
+		EventBusSupportPath:   fmt.Sprintf("%s/types/generated/eventbus_support", config.ModuleBasePath),
 		ReadOnly:              svc.ReadOnly,
 		WriteOnce:             svc.WriteOnce,
 	}

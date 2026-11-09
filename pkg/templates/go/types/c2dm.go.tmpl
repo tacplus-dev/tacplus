@@ -18,21 +18,24 @@ import (
 )
 
 // ServiceManager provides typed gRPC clients for client-to-daemon communication.
-// C2D uses a local Unix socket, plaintext transport, and no generated auth token provider.
+// C2D uses local IPC (the daemon's Unix socket on macOS and Linux, its named
+// pipe on Windows), plaintext transport, and no generated auth token provider.
 type ServiceManager struct {
 	socketPath string
 	conn       *grpc.ClientConn
 	grpcPkg    *smgrpc.Grpc
 }
 
-// New creates a C2D ServiceManager for the daemon Unix socket.
-// The connection is lazy; use Dial when startup should fail if the socket is unavailable.
+// New creates a C2D ServiceManager for the daemon serving socketPath, the
+// service_c2d socket_path: on Windows it dials the named pipe
+// serviceconnection.C2DPipeName derives from it.
+// The connection is lazy; use Dial when startup should fail if the daemon is unavailable.
 func New(socketPath string, opts ...grpc.DialOption) (*ServiceManager, error) {
 	if socketPath == "" {
 		return nil, fmt.Errorf("c2d socket path is required")
 	}
 	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+		return serviceconnection.DialC2D(ctx, socketPath)
 	}
 	dialOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -60,7 +63,7 @@ func New(socketPath string, opts ...grpc.DialOption) (*ServiceManager, error) {
 	}, nil
 }
 
-// Dial creates a C2D ServiceManager and waits until the Unix-socket connection is ready.
+// Dial creates a C2D ServiceManager and waits until the connection to the daemon is ready.
 func Dial(ctx context.Context, socketPath string, opts ...grpc.DialOption) (*ServiceManager, error) {
 	sm, err := New(socketPath, opts...)
 	if err != nil {
@@ -86,9 +89,9 @@ func (sm *ServiceManager) Connect(ctx context.Context) error {
 		}
 		if !sm.conn.WaitForStateChange(ctx, state) {
 			if err := ctx.Err(); err != nil {
-				return fmt.Errorf("connect c2d socket %q: %w", sm.socketPath, err)
+				return fmt.Errorf("connect c2d %q: %w", serviceconnection.C2DEndpoint(sm.socketPath), err)
 			}
-			return fmt.Errorf("connect c2d socket %q: context ended", sm.socketPath)
+			return fmt.Errorf("connect c2d %q: context ended", serviceconnection.C2DEndpoint(sm.socketPath))
 		}
 	}
 }
@@ -103,7 +106,8 @@ func (sm *ServiceManager) Conn() grpc.ClientConnInterface {
 	return sm.conn
 }
 
-// SocketPath returns the Unix socket path used by this manager.
+// SocketPath returns the socket path this manager was created for (on Windows,
+// the named pipe it dials is serviceconnection.C2DPipeName of it).
 func (sm *ServiceManager) SocketPath() string {
 	return sm.socketPath
 }

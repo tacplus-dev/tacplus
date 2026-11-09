@@ -1,22 +1,19 @@
 // Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
-// Unix domain socket gRPC server for c2d services.
+// Local IPC gRPC server for c2d services: a Unix domain socket on macOS and
+// Linux, a named pipe on Windows (docs/API.md, C2D transport).
 //
 // The ServiceManager creates a C2DServer for the service_c2d services it hosts
-// and calls Serve to listen on the declared socket_path. No TLS and no token
-// auth: the socket file is owner-only, and those filesystem permissions are the
-// access boundary (docs/API.md, C2D server auth-skip scope).
+// and calls Serve to listen on the declared socket_path (on Windows, the pipe
+// serviceconnection.C2DPipeName derives from it). No TLS and no token auth:
+// the endpoint is current-user only (the socket file's 0600, the pipe's DACL),
+// and that is the access boundary (docs/API.md, C2D server auth-skip scope).
 
 package grpcserver
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net"
-	"os"
-	"path/filepath"
-	"runtime"
 	"time"
 
 	"go.uber.org/zap"
@@ -28,7 +25,7 @@ import (
 // c2dShutdownTimeout bounds the graceful drain of in-flight c2d RPCs.
 const c2dShutdownTimeout = 30 * time.Second
 
-// C2DServer is a gRPC server that listens on a Unix domain socket.
+// C2DServer is a gRPC server on the c2d local IPC endpoint.
 type C2DServer struct {
 	socketPath string
 	impl       ServiceImplementation
@@ -44,39 +41,24 @@ func (s *C2DServer) SocketPath() string {
 	return s.socketPath
 }
 
-// Serve listens on the Unix socket and blocks until ctx is cancelled.
+// Serve listens on the c2d endpoint and blocks until ctx is cancelled.
 //
-// It removes any stale socket file before binding, then restricts the socket
-// file itself to owner-only (0600). c2d has no token auth, so these filesystem
-// permissions are the access boundary: if the chmod fails the server refuses to
-// serve rather than expose an unauthenticated socket. The socket file is
-// removed when Serve returns.
+// On macOS and Linux it removes any stale socket file before binding, then
+// restricts the socket file itself to owner-only (0600); the socket file is
+// removed when Serve returns. On Windows it creates the named pipe
+// serviceconnection.C2DPipeName(socketPath) with a DACL granting only the
+// current user and rejecting remote clients; a pipe of that name that already
+// exists is refused rather than shared. c2d has no token auth, so this access
+// restriction is the boundary: if it cannot be applied the server refuses to
+// serve rather than expose an unauthenticated endpoint.
 func (s *C2DServer) Serve(ctx context.Context) error {
-	if runtime.GOOS == "windows" {
-		return fmt.Errorf("c2d: refusing to serve on %s: owner-only socket permissions, the c2d access boundary, are not enforceable on windows", s.socketPath)
-	}
-
-	// Remove stale socket file.
-	if err := os.Remove(s.socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("c2d: remove stale socket %s: %w", s.socketPath, err)
-	}
-	// Ensure parent directory exists.
-	if err := os.MkdirAll(filepath.Dir(s.socketPath), 0o755); err != nil {
-		return fmt.Errorf("c2d: create socket directory for %s: %w", s.socketPath, err)
-	}
-
-	lis, err := net.Listen("unix", s.socketPath)
+	lis, endpoint, err := listenC2D(s.socketPath)
 	if err != nil {
-		return fmt.Errorf("c2d: listen on %s: %w", s.socketPath, err)
+		return err
 	}
-	// Closing a unix listener unlinks its socket file.
+	// Closing a unix listener unlinks its socket file; closing the pipe
+	// listener closes every pipe instance.
 	defer lis.Close()
-
-	// Fail closed: for c2d these permissions ARE the access boundary, so a
-	// socket that was never locked down must not serve.
-	if err := os.Chmod(s.socketPath, 0o600); err != nil {
-		return fmt.Errorf("c2d: failed to set owner-only (0600) permissions on socket %s: %w; refusing to serve without the socket's access boundary", s.socketPath, err)
-	}
 
 	grpcServer := grpc.NewServer()
 	if err := s.impl.RegisterServices(grpcServer); err != nil {
@@ -84,7 +66,7 @@ func (s *C2DServer) Serve(ctx context.Context) error {
 	}
 	healthpb.RegisterHealthServer(grpcServer, health.NewServer())
 
-	zap.L().Info("c2d server listening", zap.String("path", s.socketPath))
+	zap.L().Info("c2d server listening", zap.String("path", endpoint))
 
 	go func() {
 		<-ctx.Done()

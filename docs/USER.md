@@ -193,13 +193,15 @@ Language targets do not all support the same surface set:
 
 Full-service targets generate a `c2dm` manager for services marked with
 `(spec.service_c2d)`, with typed gRPC clients over local daemon IPC. Go and Rust
-dial a Unix-domain socket. Java accepts a caller-supplied local-daemon
-`ManagedChannel` so the embedding app chooses the local IPC adapter.
+dial the daemon's Unix-domain socket on macOS and Linux and its named pipe on
+Windows. Java accepts a caller-supplied local-daemon `ManagedChannel` so the
+embedding app chooses the local IPC adapter.
 
 Swift and C# emit lite client packages that include a C2D surface: Swift emits a
-SwiftPM package with a Unix-domain socket `C2DClient` helper, while C# emits a
-.NET package that defaults to named pipes on Windows and Unix-domain sockets
-elsewhere. They also emit C2S and W2S client surfaces (Swift's W2S adds server-streaming
+SwiftPM package with a Unix-domain socket `C2DClient` helper (Apple platforms
+only), while C# emits a .NET package whose `C2DClient` dials a named pipe only
+(Windows; it has no Unix-domain socket transport), by default the pipe the Go
+and Rust daemons serve for the services' `socket_path`. They also emit C2S and W2S client surfaces (Swift's W2S adds server-streaming
 over SSE; C#'s is unary-only). Python
 and TypeScript emit a C2D client-side surface for `(spec.service_c2d)` services,
 alongside their C2S/W2S/REST client surfaces.
@@ -454,7 +456,14 @@ When a package's proto graph declares in-scope `(spec.service_c2d)` services,
 full-service targets emit a `c2dm` manager and client-only targets emit their
 language-specific C2D helpers for those services (no YAML flag is involved). C2D
 clients do not attach generated bearer tokens; the local IPC boundary is the
-operating-system transport and its permissions.
+operating-system transport and its permissions. On macOS and Linux the daemon
+binds `socket_path` itself, mode 0600. On Windows the Go and Rust daemons, and
+the Go, Rust and C# clients, use the named pipe `\\.\pipe\tacplus-c2d-` +
+`socket_path` with every character outside `[A-Za-z0-9._-]` mapped to `-`
+(`/run/mydaemon.sock` is `\\.\pipe\tacplus-c2d--run-mydaemon.sock`), created
+with a DACL that grants only the user the daemon runs as and refusing remote
+clients. Run the daemon as the user its clients run as. The per-language,
+per-OS table is in [API.md](API.md), C2D transport.
 
 ### Member Port (black-box member traffic)
 

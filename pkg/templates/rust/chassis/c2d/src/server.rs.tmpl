@@ -4,19 +4,22 @@
 //
 // CODE GENERATED - DO NOT EDIT
 
-//! Unix domain socket gRPC server for c2d services.
+//! Local IPC gRPC server for c2d services: a Unix domain socket on macOS and
+//! Linux, a named pipe on Windows.
 //!
 //! The daemon creates a `C2dServer`, adds service implementations via
-//! `router()`, and calls `serve()` to listen on the socket.
-//! The socket file is created with restrictive permissions (owner only).
+//! `router()`, and calls `serve()` to listen on the socket (on Windows, the
+//! pipe [`crate::pipe_name`] derives from its path). Either endpoint is
+//! created current-user only: the socket file 0600, the pipe with a DACL
+//! granting only the current user.
 
 use std::path::{Path, PathBuf};
-use tokio::net::UnixListener;
 use tonic::transport::server::Router;
 
-/// A gRPC server that listens on a Unix domain socket.
+/// A gRPC server that listens on the c2d local IPC endpoint.
 ///
-/// No TLS, no auth interceptors. Filesystem permissions guard access.
+/// No TLS, no auth interceptors. The endpoint's current-user only access
+/// guards it.
 pub struct C2dServer {
     socket_path: PathBuf,
     router: Option<Router>,
@@ -37,24 +40,52 @@ impl C2dServer {
         self
     }
 
-    /// Start serving on the Unix socket. Blocks until the task is dropped.
+    /// Start serving on the c2d endpoint. Blocks until the task is dropped.
     pub async fn serve(self) -> Result<(), Box<dyn std::error::Error>> {
         self.serve_with_shutdown(std::future::pending()).await
     }
 
-    /// Start serving on the Unix socket. Returns once `shutdown` resolves and
-    /// in-flight RPCs have drained; the socket file is removed on return.
+    /// Start serving on the c2d endpoint. Returns once `shutdown` resolves
+    /// and in-flight RPCs have drained; the socket file is removed on return.
     ///
-    /// Removes any stale socket file before binding, then restricts the socket
-    /// file itself to owner-only (0o600). c2d has no token auth, so these
-    /// filesystem permissions are the access boundary — if the chmod fails the
-    /// server refuses to serve rather than expose an unauthenticated socket.
+    /// On macOS and Linux it removes any stale socket file before binding,
+    /// then restricts the socket file itself to owner-only (0o600). On Windows
+    /// it creates the named pipe [`crate::pipe_name`] of the socket path with
+    /// a DACL granting only the current user and rejecting remote clients; a
+    /// pipe of that name that already exists is refused rather than shared.
+    /// c2d has no token auth, so this access restriction is the boundary — if
+    /// it cannot be applied the server refuses to serve rather than expose an
+    /// unauthenticated endpoint.
     pub async fn serve_with_shutdown<F>(mut self, shutdown: F) -> Result<(), Box<dyn std::error::Error>>
     where
         F: std::future::Future<Output = ()>,
     {
         let router = self.router.take().ok_or("no router configured")?;
 
+        #[cfg(unix)]
+        let incoming = self.bind_socket()?;
+        #[cfg(windows)]
+        let incoming = {
+            let pipe = crate::pipe_name(&self.socket_path);
+            let incoming = crate::windows::incoming(pipe.clone()).map_err(|e| {
+                format!(
+                    "c2d: cannot create the current-user only pipe {pipe}: {e}; \
+                     refusing to serve without the pipe's access boundary"
+                )
+            })?;
+            tracing::info!(path = %pipe, "c2d server listening");
+            incoming
+        };
+
+        router
+            .serve_with_incoming_shutdown(incoming, shutdown)
+            .await?;
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn bind_socket(&self) -> Result<tokio_stream::wrappers::UnixListenerStream, Box<dyn std::error::Error>> {
         // Remove stale socket file.
         if self.socket_path.exists() {
             std::fs::remove_file(&self.socket_path)?;
@@ -65,7 +96,7 @@ impl C2dServer {
             std::fs::create_dir_all(parent)?;
         }
 
-        let uds = UnixListener::bind(&self.socket_path)?;
+        let uds = tokio::net::UnixListener::bind(&self.socket_path)?;
         tracing::info!(path = %self.socket_path.display(), "c2d server listening");
 
         // Set socket file permissions to owner-only. For c2d there is no token
@@ -88,12 +119,7 @@ impl C2dServer {
             }
         }
 
-        let incoming = tokio_stream::wrappers::UnixListenerStream::new(uds);
-        router
-            .serve_with_incoming_shutdown(incoming, shutdown)
-            .await?;
-
-        Ok(())
+        Ok(tokio_stream::wrappers::UnixListenerStream::new(uds))
     }
 
     /// Returns the socket path.
@@ -104,7 +130,9 @@ impl C2dServer {
 
 impl Drop for C2dServer {
     fn drop(&mut self) {
-        // Clean up socket file on shutdown.
+        // Clean up socket file on shutdown. A named pipe goes with its last
+        // handle.
+        #[cfg(unix)]
         if self.socket_path.exists() {
             let _ = std::fs::remove_file(&self.socket_path);
         }

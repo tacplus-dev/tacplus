@@ -25,7 +25,9 @@ impl ServiceManager {
         Self::from_parts(None, conn)
     }
 
-    /// Connects to a C2D server over a Unix domain socket.
+    /// Connects to the C2D server for `socket_path`, the service_c2d
+    /// socket_path: its Unix domain socket on macOS and Linux, the named pipe
+    /// `c2d::pipe_name` derives from it on Windows.
     pub async fn connect(socket_path: impl AsRef<Path>) -> Result<Self, Box<dyn std::error::Error>> {
         let socket_path = socket_path.as_ref().to_path_buf();
         let conn = c2d::client::connect(&socket_path).await?;
@@ -52,7 +54,8 @@ impl ServiceManager {
         &self.conn
     }
 
-    /// Returns the Unix socket path when this manager created the channel.
+    /// Returns the socket path when this manager created the channel (on
+    /// Windows, the pipe it dialed is `c2d::pipe_name` of it).
     pub fn socket_path(&self) -> Option<&Path> {
         self.socket_path.as_deref()
     }

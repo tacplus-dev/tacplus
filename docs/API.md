@@ -356,22 +356,52 @@ the full-client targets (`python`, `typescript`) additionally emit REST clients.
 
 **C2D server auth-skip scope**: Rust, Go and Java host a generated C2D server
 for the package's own `service_c2d` services, mounted by the generated
-ServiceManager on the declared `socket_path` (Unix domain socket; required, no
-default): `C2dServer` in `service_manager.rs.tmpl`, `grpcserver.C2DServer`
-(`newC2DServer` in the Go ServiceManager) and `grpcserver.C2DServer`
-(`ServiceManager.newC2DServer` in Java). The services are hosted on that socket
-only, never on the TLS gRPC listener; a service with no other gRPC surface
-starts no TLS server at all. Every hosted `service_c2d` service must declare the
-same `socket_path`, since one ServiceManager runs one c2d server. The server
-removes a stale socket file, binds, and sets the socket file to owner-only
-(0600); if it cannot, it refuses to serve. The wrapper skips token
-authentication by design: the auth boundary is the socket permission
-(filesystem ACL), not a bearer token. It still validates request/response
+ServiceManager on the declared `socket_path` (required, no default; on Windows
+the named pipe derived from it, see C2D transport below): `C2dServer` in
+`service_manager.rs.tmpl`, `grpcserver.C2DServer` (`newC2DServer` in the Go
+ServiceManager) and `grpcserver.C2DServer` (`ServiceManager.newC2DServer` in
+Java). The services are hosted on that endpoint only, never on the TLS gRPC
+listener; a service with no other gRPC surface starts no TLS server at all.
+Every hosted `service_c2d` service must declare the same `socket_path`, since
+one ServiceManager runs one c2d server. On a Unix socket the server removes a
+stale socket file, binds, and sets the socket file to owner-only (0600); on a
+named pipe it creates the pipe with a current-user only DACL; if it cannot, it
+refuses to serve. The wrapper skips token authentication by design: the auth
+boundary is the endpoint's current-user only access (the socket's filesystem
+permission, the pipe's DACL), not a bearer token. It still validates request/response
 constraints and runs the full handler pipeline; only the token-lookup and
 authorization steps are bypassed, via the `IsC2D` flag on the service
 descriptor, and the ServiceManager wires no authorizer into a c2d wrapper. A
 Go or Java c2d server that fails to start ends `Run`/`run` with the error; the
 Rust ServiceManager logs it. Python and TypeScript are client-only targets.
+
+**C2D transport**: the endpoint a `socket_path` names depends on the OS.
+On macOS and Linux it is the Unix domain socket at `socket_path`. On Windows it
+is the named pipe `\\.\pipe\tacplus-c2d-` + `socket_path` with every
+character outside `[A-Za-z0-9._-]` mapped to `-` (one `-` per character), so
+`/run/mydaemon.sock` is `\\.\pipe\tacplus-c2d--run-mydaemon.sock`; Go
+`serviceconnection.C2DPipeName`, Rust `c2d::pipe_name` and the C# client's
+`C2DClient.DefaultNamedPipeName()` all derive it (Jody, 2026-11-08, #314).
+
+| Language | Side | macOS / Linux | Windows |
+|---|---|---|---|
+| Go | daemon (`grpcserver.C2DServer`) | Unix socket, file mode 0600 | named pipe (go-winio): DACL owned by and granting only the current user, `PIPE_REJECT_REMOTE_CLIENTS`, a pipe of that name already held by another process refused |
+| Go | client (`c2dm`) | Unix socket | named pipe, anonymous impersonation level |
+| Rust | daemon (`c2d::server::C2dServer`) | Unix socket, file mode 0600 | named pipe (tokio): the same DACL, `PIPE_REJECT_REMOTE_CLIENTS`, `FILE_FLAG_FIRST_PIPE_INSTANCE` |
+| Rust | client (`c2dm`, `c2d::client`) | Unix socket | named pipe, identification impersonation level |
+| Java | daemon (`grpcserver.C2DServer`) | Unix socket, file mode 0600 | refuses to serve (no named-pipe transport yet) |
+| Java | client (`c2dm`) | caller-supplied channel | caller-supplied channel |
+| C# | client (`C2DClient`) | named pipe only: no Unix socket transport | named pipe; default the derived pipe of the services' one `socket_path` (none when they declare several: `pipeName` is then required) |
+| Python | client (`c2dm`) | Unix socket | Unix socket (no named-pipe transport yet) |
+| TypeScript | client (`c2dm`) | Unix socket | Unix socket (no named-pipe transport yet) |
+| Swift | client (`C2DClient`) | Unix socket | not a target: Swift is for Apple platforms |
+
+On either OS the boundary is the current user: another user's process cannot
+open the socket (its mode) or the pipe (its DACL), and a pipe refuses remote
+clients. The Windows legs are compiled by `cross-test/c2d-server` (the Go model
+with `GOOS=windows`, the Rust c2d crate for `x86_64-pc-windows-msvc`); the gates
+have no Windows runner to run them yet (#490). The Java (#492), Python (#493)
+and TypeScript (#491) named pipes come after it.
 
 **C2D standalone host**: a local daemon has no cluster, so it cannot call
 `New`/`create`/`new()` (config load, identity manager, state store) or `Run`.
@@ -383,7 +413,7 @@ Java `ServiceManager.serveC2DStandalone(socketPath, handler, stop)`, Rust
 `ServiceManager::serve_c2d_standalone(socket_path, handler, shutdown)`. It
 builds the generated wrappers from the generated `Handler` and serves them
 through the same c2d mount `Run` uses, so the validation, the auth skip and the
-0600 fail-closed socket are identical; it loads no config, mints no identity,
+fail-closed current-user only endpoint are identical; it loads no config, mints no identity,
 opens no state store and starts no TLS server. It serves until the context is
 cancelled (Go), the `stop` future completes (Java) or the `shutdown` future
 resolves (Rust), drains in-flight RPCs, removes the socket and then calls the

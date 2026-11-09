@@ -1001,12 +1001,13 @@ auth grpcserver.Authorizer
 
 // C2DSocketPath is the unix socket this build's service_c2d services declare
 // (spec.service_c2d.socket_path — required, no default, which would collide
-// between daemons). Run serves on it; clients dial it.
+// between daemons). Run serves on it; clients dial it. On Windows both use the
+// named pipe serviceconnection.C2DPipeName derives from it.
 const C2DSocketPath = "{{.C2DSocketPath}}"
 
 // newC2DServer hosts the service_c2d wrappers on socketPath. The wrappers skip
-// token auth: the socket's owner-only permissions are the boundary, not a
-// bearer token.
+// token auth: the endpoint's current-user only access (the socket's 0600, the
+// pipe's DACL) is the boundary, not a bearer token.
 func newC2DServer(socketPath string, impls ...grpcserver.ServiceImplementation) *grpcserver.C2DServer {
 return grpcserver.NewC2DServer(socketPath, &multiWrapper{impls: impls})
 }
@@ -1028,8 +1029,9 @@ const c2dStandaloneShutdownTimeout = 30 * time.Second
 // A daemon passes C2DSocketPath, the declared socket; a test passes its own
 // so it never takes over the socket of a daemon already running on the host.
 // It serves until ctx is cancelled, drains in-flight RPCs, removes the socket
-// and then calls h.Shutdown. A socket that cannot be bound or locked down to
-// owner-only is returned as an error, without calling h.Shutdown.
+// and then calls h.Shutdown. A socket (on Windows, the named pipe derived from
+// socketPath) that cannot be bound or locked down to the current user is
+// returned as an error, without calling h.Shutdown.
 func ServeC2DStandalone(ctx context.Context, socketPath string, h Handler) error {
 srv := newC2DServer(socketPath,
 {{- range .GrpcServices}}
@@ -1371,7 +1373,7 @@ accountingEmitter := am.NewEmitter(accountingSourceID, accountingSink)
 {{end}}
 
 {{if .HasTlsGrpc}}
-// c2d services are excluded — they run on a separate unix socket server.
+// c2d services are excluded — they run on a separate local IPC server.
 mw := &multiWrapper{
 impls: []grpcserver.ServiceImplementation{
 {{- range .GrpcServices}}
@@ -1506,8 +1508,9 @@ sm.tasks.Go(func(taskCtx context.Context) { errCh <- healthOnlySrv.Listen(taskCt
 }
 {{end}}
 {{if .HasC2DGrpc}}
-// Start the c2d unix socket server for local daemon IPC services. No TLS, no
-// token auth — the socket's owner-only permissions guard access.
+// Start the c2d server for local daemon IPC services (a unix socket; on
+// Windows a named pipe). No TLS, no token auth — the endpoint's current-user
+// only access guards it.
 c2dSrv := newC2DServer(C2DSocketPath,
 {{- range .GrpcServices}}
 {{- if .IsC2D}}

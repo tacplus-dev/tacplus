@@ -1331,6 +1331,9 @@ message ServiceC2DAnnotation {
   // All c2d services are unauthenticated and localhost-only.
   //
   // socket_path is the Unix domain socket the daemon binds and clients dial.
+  // On Windows they use the named pipe derived from it instead:
+  // \\.\pipe\tacplus-c2d- + socket_path with every character outside
+  // [A-Za-z0-9._-] mapped to '-' (docs/API.md, C2D transport).
   // Required — there is no default. A shared default path would collide between
   // daemons on the same host, so every c2d service declares its own path.
   string socket_path = 1;

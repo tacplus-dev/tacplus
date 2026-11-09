@@ -91,7 +91,7 @@ func TestC2DClientProtoFiles(t *testing.T) {
 func TestRenderC2DClientTemplate(t *testing.T) {
 	out, err := executeCSharpTemplate("C2DClient.cs.tmpl", c2dClientTemplateData{
 		PackageName:     "MyTacplus",
-		DaemonDirectory: "gateway",
+		DefaultPipeName: `\\.\pipe\tacplus-c2d--run-gateway.sock`,
 		Services: []c2dServiceTemplateData{
 			{MethodName: "WithProductApi", ClientType: "Common2.Product.ProductApi.ProductApiClient"},
 		},
@@ -104,7 +104,8 @@ func TestRenderC2DClientTemplate(t *testing.T) {
 		"namespace MyTacplus;",
 		"public sealed class C2DClient",
 		"NamedPipesConnectionFactory.Create(PipeName)",
-		`"gateway-daemon"`,
+		`public C2DClient(string? pipeName = null)`,
+		`public static string DefaultNamedPipeName() => @"\\.\pipe\tacplus-c2d--run-gateway.sock";`,
 		"public Common2.Product.ProductApi.ProductApiClient WithProductApi() => new Common2.Product.ProductApi.ProductApiClient(_channel);",
 	} {
 		if !strings.Contains(s, want) {
@@ -329,5 +330,34 @@ func TestRenderC2SClientTokenProviderHonorsCallCancellation(t *testing.T) {
 	}
 	if strings.Contains(s, "tokenProvider(CancellationToken.None)") {
 		t.Errorf("C2SClient.cs still acquires the bearer token with CancellationToken.None\n%s", s)
+	}
+}
+
+// The C# client's default pipe is the one the generated Go and Rust daemons
+// serve on Windows for the services' socket_path (issue #314); services
+// declaring different socket paths get no default, and the client requires
+// a pipe name.
+func TestDefaultC2DPipeName(t *testing.T) {
+	one := []service.ServiceInfo{
+		{ServiceName: "A", C2DSocketPath: "/run/gateway.sock"},
+		{ServiceName: "B", C2DSocketPath: "/run/gateway.sock"},
+	}
+	if got, want := defaultC2DPipeName(one), `\\.\pipe\tacplus-c2d--run-gateway.sock`; got != want {
+		t.Fatalf("defaultC2DPipeName = %q, want %q", got, want)
+	}
+	two := []service.ServiceInfo{
+		{ServiceName: "A", C2DSocketPath: "/run/a.sock"},
+		{ServiceName: "B", C2DSocketPath: "/run/b.sock"},
+	}
+	if got := defaultC2DPipeName(two); got != "" {
+		t.Fatalf("defaultC2DPipeName over two socket paths = %q, want none", got)
+	}
+	out, err := executeCSharpTemplate("C2DClient.cs.tmpl", c2dClientTemplateData{PackageName: "MyTacplus"})
+	if err != nil {
+		t.Fatalf("render C2DClient: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "public C2DClient(string pipeName)") || strings.Contains(s, "DefaultNamedPipeName") {
+		t.Fatalf("C2DClient.cs with no default pipe must require pipeName:\n%s", s)
 	}
 }

@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by looper (#313).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-09 by looper (#314).
 
 - **Version / line:** v2.6.2 (latest release, 2026-11-07, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -122,6 +122,13 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   `cross-test/redact` (`just redact`, in the gates) against a hand-built fixture. The legacy egress redaction
   (`(spec.redact)`, `(spec.data_entitlement)`, `Sanitize<T>`, `<T>Entitlement`) is deprecated (generation warns),
   removed in 3.0. Gaps: no cross-package sensitive tree, no oneof leaves, no client-only target (PROPOSALS.md).
+  C2D on Windows (#314, main only, for 2.7: Jody, 2026-11-08): the generated Go and Rust C2D daemons serve, and their
+  clients dial, the named pipe `\\.\pipe\tacplus-c2d-` + `socket_path` (outside `[A-Za-z0-9._-]` mapped to `-`)
+  with a current-user only DACL and remote clients rejected; the C# client's default pipe is that name (it was
+  `<package>-daemon`). Per-language, per-OS table in docs/API.md (C2D transport). `cross-test/c2d-server` pins the
+  name and compiles the Windows legs (Go `GOOS=windows`, the Rust c2d crate for `x86_64-pc-windows-msvc`). Gaps: no
+  Windows runner runs them (#490); Java (#492), Python (#493) and TypeScript (#491) have no pipe; the Swift
+  client's default socket ignores `socket_path` (#494).
 - **Released / deployed:** v2.6.0 is the newest release: the binaries and `checksums.txt`, and
   `ghcr.io/tacplus-dev/tacplus/build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c`
   (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.

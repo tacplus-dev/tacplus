@@ -187,9 +187,12 @@ COPY images/smoke.sh /usr/local/bin/tacplus-smoke
 COPY images/tacplus.sh /usr/local/bin/tacplus
 # Kani's setup downloads its CBMC bundle and installs the pinned nightly it
 # compiles with; cargo-fuzz runs on RUST_NIGHTLY: cargo +"$RUST_NIGHTLY" fuzz.
+# The x86_64-pc-windows-msvc target is for cross-test/c2d-server, which checks
+# the generated c2d crate's Windows named-pipe transport (#314).
 RUN cargo kani setup \
     && rustup toolchain install "${RUST_NIGHTLY}" --profile minimal \
-    && cargo kani --version && cargo +"${RUST_NIGHTLY}" fuzz --version
+    && cargo kani --version && cargo +"${RUST_NIGHTLY}" fuzz --version \
+    && rustup target add x86_64-pc-windows-msvc
 RUN ln -s ../lib/node_modules/@bufbuild/protoc-gen-es/bin/protoc-gen-es /usr/local/bin/protoc-gen-es
 # Python codegen runs `python -m grpc_tools.protoc`; black/twine/build are
 # what the Python client gates use. One venv, first on PATH. The floors

@@ -17,7 +17,9 @@
 # socket through the generated c2dm client: a tokenless valid call,
 # server-side request and response validation, server streaming, the 0600
 # socket mode, stale-socket removal, and on stop: drain, socket cleanup and
-# one Handler shutdown call.
+# one Handler shutdown call. It also pins the Windows pipe name (Go, Rust) and
+# compiles the Windows named-pipe transport (the Go model, the Rust c2d crate),
+# which only a Windows runner can run (#490).
 #
 # Usage: run.sh [--language go|java|rust]   (default: all three)
 set -euo pipefail
@@ -85,12 +87,21 @@ run_go() {
   echo "==> Compiling the whole generated Go model"
   (cd "$WORK/go" && go mod tidy && go vet ./model/...) || die "generated Go model does not compile"
 
+  # The Windows named-pipe transport (issue #314) compiles here; it runs on a
+  # Windows runner only, which the gates do not have (#490).
+  echo "==> Compiling the whole generated Go model for Windows (named-pipe c2d)"
+  grep -q "winio.ListenPipe(" "$OUT/chassis/grpcserver/c2d_listen_windows.go" || die "Windows c2d server does not listen on a named pipe"
+  grep -q "winio.DialPipeContext(" "$OUT/chassis/serviceconnection/c2d_windows.go" || die "Windows c2d client does not dial the named pipe"
+  (cd "$WORK/go" && GOOS=windows GOARCH=amd64 go vet ./model/...) || die "generated Go model does not compile for Windows"
+
   echo "==> Running generated Go standalone C2D host test"
-  (cd "$WORK/go" && go test -count=1 -v -run TestGeneratedC2DStandaloneHostOverSocket ./model/s2sm/) >"$WORK/go/test.log" 2>&1 \
+  (cd "$WORK/go" && go test -count=1 -v -run 'TestGeneratedC2DStandaloneHostOverSocket|TestGeneratedC2DPipeName' ./model/s2sm/) >"$WORK/go/test.log" 2>&1 \
     || { tail -40 "$WORK/go/test.log"; die "generated Go standalone C2D host test failed"; }
   # A filter that matched nothing would pass vacuously.
-  grep -q -- "--- PASS: TestGeneratedC2DStandaloneHostOverSocket" "$WORK/go/test.log" \
-    || { cat "$WORK/go/test.log"; die "Go standalone C2D host test did not run"; }
+  for t in TestGeneratedC2DStandaloneHostOverSocket TestGeneratedC2DPipeName; do
+    grep -q -- "--- PASS: $t" "$WORK/go/test.log" \
+      || { cat "$WORK/go/test.log"; die "Go $t did not run"; }
+  done
 
   echo "==> c2d-server check PASSED (go)"
 }
@@ -167,8 +178,23 @@ run_rust() {
   echo "==> Running generated Rust standalone C2D host test"
   (cd "$OUT" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo test --test c2d_standalone_test) >"$WORK/rust/test.log" 2>&1 \
     || { tail -60 "$WORK/rust/test.log"; die "generated Rust standalone C2D host test failed"; }
-  grep -q "test generated_c2d_standalone_host_over_socket ... ok" "$WORK/rust/test.log" \
-    || { tail -40 "$WORK/rust/test.log"; die "Rust standalone C2D host test did not run"; }
+  for t in generated_c2d_standalone_host_over_socket generated_c2d_pipe_name; do
+    grep -q "test $t ... ok" "$WORK/rust/test.log" \
+      || { tail -40 "$WORK/rust/test.log"; die "Rust $t did not run"; }
+  done
+
+  # The Windows named-pipe transport (issue #314) compiles here; it runs on a
+  # Windows runner only, which the gates do not have (#490). Only
+  # the c2d crate: the rest of the model links ring and aws-lc, whose C builds
+  # need the MSVC toolchain.
+  echo "==> Checking the generated c2d crate for Windows (named-pipe c2d)"
+  local win_target="x86_64-pc-windows-msvc"
+  if ! rustup target list --installed | grep -qx "$win_target"; then
+    rustup target add "$win_target" >"$WORK/rust/rustup.log" 2>&1 \
+      || { cat "$WORK/rust/rustup.log"; die "cannot install the $win_target target to check the Windows c2d transport"; }
+  fi
+  (cd "$OUT" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" RUSTFLAGS="-D warnings" cargo check -p c2d --target "$win_target") >"$WORK/rust/windows.log" 2>&1 \
+    || { tail -60 "$WORK/rust/windows.log"; die "generated c2d crate does not compile for Windows"; }
   prune_cargo_workspace "$OUT"
 
   echo "==> c2d-server check PASSED (rust)"

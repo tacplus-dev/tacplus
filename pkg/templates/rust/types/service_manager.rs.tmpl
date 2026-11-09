@@ -1848,7 +1848,7 @@ impl ServiceManager {
         // Build router: if handler provides additional services, start from those routes
         // (Server::add_routes), then chain our services (Router::add_service).
         // Router doesn't have add_routes, so additional routes must go first.
-        // c2d services are excluded — they run on a separate unix socket server.
+        // c2d services are excluded — they run on a separate local IPC server.
         let router = if let Some(additional_routes) = handler.additional_services() {
             server.add_routes(additional_routes)
                 .add_service(grpc_health_svc)
@@ -2206,9 +2206,9 @@ impl ServiceManager {
 {{- end}}
 
 {{- if .HasC2DGrpc}}
-        // Start c2d unix socket server for local daemon IPC services.
-        // No TLS, no auth — filesystem permissions guard access.
-        #[cfg(unix)]
+        // Start the c2d server for local daemon IPC services (a unix socket; on
+        // Windows a named pipe). No TLS, no auth — the endpoint's current-user
+        // only access guards it.
         {
             let c2d_server = new_c2d_server(
                 C2D_SOCKET_PATH,
@@ -2412,7 +2412,6 @@ impl ServiceManager {
 
 /// Bounds `handler.shutdown()` in `serve_c2d_standalone`, which has no config to
 /// read shutdown_timeout_seconds from.
-#[cfg(unix)]
 const C2D_STANDALONE_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl ServiceManager {
@@ -2427,10 +2426,10 @@ impl ServiceManager {
     /// A daemon passes `C2D_SOCKET_PATH`, the declared socket; a test passes its
     /// own so it never takes over the socket of a daemon already running on the
     /// host. Serves until `shutdown` resolves, drains in-flight RPCs, removes the
-    /// socket and then calls `handler.shutdown()`. A socket that cannot be bound
-    /// or locked down to owner-only is returned as an error, without calling
-    /// `handler.shutdown()`.
-    #[cfg(unix)]
+    /// socket and then calls `handler.shutdown()`. A socket (on Windows, the
+    /// named pipe `c2d::pipe_name` derives from `socket_path`) that cannot be
+    /// bound or locked down to the current user is returned as an error,
+    /// without calling `handler.shutdown()`.
     pub async fn serve_c2d_standalone<F>(
         socket_path: &str,
         handler: Arc<dyn Handler>,
@@ -2458,13 +2457,13 @@ impl ServiceManager {
 
 /// The unix socket this build's service_c2d services declare
 /// (spec.service_c2d.socket_path — required, no default, which would collide
-/// between daemons). `run()` serves on it; clients dial it.
+/// between daemons). `run()` serves on it; clients dial it. On Windows both use
+/// the named pipe `c2d::pipe_name` derives from it.
 pub const C2D_SOCKET_PATH: &str = "{{.C2DSocketPath}}";
 
 /// Hosts the service_c2d wrappers on `socket_path`. The wrappers skip token
-/// auth: the socket's owner-only permissions are the boundary, not a bearer
-/// token.
-#[cfg(unix)]
+/// auth: the endpoint's current-user only access (the socket's 0600, the
+/// pipe's DACL) is the boundary, not a bearer token.
 fn new_c2d_server(
     socket_path: &str,
 {{- range .GrpcServices}}

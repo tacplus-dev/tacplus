@@ -31,7 +31,6 @@ const (
 	defaultGrpcNetClientVer   = "2.65.0"
 	defaultGrpcCoreApiVersion = "2.65.0"
 	defaultGrpcToolsVersion   = "2.65.0"
-	defaultDaemonSocketDir    = "tacplus"
 )
 
 type projectTemplateData struct {
@@ -44,8 +43,12 @@ type projectTemplateData struct {
 }
 
 type c2dClientTemplateData struct {
-	PackageName     string
-	DaemonDirectory string
+	PackageName string
+	// DefaultPipeName is the named pipe the daemon serving these services
+	// listens on (service.C2DPipeName of their socket_path), or "" when they
+	// declare different socket paths: no one default reaches all of them, so
+	// the client then requires a pipe name.
+	DefaultPipeName string
 	Services        []c2dServiceTemplateData
 }
 
@@ -305,7 +308,7 @@ func renderProject(config *tactype.Config, clientProtoFiles []string) error {
 func renderC2DClient(config *tactype.Config, servicesInfo []service.ServiceInfo) error {
 	data := c2dClientTemplateData{
 		PackageName:     config.CSharpPackageBase,
-		DaemonDirectory: daemonDirectory(config, servicesInfo),
+		DefaultPipeName: defaultC2DPipeName(servicesInfo),
 		Services:        c2dServicesTemplateData(servicesInfo),
 	}
 	out, err := executeCSharpTemplate("C2DClient.cs.tmpl", data)
@@ -734,31 +737,20 @@ func csharpModuleName(s string) string {
 	return ident
 }
 
-func daemonDirectory(config *tactype.Config, servicesInfo []service.ServiceInfo) string {
-	if config.SelfPackage != "" {
-		return sanitizeDaemonDirectory(config.SelfPackage)
-	}
+// defaultC2DPipeName is the pipe of the one socket_path the C2D services
+// declare, or "" when they declare none or several.
+func defaultC2DPipeName(servicesInfo []service.ServiceInfo) string {
+	path := ""
 	for _, svc := range servicesInfo {
-		if svc.PackageName != "" {
-			return sanitizeDaemonDirectory(svc.PackageName)
+		if svc.C2DSocketPath == "" || (path != "" && svc.C2DSocketPath != path) {
+			return ""
 		}
+		path = svc.C2DSocketPath
 	}
-	return defaultDaemonSocketDir
-}
-
-func sanitizeDaemonDirectory(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = strings.NewReplacer(".", "-", "_", "-").Replace(s)
-	var b strings.Builder
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			b.WriteRune(r)
-		}
+	if path == "" {
+		return ""
 	}
-	if b.Len() == 0 {
-		return defaultDaemonSocketDir
-	}
-	return b.String()
+	return service.C2DPipeName(path)
 }
 
 func csharpDependencyVersion(config *tactype.Config, packageName, fallback string) string {

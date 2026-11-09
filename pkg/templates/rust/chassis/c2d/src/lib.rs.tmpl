@@ -4,11 +4,39 @@
 //
 // CODE GENERATED - DO NOT EDIT
 
-//! c2d — client-to-daemon gRPC transport over Unix domain sockets.
+//! c2d — client-to-daemon gRPC transport over local IPC.
 //!
 //! Provides a server (for the daemon) and client (for the CLI) that
-//! communicate via a Unix socket file. No TLS, no auth — filesystem
-//! permissions are the security boundary.
+//! communicate over a Unix socket file on macOS and Linux and over a named
+//! pipe on Windows ([`pipe_name`] of the socket path). No TLS, no auth — the
+//! endpoint is current-user only (the socket's 0600, the pipe's DACL), and
+//! that is the security boundary.
+
+use std::path::Path;
 
 pub mod server;
 pub mod client;
+#[cfg(windows)]
+mod windows;
+
+/// The Windows named pipe namespace and the tacplus c2d prefix every c2d pipe
+/// name starts with.
+pub const PIPE_PREFIX: &str = r"\\.\pipe\tacplus-c2d-";
+
+/// Returns the Windows named pipe a c2d daemon serves on, and its clients
+/// dial, for `socket_path`, the service_c2d socket_path: [`PIPE_PREFIX`] +
+/// the path with every character outside `[A-Za-z0-9._-]` mapped to `-`.
+/// Every generated client and daemon derives it the same way.
+pub fn pipe_name(socket_path: impl AsRef<Path>) -> String {
+    let path = socket_path.as_ref().to_string_lossy();
+    let mut name = String::with_capacity(PIPE_PREFIX.len() + path.len());
+    name.push_str(PIPE_PREFIX);
+    for c in path.chars() {
+        if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+            name.push(c);
+        } else {
+            name.push('-');
+        }
+    }
+    name
+}

@@ -4,6 +4,16 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **C2D clients on Windows check who serves the pipe** (2026-11-09, #314): the daemon creates its pipe exclusively
+  (a second creator fails) with a current-user only DACL, but a client cannot tell a squatter, an earlier process of
+  another user that took the name while the daemon was down, from the daemon. The Unix analogue relies on the socket's
+  directory. A client could compare the pipe server's process owner (`GetNamedPipeServerProcessId`, its token user)
+  with its own user before sending, in Go, Rust and C#. Why: c2d carries no token, so the pipe's owner is the only
+  identity there is. Links: docs/API.md (C2D transport), #490.
+- **A C2D Windows check for the whole Rust model** (2026-11-09, #314): `cross-test/c2d-server` checks only the Rust
+  `c2d` crate for `x86_64-pc-windows-msvc`, because the rest of the model links ring and aws-lc, whose C builds need
+  the MSVC toolchain on Linux (clang-cl and the Windows SDK, or `cargo-xwin`). The `s2sm` wiring around it is checked
+  only on Windows itself, once #490 runs.
 - **trace_id in 2.7: field 200 on every sys wire message, additive traced helper forms** (2026-11-06, #313 → #327):
   the hub's split of #313. Every request-building generated helper (state clients' `Fetch`/`Delete`/`Query`, record
   readers, record-plane and kernel state helpers) gets a form that takes `trace_id`, beside today's, and every sys

@@ -260,6 +260,26 @@ cluster.
 
 ---
 
+## C2D-2 — the Windows named-pipe C2D transport is compiled, never run
+
+**Status:** Go and Rust compiled for Windows; nothing executes them.
+
+On Windows the generated Go and Rust C2D daemons serve, and their clients dial,
+the named pipe derived from `socket_path` (docs/API.md, C2D transport; #314).
+`cross-test/c2d-server` pins the pipe name in both, against the compiler's
+vectors (`pkg/internal/common/service/c2d_pipe_test.go`). It compiles the whole
+generated Go model with `GOOS=windows` and checks the Rust `c2d` crate for
+`x86_64-pc-windows-msvc` with warnings denied. Not run:
+- the pipe's current-user DACL (another local user refused);
+- `PIPE_REJECT_REMOTE_CLIENTS`;
+- the exclusive first instance;
+- any call over the pipe, including from the C# client.
+The gates have no Windows runner.
+
+**To close:** #490, the `windows-latest` C2D leg and its cross-language matrix.
+
+---
+
 ## DS-1 — the GCS archive sink is compiled, never run against a bucket
 
 **Status:** open.

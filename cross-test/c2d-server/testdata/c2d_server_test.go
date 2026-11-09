@@ -40,6 +40,7 @@ import (
 
 	c2dm "example.com/c2dserver/model/c2dm"
 	"example.com/c2dserver/model/chassis/servicemanager"
+	"example.com/c2dserver/model/chassis/serviceconnection"
 	sm "example.com/c2dserver/model/s2sm"
 	c2dserver_fe "example.com/c2dserver/model/s2sm/grpc/servers/svc/c2dserver"
 	types "example.com/c2dserver/model/types/svc/c2dserver"
@@ -216,5 +217,26 @@ func TestGeneratedC2DStandaloneHostOverSocket(t *testing.T) {
 	}
 	if got := daemon.shutdownCalls.Load(); got != 1 {
 		t.Fatalf("Handler.Shutdown calls after shutdown = %d, want 1", got)
+	}
+}
+
+// TestGeneratedC2DPipeName pins the Windows pipe name the generated Go daemon
+// serves on and its clients dial (issue #314): the same vectors as the
+// compiler's service.C2DPipeName (pkg/internal/common/service/c2d_pipe_test.go)
+// and the generated Rust c2d::pipe_name, and the C# client's default.
+func TestGeneratedC2DPipeName(t *testing.T) {
+	for _, v := range []struct{ socketPath, pipe string }{
+		{"/run/mydaemon.sock", `\\.\pipe\tacplus-c2d--run-mydaemon.sock`},
+		{"/tmp/c2d_server-1.sock", `\\.\pipe\tacplus-c2d--tmp-c2d_server-1.sock`},
+		{`C:\ProgramData\My App\d.sock`, `\\.\pipe\tacplus-c2d-C--ProgramData-My-App-d.sock`},
+		{"/run/é/x.sock", `\\.\pipe\tacplus-c2d--run---x.sock`},
+		{"", `\\.\pipe\tacplus-c2d-`},
+	} {
+		if got := serviceconnection.C2DPipeName(v.socketPath); got != v.pipe {
+			t.Errorf("C2DPipeName(%q) = %q, want %q", v.socketPath, got, v.pipe)
+		}
+	}
+	if got := serviceconnection.C2DEndpoint(socketPath); got != socketPath {
+		t.Errorf("C2DEndpoint(%q) = %q off Windows, want the socket path itself", socketPath, got)
 	}
 }

@@ -103,15 +103,20 @@ import javax.net.ssl.X509TrustManager;
  * unexpired, a service token with audience {@code member:<service>}, for this
  * same service in this same namespace (so the same tenant, for a tenant-owned
  * service). A refused open ends with {@code UNAUTHENTICATED} (a bad, missing or
- * expired token) or {@code PERMISSION_DENIED} (a valid token not allowed), and
- * the server closes a stream at its token's {@code exp} with
- * {@code UNAUTHENTICATED}; no status carries a description, the reason goes to
- * the log.
+ * expired token) or {@code PERMISSION_DENIED} (a valid token not allowed); no
+ * status carries a description, the reason goes to the log. A stream lives no
+ * longer than either of its two tokens, the client's and the receiver's: both
+ * sides drop it at the earlier {@code exp} (the server with
+ * {@code UNAUTHENTICATED}), so a member whose identity lapses loses every
+ * session, whichever side opened it, and a member whose own token has expired
+ * accepts none.
  *
  * <p>A byte session outlives its tokens by make-before-break rotation: at about
- * 75% of its token's lifetime the client acquires a new token, opens a new
- * stream presenting the session id, and once the server has attached it writes
- * its final chunk on the old stream with {@code last}; the server, reading it,
+ * 75% of the earlier token's lifetime the client opens a new stream with its
+ * current token, presenting the session id; the receiver answers with its
+ * current one. Once the server has attached it, and it ends later than the old
+ * stream (else it is dropped and retried until the old one expires), the client
+ * writes its final chunk on the old stream with {@code last}; the server, reading it,
  * writes its own {@code last} there, ends the old stream and writes on the new
  * one. Each side reads the old stream to its {@code last} before anything of
  * the new one, so the bytes keep their order with no sequence numbers. A
@@ -581,8 +586,11 @@ public final class MemberPort implements AutoCloseable {
      * thread-safe, so every operation on it holds the leg's lock.
      */
     private abstract static class Leg {
-        /** The token's exp: the client's own, the server's peer's. */
-        final long expMillis;
+        /**
+         * The earlier exp of the stream's two tokens, the client's and the
+         * receiver's: past it, neither side may go on trusting the other.
+         */
+        volatile long expMillis;
         /** Chunks and the end, as they arrived; read only once this leg is the session's read leg. */
         final LinkedBlockingQueue<Object> inbox = new LinkedBlockingQueue<>();
         /** This side sends nothing more on the stream. */
@@ -1034,7 +1042,7 @@ public final class MemberPort implements AutoCloseable {
                     CallOptions.DEFAULT.withDeadlineAfter(Math.max(1, expMillis - System.currentTimeMillis()), TimeUnit.MILLISECONDS));
             ClientLeg leg = new ClientLeg(call, expMillis);
             CompletableFuture<String> attached = new CompletableFuture<>();
-            AtomicBoolean receiverAdmitted = new AtomicBoolean();
+            AtomicReference<Admitted> receiver = new AtomicReference<>();
             Metadata headers = new Metadata();
             headers.put(AUTHORIZATION, "Bearer " + token);
             synchronized (leg) {
@@ -1042,8 +1050,7 @@ public final class MemberPort implements AutoCloseable {
                     @Override
                     public void onHeaders(Metadata h) {
                         try {
-                            verifyPeer(h.get(MEMBER_TOKEN));
-                            receiverAdmitted.set(true);
+                            receiver.set(verifyPeer(h.get(MEMBER_TOKEN)));
                         } catch (RefusedException e) {
                             attached.completeExceptionally(new RefusedStream(Status.PERMISSION_DENIED,
                                     "the receiver's token: " + e.getMessage()));
@@ -1058,7 +1065,7 @@ public final class MemberPort implements AutoCloseable {
                             return;
                         }
                         String id = chunk.getSessionId();
-                        if (!receiverAdmitted.get() || id.isEmpty() || !(joining.isEmpty() || joining.equals(id))
+                        if (receiver.get() == null || id.isEmpty() || !(joining.isEmpty() || joining.equals(id))
                                 || !chunk.getPayload().isEmpty() || chunk.getLast() || chunk.getFin()) {
                             attached.completeExceptionally(new RefusedStream(Status.PERMISSION_DENIED,
                                     "the receiver did not attach the stream"));
@@ -1097,6 +1104,9 @@ public final class MemberPort implements AutoCloseable {
                 leg.abort(Status.CANCELLED);
                 throw new RefusedStream(Status.DEADLINE_EXCEEDED, "the receiver did not attach the stream in time");
             }
+            // The receiver's token was checked once, here: the stream lives no
+            // longer than it does (#465).
+            leg.expMillis = Math.min(expMillis, receiver.get().expMillis);
             return leg;
         }
 
@@ -1134,12 +1144,12 @@ public final class MemberPort implements AutoCloseable {
                     token = tokenSource.token();
                 } catch (Exception e) {
                     LOG.warning("member port: token mint for a rotation failed, retrying: " + describe(e));
-                    rotation = later(this::rotate, ROTATE_RETRY_MS);
+                    rotation = later(this::rotate, retryDelay(current));
                     return;
                 }
                 if (TokenWrapper.parse(token).getExpiration() * 1000L <= current.expMillis) {
                     // No newer token yet: the identity cache renews it ahead of expiry.
-                    rotation = later(this::rotate, ROTATE_RETRY_MS);
+                    rotation = later(this::rotate, retryDelay(current));
                     return;
                 }
                 ClientLeg next;
@@ -1159,7 +1169,15 @@ public final class MemberPort implements AutoCloseable {
                         return;
                     }
                     LOG.warning("member port: rotation failed, retrying: " + describe(e));
-                    rotation = later(this::rotate, ROTATE_RETRY_MS);
+                    rotation = later(this::rotate, retryDelay(current));
+                    return;
+                }
+                if (next.expMillis <= current.expMillis) {
+                    // The receiver answered with no newer token than the one the
+                    // current stream ends with: its identity cache renews it
+                    // ahead of expiry, or never, and then the session drops.
+                    next.abort(Status.CANCELLED);
+                    rotation = later(this::rotate, retryDelay(current));
                     return;
                 }
                 nextLeg = next;
@@ -1175,6 +1193,12 @@ public final class MemberPort implements AutoCloseable {
             } finally {
                 rotating.set(false);
             }
+        }
+
+        /** The next try of a rotation: sooner as {@code current}'s exp nears, so a late renewal still lands. */
+        private long retryDelay(Leg current) {
+            long left = current.expMillis - System.currentTimeMillis();
+            return Math.max(ROTATE_MIN_MS, Math.min(ROTATE_RETRY_MS, left / 2));
         }
 
         @Override
@@ -1270,8 +1294,9 @@ public final class MemberPort implements AutoCloseable {
                 }
             }, ADMISSION_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             AtomicReference<InboundSession> owner = new AtomicReference<>();
-            // The stream closes at its token's exp, whatever it is doing then.
-            leg.expiry = timers.schedule(() -> {
+            // The stream closes at its token's exp, whatever it is doing then;
+            // first() moves that earlier when this member's own token ends first.
+            Runnable expire = () -> {
                 InboundSession s = owner.get();
                 synchronized (leg) {
                     if (leg.closed) {
@@ -1287,7 +1312,8 @@ public final class MemberPort implements AutoCloseable {
                 }
                 leg.abort(Status.UNAUTHENTICATED);
                 admittedOrGone.run();
-            }, Math.max(0, admitted.expMillis - System.currentTimeMillis()), TimeUnit.MILLISECONDS);
+            };
+            leg.expiry = timers.schedule(expire, Math.max(0, admitted.expMillis - System.currentTimeMillis()), TimeUnit.MILLISECONDS);
             leg.request();
             return new ServerCall.Listener<MemberChunk>() {
                 @Override
@@ -1296,7 +1322,7 @@ public final class MemberPort implements AutoCloseable {
                         deadline.cancel(false);
                         try {
                             workers.execute(() -> {
-                                owner.set(first(leg, chunk, peer));
+                                owner.set(first(leg, chunk, peer, expire));
                                 admittedOrGone.run();
                             });
                         } catch (RejectedExecutionException e) {
@@ -1349,19 +1375,34 @@ public final class MemberPort implements AutoCloseable {
          * the target dialled), a session id joins that session as a rotation
          * when the token names the same subject.
          */
-        private InboundSession first(ServerLeg leg, MemberChunk chunk, String peer) {
+        private InboundSession first(ServerLeg leg, MemberChunk chunk, String peer, Runnable expire) {
             if (!chunk.getPayload().isEmpty() || chunk.getLast() || chunk.getFin()) {
                 LOG.warning("member port: stream from " + peer + " opened with a data chunk");
                 leg.abort(Status.PERMISSION_DENIED);
                 return null;
             }
             String own;
+            long ownExpMillis;
             try {
                 own = tokenSource.token();
+                ownExpMillis = TokenWrapper.parse(own).getExpiration() * 1000L;
             } catch (Exception e) {
                 LOG.warning("member port: no member token to answer " + peer + " with: " + describe(e));
                 leg.abort(Status.UNAVAILABLE);
                 return null;
+            }
+            long now = System.currentTimeMillis();
+            if (ownExpMillis <= now) {
+                // A member whose identity lapsed serves no one (#465).
+                LOG.warning("member port: this member's own token has expired; refusing " + peer);
+                leg.abort(Status.UNAVAILABLE);
+                return null;
+            }
+            if (ownExpMillis < leg.expMillis) {
+                // The client drops the stream at this token's exp too: so does this side.
+                leg.expMillis = ownExpMillis;
+                cancel(leg.expiry);
+                leg.expiry = timers.schedule(expire, ownExpMillis - now, TimeUnit.MILLISECONDS);
             }
             String joining = chunk.getSessionId();
             if (!joining.isEmpty()) {

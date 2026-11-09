@@ -210,9 +210,12 @@ the service's black-box member traffic, and it fails closed.
   instance's own tenant (tenant-owned) or under `/system` (platform service),
   and the token in its `tacplus-member-token` header must pass the same
   admission as an inbound one, on every stream (the first and each rotation).
-- **Rotation (make-before-break).** At about 75% of its token's lifetime the
-  client asks its identity manager for a token; once it gets a newer one it
-  opens a new stream whose first chunk carries the `session_id`. The server
+- **Rotation (make-before-break).** At about 75% of the stream's lifetime (to
+  the earlier `exp` of its two tokens, below) the client asks its identity
+  manager for a token. When its own token is the earlier, it waits for a newer
+  one; then it opens a new stream whose first chunk carries the `session_id`.
+  A new stream that would end no later than the old one (the receiver answered
+  with no newer token) is cancelled and the rotation retried. The server
   attaches it only if the session is live, has no rotation pending, and the new
   token names the same subject (service and namespace); otherwise
   `PERMISSION_DENIED`, the same for an unknown id. The id alone authorizes
@@ -225,12 +228,17 @@ the service's black-box member traffic, and it fails closed.
   most one chunk plus the HTTP/2 window waits on the new stream.
 - **Retries.** An open refused with `UNAUTHENTICATED` is retried once with a
   fresh token, then fails; `PERMISSION_DENIED` is never retried. A mint that
-  fails, or returns no newer token, is retried every second while the old
-  stream lasts.
-- **Expiry and revocation.** The server ends every stream at its opening token's
+  fails, or returns no newer token (the client's or the receiver's), is retried
+  every second, more often as the old stream's end nears, while it lasts.
+- **Expiry and revocation.** A stream lives no longer than either of its two
+  tokens: the client's (its opening token) and the receiver's (the one in its
+  `tacplus-member-token` header). The server ends every stream at the earlier
   `exp` with `UNAUTHENTICATED` (no description), as every stream is (#260); the
-  client drops a session whose stream reaches `exp` unrotated. A caller that
-  gets no new token is cut off within one token lifetime.
+  client drops a session whose stream reaches it unrotated. A server whose own
+  member token has expired refuses every new stream with `UNAVAILABLE`, nothing
+  dialled. So a member that gets no new token is cut off within one token
+  lifetime from every session, the ones it opened and the ones it accepted
+  (#465).
 - **Faults.** A stream that ends without its `last` (a status, a cancel, a
   transport error, even an OK close) before the session is done drops the
   session; the bytes after it are never spliced onto another stream. So do a

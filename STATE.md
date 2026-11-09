@@ -111,8 +111,10 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   certificate: kernel tokens for `member:<svc>` checked at each stream's open, both ways (the receiver's in a
   response header), same service and namespace only; make-before-break session rotation at 75% of a token's
   lifetime with an in-band `last` each way and same-subject session binding; `UNAUTHENTICATED`/`PERMISSION_DENIED`
-  with no reason text; streams closed at `exp` (#260); a stream ending without `last` drops the session; a dropped
-  session resets its loopback connection (RST); nothing dialled before admission, no plaintext.
+  with no reason text; streams closed at the earlier `exp` of the client's and the receiver's token (#260, #465), so
+  a lapsed member loses the sessions it accepted as well as those it opened; a stream ending without `last` drops
+  the session; a dropped session resets its loopback connection (RST); nothing dialled before admission, no
+  plaintext.
   `grpcconfig.member_port` places it (loopback target only); `sm.getMemberPort().forward(remote)` tunnels outbound.
   registry.json carries `member_port`. Go and Rust refuse the annotation until #322 ports this version.
   `(spec.smb)`/`(spec.smb_authority)`/`SmbCertService` are deprecated (removed in 3.0) and exclusive with it.

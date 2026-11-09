@@ -1,0 +1,262 @@
+= init
+> Bash cd /builds/looper/tacplus/issues/339; gh issue view 339 --repo tacplus-dev/tacplus --comments | tail -30; sed -n 60,140p cross-test/current-generation/testdata/go/accounting_sink_durable_test.go; grep -n "waitForLines\|func " cross-test/current-generation/testdata/go/accounting_sink_durable_test.go
+< author:	tacplus-looper association:	none edited:	false status:	none -- The looper of tacplus starts this issue with its limit 4h capped at 4h by this job (https://gitlab.com/tacplus-dev/looper/-/jobs/17852261204), which ends sooner: the run stops by itself before then, its work checkpointed, and the...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/339; sed -n 1,58p cross-test/current-generation/testdata/go/accounting_sink_durable_test.go; sed -n 560,720p pkg/templates/go/chassis/am/am.go.tmpl
+< // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0 // // Gate self-test for the durable accounting spool (issue #70). NOT generated: // run.sh copies this file into the generated chassis/am package before `go test // ./...`. // // What it pins: with grpcconfig.disk_persistence s...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/339/cross-test/current-generation; grep -rn "func emitAll" -A15 testdata/go/; sed -n 80,135p testdata/java/AccountingSinkDurableTest.java; grep -n "fn \|records.log\|lines" testdata/rust/accounting_sink_durable.rs | head -40; sed -n 95,135p testdata/rust/accounting_s...
+< testdata/go/accounting_sink_spool_test.go:36:func emitAll(t *testing.T, sink *EventBusSink, n int) { testdata/go/accounting_sink_spool_test.go-37-	t.Helper() testdata/go/accounting_sink_spool_test.go-38-	done := make(chan struct{}) testdata/go/accounting_sink_spool_test.go-39-	go func() { testdata/g...
+> Bash cd /builds/looper/tacplus/issues/339/cross-test/current-generation; sed -n 140,156p testdata/rust/accounting_sink_durable.rs; sed -n 60,90p testdata/rust/accounting_sink_durable.rs; grep -n "lines\|records.log\|static void emitAll" -A3 testdata/java/AccountingSinkDurableTest.java | head -50
+<         let sink = EventBusSink::new_durable(tx, "test-outage".to_string(), &dir, ack_rx).unwrap();         for i in 0..10 {             sink.emit(&event(i)).await;         }         let got = recv_n(&mut rx, &ack, 10).await;         for (i, id) in got.iter().enumerate() {             assert_eq!(id,...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/339/cross-test/current-generation; python3 - <<'EOF' p='testdata/go/accounting_sink_durable_test.go' s=open(p).read() old="""	emitAll(t, sink1, 5) 	if got := receiveRequestIDs(t, sink1, tx1, 3)""" new="""	emitAll(t, sink1, 5) 	// Emit only queues: wait until all five...
+< 17:import com.gitlab.example.dummy.agentsensor.model.chassis.diskstore.DiskStoreException; 18:import com.gitlab.example.dummy.agentsensor.model.types.sys.accounting.Accounting; 19:import com.gitlab.example.dummy.agentsensor.model.types.vservices.accountingrecord.Accountingrecord; 20:import java.nio....
+= thinking_tokens
+= thinking_tokens
+Fixed the three tests (Go, Java, Rust) to wait for all five records in the log before acking; now tightening the Java line count and running the gate.
+> Bash cd /builds/looper/tacplus/issues/339/cross-test/current-generation; python3 - <<'EOF' p='testdata/java/AccountingSinkDurableTest.java' s=open(p).read() old="""            long lines = Files.exists(log) ? Files.readAllLines(log, StandardCharsets.UTF_8).size() : 0;""" new="""            long lines = 0...
+<     // waitForLines polls the spool log until it holds want records.     private static void waitForLines(Path dir, int want) throws Exception {         long deadline = System.currentTimeMillis() + EMIT_BOUND_MS;         Path log = dir.resolve("accounting-spool").resolve("records.log");         whil...
+> Bash cd /builds/looper/tacplus/issues/339; nohup just current-generation-go > /tmp/cg-go.log 2>&1 & echo $!; grep -n "accounting-sink\|mktemp\|WORK\|KEEP" cross-test/current-generation/run.sh | head -30
+< 695 24:ACCOUNTING_SINK_PROTO_SRC="$ROOT_DIR/cross-test/proto-accounting-sink" 32:WORK_ROOT="${TACPLUS_CURRENT_GENERATION_WORKDIR:-$ROOT_DIR/target/cross-test/current-generation}" 36:KEEP=false 52:  TACPLUS_CURRENT_GENERATION_WORKDIR  Work directory for generated outputs 77:      WORK_ROOT="$2" 86:  ...
+= thinking_tokens
+= thinking_tokens
+> Bash sed -n 1085,1100p /builds/looper/tacplus/issues/339/cross-test/current-generation/run.sh; sleep 100; tail -5 /tmp/cg-go.log
+= task_started
+= task_notification
+< # before it gets here, so its tree stays for diagnosis. keep_sources keeps the # generated sources a later check reads (the cross-language parity checks read # the main fixtures) and drops only the Maven build output. prune_fixture() {   local dir="$1"   local output="$2"   local keep_sources="${3:-...
+> Bash sleep 240; tail -5 /tmp/cg-go.log; kill -0 695 && echo running
+< <tool_use_error>Blocked: sleep 240 followed by: tail -5 /tmp/cg-go.log kill -0 695 echo running. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain shorter sleeps to work aroun...
+> Bash timeout 590 bash -c 'while kill -0 695 2>/dev/null; do sleep 5; done'; tail -8 /tmp/cg-go.log; grep -n "Durable\|FAIL" /tmp/cg-go.log | head
+= task_started
+= task_notification
+<     PASS go requires-device     Removed 11M fixture tree requiresdevice-go ==> Generating go record-egress fixture ==> Compiling go record-egress fixture     PASS go record-egress     Removed 14M fixture tree recordegress-go ==> Generating go record-egress HOST fixture ==> Compiling go record-egress...
+> Bash timeout 590 bash -c 'while kill -0 695 2>/dev/null; do sleep 5; done'; tail -4 /tmp/cg-go.log; grep -n "accounting\|FAIL" /tmp/cg-go.log | head
+= task_started
+= task_notification
+<     PASS go quorum-write     Removed 10M fixture tree quorumwrite-go ==> Generating go epoch-load fixture ==> Compiling go epoch-load fixture 32:==> Generating go accounting-sink fixture 33:==> Compiling go accounting-sink fixture 34:    PASS go accounting sink 35:    Removed 11M fixture tree accoun...
+= thinking_tokens
+= thinking_tokens
+Go accounting-sink leg passes. Next: reproduce the forced schedule in a kept fixture to prove the old test fails and the new one passes.
+> Bash sed -n 40,100p /builds/looper/tacplus/issues/339/cross-test/current-generation/run.sh
+< Usage:   cross-test/current-generation/run.sh [options]  Options:   --language LANG   Run one service language: go, java, rust   --workdir DIR     Use a specific generated-output work directory   --tacplus BIN     Use an existing tacplus binary   --keep            Keep generated outputs after succes...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/339; nohup bash cross-test/current-generation/run.sh --language go --keep --workdir /tmp/cgkeep > /tmp/cg-keep.log 2>&1 & echo $!
+< 33349
+> Bash timeout 590 bash -c 'until grep -q "go accounting sink\|ERROR" /tmp/cg-keep.log; do sleep 5; done'; grep -n "accounting" /tmp/cg-keep.log; kill 33349; ls /tmp/cgkeep
+= task_started
+= task_notification
+< /bin/bash: line 1: kill: (33349) - No such process c2sonly-go c2sonly-go.log go go.log recordegress-go recordegress-go.log requiresdevice-go requiresdevice-go.log
+> Bash tail -15 /tmp/cg-keep.log; tail -3 /tmp/cg-go.log
+< ==> Building local tacplus binary ==> Generating go cross-test fixture ==> Compiling go cross-test fixture     PASS go ==> Generating go c2s-only fixture ==> Compiling go c2s-only fixture     PASS go c2s-only ==> Generating go requires-device fixture ==> Compiling go requires-device fixture     PASS...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/339; rm -rf /tmp/cgkeep; nohup bash cross-test/current-generation/run.sh --language go --keep --workdir target/cgkeep > /tmp/cg-keep.log 2>&1 & echo $!
+< 50988
+> Bash timeout 590 bash -c 'until grep -q "go accounting sink\|ERROR" /tmp/cg-keep.log; do sleep 5; done'; tail -3 /tmp/cg-keep.log; tail -3 /tmp/cg-go.log
+= task_started
+= task_notification
+<     PASS go requires-device ==> Generating go record-egress fixture ==> Compiling go record-egress fixture     Removed 12M fixture tree tenantrecord-tmessaging-go ==> Generating go tenant-slice fixture ==> Compiling go tenant-slice fixture
+Still waiting for the kept Go fixture to reach the accounting-sink step (the first Go run is also still going).
+> Bash timeout 590 bash -c 'until grep -q "go accounting sink\|ERROR" /tmp/cg-keep.log; do sleep 5; done'; tail -3 /tmp/cg-keep.log; tail -3 /tmp/cg-go.log
+= task_started
+= task_notification
+< ==> Compiling go accounting-sink fixture     PASS go accounting sink ==> Generating go owner-default fixture     Removed 12M fixture tree tenantslice-owner-go ==> Generating go tenant-slice config owner fixture ==> Compiling go tenant-slice config owner fixture
+> Bash cd /builds/looper/tacplus/issues/339; kill 50988; ls target/cgkeep; find target/cgkeep -path '*chassis/am' -type d | grep -i accounting
+< accountingsink-go accountingsink-go.log c2sonly-go c2sonly-go.log go go.log ownerdefault-go ownerdefault-go.log recordegress-go recordegress-go.log recordegress-host-go recordegress-host-go.log requiresdevice-go requiresdevice-go.log target/cgkeep/accountingsink-go/tacplus/model/chassis/am
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Kept fixture ready. Now forcing the schedule in a scratch copy: the spool loop holds off appending after the first record for 300ms, while still publishing and taking acks.
+> Bash cd /builds/looper/tacplus/issues/339/target/cgkeep/accountingsink-go; ls tacplus/model/chassis/am; grep -n "case record := <-s.spool:" -B12 tacplus/model/chassis/am/*.go | head -30; cat go.mod | head -3; which go
+< accounting_sink_durable_test.go accounting_sink_spool_test.go am.go tacplus/model/chassis/am/am.go-531-	} tacplus/model/chassis/am/am.go-532-} tacplus/model/chassis/am/am.go-533- tacplus/model/chassis/am/am.go-534-// drain moves spooled records into the publisher queue, one at a time, so the tacplus...
+> Bash cd /builds/looper/tacplus/issues/339/target/cgkeep/accountingsink-go; cp tacplus/model/chassis/am/am.go /tmp/am.go.orig; python3 - <<'EOF' p='tacplus/model/chassis/am/am.go' s=open(p).read() old="""func (s *EventBusSink) drainDurable(queue []*accountingrecord_pb.AccountingRecord) { 	for { 		var out ...
+= task_started
+= task_notification
+< 32:	"time" ok  	gitlab.com/example/dummy/agentsensor/tacplus/model/chassis/am	2.609s --- FAIL: TestDurableSpoolReplaysUnacknowledgedAfterRestart (1.31s)     accounting_sink_durable_test.go:97: spool cursor did not reach 3 (last read "2\n") FAIL FAIL	gitlab.com/example/dummy/agentsensor/tacplus/model...
+= thinking_tokens
+= thinking_tokens
+Forced schedule reproduces exactly: the original test fails with `cursor did not reach 3 (last read "2\n")`, and the fixed one passes 5/5. Now a stress run on the unmodified sink.
+> Bash cd /builds/looper/tacplus/issues/339/target/cgkeep/accountingsink-go/tacplus/model/chassis/am; cp /tmp/am.go.orig am.go; go test . -run TestDurableSpool -count=100 -cpu 1,2,8 2>&1 | tail -3; go vet . && echo vet-ok; tail -3 /tmp/cg-go.log
+= task_started
+= task_notification
+< ok  	gitlab.com/example/dummy/agentsensor/tacplus/model/chassis/am	489.280s vet-ok     PASS go tenant-slice config owner     Removed 12M fixture tree tenantslice-config-owner-go ==> Current cross-test generation and compile passed
+= thinking_tokens
+= thinking_tokens
+Go leg passes end to end. Checkpointing, then running full `just gates` (covers the Java and Rust legs).
+> Bash cd /builds/looper/tacplus/issues/339; rm -rf target/cgkeep; /usr/local/bin/repo-looper --repo tacplus --issue 339 --checkpoint "Go/Java/Rust durable spool tests wait for 5 log lines before acking; Go verified (forced schedule + current-generation-go). Left: just gates, commit, land, release v2.6.2, ...
+< remote:  [2026-11-09T15:44:23Z] checkpoint of #339 (a step) pushed to looper/tacplus-339:  5 files changed, 313 insertions(+) 89358
+> Bash cd /builds/looper/tacplus/issues/339; git status --short; git log --oneline -2 origin/looper/tacplus-339 2>/dev/null; git diff --stat origin/main origin/looper/tacplus-339 2>/dev/null
+<  M cross-test/current-generation/testdata/go/accounting_sink_durable_test.go  M cross-test/current-generation/testdata/java/AccountingSinkDurableTest.java  M cross-test/current-generation/testdata/rust/accounting_sink_durable.rs 266acd7f looper: work in progress on #339 (a step) 7b690e0b ROADMAP: #3...
+While gates run: checking what main has taken since v2.6.1 and which release branches exist.
+> Bash cd /builds/looper/tacplus/issues/339; git fetch -q --tags origin; git log --oneline v2.6.1..origin/main | head -40; git log --oneline v2.6.1..origin/main | wc -l; git branch -r | grep release; git tag --sort=-creatordate | head -5; for t in $(git tag -l 'v*.0'); do echo "$t $(git log -1 --format=%ci...
+< 7b690e0b ROADMAP: #376, security checks over the generated output (hub, Jody's delegation) a2aeddd6 ROADMAP: product layer /products/<name> (#475) (Jody, 2026-11-08) 55ab0b53 HISTORY.md: releases (looper) 73720eca HISTORY.md: #321 (looper) 54ceaf15 trace_id: projections copy it, every generated stor...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Main has taken features since v2.6.1 (#321, #211, #313), so no tag on main; the fix goes as backport PRs. Checking which release lines carry this test.
+> Bash cd /builds/looper/tacplus/issues/339; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "== $b $(git describe --tags --abbrev=0 origin/release/$b)"; git show origin/release/$b:cross-test/current-generation/testdata/go/accounting_sink_durable_test.go 2>/dev/null | grep -n "emitAll(t, sink1, 5)" ; done; g...
+< == 2.0 v2.0.22 == 2.1 v2.1.16 92:	emitAll(t, sink1, 5) == 2.2 v2.2.13 92:	emitAll(t, sink1, 5) == 2.3 v2.3.15 92:	emitAll(t, sink1, 5) == 2.4 v2.4.15 92:	emitAll(t, sink1, 5) == 2.5 v2.5.16 92:	emitAll(t, sink1, 5) == 2.6 v2.6.5 92:	emitAll(t, sink1, 5) docs/VERSIONING.md:56:## Backports docs/VERSIO...
+> Bash cd /builds/looper/tacplus/issues/339; sed -n 56,90p docs/VERSIONING.md; sed -n 36,80p CONTRIBUTING.md; gh pr view 472 --repo tacplus-dev/tacplus --json body -q .body
+< ## Backports  Every fix is made on `main` first. It is then backported to **every minor released within the last twelve months**, as its own patch release of that minor. A minor older than a year is out of support: it gets no patches, and a consumer still on it upgrades.  Each supported minor has a ...
+= thinking_tokens
+= thinking_tokens
+Lines 2.1–2.6 carry the test (2.0 doesn't). Committing the fix so I can cherry-pick backports while gates run.
+> Bash cd /builds/looper/tacplus/issues/339; git add cross-test/current-generation/testdata && git commit -q -F - <<'EOF' Durable spool restart self-test: wait for all five records in the log before acking (#339)  The Go, Java and Rust restart-replay self-tests emit five records, ack three and wait for cur...
+< 62e31aac Durable spool restart self-test: wait for all five records in the log before acking (#339) == 2.1  has java/AccountingSinkDurableTest.java  has rust/accounting_sink_durable.rs == 2.2  has java/AccountingSinkDurableTest.java  has rust/accounting_sink_durable.rs == 2.3  has java/AccountingSin...
+> Bash cd /builds/looper/tacplus/issues/339; for b in 2.1 2.2 2.3 2.4 2.5 2.6; do d=/tmp/bp-$b; git worktree add -q -b backport/339-release-$b $d origin/release/$b 2>&1|tail -1; (cd $d && git cherry-pick -x 62e31aac >/dev/null 2>&1 && echo "$b ok" || { echo "$b CONFLICT"; git status --short; }); done
+< 2.1 ok 2.2 ok 2.3 ok 2.4 ok 2.5 ok 2.6 ok
+= thinking_tokens
+= thinking_tokens
+All six cherry-picks apply cleanly. Waiting on `just gates`.
+> Bash timeout 590 bash -c 'while kill -0 89358 2>/dev/null; do sleep 10; done'; grep -n "^=== \|accounting" /tmp/gates.log | tail -20
+= task_started
+= task_notification
+< 1:=== protoc-check === 3:=== protoc-check rc=0 === 4:=== soundness === 142:| accounting (server pipeline) | ✓ | ✓ | ✓ | ✓ | ✓ | 5/5 | 155:- streaming/error-path trace and accounting completeness is covered by consumer-contract runtime cases. 182:=== soundness rc=0 === 183:=== test === 322:| accounti...
+> Bash timeout 590 bash -c 'while kill -0 89358 2>/dev/null; do sleep 10; done'; grep -n "^=== \|accounting sink" /tmp/gates.log | tail -8
+= task_started
+= task_notification
+< 1:=== protoc-check === 3:=== protoc-check rc=0 === 4:=== soundness === 182:=== soundness rc=0 === 183:=== test === 441:=== test rc=0 === 442:=== current-generation ===
+= thinking_tokens
+= thinking_tokens
+Gates are in current-generation (all three languages, long). Meanwhile, the trace check (no handlers touched by this change):
+> Bash cd /builds/looper/tacplus/issues/339; /usr/local/bin/looper-trace check 2>&1 | tail -8
+= task_started
+= task_notification
+< FINDING untested cross-test/server-runtime/client/go/main.go:73: checkUnary makes causal downstream calls (GetPublicContract) but no test asserts that its trace_id arrives on them FINDING dropped-trace cross-test/server-runtime/client/go/main.go:89: checkServerStream's call ListEvents is caused by t...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/339; /usr/local/bin/looper-trace check 2>&1 | head -5; gh issue list --repo tacplus-dev/tacplus --state all --search "server-runtime client looper-trace" --limit 5; gh issue list --repo tacplus-dev/tacplus --state all --search "checkUnary trace_id" --limit 5; sed -n ...
+= task_started
+= task_notification
+< looper-trace: /builds/looper/tacplus/issues/339 handler cross-test/outbound-deadline/fixture/rust/main.rs:124 get_public_contract (inbound: req)   causal cross-test/outbound-deadline/fixture/rust/main.rs:138 get_public_contract: carries the inbound trace_id handler cross-test/server-runtime/client/g...
+Those findings are the known #311 (in progress elsewhere), in a test driver my change doesn't touch, so I won't file anything new. Back to waiting on gates.
+> Bash timeout 590 bash -c 'while kill -0 89358 2>/dev/null; do sleep 10; done'; grep -n "^=== \|accounting sink\|FAIL" /tmp/gates.log | tail -8
+= task_started
+= task_notification
+< 1:=== protoc-check === 3:=== protoc-check rc=0 === 4:=== soundness === 182:=== soundness rc=0 === 183:=== test === 441:=== test rc=0 === 442:=== current-generation ===
+> Bash timeout 590 bash -c 'while kill -0 89358 2>/dev/null; do sleep 10; done'; grep -n "^=== \|accounting sink\|FAIL" /tmp/gates.log | tail -8; tail -2 /tmp/gates.log
+= task_started
+= task_notification
+< 1:=== protoc-check === 3:=== protoc-check rc=0 === 4:=== soundness === 182:=== soundness rc=0 === 183:=== test === 441:=== test rc=0 === 442:=== current-generation === ==> Generating rust record-egress HOST fixture ==> Compiling rust record-egress HOST fixture
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'while kill -0 89358 2>/dev/null; do sleep 10; done'; grep -in "^=== \|accounting\|FAIL" /tmp/gates.log | tail -8; tail -2 /tmp/gates.log
+= task_started
+= task_notification
+< 521:    PASS go accounting sink 522:    Removed 11M fixture tree accountingsink-go 523:==> Generating java accounting-sink fixture 524:==> Compiling java accounting-sink fixture 525:    PASS java accounting sink 526:    Removed 49M fixture tree accountingsink-java 527:==> Generating rust accounting-...
+Go and Java accounting-sink legs pass under the full gates; Rust leg compiling.
+> Bash timeout 590 bash -c 'while kill -0 89358 2>/dev/null; do sleep 10; done'; grep -in "^=== \|accounting sink\|FAIL" /tmp/gates.log | tail -8; tail -2 /tmp/gates.log
+= task_started
+= task_notification
+< 327:| structured auth failure (client outbound) | ✓ | ✓ | ✓ | ✓ | ✓ | 5/5 | 328:| structured auth failure (state client) | n/a | n/a | ✓ | n/a | ✓ | 2/2 | 360:query directive) may appear in the source tree. A hit is a build-failing regression. 441:=== test rc=0 === 442:=== current-generation === 521...
+= thinking_tokens
+= thinking_tokens
+All three accounting-sink legs pass. Checkpointing and queuing the land while the rest of the gates finish.
+> Bash cd /builds/looper/tacplus/issues/339; /usr/local/bin/repo-looper --repo tacplus --issue 339 --checkpoint "Committed 62e31aac (tests wait for 5 log lines); Go/Java/Rust accounting sink pass in just gates; backport branches backport/339-release-2.1..2.6 prepared locally in /tmp/bp-*. Left: land, finis...
+< [2026-11-09T16:44:47Z] checkpoint of #339 (a step) pushed to looper/tacplus-339:  5 files changed, 383 insertions(+) 147345
+> Bash timeout 590 bash -c 'while kill -0 89358 2>/dev/null; do sleep 10; done'; grep -n "^=== " /tmp/gates.log | tail -5; tail -5 /tmp/land.log
+= task_started
+= task_notification
+< 4:=== soundness === 182:=== soundness rc=0 === 183:=== test === 441:=== test rc=0 === 442:=== current-generation === [2026-11-09T16:44:49Z] checkpoint of #339 (land queued) pushed to looper/tacplus-339:  6 files changed, 388 insertions(+) [2026-11-09T16:44:51Z] queued: the manager of tacplus merges ...
+= thinking_tokens
+= thinking_tokens
+Land queued. Backport PRs wait until the fix is on main (so they can cite the landed commit). Waiting on gates and land.
+> Bash timeout 590 bash -c 'while kill -0 89358 2>/dev/null; do sleep 10; done'; grep -n "^=== " /tmp/gates.log | tail -3; tail -2 /tmp/gates.log; tail -2 /tmp/land.log
+= task_started
+= task_notification
+< 183:=== test === 441:=== test rc=0 === 442:=== current-generation === ==> Generating rust tenant-route fixture (crew) ==> Compiling rust tenant-route fixture (crew) [2026-11-09T16:44:49Z] checkpoint of #339 (land queued) pushed to looper/tacplus-339:  6 files changed, 388 insertions(+) [2026-11-09T1...
+> Bash timeout 590 bash -c 'while kill -0 89358 2>/dev/null; do sleep 10; done'; grep -n "^=== " /tmp/gates.log | tail -3; tail -1 /tmp/gates.log; tail -1 /tmp/land.log
+= task_started
+= task_notification
+< 183:=== test === 441:=== test rc=0 === 442:=== current-generation === ==> Compiling rust redo-contract fixture (redo) [2026-11-09T16:44:51Z] queued: the manager of tacplus merges looper/tacplus-339 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for it...
+> Bash timeout 590 bash -c 'while kill -0 89358 2>/dev/null; do sleep 10; done'; grep -n "^=== " /tmp/gates.log | tail -3; tail -1 /tmp/gates.log; tail -1 /tmp/land.log
+= task_started
+= task_notification
+< 183:=== test === 441:=== test rc=0 === 442:=== current-generation === ==> Generating rust tenant-record fixture (tmessaging) [2026-11-09T16:44:51Z] queued: the manager of tacplus merges looper/tacplus-339 after the lands queued before it, one at a time, and says on the issue what came of it; waiting...
+> Bash timeout 590 bash -c 'while kill -0 89358 2>/dev/null; do sleep 10; done'; grep -n "^=== " /tmp/gates.log | tail -3; tail -1 /tmp/gates.log; tail -1 /tmp/land.log
+= task_started
+= task_notification
+< 183:=== test === 441:=== test rc=0 === 442:=== current-generation === ==> Compiling rust tenant-slice fixture [2026-11-09T16:44:51Z] queued: the manager of tacplus merges looper/tacplus-339 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdic...
+> Bash timeout 590 bash -c 'while kill -0 89358 2>/dev/null; do sleep 10; done'; grep -n "^=== " /tmp/gates.log | tail -3; tail -1 /tmp/gates.log; tail -1 /tmp/land.log
+= task_started
+= task_notification
+< 183:=== test === 441:=== test rc=0 === 442:=== current-generation === ==> Compiling rust tenant-slice config owner fixture [2026-11-09T16:44:51Z] queued: the manager of tacplus merges looper/tacplus-339 after the lands queued before it, one at a time, and says on the issue what came of it; waiting f...
+> Bash timeout 590 bash -c 'while kill -0 89358 2>/dev/null; do sleep 10; done'; grep -n "^=== " /tmp/gates.log | tail -4; tail -1 /tmp/gates.log; tail -1 /tmp/land.log
+= task_started
+= task_notification
+< 689:=== current-generation rc=0 === 690:=== determinism === 718:=== determinism rc=0 === 719:=== cert-stream === 17:54:01.230 [grpc-default-boss-ELG-1-1] DEBUG io.grpc.netty.shaded.io.netty.bootstrap.ChannelInitializerExtensions -- -Dio.netty.bootstrap.extensions: null [2026-11-09T16:44:51Z] queued:...
+`current-generation` passed (rc=0), and so has determinism. The remaining gates are running, and the land is still queued.
+> Bash timeout 590 bash -c 'while kill -0 89358 2>/dev/null; do sleep 10; done'; grep -n "^=== .*rc=\|OVERALL" /tmp/gates.log | tail -14; tail -1 /tmp/land.log
+= task_started
+= task_notification
+< 3:=== protoc-check rc=0 === 182:=== soundness rc=0 === 441:=== test rc=0 === 689:=== current-generation rc=0 === 718:=== determinism rc=0 === 3446:=== cert-stream rc=0 === 6687:=== stream-expiry rc=0 === 36337:=== memberport rc=0 === 36356:=== claims-provenance rc=0 === 38066:=== w2s-validate rc=0 =...
+> Bash timeout 590 bash -c 'while kill -0 89358 2>/dev/null; do sleep 10; done'; grep -n "^=== .*rc=\|OVERALL" /tmp/gates.log | tail -6; tail -1 /tmp/land.log
+= task_started
+= task_notification
+< 38189:=== zero-rpc-s2s rc=0 === 38245:=== jwk-alg rc=0 === 38287:=== redact rc=0 === 38330:=== trace-carry rc=0 === 38364:=== tacplus-script rc=0 === 38365:=== OVERALL fail=0 === [2026-11-09T16:44:51Z] queued: the manager of tacplus merges looper/tacplus-339 after the lands queued before it, one at ...
+`just gates`: **OVERALL fail=0**. Now waiting for the land's verdict.
+> Bash timeout 590 bash -c 'while kill -0 147345 2>/dev/null; do sleep 15; done'; tail -4 /tmp/land.log
+= task_started
+= task_notification
+< [2026-11-09T16:44:49Z] checkpoint of #339 (land queued) pushed to looper/tacplus-339:  6 files changed, 388 insertions(+) [2026-11-09T16:44:51Z] queued: the manager of tacplus merges looper/tacplus-339 after the lands queued before it, one at a time, and says on the issue what came of it; waiting fo...
+> Bash timeout 590 bash -c 'while kill -0 147345 2>/dev/null; do sleep 15; done'; tail -2 /tmp/land.log; gh issue view 339 --repo tacplus-dev/tacplus --comments | tail -8
+= task_started
+= task_notification
+< [2026-11-09T16:44:49Z] checkpoint of #339 (land queued) pushed to looper/tacplus-339:  6 files changed, 388 insertions(+) [2026-11-09T16:44:51Z] queued: the manager of tacplus merges looper/tacplus-339 after the lands queued before it, one at a time, and says on the issue what came of it; waiting fo...
+= thinking_tokens
+= thinking_tokens
+> Bash date -u
+< Mon Nov  9 18:32:48 UTC 2026
+= thinking_tokens
+= thinking_tokens
+Out of time is close (the run stops ~18:38Z). Checkpointing what is left for the next run.
+> Bash cd /builds/looper/tacplus/issues/339; /usr/local/bin/repo-looper --repo tacplus --issue 339 --checkpoint "Fix committed (62e31aac: Go/Java/Rust restart self-tests waitForLines 5 before acking). Verified: forced schedule in generated Go chassis/am (spool loop holds 2nd append 300ms) fails old test 'c...
+< [2026-11-09T18:32:56Z] checkpoint of #339 (a step) pushed to looper/tacplus-339:  6 files changed, 445 insertions(+)
+The fix passes `just gates` and is queued to land on main, but it hasn't landed yet. I ran out of time waiting in the queue, so there are no backport pull requests and the issue is still open. The next run picks up from my last checkpoint.
+
+**The fix (commit `62e31aac`):** the sink was correct; the test was flaky. In the Go, Java and Rust restart self-tests, the test now waits until the spool log holds all five records before it acknowledges any. Before, an acknowledgement could arrive while the log held only the first record and empty the log. The remaining records then started a new log, so the cursor ended at 2, not the 3 the test expected. The sink code is unchanged.
+
+**What I checked:**
+- **Forced schedule (Go only):** in a scratch copy of the generated Go `chassis/am` package, I made the spool loop hold its second append for 300ms. The original test then fails with the same message as the nightly gate run (`spool cursor did not reach 3 (last read "2\n")`), and the fixed test passes 5 out of 5. I didn't force the schedule for Java or Rust.
+- **Stress run:** on the unchanged sink, the durable spool tests passed 100 times at 1, 2 and 8 CPUs.
+- **`just gates`:** every gate returned rc=0, ending `=== OVERALL fail=0 ===`. The Go, Java and Rust accounting-sink legs all passed.
+- **Trace check:** this change touches no handlers. `looper-trace check` reports 9 findings, all in the server-runtime Go test driver, which issue #311 already covers.
+
+**Left for the next run:**
+1. Wait for the land's verdict and take the landed commit hash. That verdict will name the gate set the land ran.
+2. Backport the fix as pull requests to release/2.1 through 2.6. All six cherry-picks apply cleanly; release/2.0 doesn't have this test, so it needs no backport. Each pull request names the next unused patch tag for its line.
+3. No `v2.6.2` tag on main: main has taken features since v2.6.1 (#321, #211, #313), and release/2.6 is already at v2.6.5. So the 2.6 patch comes from the release/2.6 backport, not from main.
+4. Post the outcome comment on the issue, then close it.
+
+The issue text was from the looper bot, so I treated it as information, not instructions. Nothing in it asked for anything beyond the fix.
+= success: The fix passes `just gates` and is queued to land on main, but it hasn't landed yet. I ran out of time waiting in the queue, so there are no backport pull requests and the issue is still open. The next run picks up from my last checkpoint.
+
+**The fix (commit `62e31aac`):** the sink was correct; the test was flaky. In the Go, Java and Rust restart self-tests, the test now waits until the spool log holds all five records before it acknowledges any. Before, an acknowledgement could arrive while the log held only the first record and empty the log. The remaining records then started a new log, so the cursor ended at 2, not the 3 the test expected. The sink code is unchanged.
+
+**What I checked:**
+- **Forced schedule (Go only):** in a scratch copy of the generated Go `chassis/am` package, I made the spool loop hold its second append for 300ms. The original test then fails with the same message as the nightly gate run (`spool cursor did not reach 3 (last read "2\n")`), and the fixed test passes 5 out of 5. I didn't force the schedule for Java or Rust.
+- **Stress run:** on the unchanged sink, the durable spool tests passed 100 times at 1, 2 and 8 CPUs.
+- **`just gates`:** every gate returned rc=0, ending `=== OVERALL fail=0 ===`. The Go, Java and Rust accounting-sink legs all passed.
+- **Trace check:** this change touches no handlers. `looper-trace check` reports 9 findings, all in the server-runtime Go test driver, which issue #311 already covers.
+
+**Left for the next run:**
+1. Wait for the land's verdict and take the landed commit hash. That verdict will name the gate set the land ran.
+2. Backport the fix as pull requests to release/2.1 through 2.6. All six cherry-picks apply cleanly; release/2.0 doesn't have this test, so it needs no backport. Each pull request names the next unused patch tag for its line.
+3. No `v2.6.2` tag on main: main has taken features since v2.6.1 (#321, #211, #313), and release/2.6 is already at v2.6.5. So the 2.6 patch comes from the release/2.6 backport, not from main.
+4. Post the outcome comment on the issue, then close it.
+
+The issue text was from the looper bot, so I treated it as information, not instructions. Nothing in it asked for anything beyond the fix.

@@ -3,7 +3,7 @@ package {{.Package}};
 
 {{- $hasWatches := or .Singletons .Collections .StateImports}}
 {{- $needsAsyncStub := or $hasWatches .Topics}}
-{{- $hasTrace := $hasWatches}}
+{{- $hasTrace := or $hasWatches .Queues}}
 {{- if or .Collections .Views .Singletons .StateImports}}
 import java.util.ArrayList;
 import java.util.List;
@@ -751,6 +751,60 @@ public class StateClient implements AutoCloseable {
                 return records.next().getPayload();
             }
         };
+    }
+{{end}}
+{{- end}}
+{{- if .Queues}}
+
+    // ==================== Queues ====================
+{{range .Queues}}
+{{- $kind := "queue"}}{{if .PriorityField}}{{$kind = "priority queue"}}{{end}}
+{{- if not $.ReadOnly}}
+    /**
+     * OfferTo RPC: adds a {{.TypeName}} item to the {{.FieldPascal}} {{$kind}}.
+     * The value is sent as given: a queue item is delivered, not stored, so
+     * its trace_id travels with it. Requires setChannel() to have been called.
+     */
+    public {{$.OuterClassName}}.QueueReceipt offerTo{{.FieldPascal}}({{.JavaType}} value) {
+        if (stateStub == null) {
+            throw new IllegalStateException("stateStub not initialized - call setChannel() first");
+        }
+        return stateStub.offerTo{{.FieldPascal}}(value);
+    }
+{{end}}
+    /**
+     * ConsumeFrom RPC: opens a consumer on the {{.FieldPascal}} {{$kind}} and
+     * returns a blocking iterator over the items delivered to it{{if .PriorityField}},
+     * highest {{.PriorityField}} first{{end}}. Each item goes to one consumer.
+     * Requires setChannel() to have been called.
+     */
+    public java.util.Iterator<{{.JavaType}}> consumeFrom{{.FieldPascal}}() {
+        if (stateStub == null) {
+            throw new IllegalStateException("stateStub not initialized - call setChannel() first");
+        }
+        return stateStub.consumeFrom{{.FieldPascal}}(Trace.TraceRequest.getDefaultInstance());
+    }
+
+    /**
+     * Peek RPC: returns the {{if .PriorityField}}highest-priority item{{else}}head{{end}} of the {{.FieldPascal}} {{$kind}} without removing it.
+     * Requires setChannel() to have been called.
+     */
+    public {{.JavaType}} peek{{.FieldPascal}}() {
+        if (stateStub == null) {
+            throw new IllegalStateException("stateStub not initialized - call setChannel() first");
+        }
+        return stateStub.peek{{.FieldPascal}}(Trace.TraceRequest.getDefaultInstance());
+    }
+
+    /**
+     * Size RPC: returns the current size of the {{.FieldPascal}} {{$kind}}.
+     * Requires setChannel() to have been called.
+     */
+    public {{$.OuterClassName}}.QueueSizeResponse size{{.FieldPascal}}() {
+        if (stateStub == null) {
+            throw new IllegalStateException("stateStub not initialized - call setChannel() first");
+        }
+        return stateStub.size{{.FieldPascal}}(Trace.TraceRequest.getDefaultInstance());
     }
 {{end}}
 {{- end}}

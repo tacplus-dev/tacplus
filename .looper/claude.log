@@ -1,0 +1,400 @@
+= thinking_tokens
+While gates run, drafting the backport PR descriptions (next unused tag per line).
+> Bash cd /builds/looper/tacplus/issues/464; git fetch -q --tags origin; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b $(git tag -l "v$b.*" --sort=-v:refname | head -1)"; done; gh pr list --repo tacplus-dev/tacplus --state open --limit 30 --json number,title,baseRefName -q '.[]|"\(.number) \(.baseRefNa...
+< 2.0 v2.0.22 2.1 v2.1.16 2.2 v2.2.13 2.3 v2.3.15 2.4 v2.4.15 2.5 v2.5.16 2.6 v2.6.5 489 release/2.6 [release/2.6] Raise the TypeScript, Rust and Go x/crypto floors past their advisories (#312) 488 release/2.5 [release/2.5] Raise the TypeScript, Rust and Go x/crypto floors past their advisories (#312)...
+> Bash cat > /tmp/bpscripts/body.tmpl <<'EOF' Backport of #464 to release/LINE. It is a generator bug fix (approved in hub triage, 2026-11-08: "patch the lines that have it"); this line has it.  **Patch to cut once this merges: the next unused LINE tag, `NEXTTAG` as of 2026-11-09** (`LASTTAG` is the newest...
+< ok
+= thinking_tokens
+= thinking_tokens
+> Bash cd /tmp/bpscripts && python3 -c " p='body.tmpl';s=open(p).read() s=s.replace('Without the fix, the same build fails with the TS2339 above.','The unfixed generator, which is the same code on this line as on main, fails the same build on main with the TS2339 above.') open(p,'w').write(s)"; grep -c TS2...
+< 2 Shell cwd was reset to /builds/looper/tacplus/issues/464
+> Bash until grep -q "OVERALL" /tmp/gates464.log || ! kill -0 11766 2>/dev/null; do sleep 30; done; grep -E "^=== .* rc=|OVERALL" /tmp/gates464.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bsy2pb22b). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/bsy2pb22b.output. You will be notified w...
+The gates are still running; the long watcher (bl4mfq0hg) will notify me when they finish.
+> Bash until grep -q "OVERALL" /tmp/gates464.log || ! kill -0 11766 2>/dev/null; do sleep 30; done; grep -E "^=== .* rc=|OVERALL" /tmp/gates464.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bledx2qvd). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/bledx2qvd.output. You will be notified w...
+> Bash grep -E "^=== .* rc=|OVERALL" /tmp/gates464.log; tail -2 /tmp/gates464.log
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust record-egress fixture ==> Compiling rust record-egress fixture
+The gates are still in current-generation's Rust fixtures. I'll wait for the long watcher's notification instead of polling.
+> Read /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/bl4mfq0hg.output
+< <system-reminder>Warning: the file exists but the contents are empty.</system-reminder>
+> Bash until grep -q "=== determinism rc=" /tmp/gates464.log || ! kill -0 11766 2>/dev/null; do sleep 30; done; grep -E "^=== .* rc=|OVERALL" /tmp/gates464.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b27rkt3w8). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/b27rkt3w8.output. You will be notified w...
+> Bash grep -E "^=== .* rc=|OVERALL" /tmp/gates464.log; tail -2 /tmp/gates464.log; date
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust record-egress HOST fixture ==> Compiling rust record-egress HOST fixture Mon Nov  9 17:51:03 UTC 2026
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash ps -o pid,pgid,cmd -p 11766; pg=$(ps -o pgid= -p 11766 | tr -d ' '); echo pg=$pg; [ "$pg" = 11766 ] && kill -- -11766; sleep 3; ps -o pid,cmd -g 11766 | head
+= task_started
+= task_notification
+<     PID    PGID CMD   11766   11656 just gates pg=11656     PID CMD
+> Bash ps -o pid,pgid,cmd -g 11656 | head -20
+<     PID    PGID CMD   11766   11656 just gates   11768   11656 bash scripts/with-tree-lock.sh just gates   11772   11656 just gates   11774   11656 bash /builds/looper/tacplus/homes/looper-464/tmp/just-aafKj5/gates   27032   11656 just current-generation   27034   11656 sh -cu bash scripts/with-tree...
+= thinking_tokens
+= thinking_tokens
+> Bash ps -o pid,cmd -p 11656; pids=$(ps -o pid= -g 11656 | tr '\n' ' '); echo $pids; kill $pids 2>/dev/null; sleep 5; ps -o pid,cmd -g 11656 | head -5
+= task_started
+= task_notification
+<     PID CMD 11766 11768 11772 11774 27032 27034 27035 27038 79572 79584     PID CMD
+Stopped (those PIDs were all from my own run's process group). Committing and landing.
+> Bash cd /builds/looper/tacplus/issues/464; git status --short | head -30
+<  M PROPOSALS.md  M cross-test/README.md  M cross-test/TESTS.md  M cross-test/current-generation/run.sh  M cross-test/justfile  M justfile  M pkg/internal/typescript/types/assert_min_size_presence_test.go  M pkg/internal/typescript/types/assert_required_zero_check_test.go  M pkg/internal/typescript/t...
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash cd /builds/looper/tacplus/issues/464; python3 - <<'EOF' s=open('/tmp/bpscripts/msg.txt').read() s=s.replace("\nCo-Authored-By",""" current-generation now also generates the TypeScript model of cross-test/proto, which has the case (libraries2/cache.proto, warm_max_bytes), and compiles it with tsc, so...
+< 8d724a36 TypeScript: required_if_eq on an enum sibling names the protobuf-es member (#464) [2026-11-09T17:51:37Z] checkpoint of #464 (a step) pushed to looper/tacplus-464:  19 files changed, 716 insertions(+), 28 deletions(-) pid=79768
+= thinking_tokens
+= thinking_tokens
+The commit is 8d724a36, and the land is queued (pid 79768). Those three notifications came from watchers of the gate run I stopped, not from a verdict. Now waiting on the land.
+> Bash until ! kill -0 79768 2>/dev/null; do sleep 30; done; tail -30 /tmp/land464.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bkxbpnr8y. Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/bkxbpnr8y.output. You will be notified when it completes. To check interim output, use R...
+> Bash cat /tmp/land464.log | tail -15
+< [2026-11-09T17:51:39Z] checkpoint of #464 (land queued) pushed to looper/tacplus-464:  20 files changed, 720 insertions(+), 28 deletions(-) [2026-11-09T17:51:42Z] queued: the manager of tacplus merges looper/tacplus-464 after the lands queued before it, one at a time, and says on the issue what came...
+= thinking_tokens
+= thinking_tokens
+The land is queued with the manager. I'll wait for its verdict before opening the backport PRs.
+> Bash until ! kill -0 79768 2>/dev/null; do sleep 30; done; tail -30 /tmp/land464.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b28r5wfra). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/b28r5wfra.output. You will be notified w...
+> Bash tail -5 /tmp/land464.log; date
+< [2026-11-09T17:51:39Z] checkpoint of #464 (land queued) pushed to looper/tacplus-464:  20 files changed, 720 insertions(+), 28 deletions(-) [2026-11-09T17:51:42Z] queued: the manager of tacplus merges looper/tacplus-464 after the lands queued before it, one at a time, and says on the issue what came...
+The land is still queued. The long watcher (bkxbpnr8y, 2h limit) will notify me when the verdict arrives.
+> Bash until ! kill -0 79768 2>/dev/null; do sleep 30; done; tail -30 /tmp/land464.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bn611gpmy). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/bn611gpmy.output. You will be notified w...
+> Bash tail -3 /tmp/land464.log; gh issue view 464 --repo tacplus-dev/tacplus --comments | tail -8; date
+< [2026-11-09T17:51:39Z] checkpoint of #464 (land queued) pushed to looper/tacplus-464:  20 files changed, 720 insertions(+), 28 deletions(-) [2026-11-09T17:51:42Z] queued: the manager of tacplus merges looper/tacplus-464 after the lands queued before it, one at a time, and says on the issue what came...
+> Bash until ! kill -0 79768 2>/dev/null; do sleep 30; done; tail -30 /tmp/land464.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b810lnnx5). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/b810lnnx5.output. You will be notified w...
+> Bash until ! kill -0 79768 2>/dev/null; do sleep 30; done; tail -30 /tmp/land464.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b33u15tli). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/b33u15tli.output. You will be notified w...
+> Bash tail -3 /tmp/land464.log; date
+< [2026-11-09T17:51:39Z] checkpoint of #464 (land queued) pushed to looper/tacplus-464:  20 files changed, 720 insertions(+), 28 deletions(-) [2026-11-09T17:51:42Z] queued: the manager of tacplus merges looper/tacplus-464 after the lands queued before it, one at a time, and says on the issue what came...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/464; declare -A last=([2.0]=v2.0.22 [2.1]=v2.1.16 [2.2]=v2.2.13 [2.3]=v2.3.15 [2.4]=v2.4.15 [2.5]=v2.5.16 [2.6]=v2.6.5); declare -A next=([2.0]=v2.0.23 [2.1]=v2.1.17 [2.2]=v2.2.14 [2.3]=v2.3.16 [2.4]=v2.4.16 [2.5]=v2.5.17 [2.6]=v2.6.6); for b in 2.0 2.1 2.2 2.3 2.4 2...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= vcs_state_changed
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/510 https://github.com/tacplus-dev/tacplus/pull/511 https://github.com/tacplus-dev/tacplus/pull/512 https://github.com/tacplus-dev/tacplus/pull/513 https://github.com/tacplus-dev/tacplus/pull/514 https://github.com/tacplus-dev/tacplus/pull/515 https://gith...
+= thinking_tokens
+= thinking_tokens
+I opened the backport PRs #510–#516 (release/2.0–2.6). Checkpointing, then waiting for the land.
+> Bash cd /builds/looper/tacplus/issues/464; /usr/local/bin/repo-looper --repo tacplus --issue 464 --checkpoint "8d724a36 queued for land. Backport PRs #510-#516 open (release/2.0-2.6, tags v2.0.23 v2.1.17 v2.2.14 v2.3.16 v2.4.16 v2.5.17 v2.6.6 to cut on merge). Left: land verdict, outcome comment, close."...
+< [2026-11-09T18:32:40Z] checkpoint of #464 (a step) pushed to looper/tacplus-464:  20 files changed, 720 insertions(+), 28 deletions(-)
+> Bash until ! kill -0 79768 2>/dev/null; do sleep 30; done; tail -30 /tmp/land464.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b1jvz66km). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/b1jvz66km.output. You will be notified w...
+> Bash until ! kill -0 79768 2>/dev/null; do sleep 30; done; tail -30 /tmp/land464.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bnrltesla). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/bnrltesla.output. You will be notified w...
+> Bash tail -3 /tmp/land464.log; date
+< [2026-11-09T17:51:39Z] checkpoint of #464 (land queued) pushed to looper/tacplus-464:  20 files changed, 720 insertions(+), 28 deletions(-) [2026-11-09T17:51:42Z] queued: the manager of tacplus merges looper/tacplus-464 after the lands queued before it, one at a time, and says on the issue what came...
+The land is still queued (18:52; about 1h40m left). I'll keep waiting.
+> Bash until ! kill -0 79768 2>/dev/null; do sleep 30; done; tail -30 /tmp/land464.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b03kmevru). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/b03kmevru.output. You will be notified w...
+> Bash until ! kill -0 79768 2>/dev/null; do sleep 30; done; tail -30 /tmp/land464.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bjs53qzqn). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/bjs53qzqn.output. You will be notified w...
+> Bash tail -3 /tmp/land464.log; date; gh issue view 464 --repo tacplus-dev/tacplus --json comments -q '.comments[-1].body' | head -5
+< [2026-11-09T17:51:39Z] checkpoint of #464 (land queued) pushed to looper/tacplus-464:  20 files changed, 720 insertions(+), 28 deletions(-) [2026-11-09T17:51:42Z] queued: the manager of tacplus merges looper/tacplus-464 after the lands queued before it, one at a time, and says on the issue what came...
+> Bash until ! kill -0 79768 2>/dev/null; do sleep 30; done; tail -30 /tmp/land464.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bhhzinvlm). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/bhhzinvlm.output. You will be notified w...
+> Bash until ! kill -0 79768 2>/dev/null; do sleep 30; done; tail -30 /tmp/land464.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b7r3vdja5). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/b7r3vdja5.output. You will be notified w...
+> Bash tail -3 /tmp/land464.log; date
+< [2026-11-09T17:51:39Z] checkpoint of #464 (land queued) pushed to looper/tacplus-464:  20 files changed, 720 insertions(+), 28 deletions(-) [2026-11-09T17:51:42Z] queued: the manager of tacplus merges looper/tacplus-464 after the lands queued before it, one at a time, and says on the issue what came...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash until ! kill -0 79768 2>/dev/null; do sleep 30; done; tail -30 /tmp/land464.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: boyxmnnpi). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/boyxmnnpi.output. You will be notified w...
+> Bash until ! kill -0 79768 2>/dev/null; do sleep 30; done; tail -30 /tmp/land464.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: brdq9cwuj). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/brdq9cwuj.output. You will be notified w...
+> Bash tail -3 /tmp/land464.log; date
+< [2026-11-09T17:51:39Z] checkpoint of #464 (land queued) pushed to looper/tacplus-464:  20 files changed, 720 insertions(+), 28 deletions(-) [2026-11-09T17:51:42Z] queued: the manager of tacplus merges looper/tacplus-464 after the lands queued before it, one at a time, and says on the issue what came...
+> Bash until ! kill -0 79768 2>/dev/null; do sleep 30; done; tail -30 /tmp/land464.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b6u6l4yln). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/b6u6l4yln.output. You will be notified w...
+> Bash tail -3 /tmp/land464.log; date
+< [2026-11-09T17:51:39Z] checkpoint of #464 (land queued) pushed to looper/tacplus-464:  20 files changed, 720 insertions(+), 28 deletions(-) [2026-11-09T17:51:42Z] queued: the manager of tacplus merges looper/tacplus-464 after the lands queued before it, one at a time, and says on the issue what came...
+= thinking_tokens
+= thinking_tokens
+> Bash until ! kill -0 79768 2>/dev/null || [ $(date +%s) -ge $(date -d 20:14 +%s) ]; do sleep 20; done; tail -5 /tmp/land464.log; date
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bw6qgoegq). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/bw6qgoegq.output. You will be notified w...
+> Bash tail -3 /tmp/land464.log; date; gh issue view 464 --repo tacplus-dev/tacplus --json comments -q '.comments[-1].author.login'
+< [2026-11-09T17:51:39Z] checkpoint of #464 (land queued) pushed to looper/tacplus-464:  20 files changed, 720 insertions(+), 28 deletions(-) [2026-11-09T17:51:42Z] queued: the manager of tacplus merges looper/tacplus-464 after the lands queued before it, one at a time, and says on the issue what came...
+Still no verdict at 20:13, with about 20 minutes left. I'll post a progress comment, checkpoint, and end without closing, since the manager lands it after me and the next run finishes the issue.
+> Bash cat > /tmp/bpscripts/progress.md <<'EOF' Progress (this run's time is up; the land is still in the manager's queue, which lands it after this run and reports here).  **Fix, 8d724a36 on `looper/tacplus-464`, queued to land at 17:51Z** - `pkg/internal/typescript/types/validation.go`: `required_if_eq` ...
+= task_started
+= task_notification
+< https://github.com/tacplus-dev/tacplus/issues/464#issuecomment-6750317089 [2026-11-09T20:13:34Z] checkpoint of #464 (a step) pushed to looper/tacplus-464:  20 files changed, 720 insertions(+), 28 deletions(-)
+= thinking_tokens
+= thinking_tokens
+The fix for #464 is committed (8d724a36) and queued to land on main, but the manager hadn't given a verdict by 20:13, so the issue is still open. The manager lands it after this run and posts the result on the issue; the next run checks that result and closes the issue.
+
+**The fix:** for a `required_if_eq` against an enum value, the TypeScript generator now uses the shorter enum name protobuf-es generates: `EvictionPolicy.LRU` instead of `EvictionPolicy.EVICTION_POLICY_LRU`. The change is in `pkg/internal/typescript/types/validation.go`. If the value isn't one the enum declares, generation now fails with an error.
+
+**Tests:** `required_if_eq_enum_test.go` covers three cases: the shortened name, an enum whose values don't all share the prefix (full name kept), and an unknown value (error). They pass.
+
+**New gate:** `current-generation` now also generates the TypeScript model of `cross-test/proto` and compiles it with `tsc`; `just current-generation-typescript` runs that part alone. `cross-test/proto` already contains the failing case (`cache.proto`, `warm_max_bytes`).
+- With main's compiler, this check fails with the issue's `TS2339` error; with the fix it passes.
+- The kitchensink proto set Jody asked for (#196) doesn't exist yet, so `cross-test/proto` stands in for it. I noted in PROPOSALS.md that #196 should keep this case.
+- I only check the `tsc` build output for warnings, not `npm install`'s: npm warns about a dependency's install script, which has nothing to do with the generated code.
+
+**Gates not fully run:** I stopped `just gates` after an hour so the land could start; the land runs the gates itself. Before I stopped it:
+- protoc-check, soundness and test passed.
+- current-generation had passed Go, Java, Rust and the new TypeScript check, and was still building later Rust fixtures.
+
+The rest never ran locally, so the land's gates are the real result.
+
+**Patch releases:** main has taken features since v2.6.1, so main gets no 2.6 tag. I opened one backport PR per release line, each carrying only the fix and its test and naming the tag to cut once it merges:
+
+| PR | Branch | Tag |
+|---|---|---|
+| #510 | release/2.0 | v2.0.23 |
+| #511 | release/2.1 | v2.1.17 |
+| #512 | release/2.2 | v2.2.14 |
+| #513 | release/2.3 | v2.3.16 |
+| #514 | release/2.4 | v2.4.16 |
+| #515 | release/2.5 | v2.5.17 |
+| #516 | release/2.6 | v2.6.6 |
+
+On each branch the TypeScript unit tests pass and `tsc` compiles the TypeScript model of `cross-test/proto` with no errors. I opened them before main landed, to save time.
+
+**Follow-ups added to PROPOSALS.md:**
+- An enum declared in a different proto file is untested and may still not compile, because the generated TypeScript helpers file only imports its own file's enums.
+- `npm install` on the generated TypeScript model warns about the protobufjs install script.
+
+No service handlers were touched, so the trace-propagation check (rule 13) didn't apply. I posted a progress comment on #464 and checkpointed the branch.
+= success: The fix for #464 is committed (8d724a36) and queued to land on main, but the manager hadn't given a verdict by 20:13, so the issue is still open. The manager lands it after this run and posts the result on the issue; the next run checks that result and closes the issue.
+
+**The fix:** for a `required_if_eq` against an enum value, the TypeScript generator now uses the shorter enum name protobuf-es generates: `EvictionPolicy.LRU` instead of `EvictionPolicy.EVICTION_POLICY_LRU`. The change is in `pkg/internal/typescript/types/validation.go`. If the value isn't one the enum declares, generation now fails with an error.
+
+**Tests:** `required_if_eq_enum_test.go` covers three cases: the shortened name, an enum whose values don't all share the prefix (full name kept), and an unknown value (error). They pass.
+
+**New gate:** `current-generation` now also generates the TypeScript model of `cross-test/proto` and compiles it with `tsc`; `just current-generation-typescript` runs that part alone. `cross-test/proto` already contains the failing case (`cache.proto`, `warm_max_bytes`).
+- With main's compiler, this check fails with the issue's `TS2339` error; with the fix it passes.
+- The kitchensink proto set Jody asked for (#196) doesn't exist yet, so `cross-test/proto` stands in for it. I noted in PROPOSALS.md that #196 should keep this case.
+- I only check the `tsc` build output for warnings, not `npm install`'s: npm warns about a dependency's install script, which has nothing to do with the generated code.
+
+**Gates not fully run:** I stopped `just gates` after an hour so the land could start; the land runs the gates itself. Before I stopped it:
+- protoc-check, soundness and test passed.
+- current-generation had passed Go, Java, Rust and the new TypeScript check, and was still building later Rust fixtures.
+
+The rest never ran locally, so the land's gates are the real result.
+
+**Patch releases:** main has taken features since v2.6.1, so main gets no 2.6 tag. I opened one backport PR per release line, each carrying only the fix and its test and naming the tag to cut once it merges:
+
+| PR | Branch | Tag |
+|---|---|---|
+| #510 | release/2.0 | v2.0.23 |
+| #511 | release/2.1 | v2.1.17 |
+| #512 | release/2.2 | v2.2.14 |
+| #513 | release/2.3 | v2.3.16 |
+| #514 | release/2.4 | v2.4.16 |
+| #515 | release/2.5 | v2.5.17 |
+| #516 | release/2.6 | v2.6.6 |
+
+On each branch the TypeScript unit tests pass and `tsc` compiles the TypeScript model of `cross-test/proto` with no errors. I opened them before main landed, to save time.
+
+**Follow-ups added to PROPOSALS.md:**
+- An enum declared in a different proto file is untested and may still not compile, because the generated TypeScript helpers file only imports its own file's enums.
+- `npm install` on the generated TypeScript model warns about the protobufjs install script.
+
+No service handlers were touched, so the trace-propagation check (rule 13) didn't apply. I posted a progress comment on #464 and checkpointed the branch.
+= task_updated
+= task_notification
+= background_tasks_changed
+= init
+> Bash tail -3 /tmp/land464.log; kill -0 79768 2>/dev/null && echo running; date
+< [2026-11-09T17:51:39Z] checkpoint of #464 (land queued) pushed to looper/tacplus-464:  20 files changed, 720 insertions(+), 28 deletions(-) [2026-11-09T17:51:42Z] queued: the manager of tacplus merges looper/tacplus-464 after the lands queued before it, one at a time, and says on the issue what came...
+= thinking_tokens
+= thinking_tokens
+That notification was just my 20:14 deadline watcher firing. The land is still queued. I'll wait until about 20:25 in case the verdict arrives before the run is stopped.
+> Bash until ! kill -0 79768 2>/dev/null || [ $(date +%s) -ge $(date -d 20:25 +%s) ]; do sleep 20; done; tail -5 /tmp/land464.log; date
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: blddc01un). Output is being written to: /builds/looper/tacplus/homes/looper-464/tmp/claude-61000/-builds-looper-tacplus-issues-464/ab4507ff-f37b-495d-b7ab-58951fff8537/tasks/blddc01un.output. You will be notified w...
+> Bash until [ $(date +%s) -ge $(date -d 20:25:30 +%s) ]; do sleep 10; done; tail -4 /tmp/land464.log; date
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< [2026-11-09T17:51:39Z] checkpoint of #464 (land queued) pushed to looper/tacplus-464:  20 files changed, 720 insertions(+), 28 deletions(-) [2026-11-09T17:51:42Z] queued: the manager of tacplus merges looper/tacplus-464 after the lands queued before it, one at a time, and says on the issue what came...
+The land of #464 still had no verdict at 20:25, so I'm ending this run without closing the issue. The fix commit (8d724a36) is still in the land queue. The manager lands it after this run and posts the verdict on #464; the next run checks that verdict and closes the issue.
+
+Already in place:
+- **Backports:** PRs #510–#516 are open against release/2.0 through release/2.6. Each names the tag to cut once it merges (v2.0.23 through v2.6.6).
+- **Progress:** a comment on #464 covers what changed and what I ran, and the branch is checkpointed with what's left.
+= success: The land of #464 still had no verdict at 20:25, so I'm ending this run without closing the issue. The fix commit (8d724a36) is still in the land queue. The manager lands it after this run and posts the verdict on #464; the next run checks that verdict and closes the issue.
+
+Already in place:
+- **Backports:** PRs #510–#516 are open against release/2.0 through release/2.6. Each names the tag to cut once it merges (v2.0.23 through v2.6.6).
+- **Progress:** a comment on #464 covers what changed and what I ran, and the branch is checkpointed with what's left.

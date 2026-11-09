@@ -1,0 +1,400 @@
+> Bash for v in 2.1 2.0; do cd /tmp/tp454/bp-$v && sed -i 's/nil, \[\]string{"demo"}, collectStateEventSurfaces(files), nil).serviceProto/nil, []string{"demo"}, collectStateEventSurfaces(files)).serviceProto/' pkg/internal/proto/state_topic_rpcs_test.go && go test ./pkg/internal/proto/ 2>&1 | tail -2 | sed...
+= task_started
+= task_notification
+< 2.1: ok  	github.com/tacplus-dev/tacplus/pkg/internal/proto	20.181s 2.0: ok  	github.com/tacplus-dev/tacplus/pkg/internal/proto	19.875s Shell cwd was reset to /builds/looper/tacplus/issues/454
+= thinking_tokens
+= thinking_tokens
+Unit tests pass on all seven. Checking the gates' progress.
+> Bash grep "^=== " /tmp/tp454/gates.log | tail -5; kill -0 $(cat /tmp/tp454/gates.pid) && echo running
+< === soundness === === soundness rc=0 === === test === === test rc=0 === === current-generation === running
+Now a per-branch end-to-end check script: build that branch's compiler, generate the fixture in Go, drop in the self-test, `go test`.
+> Bash mkdir -p /tmp/tp454/scripts && cat > /tmp/tp454/scripts/bpcheck.sh <<'EOF' #!/usr/bin/env bash # bpcheck.sh <release worktree> : generate the eventbus-backpressure fixture in Go # with that worktree's compiler, install the #454 self-test, go vet + go test it. set -euo pipefail wt="$1"; v="$(basename...
+= task_started
+= task_notification
+< == 2.6 ok  	gitlab.com/example/dummy/agentsensor/tacplus/model/s2sm/state/services/agent_state	0.016s == 2.0 # gitlab.com/example/dummy/agentsensor/tacplus/model/chassis/service_im tacplus/model/chassis/service_im/service_im.go:121:8: duplicate case "grpcconfig" (constant of type string) in expressi...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+2.6 passes end to end. 2.0 fails in `chassis/service_im`, outside my change. Checking whether the state package itself is fine there, and which other lines share this.
+> Bash cd /tmp/tp454/e2e-bp-2.0 && sc=$(dirname $(find tacplus -path '*/s2sm/state/services/agent_state/state.go')); go vet ./$sc 2>&1 | tail -3; go test ./$sc 2>&1 | tail -3; sed -n 108,125p tacplus/model/chassis/service_im/service_im.go
+< # gitlab.com/example/dummy/agentsensor/tacplus/model/chassis/service_im tacplus/model/chassis/service_im/service_im.go:121:8: duplicate case "grpcconfig" (constant of type string) in expression switch 	tacplus/model/chassis/service_im/service_im.go:115:8: previous case 	tacplus/model/chassis/service...
+= thinking_tokens
+= thinking_tokens
+> Bash for v in 2.5 2.4 2.3 2.2 2.1; do echo "== $v"; /tmp/tp454/scripts/bpcheck.sh /tmp/tp454/bp-$v 2>&1 | tail -4; done
+= task_started
+= task_notification
+< == 2.5 ok  	gitlab.com/example/dummy/agentsensor/tacplus/model/s2sm/state/services/agent_state	0.031s == 2.4 ok  	gitlab.com/example/dummy/agentsensor/tacplus/model/s2sm/state/services/agent_state	0.016s == 2.3 ok  	gitlab.com/example/dummy/agentsensor/tacplus/model/s2sm/state/services/agent_state	0...
+= thinking_tokens
+= thinking_tokens
+2.1–2.6 all pass end to end. For 2.0, finding what fixed the duplicate `case` on later lines.
+> Bash f=$(git grep -l "Virtual service" origin/release/2.0 -- pkg/templates/go | head -3); echo "$f"; git log --oneline origin/release/2.0..origin/release/2.1 -- pkg/templates/go/types/ pkg/internal/go/types/lib_templates.go | head -20
+< origin/release/2.0:pkg/templates/go/chassis/service_im/service_im.go.tmpl c136aa2f trace_id: projections copy it, every generated store path clears it (#313, backport to 2.1) c71d4db0 Backport of #151 to 2.1: tenant-owned instances refuse another tenant at the door (#140) (#156) 3aff936a accounting:...
+> Bash git show origin/release/2.0:pkg/templates/go/chassis/service_im/service_im.go.tmpl | grep -n "Virtual service\|case \"" | head; git show origin/release/2.1:pkg/templates/go/chassis/service_im/service_im.go.tmpl | grep -n -B3 -A8 "Virtual service" | head -30
+< 115:// Virtual service packages are mapped to their physical host service. 121:		case "grpcconfig", "jwkview", "entitlementview", "healthreport": 124:		// Virtual service: {{.Package}} is hosted by {{.Audience}}. 125:		case "{{.Package}}": 118- 119-// audienceFromMethod extracts the target service a...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The 2.0 failure is a separate defect, fixed on 2.1 by a later service_im change. For evidence on 2.0, I'll remove the duplicate case by hand in my scratch output only and run the self-test.
+> Bash cd /tmp/tp454/e2e-bp-2.0 && python3 - <<'EOF' p='tacplus/model/chassis/service_im/service_im.go' s=open(p).read() s=s.replace('''		// Virtual service: grpcconfig is hosted by recordegresshealth. 		case "grpcconfig": 			return "recordegresshealth" ''','',1) open(p,'w').write(s) EOF go build ./... && ...
+< ok  	gitlab.com/example/dummy/agentsensor/tacplus/model/s2sm/state/services/agent_state	0.016s Shell cwd was reset to /builds/looper/tacplus/issues/454
+= thinking_tokens
+= thinking_tokens
+Fix confirmed on 2.0 too. For the 2.0 backport I'll leave the Go leg out of `run.sh`, since enabling it would fail on that other defect. Finding which issue fixed it on 2.1+.
+> Bash git log --oneline -S DefaultAudiencePackages origin/release/2.1 -- pkg/ | tail -3; git log --oneline -S DefaultAudiencePackages origin/main -- pkg/ | tail -2
+< f1b58c21 Accounting sink never holds an RPC on the event bus f1b58c21 Accounting sink never holds an RPC on the event bus
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue list --repo tacplus-dev/tacplus --state all --search "audienceFromMethod duplicate case" --json number,title,state -q '.[]|"\(.number) \(.state) \(.title)"'; gh issue list --repo tacplus-dev/tacplus --state all --search "service_im duplicate case grpcconfig" --json number,title,state -q '.[...
+< 34 CLOSED Accounting emit can hold an RPC for as long as the event bus is down (all languages): bound the wait, spool, replay
+= thinking_tokens
+= thinking_tokens
+Not filed yet; I'll file it. Adjusting the 2.0 backport: no Go leg, no unused self-test file.
+> Bash cd /tmp/tp454/bp-2.0 && git checkout HEAD -- cross-test/current-generation/run.sh && git rm -q --cached cross-test/current-generation/testdata/go/state_topic_test.go && rm cross-test/current-generation/testdata/go/state_topic_test.go && git add -A && git status --short
+< M  docs/USER.md M  pkg/internal/go/types/stateclient_gen.go A  pkg/internal/go/types/stateclient_topic_render_test.go M  pkg/internal/proto/state.go A  pkg/internal/proto/state_topic_rpcs_test.go M  pkg/templates/go/types/state_wrapper.go.tmpl Shell cwd was reset to /builds/looper/tacplus/issues/454
+= thinking_tokens
+= thinking_tokens
+Committing each backport locally; pushing and opening PRs waits until main's fix lands.
+> Bash for v in 2.6 2.5 2.4 2.3 2.2 2.1 2.0; do cd /tmp/tp454/bp-$v; git add -A; extra=""; [[ $v == 2.0 ]] && extra="  On 2.0 the eventbus-backpressure fixture's Go output does not compile for another reason (service_im's audienceFromMethod emits a duplicate case, fixed on 2.1 by f1b58c21), so its Go leg s...
+< 2.6 cbfe4c4d [release/2.6] Go state client: a service_state topic publishes and subscribes over its bidi streams (#454) 2.5 e48fed1f [release/2.5] Go state client: a service_state topic publishes and subscribes over its bidi streams (#454) 2.4 5395d2b6 [release/2.4] Go state client: a service_state ...
+Filing the 2.0 `service_im` bug while the gates run. First, reading the roadmaps as rule 11 requires.
+> Bash grep -n -i "audience\|virtual" ROADMAP.md | head -5; gh api repos/tacplus-dev/roadmap/contents/ROADMAP.md -H 'Accept: application/vnd.github.raw' | grep -n -i "audience\|virtual service" | head -5; grep "^=== " /tmp/tp454/gates.log | tail -2
+< 16:- Chassis reads config, not env: token file and audience and config path from config; the ge (#262) (Jody, 2026-11-01) === test rc=0 === === current-generation ===
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue create --repo tacplus-dev/tacplus --label bug --title "release/2.0 Go: service_im audienceFromMethod emits a duplicate case when a virtual service package is also a default-audience package" --body-file - <<'EOF' Found while backporting #454 to release/2.0.  On release/2.0 (v2.0.22), the Go...
+< https://github.com/tacplus-dev/tacplus/issues/495
+= thinking_tokens
+= thinking_tokens
+Filed #495. Now waiting on the gates.
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Bash until ! kill -0 $(cat /tmp/tp454/gates.pid) 2>/dev/null; do sleep 20; done; grep "^=== " /tmp/tp454/gates.log | tail -40
+= background_tasks_changed
+= task_started
+< Command running in background with ID: b10x4oux2. Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/b10x4oux2.output. You will be notified when it completes. To check interim output, use R...
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 454 --checkpoint "Committed 0765cb29 on branch; just gates running. Backports committed locally in /tmp/tp454/bp-2.x (branches backport/454-release-2.x; 2.0 without the Go leg, see #495). Left: gates result, land, push backports + PRs (patch tags nex...
+< [2026-11-09T16:26:13Z] checkpoint of #454 (a step) pushed to looper/tacplus-454:  11 files changed, 1155 insertions(+), 30 deletions(-)
+Checkpointed. Waiting for the gates to finish.
+> Monitor until ! kill -0 $(cat /tmp/tp454/gates.pid) 2>/dev/null; do grep --line-buffered "^=== .* rc=" /tmp/tp454/gates.log | tail -1; sleep 300; done; grep "OVERALL" /tmp/tp454/gates.log
+= permission_denied
+< A nested command in this command can't be checked before it runs
+= thinking_tokens
+= thinking_tokens
+> Monitor while kill -0 17562 2>/dev/null; do sleep 60; done; grep -E "rc=|OVERALL" /tmp/tp454/gates.log | tail -25
+= permission_denied
+< This Bash command contains multiple operations. The following part requires approval: while kill -0 17562 ; do sleep 60; done; grep -E "rc=|OVERALL" /tmp/tp454/gates.log
+> Read /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/b10x4oux2.output
+< <system-reminder>Warning: the file exists but the contents are empty.</system-reminder>
+> Bash grep -E "rc=|OVERALL" /tmp/tp454/gates.log | tail -5; tail -2 /tmp/tp454/gates.log
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust cross-test fixture ==> Compiling rust cross-test fixture
+= thinking_tokens
+= thinking_tokens
+Gates are in current-generation (Rust leg of the main fixture). The background watcher will notify me when the gates finish.
+> Bash grep -n "event-bus backpressure\|FAIL\|ERROR" /tmp/tp454/gates.log | head
+< (Bash completed with no output)
+> Bash until grep -q "event-bus backpressure\|OVERALL\|ERROR" /tmp/tp454/gates.log; do sleep 15; done; grep -n "event-bus backpressure\|OVERALL\|ERROR" /tmp/tp454/gates.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: byknhav31). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/byknhav31.output. You will be notified w...
+> Bash until grep -q "event-bus backpressure\|OVERALL\|ERROR" /tmp/tp454/gates.log; do sleep 15; done; grep -n "event-bus backpressure\|OVERALL\|ERROR" /tmp/tp454/gates.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: by0fm4mir). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/by0fm4mir.output. You will be notified w...
+> Bash grep "^==>\|PASS\|rc=" /tmp/tp454/gates.log | tail -8
+< ==> Generating rust zero-rpc fixture ==> Compiling rust zero-rpc fixture     PASS rust zero-rpc ==> Generating go requires-device fixture ==> Compiling go requires-device fixture     PASS go requires-device ==> Generating java requires-device fixture ==> Compiling java requires-device fixture
+> Bash until grep -q "PASS go event-bus backpressure\|OVERALL\|ERROR" /tmp/tp454/gates.log; do sleep 15; done; grep -n "event-bus backpressure\|OVERALL\|ERROR" /tmp/tp454/gates.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: b873b4elv. Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/b873b4elv.output. You will be notified when it completes. To check interim output, use R...
+Waiting for the eventbus-backpressure Go leg to report.
+> Bash until grep -q "PASS go event-bus backpressure\|OVERALL\|ERROR" /tmp/tp454/gates.log; do sleep 15; done; grep -n "event-bus backpressure\|OVERALL\|ERROR" /tmp/tp454/gates.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bzg2n5g4l). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/bzg2n5g4l.output. You will be notified w...
+> Bash grep "^==>\|PASS\|rc=" /tmp/tp454/gates.log | tail -4; kill -0 17562 && echo running
+< ==> Compiling java record-egress fixture     PASS java record-egress ==> Generating rust record-egress fixture ==> Compiling rust record-egress fixture running
+> Bash until grep -q "PASS go event-bus backpressure\|OVERALL\|ERROR" /tmp/tp454/gates.log; do sleep 15; done; grep -n "event-bus backpressure\|OVERALL\|ERROR" /tmp/tp454/gates.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b7z26q09y). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/b7z26q09y.output. You will be notified w...
+> Bash grep "^==>\|PASS\|rc=" /tmp/tp454/gates.log | tail -4
+< ==> Compiling java record-egress HOST fixture     PASS java record-egress host ==> Generating rust record-egress HOST fixture ==> Compiling rust record-egress HOST fixture
+> Bash until grep -q "PASS go event-bus backpressure\|OVERALL\|ERROR" /tmp/tp454/gates.log; do sleep 15; done; grep -n "event-bus backpressure\|OVERALL\|ERROR" /tmp/tp454/gates.log
+= task_started
+= task_notification
+< 514:==> Generating go event-bus backpressure fixture 515:==> Compiling go event-bus backpressure fixture 516:    PASS go event-bus backpressure 518:==> Generating java event-bus backpressure fixture
+The new Go leg passes in the gate. Waiting for the rest of `just gates`.
+> Bash until grep -q "OVERALL" /tmp/tp454/gates.log; do sleep 20; done; grep -E "rc=|OVERALL" /tmp/tp454/gates.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: by7rb29qt). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/by7rb29qt.output. You will be notified w...
+> Bash until grep -q "OVERALL" /tmp/tp454/gates.log; do sleep 20; done; grep -E "rc=|OVERALL" /tmp/tp454/gates.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b391bdb1d). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/b391bdb1d.output. You will be notified w...
+> Bash grep -E "rc=" /tmp/tp454/gates.log; tail -2 /tmp/tp454/gates.log
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating go quorum-write fixture ==> Compiling go quorum-write fixture
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash until grep -q "OVERALL" /tmp/tp454/gates.log; do sleep 20; done; grep -E "rc=|OVERALL" /tmp/tp454/gates.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b3b5zl0rb). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/b3b5zl0rb.output. You will be notified w...
+> Bash until grep -q "OVERALL" /tmp/tp454/gates.log; do sleep 20; done; grep -E "rc=|OVERALL" /tmp/tp454/gates.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b21beoslw). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/b21beoslw.output. You will be notified w...
+> Bash grep -E "rc=" /tmp/tp454/gates.log; tail -1 /tmp/tp454/gates.log; date -u
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling go tenant-route fixture (crew) Mon Nov  9 17:56:01 UTC 2026
+= thinking_tokens
+= thinking_tokens
+Still in current-generation after ~1h50m of my 4h. To leave time, I'm queuing the land now while my local gates keep running; the manager re-runs gates before merging anyway.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 454 --checkpoint "0765cb29 committed; local just gates running (soundness/test ok, current-generation in progress, go event-bus backpressure PASS); landing now. Backports in /tmp/tp454/bp-2.x committed locally, not pushed." 2>&1 | tail -1; nohup /usr...
+< [2026-11-09T17:56:08Z] checkpoint of #454 (a step) pushed to looper/tacplus-454:  11 files changed, 1155 insertions(+), 30 deletions(-) 133600
+> Bash until grep -q "OVERALL" /tmp/tp454/gates.log; do sleep 20; done; grep -E "rc=|OVERALL" /tmp/tp454/gates.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b0322zu74). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/b0322zu74.output. You will be notified w...
+> Bash grep -E "rc=" /tmp/tp454/gates.log | tail -3; tail -1 /tmp/tp454/gates.log; tail -3 /tmp/tp454/land.log
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust tenant-route fixture (crew) [2026-11-09T17:56:11Z] checkpoint of #454 (land queued) pushed to looper/tacplus-454:  12 files changed, 1159 insertions(+), 30 deletions(-) [2026-11-09T17:56:13Z] queued: the manager of...
+= thinking_tokens
+= thinking_tokens
+The land checkpoint pushed 12 files where I committed 11. Checking for a stray file.
+> Bash git status --short; git log --oneline -3 origin/looper/tacplus-454; git diff --stat origin/main origin/looper/tacplus-454 | tail -14
+< 104d00b3 looper: work in progress on #454 (land queued) 0765cb29 Go state client: a service_state topic publishes and subscribes over its bidi streams (#454) 7b690e0b ROADMAP: #376, security checks over the generated output (hub, Jody's delegation)  .looper/claude.log                                ...
+Those are the looper's `.looper/` bookkeeping files, so my change is intact. Waiting on both the local gates and the land.
+> Bash until grep -q "OVERALL" /tmp/tp454/gates.log; do sleep 20; done; grep -E "rc=|OVERALL" /tmp/tp454/gates.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bse572fzr). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/bse572fzr.output. You will be notified w...
+> Bash until grep -q "OVERALL" /tmp/tp454/gates.log; do sleep 20; done; grep -E "rc=|OVERALL" /tmp/tp454/gates.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bu5di959i). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/bu5di959i.output. You will be notified w...
+> Bash grep -E "rc=" /tmp/tp454/gates.log | tail -3; tail -1 /tmp/tp454/gates.log; tail -2 /tmp/tp454/land.log; date -u
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling go tenant-record fixture (tstratum) [2026-11-09T17:56:11Z] checkpoint of #454 (land queued) pushed to looper/tacplus-454:  12 files changed, 1159 insertions(+), 30 deletions(-) [2026-11-09T17:56:13Z] queued: the manager...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+About 1h30m left and the gates have a long way to go, so I'll open the backport PRs now. Earlier backports were opened while their main fix was still queued. Pushing the branches first.
+> Bash for v in 2.6 2.5 2.4 2.3 2.2 2.1 2.0; do cd /tmp/tp454/bp-$v && git push -q origin backport/454-release-$v 2>&1 | grep -v "^remote:" | tail -2; echo "$v pushed rc=$?"; done
+= task_started
+= task_notification
+= vcs_state_changed
+< 2.6 pushed rc=0 2.5 pushed rc=0 2.4 pushed rc=0 2.3 pushed rc=0 2.2 pushed rc=0 2.1 pushed rc=0 2.0 pushed rc=0 Shell cwd was reset to /builds/looper/tacplus/issues/454
+> Bash for v in 2.6 2.5 2.4 2.3 2.2 2.1 2.0; do latest=$(git tag -l "v$v.*" --sort=-v:refname | head -1); n=${latest##*.}; next="v$v.$((n+1))";  if [[ $v == 2.0 ]]; then gate="- \`cross-test/current-generation\` does **not** turn on the eventbus-backpressure fixture's Go leg on this line: that fixture's Go...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/503 https://github.com/tacplus-dev/tacplus/pull/504 https://github.com/tacplus-dev/tacplus/pull/505 https://github.com/tacplus-dev/tacplus/pull/506 https://github.com/tacplus-dev/tacplus/pull/507 https://github.com/tacplus-dev/tacplus/pull/508 https://gith...
+> Bash gh pr view 509 --repo tacplus-dev/tacplus --json body -q .body | sed -n 1,4p; cd /builds/looper/tacplus/issues/454 && /usr/local/bin/repo-looper --repo tacplus --issue 454 --checkpoint "0765cb29 land queued; local just gates still running (/tmp/tp454/gates.log). Backport PRs open: #503 (2.6, v2.6.6)...
+< Backport of #454 to release/2.0. It is a bug fix (generated code that does not compile), shipped as a patch on every supported line. The fix on main is 0765cb29, queued to land by the looper.  **Patch to cut once this merges: the next unused 2.0 tag, `v2.0.23` as of 2026-11-09** (`v2.0.22` is the ne...
+Backport PRs #503–#509 are open. Waiting for the land verdict and the local gates.
+> Bash until grep -q "OVERALL" /tmp/tp454/gates.log || ! kill -0 133600 2>/dev/null; do sleep 20; done; grep -E "rc=|OVERALL" /tmp/tp454/gates.log; tail -5 /tmp/tp454/land.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bb9ncxxzc). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/bb9ncxxzc.output. You will be notified w...
+> Bash until grep -q "OVERALL" /tmp/tp454/gates.log || ! kill -0 133600 2>/dev/null; do sleep 20; done; grep -E "rc=|OVERALL" /tmp/tp454/gates.log; tail -5 /tmp/tp454/land.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: blkpk22ko). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/blkpk22ko.output. You will be notified w...
+> Bash grep -E "rc=" /tmp/tp454/gates.log | tail -3; tail -1 /tmp/tp454/gates.log; tail -2 /tmp/tp454/land.log; date -u
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust tenant-slice fixture [2026-11-09T17:56:11Z] checkpoint of #454 (land queued) pushed to looper/tacplus-454:  12 files changed, 1159 insertions(+), 30 deletions(-) [2026-11-09T17:56:13Z] queued: the manager of tacplu...
+= thinking_tokens
+= thinking_tokens
+> Bash until grep -q "OVERALL" /tmp/tp454/gates.log || ! kill -0 133600 2>/dev/null; do sleep 20; done; grep -E "rc=|OVERALL" /tmp/tp454/gates.log; tail -5 /tmp/tp454/land.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b3957b0fm). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/b3957b0fm.output. You will be notified w...
+> Bash until grep -q "OVERALL" /tmp/tp454/gates.log || ! kill -0 133600 2>/dev/null; do sleep 20; done; grep -E "rc=|OVERALL" /tmp/tp454/gates.log; tail -5 /tmp/tp454/land.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bgwo5pxhn). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/bgwo5pxhn.output. You will be notified w...
+> Bash grep -E "rc=" /tmp/tp454/gates.log | tail -3; tail -1 /tmp/tp454/gates.log; tail -2 /tmp/tp454/land.log; date -u; gh issue view 454 --repo tacplus-dev/tacplus --comments | tail -8
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust tenant-slice config owner fixture [2026-11-09T17:56:11Z] checkpoint of #454 (land queued) pushed to looper/tacplus-454:  12 files changed, 1159 insertions(+), 30 deletions(-) [2026-11-09T17:56:13Z] queued: the mana...
+About 50 minutes remain, and neither the land nor my local gates will likely finish in time. Posting a progress comment and checkpointing so the next run can finish, then I'll keep waiting.
+> Bash gh issue comment 454 --repo tacplus-dev/tacplus --body-file - <<'EOF' Progress (looper run, 2026-11-09). Not closing yet: the land is queued and the local gates have not finished.  **Fix**: 0765cb29 on `looper/tacplus-454`, land queued with the manager. - `proto.StateTopicRPCSurface` (pkg/internal/p...
+= task_started
+= task_notification
+< https://github.com/tacplus-dev/tacplus/issues/454#issuecomment-6748876442 [2026-11-09T19:07:46Z] checkpoint of #454 (a step) pushed to looper/tacplus-454:  12 files changed, 1159 insertions(+), 30 deletions(-)
+> Bash until grep -q "OVERALL" /tmp/tp454/gates.log || ! kill -0 133600 2>/dev/null; do sleep 20; done; grep -E "rc=|OVERALL" /tmp/tp454/gates.log; tail -5 /tmp/tp454/land.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bgwf98zfn). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/bgwf98zfn.output. You will be notified w...
+> Bash until grep -q "OVERALL" /tmp/tp454/gates.log || ! kill -0 133600 2>/dev/null; do sleep 20; done; grep -E "rc=|OVERALL" /tmp/tp454/gates.log; tail -5 /tmp/tp454/land.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bvxaj2ido). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/bvxaj2ido.output. You will be notified w...
+> Bash grep -E "rc=" /tmp/tp454/gates.log | tail -3; grep -c PASS /tmp/tp454/gates.log; grep -n "FAIL\|ERROR" /tmp/tp454/gates.log | head -3; tail -1 /tmp/tp454/gates.log; tail -1 /tmp/tp454/land.log; date -u
+< === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc=0 === 92 37972:{"timestamp":"2026-11-09T19:25:55.279658Z","level":"ERROR","fields":{"message":"ServiceHealth.instances watch failed, retrying","error":"code: 'Operation is not implemented or not supported', message: \"watch_instan...
+> Bash grep -E "rc=" /tmp/tp454/gates.log
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=0 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=0 === === memberport rc=0 === === claims-provenance rc=0 === === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc...
+= thinking_tokens
+= thinking_tokens
+Twelve gates passed, current-generation included. Four remain (jwk-alg, redact, trace-carry, tacplus-script).
+> Bash until grep -q "OVERALL" /tmp/tp454/gates.log || ! kill -0 133600 2>/dev/null; do sleep 20; done; grep -E "rc=|OVERALL" /tmp/tp454/gates.log | tail -6; tail -3 /tmp/tp454/land.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === zero-rpc-s2s rc=0 === === jwk-alg rc=0 === === redact rc=0 === === trace-carry rc=0 === === tacplus-script rc=0 === === OVERALL fail=0 === [2026-11-09T17:56:11Z] checkpoint of #454 (land queued) pushed to looper/tacplus-454:  12 files changed, 1159 insertions(+), 30 deletions(-) [2026-11-09T17:5...
+Full local `just gates` passed (`OVERALL fail=0`). The land is still queued. Recording that on the issue and checkpointing before time runs out.
+> Bash date -u; gh issue comment 454 --repo tacplus-dev/tacplus --body "Local \`just gates\` on 0765cb29 finished: protoc-check, soundness, test, current-generation, determinism, cert-stream, stream-expiry, memberport, claims-provenance, w2s-validate, c2d-server, zero-rpc-s2s, jwk-alg, redact, trace-carry,...
+= task_started
+= task_notification
+< Mon Nov  9 19:32:45 UTC 2026 https://github.com/tacplus-dev/tacplus/issues/454#issuecomment-6749441533 [2026-11-09T19:32:48Z] checkpoint of #454 (a step) pushed to looper/tacplus-454:  12 files changed, 1159 insertions(+), 30 deletions(-)
+Waiting for the land verdict until the run stops.
+> Bash until ! kill -0 133600 2>/dev/null; do sleep 20; done; tail -8 /tmp/tp454/land.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bu326ll19). Output is being written to: /builds/looper/tacplus/homes/looper-454/tmp/claude-61000/-builds-looper-tacplus-issues-454/3eae4ea3-46e4-4bdc-8dfc-49910a02bf96/tasks/bu326ll19.output. You will be notified w...
+> Bash tail -3 /tmp/tp454/land.log; date -u
+< [2026-11-09T17:56:11Z] checkpoint of #454 (land queued) pushed to looper/tacplus-454:  12 files changed, 1159 insertions(+), 30 deletions(-) [2026-11-09T17:56:13Z] queued: the manager of tacplus merges looper/tacplus-454 after the lands queued before it, one at a time, and says on the issue what cam...
+= thinking_tokens
+= thinking_tokens
+The fix is written, tested and queued to land, but #454 is still open. The manager hasn't merged it yet, and my run stops at about 19:56. The manager will still land it after I stop, and the next run posts the closing comment and closes the issue.
+
+**The bug:** the Go state client called a topic's two RPCs with the wrong shapes. `Publish` treated `PublishTo<Field>` as a simple request/response call returning a `TopicPublishReceipt` type that doesn't exist. `Subscribe` treated `SubscribeTo<Field>` as a one-way stream taking a `TraceRequest`. The generated state service declares both as two-way streams, so the client didn't compile.
+
+**The fix** (commit 0765cb29, queued to land):
+- **Which RPCs exist:** a new `proto.StateTopicRPCSurface` says which topic RPCs a state service declares. The code that generates the service now uses the same rule, so the client can only call RPCs that exist. Some services leave one of the two out.
+- **Template** (`state_wrapper.go.tmpl`):
+  - `Publish(ctx, msg)` sends one message and returns the broker's acknowledgement.
+  - `Subscribe(ctx, req)` sends the request and returns the stream: read records from it, send flow control (pause, speed), cancel `ctx` to end.
+  - A read-only client has no `Publish`.
+- **Gate:** the `kitchensink` test set the triage asked for doesn't exist yet (#196 is open). So I turned on the Go build of the `eventbus-backpressure` test fixture, which already has a state topic. Its new self-test runs `Publish` and `Subscribe` over a real gRPC connection against the generated state service.
+- **Other tests and docs:** unit tests for the RPC rule and the template, a USER.md note on the client methods, and a PROPOSALS.md entry. The Java state client probably has a similar gap, but I couldn't check it with a build.
+- **The issue's own example** (`Announcement announcements = 7 [(spec.topic) = true]`) now generates Go that builds.
+
+**Gates:** the full local `just gates` passed, ending `=== OVERALL fail=0 ===`. That includes the new `PASS go event-bus backpressure` step. I posted the results on #454.
+
+**Release:**
+- **No tag from main:** main has taken a feature since v2.6.1 (#321), so I didn't tag `v2.6.2` there. The patch goes to the release branches.
+- **Backport PRs:** one per line, each naming the next free patch tag: #503 (2.6, v2.6.6), #504 (2.5, v2.5.17), #505 (2.4, v2.4.16), #506 (2.3, v2.3.16), #507 (2.2, v2.2.14), #508 (2.1, v2.1.17), #509 (2.0, v2.0.23).
+- **Checks on each branch:** I ran the changed packages' tests and generated the fixture with that branch's compiler; the self-test passed on all seven. I didn't run the full `just gates` on any release branch.
+- **2.0:** that line's fixture output fails to compile because of a different bug, a duplicate `case` in `service_im`, which I filed as #495. To test my fix on 2.0 I removed that case by hand in a scratch copy. The 2.0 backport therefore leaves the new Go check off.
+
+**Trace check:** my change touches no handlers. `looper-trace check` fails on main with 9 findings in fixtures I didn't change, already filed as #310 and #311.
+
+**For the next run:** once the manager's verdict appears on #454, post the closing comment with the commit hash on main and the gates the land ran, then close the issue. If the land fails, fix it and land again.
+= success: The fix is written, tested and queued to land, but #454 is still open. The manager hasn't merged it yet, and my run stops at about 19:56. The manager will still land it after I stop, and the next run posts the closing comment and closes the issue.
+
+**The bug:** the Go state client called a topic's two RPCs with the wrong shapes. `Publish` treated `PublishTo<Field>` as a simple request/response call returning a `TopicPublishReceipt` type that doesn't exist. `Subscribe` treated `SubscribeTo<Field>` as a one-way stream taking a `TraceRequest`. The generated state service declares both as two-way streams, so the client didn't compile.
+
+**The fix** (commit 0765cb29, queued to land):
+- **Which RPCs exist:** a new `proto.StateTopicRPCSurface` says which topic RPCs a state service declares. The code that generates the service now uses the same rule, so the client can only call RPCs that exist. Some services leave one of the two out.
+- **Template** (`state_wrapper.go.tmpl`):
+  - `Publish(ctx, msg)` sends one message and returns the broker's acknowledgement.
+  - `Subscribe(ctx, req)` sends the request and returns the stream: read records from it, send flow control (pause, speed), cancel `ctx` to end.
+  - A read-only client has no `Publish`.
+- **Gate:** the `kitchensink` test set the triage asked for doesn't exist yet (#196 is open). So I turned on the Go build of the `eventbus-backpressure` test fixture, which already has a state topic. Its new self-test runs `Publish` and `Subscribe` over a real gRPC connection against the generated state service.
+- **Other tests and docs:** unit tests for the RPC rule and the template, a USER.md note on the client methods, and a PROPOSALS.md entry. The Java state client probably has a similar gap, but I couldn't check it with a build.
+- **The issue's own example** (`Announcement announcements = 7 [(spec.topic) = true]`) now generates Go that builds.
+
+**Gates:** the full local `just gates` passed, ending `=== OVERALL fail=0 ===`. That includes the new `PASS go event-bus backpressure` step. I posted the results on #454.
+
+**Release:**
+- **No tag from main:** main has taken a feature since v2.6.1 (#321), so I didn't tag `v2.6.2` there. The patch goes to the release branches.
+- **Backport PRs:** one per line, each naming the next free patch tag: #503 (2.6, v2.6.6), #504 (2.5, v2.5.17), #505 (2.4, v2.4.16), #506 (2.3, v2.3.16), #507 (2.2, v2.2.14), #508 (2.1, v2.1.17), #509 (2.0, v2.0.23).
+- **Checks on each branch:** I ran the changed packages' tests and generated the fixture with that branch's compiler; the self-test passed on all seven. I didn't run the full `just gates` on any release branch.
+- **2.0:** that line's fixture output fails to compile because of a different bug, a duplicate `case` in `service_im`, which I filed as #495. To test my fix on 2.0 I removed that case by hand in a scratch copy. The 2.0 backport therefore leaves the new Go check off.
+
+**Trace check:** my change touches no handlers. `looper-trace check` fails on main with 9 findings in fixtures I didn't change, already filed as #310 and #311.
+
+**For the next run:** once the manager's verdict appears on #454, post the closing comment with the commit hash on main and the gates the land ran, then close the issue. If the land fails, fix it and land again.
+= task_updated
+= task_notification
+= background_tasks_changed
+= init
+> Bash tail -3 /tmp/tp454/land.log; date -u
+< [2026-11-09T17:56:11Z] checkpoint of #454 (land queued) pushed to looper/tacplus-454:  12 files changed, 1159 insertions(+), 30 deletions(-) [2026-11-09T17:56:13Z] queued: the manager of tacplus merges looper/tacplus-454 after the lands queued before it, one at a time, and says on the issue what cam...
+The land of 0765cb29 is still queued with the manager, and my run stops in a few minutes. The background watcher on it stopped at its time limit. I didn't restart it because it couldn't finish before the run ends.
+
+Issue #454 stays open. Everything is checkpointed: full local `just gates` passed (`OVERALL fail=0`), backport PRs #503–#509 are open, and the 2.0-only build bug is filed as #495. The manager will still land the fix after I stop.
+
+The next run checks the manager's verdict on #454. If it merged, it posts the closing comment (the commit hash on main and the gates the land ran) and closes the issue. If it failed, it fixes the problem and lands again.
+= success: The land of 0765cb29 is still queued with the manager, and my run stops in a few minutes. The background watcher on it stopped at its time limit. I didn't restart it because it couldn't finish before the run ends.
+
+Issue #454 stays open. Everything is checkpointed: full local `just gates` passed (`OVERALL fail=0`), backport PRs #503–#509 are open, and the 2.0-only build bug is filed as #495. The manager will still land the fix after I stop.
+
+The next run checks the manager's verdict on #454. If it merged, it posts the closing comment (the commit hash on main and the gates the land ran) and closes the issue. If it failed, it fixes the problem and lands again.

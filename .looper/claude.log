@@ -1,0 +1,400 @@
+All Java and common tests pass. I'll poll the run.
+> Bash for i in $(seq 1 55); do sleep 10; if ! pgrep -f "cg-java-work" >/dev/null; then break; fi; done; tail -15 /tmp/cg-java-run.log; free -m | head -2
+= task_progress
+= task_started
+= task_notification
+< ==> Compiling go requires-device fixture     PASS go requires-device ==> Generating go record-egress fixture ==> Compiling go record-egress fixture 00:02
+= thinking_tokens
+= thinking_tokens
+Rust is done with its runtime self-test passing. Checking its `tokio-stream` dependency follows the no-hardcoded-versions rule.
+> Bash git diff pkg/templates/rust/chassis/am/Cargo.toml.tmpl; grep -rn 'tokio-stream' pkg/templates/rust --include=Cargo.toml.tmpl | head -5
+< diff --git a/pkg/templates/rust/chassis/am/Cargo.toml.tmpl b/pkg/templates/rust/chassis/am/Cargo.toml.tmpl index 146b8c4d..b2b5618a 100644 --- a/pkg/templates/rust/chassis/am/Cargo.toml.tmpl +++ b/pkg/templates/rust/chassis/am/Cargo.toml.tmpl @@ -10,4 +10,5 @@ base64 = { workspace = true }  prost = ...
+Fine, it follows the existing pattern. Waiting on Java and the Go gate.
+> Bash pid=$(cat /tmp/cg-go2.pid); for i in $(seq 1 57); do kill -0 $pid 2>/dev/null || break; sleep 10; done; tail -4 /tmp/cg-go2.log; date -u +%H:%M
+= task_started
+= task_notification
+< ?   	gitlab.com/example/dummy/egressvault/tacplus/model/types/sys/x509	[no test files] ?   	gitlab.com/example/dummy/egressvault/tacplus/model/types/vservices/egressquery	[no test files] ok  	gitlab.com/example/dummy/egressvault/tacplus/model/utils	0.013s FAIL 00:04
+> Bash grep -n -- '--- FAIL\|FAIL\s\|\.go:[0-9]*:' /tmp/cg-go2.log | head -20
+< 24:tacplus/model/s2sm/grpc/servers/services/egressvault/egress_vault_api.go:984:2: undefined: __caller 25:tacplus/model/s2sm/grpc/servers/services/egressvault/egress_vault_api.go:985:2: undefined: __stage 42:FAIL	gitlab.com/example/dummy/egressvault/tacplus/model/s2sm [build failed] 47:FAIL	gitlab.c...
+> Bash f=$(find /tmp/t273/target -path '*recordegress-go*/egress_vault_api.go' | head -1); sed -n 955,990p $f
+< 		}) 	}  	return resp, nil }  // ListVaultRowsPaged implements EgressVaultApi.ListVaultRowsPaged (PAGE collection — keyset pagination) func (p *EgressVaultApi) ListVaultRowsPaged(ctx context.Context, req *types.VaultPageRequest) (*types.VaultPageResponse, error) { 	// Authenticate (auth_any_user: an...
+= thinking_tokens
+= thinking_tokens
+The Go PAGE shape uses `callerExtractFor` but was never accounted. For parity with Rust (which now accounts PAGE), I'll account it in Go too.
+> Bash grep -n 'PAGE collection — keyset pagination' -B40 pkg/internal/go/types/servicewrapper.go | grep -n 'callerExtract\|func \|hasAccounting\|return fmt' ; grep -n 'PAGE collection — keyset pagination' -A30 pkg/internal/go/types/servicewrapper.go | head -40
+< 10:1617-			callerExtract += egressSanitizePreamble([]sanTarget{t}) 17:1624-			callerExtract += pagePre 41:1648:		return fmt.Sprintf(`// %s implements %s.%s (PAGE collection — keyset pagination) 1648:		return fmt.Sprintf(`// %s implements %s.%s (PAGE collection — keyset pagination) 1649-func (p *{{.S...
+> Bash sed -n 1625,1647p pkg/internal/go/types/servicewrapper.go
+< 			pageSan = "\n" + pageEgress + pageSan 		}  		totalBlock := "" 		if method.Resolved.PageHasTotal { 			totalBlock = ` 	// total_count is reported only when the handler computes it (Total >= 0); 	// a negative Total leaves total_count at 0 = "unknown", not "empty". 	if page.Total >= 0 { 		resp.Total...
+= thinking_tokens
+= thinking_tokens
+> Bash python3 - <<'EOF' p='pkg/internal/go/types/servicewrapper.go' s=open(p).read() old='''		return fmt.Sprintf(`// %s implements %s.%s (PAGE collection — keyset pagination) func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) (*%s, error) {%s%s%s 	// Decode the opaque page_token into a keyset curs...
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/pkg/internal/go/types	2.305s
+= thinking_tokens
+= thinking_tokens
+Go now accounts PAGE too. Adding a pin for it.
+> Bash grep -rn 'func pageMethod\|func watchMethod' pkg/internal/go/types/*_test.go | head
+< pkg/internal/go/types/collection_render_test.go:143:func watchMethod() *parser.MethodInfo { pkg/internal/go/types/collection_render_test.go:234:func pageMethod() *parser.MethodInfo {
+> Bash sed -n 234,250p pkg/internal/go/types/collection_render_test.go && cat >> pkg/internal/go/types/servicewrapper_accounting_regression_test.go <<'EOF'  // A PAGE method is accounted like any other unary call (tacplus#273): it had // no record at all before. func TestGoPageAccountingRecordsEveryExitPat...
+= task_started
+= task_notification
+< func pageMethod() *parser.MethodInfo { 	return &parser.MethodInfo{ 		Name:           "ListEvents", 		InputType:      "ListEventsRequest", 		OutputType:     "ListEventsPage", 		FullInputType:  "catalog.ListEventsRequest", 		FullOutputType: "catalog.ListEventsPage", 		Collection:     &parser.Collectio...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Rebuilding the private copy (Java reset to HEAD while that agent works) and rerunning the Go gate.
+> Bash rm -rf /tmp/t273 && mkdir /tmp/t273 && tar --exclude=./target --exclude=./.git -cf - . | tar -xf - -C /tmp/t273 && cd /tmp/t273 && rm -rf pkg/internal/java pkg/templates/java && git -C /builds/looper/tacplus/issues/273 archive HEAD pkg/internal/java pkg/templates/java | tar -x -C /tmp/t273 && go gen...
+= task_started
+= task_notification
+< 81941 Shell cwd was reset to /builds/looper/tacplus/issues/273
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash pid=$(cat /tmp/cg-go2.pid); for i in $(seq 1 57); do kill -0 $pid 2>/dev/null || break; sleep 10; done; tail -3 /tmp/cg-go2.log; grep -c PASS /tmp/cg-go2.log; date -u +%H:%M
+= task_started
+= task_notification
+<     PASS java record-egress host ==> Generating java event-bus backpressure fixture ==> Compiling java event-bus backpressure fixture     PASS java event-bus backpressure ==> Generating java accounting-sink fixture ==> Compiling java accounting-sink fixture     PASS java accounting sink ==> Generati...
+> Bash grep -c "AccountingOutcomeTest: all checks passed" /tmp/cg-java-work/accountingsink-java*/ -r 2>/dev/null | grep -v ":0" | head -3; for i in $(seq 1 55); do sleep 10; if ! pgrep -f "cg-java-work" >/dev/null; then break; fi; done; tail -8 /tmp/cg-java-run.log
+= task_progress
+= task_started
+= task_notification
+<     PASS go owner-default ==> Generating go quorum-write fixture ==> Compiling go quorum-write fixture 7 00:14
+> Bash grep PASS /tmp/cg-go2.log; pid=$(cat /tmp/cg-go2.pid); for i in $(seq 1 57); do kill -0 $pid 2>/dev/null || break; sleep 10; done; tail -3 /tmp/cg-go2.log; date -u +%H:%M
+= task_started
+= task_notification
+< /tmp/cg-java-work/accountingsink-java/tacplus/model/src/main/java/com/gitlab/example/dummy/agentsensor/model/s2sm/internal/grpc/servers/services/agentsensor/AccountingOutcomeTest.java:1 /tmp/cg-java-work/accountingsink-java/java-compile/target/classes/com/gitlab/example/dummy/agentsensor/model/s2sm/...
+Confirmed in the full gate's log. Continuing to poll.
+> Bash for i in $(seq 1 58); do sleep 10; if ! pgrep -f "cg-java-work" >/dev/null; then break; fi; done; tail -8 /tmp/cg-java-run.log
+= task_progress
+= task_started
+= task_notification
+<     PASS go     PASS go c2s-only     PASS go requires-device     PASS go record-egress     PASS go record-egress host     PASS go accounting sink     PASS go owner-default     PASS go tenant-route (harbor) ==> Generating go tenant-route fixture (crew) ==> Compiling go tenant-route fixture (crew) 00:...
+= thinking_tokens
+= thinking_tokens
+Go accounting-sink fixture (with the new acceptance test) passes. Continuing.
+> Bash pid=$(cat /tmp/cg-go2.pid); for i in $(seq 1 57); do kill -0 $pid 2>/dev/null || break; sleep 10; done; tail -3 /tmp/cg-go2.log; date -u +%H:%M
+= task_started
+= task_notification
+<     PASS java tenant-slice ==> Generating java tenant-slice owner fixture ==> Compiling java tenant-slice owner fixture     PASS java tenant-slice owner ==> Generating java tenant-slice config owner fixture ==> Compiling java tenant-slice config owner fixture     PASS java tenant-slice config owner ...
+The Java part of #273 is in, including the lead's two later changes. The full Java gate (`cross-test/current-generation/run.sh --language java --keep --workdir /tmp/cg-java-work`) passed every fixture, but its final verdict is void: it ended with "tree guard: the working tree ... changed while this gate ran; its verdict is about a different tree. Re-run it." The other agents' edits, and my own fixture edits, landed while it ran, so it needs a re-run on a quiet tree. Nothing is committed.
+
+**Verification**
+- `go build ./... && go test ./pkg/internal/java/... ./pkg/internal/common/...` passes (`ok .../pkg/internal/java/types`, all common packages ok).
+- I generated the accounting-sink fixture, compiled it with maven (no errors or warnings) and ran three tests. Each printed its pass line: `AccountingOutcomeTest: all checks passed`, `AccountingSinkSpoolTest: all checks passed`, `AccountingSinkDurableTest: all checks passed`. The run log has no WARN or ERROR lines.
+- In the full gate run, the last lines before the guard message were `PASS java tenant-slice owner` and `PASS java tenant-slice config owner`. `java-generated-selftests.log` there contains `AccountingOutcomeTest: all checks passed`.
+- I did not run `cross-test/accounting-identity` or `cross-test/consumer-contract`, so the Java fixture changes in those two are untested.
+
+**Java API generated (`AccountingManager`)**
+- **Classification**, rendered from `accountingpolicy` (stages, code to outcome, stage plus outcome to reason, levels): `enum Stage {AUTH, REQUEST, HANDLER, RESPONSE}`, `outcomeForCode(int)`, `reasonFor(Stage, RpcOutcome)`, `levelFor(RpcOutcome)`, `codeOf(Throwable)`, `grpcCodeFromError(Throwable)`.
+- **Emitter:** one RPC method, `rpc(method, stage, err, durationMs, metrics, identity, requestId)`. For a FAILED call the error text is logged at DEBUG on the console only. `endpointHealthChanged` and `stateUpdated` are kept. `rpcCompleted`, `rpcError`, `tokenRejected`, `diagnostic` and all the ErrorContext/stack helpers are removed.
+- **Metrics:** `AccountingManager.Metrics.setRecordsReturned(long)` and `addBytes(long)`. They work through an `io.grpc.Context` key and do nothing outside an accounted call.
+- **Call:** `Call.begin(emitter, method, requestId)`, `authorized(identity)`, `stage(Stage)`, `bind()`, `unbind(prev)`, `finish(Throwable)`. Only the first `finish` emits. A client cancel or deadline ends the call through a Context listener.
+- **Marker:** `INTERNAL_HEADER`, `INTERNAL_CTX`, `captureInternal(ctx, headers)`, `internalFromContext()`, and `internalMarker()` (a client interceptor that sends the header as "1").
+- **EventBusSink:** `flatten` now sets outcome, reason, code, records_returned and bytes. `stats()` returns `Stats{ingested, dropped, depth}`.
+- **LoggerSink:** handles the new payload with no free text.
+
+**Behaviour**
+- Every accounted gRPC method is now a short override that begins the call, wraps the response observer so the first `onCompleted` or `onError` emits the one record, and binds the call into the Context. The real body moves to a private `<name>__accounted(...)` method.
+- **Auth denial:** before this change, the Java wrapper's own auth check refused with `responseObserver.onError(...)` and emitted nothing. That onError now goes through the accounted observer while the stage is still AUTH, so a denied call produces exactly one record: PERMISSION_DENIED gives DENIED_AUTHZ / NOT_ENTITLED, UNAUTHENTICATED gives DENIED_AUTHN / TOKEN_REJECTED, with empty identity.
+- **Marker (per the lead's revised contract):** any accounted wrapper drops the record when the verified token's `sub_type` is exactly "service" and the incoming call carried the header. `headerCaptureInterceptor` copies the header onto the Context, and only the accounting record publisher sends it. A user caller with the header is still recorded.
+
+**Limits you should know about**
+- Plain server-streaming, client-streaming and bidi calls stay at stage HANDLER once the handler is called. A response guard or per-message validation that fails there is recorded as HANDLER_ERROR, not POLICY_DENIED or RESPONSE_INVALID.
+- Metrics set inside a watch thread or a tier-3 iterator are not captured.
+- The trace noop path now emits a PERMITTED record; before, it emitted nothing.
+- The bidi MCP carrier, when accounted, now gets the fail-closed `caller == null` guard that the unaccounted version already had.
+
+**Files changed**
+- Templates (`/builds/looper/tacplus/issues/273/pkg/templates/java/`):
+  - `chassis/am/AccountingManager.java.tmpl`
+  - `chassis/grpcserver/Authorizer.java.tmpl` (captures the marker)
+  - `types/servicewrapper.java.tmpl`
+  - `types/ServiceManager.java.tmpl` (the accounting publish stream sends the marker)
+- Generator (`/builds/looper/tacplus/issues/273/pkg/internal/java/types/`):
+  - `libs.go` (adds `Acct: accountingpolicy.TemplateContext()`)
+  - `servicewrapper_gen.go` (removed the per-shape emit branches; added stage markers and `javaAccountedOverride`)
+- Generator tests (same directory):
+  - new `accounting_outcome_test.go` covers: classification rendered from the policy, the removed API is gone, pre-handler denial emits the record, metrics are bound around the handler, the marker applies only to a service caller, and `headerCaptureInterceptor` captures it.
+  - updated: `servicewrapper_accounting_regression_test.go`, `collection_render_test.go`, `service_manager_accounting_template_test.go` (now checks the publisher sends the marker)
+- Cross-test (`/builds/looper/tacplus/issues/273/cross-test/`):
+  - new `current-generation/testdata/java/AccountingOutcomeTest.java`: drives the real AgentApi wrapper over a real socket with the real interceptor, Emitter and EventBusSink. Only `authorize` is substituted, like the Go test's authorize func.
+  - `current-generation/run.sh`: Java branch of `install_accounting_sink_selftests`, and `AccountingOutcomeTest` added to the self-test loop.
+  - `accounting-identity/fixture/AccountingIdentityTest.java` and `accounting-identity/run.sh` (comment only): case 3 now expects RPC_COMPLETED with FAILED / HANDLER_ERROR; case 5 (forged token) now expects one DENIED_AUTHN record with no identity, instead of no record.
+  - `consumer-contract/run.sh`: Java section only, now counts failures by outcome instead of `hasRpcError`.
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+<     PASS go tenant-record (tstratum) ==> Generating go tenant-record fixture (tmessaging) ==> Compiling go tenant-record fixture (tmessaging) 00:33
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+All agents are done. The tree is quiet now, so I'll stop the private Go run (gates re-cover it) and run the full `just gates` on the real worktree.
+> Bash pid=$(cat /tmp/cg-go2.pid); grep PASS /tmp/cg-go2.log | tr '\n' ';'; kill $pid; cd /builds/looper/tacplus/issues/273 && go build ./... && gofmt -l $(git diff --name-only -- '*.go'; git ls-files --others --exclude-standard -- '*.go') 2>/dev/null; git status --short | wc -l
+<     PASS go;    PASS go c2s-only;    PASS go requires-device;    PASS go record-egress;    PASS go record-egress host;    PASS go accounting sink;    PASS go owner-default;    PASS go quorum-write;    PASS go epoch-load;    PASS go tenant-route (harbor);    PASS go tenant-route (crew);    PASS go re...
+= thinking_tokens
+= thinking_tokens
+> Bash ps -u $(id -u) -o pid,ppid,etime,cmd | grep -v 'ps -u\|grep' | grep -E 'go test|run.sh|cargo|java|mvn' | head
+<  118047       1       01:17 go test ./...
+> Bash kill 118047; cd /builds/looper/tacplus/issues/273 && git status --short | head -80
+<  M PROPOSALS.md  M STATE.md  M cross-test/accounting-identity/fixture/AccountingIdentityTest.java  M cross-test/accounting-identity/run.sh  M cross-test/consumer-contract/run.sh  M cross-test/current-generation/run.sh  M cross-test/current-generation/testdata/rust/accounting_sink_spool.rs  M cross-t...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Committing the work locally, then running the full gate suite on it.
+> Bash git add -A && git commit -q -F - <<'EOF' Accounting: typed outcome, reason and metrics, one record per call, no data (#273)  Accounting said "denied" only by inference (TokenRejected, a generic RpcError) and carried free text that could hold request data: error messages, stack traces, agent telemetr...
+< 09c0aa3f Accounting: typed outcome, reason and metrics, one record per call, no data (#273) 119494
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 273 --checkpoint "All languages done and committed locally (09c0aa3f): proto, gate, accountingpolicy, Go/Java/Rust/TS/Py am + wrappers, self-tests (go/java/rust accounting_outcome), docs/STATE/PROPOSALS. Running just gates (/tmp/gates.log). Left: gat...
+< [2026-11-09T00:34:14Z] checkpoint of #273 (a step) pushed to looper/tacplus-273:  69 files changed, 6034 insertions(+), 2292 deletions(-)
+Gates running. Meanwhile, reviewing the Java and Rust diffs myself (I only have the agents' summaries so far).
+> Bash grep -n 'accounting-identity\|consumer-contract' justfile cross-test/justfile | head; git show --stat HEAD | grep -E 'java|rust' | head -30
+< justfile:23:#   cross-test/consumer-contract/run.sh   (pom heredoc) justfile:385:accounting-identity: justfile:386:  {{lock}} bash cross-test/accounting-identity/run.sh justfile:483:  {{lock}} bash cross-test/consumer-contract/run.sh justfile:486:  {{lock}} bash cross-test/consumer-contract/run.sh -...
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n 'internal\|Internal\|INTERNAL' pkg/templates/java/chassis/am/AccountingManager.java.tmpl | head -30; git show HEAD -- pkg/templates/java/chassis/grpcserver/Authorizer.java.tmpl | head -50
+< 52:    // Classification — rendered from pkg/internal/common/accountingpolicy, the 83:        return Accounting.RpcReason.RPC_REASON_INTERNAL; 124:    // accounting_internal marker 134:    public static final String INTERNAL_HEADER = "{{.Acct.InternalHeader}}"; 136:    private static final Metadata....
+= thinking_tokens
+= thinking_tokens
+> Bash sed -n 200,300p pkg/templates/java/chassis/am/AccountingManager.java.tmpl
+<     // Call — one accounted RPC     // -----------------------------------------------------------------------      /**      * Call is one accounted RPC. The generated wrapper begins it before      * anything else runs, advances its stage along the call path, and      * finishes it on every exit pat...
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n 'service_caller\|accounting_internal\|sub_type' pkg/internal/rust/types/servicewrapper_gen.go | head -15
+< 906:// before authentication, noting the accounting_internal marker (honored only 936:            am::accounting_internal(request.metadata()), 1009:// SERVICE principal's (sub_type exactly "service"). It is only evaluated after 1012:// accounting_internal marker is honored: a user (or workload) toke...
+> Bash sed -n 1000,1030p pkg/internal/rust/types/servicewrapper_gen.go
+< // rustAccountedAuthLine is rustAuthLine on an accounted method: the verified // identity is handed to the accounting Call the moment the authorizer returns // it, and the call moves to Stage::Request once every auth check has passed. // A call refused here is accounted at Stage::Auth with no identi...
+= thinking_tokens
+= thinking_tokens
+Java and Rust marker checks both key off the verified token's `sub_type`, after verification. Polling the gates.
+> Bash pid=$(cat /tmp/gates.pid); for i in $(seq 1 57); do kill -0 $pid 2>/dev/null || break; sleep 10; done; grep '^=== ' /tmp/gates.log | tail -6; date -u +%H:%M
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness === === soundness rc=0 === === test === === test rc=0 === === current-generation === 00:44
+= thinking_tokens
+= thinking_tokens
+`soundness` and `test` pass; `current-generation` (all three languages) is running.
+> Bash pid=$(cat /tmp/gates.pid); for i in $(seq 1 58); do kill -0 $pid 2>/dev/null || break; sleep 10; done; grep '^=== \|PASS' /tmp/gates.log | tail -4; date -u +%H:%M
+= task_started
+= task_notification
+<     PASS rust     PASS config defaults parity (11 constants matched across go/java/rust)     PASS config defaults behavioral parity (go: 12 fields, java: 12 fields, rust: 12 fields)     PASS go c2s-only 00:53
+> Bash pid=$(cat /tmp/gates.pid); for i in $(seq 1 58); do kill -0 $pid 2>/dev/null || break; sleep 10; done; grep '^=== \|PASS\|ERROR\|FAIL' /tmp/gates.log | tail -5; date -u +%H:%M
+= task_started
+= task_notification
+<     PASS config defaults behavioral parity (go: 12 fields, java: 12 fields, rust: 12 fields)     PASS go c2s-only     PASS rust health-only     PASS rust zero-rpc     PASS go requires-device 01:03
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 273 --checkpoint "Committed 09c0aa3f; local just gates running (soundness, test green; current-generation in progress). Landing now in parallel. Left: land verdict, accounting-identity Java gate, outcome comment + Blocked-by tacplus-dev/stratum#24." ...
+= task_started
+= task_notification
+< [2026-11-09T01:03:37Z] checkpoint of #273 (a step) pushed to looper/tacplus-273:  69 files changed, 6034 insertions(+), 2292 deletions(-) [2026-11-09T01:03:39Z] checkpoint of #273 (land queued) pushed to looper/tacplus-273:  70 files changed, 6038 insertions(+), 2292 deletions(-) [2026-11-09T01:03:4...
+= thinking_tokens
+= thinking_tokens
+Land queued. Polling both.
+> Bash pid=$(cat /tmp/gates.pid); for i in $(seq 1 58); do kill -0 $pid 2>/dev/null || break; sleep 10; done; grep '^=== \|PASS\|ERROR\|FAIL' /tmp/gates.log | tail -4; tail -2 /tmp/land.log; date -u +%H:%M
+= task_started
+= task_notification
+<     PASS java requires-device     PASS rust requires-device     PASS go record-egress     PASS java record-egress [2026-11-09T01:03:39Z] checkpoint of #273 (land queued) pushed to looper/tacplus-273:  70 files changed, 6038 insertions(+), 2292 deletions(-) [2026-11-09T01:03:41Z] queued: the manager ...
+> Bash pid=$(cat /tmp/gates.pid); for i in $(seq 1 58); do kill -0 $pid 2>/dev/null || break; sleep 10; done; grep '^=== \|PASS\|ERROR\|FAIL' /tmp/gates.log | tail -4; tail -1 /tmp/land.log; date -u +%H:%M
+= task_started
+= task_notification
+<     PASS go record-egress     PASS java record-egress     PASS rust record-egress     PASS go record-egress host [2026-11-09T01:03:41Z] queued: the manager of tacplus merges looper/tacplus-273 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its ver...
+> Bash pid=$(cat /tmp/gates.pid); for i in $(seq 1 58); do kill -0 $pid 2>/dev/null || break; sleep 10; done; grep '^=== \|PASS\|ERROR\|FAIL' /tmp/gates.log | tail -4; tail -1 /tmp/land.log; date -u +%H:%M
+= task_started
+= task_notification
+<     PASS go record-egress host     PASS java record-egress host     PASS rust record-egress host     PASS java event-bus backpressure [2026-11-09T01:03:41Z] queued: the manager of tacplus merges looper/tacplus-273 after the lands queued before it, one at a time, and says on the issue what came of it...
+> Bash pid=$(cat /tmp/gates.pid); for i in $(seq 1 58); do kill -0 $pid 2>/dev/null || break; sleep 10; done; grep '^=== \|PASS\|ERROR\|FAIL' /tmp/gates.log | tail -5; tail -1 /tmp/land.log; date -u +%H:%M
+= task_started
+= task_notification
+<     PASS rust record-egress host     PASS java event-bus backpressure     PASS go accounting sink     PASS java accounting sink     PASS rust accounting sink [2026-11-09T01:03:41Z] queued: the manager of tacplus merges looper/tacplus-273 after the lands queued before it, one at a time, and says on t...
+= thinking_tokens
+= thinking_tokens
+All three accounting-sink fixtures pass, including the new outcome self-tests. Continuing.
+> Bash pid=$(cat /tmp/gates.pid); for i in $(seq 1 58); do kill -0 $pid 2>/dev/null || break; sleep 10; done; grep '^=== \|PASS\|ERROR\|FAIL' /tmp/gates.log | tail -4; tail -1 /tmp/land.log; date -u +%H:%M
+= task_started
+= task_notification
+<     PASS rust accounting sink     PASS go owner-default     PASS java owner-default     PASS rust owner-default [2026-11-09T01:03:41Z] queued: the manager of tacplus merges looper/tacplus-273 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verd...
+> Bash pid=$(cat /tmp/gates.pid); for i in $(seq 1 58); do kill -0 $pid 2>/dev/null || break; sleep 10; done; grep '^=== \|PASS\|ERROR\|FAIL' /tmp/gates.log | tail -4; tail -1 /tmp/land.log; date -u +%H:%M
+= task_started
+= task_notification
+<     PASS java quorum-write     PASS rust quorum-write     PASS go epoch-load     PASS java epoch-load [2026-11-09T01:03:41Z] queued: the manager of tacplus merges looper/tacplus-273 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If yo...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash rm -rf /tmp/t273b && mkdir /tmp/t273b && git archive HEAD | tar -x -C /tmp/t273b && cd /tmp/t273b && git init -q && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm snapshot && (nohup bash cross-test/accounting-identity/run.sh > /tmp/acct-id.log 2>&1 & echo $! > /tmp/acc...
+< 188747 28:WORK_ROOT="${TACPLUS_ACCOUNTING_IDENTITY_WORKDIR:-}" 29:TACPLUS_BIN="${TACPLUS_BIN:-}" 30:KEEP_WORK="${TACPLUS_ACCOUNTING_IDENTITY_KEEP:-false}" Shell cwd was reset to /builds/looper/tacplus/issues/273
+> Bash pid=$(cat /tmp/acct-id.pid); for i in $(seq 1 58); do kill -0 $pid 2>/dev/null || break; sleep 10; done; tail -12 /tmp/acct-id.log; grep '^=== \|PASS\|ERROR\|FAIL' /tmp/gates.log | tail -3; tail -1 /tmp/land.log; date -u +%H:%M
+< pkg/internal/common/parser/descriptor.go:20:2: no required module provides package github.com/tacplus-dev/tacplus/target/proto/spec/sys; to add it: 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sys     PASS rust quorum-write     PASS go epoch-load     PASS java epoch-load [2026-11-09T01:0...
+> Bash cd /tmp/t273b && go generate ./pkg/internal/proto/spec/... >/dev/null 2>&1 && (nohup bash cross-test/accounting-identity/run.sh > /tmp/acct-id.log 2>&1 & echo $! > /tmp/acct-id.pid); pid=$(cat /tmp/acct-id.pid); for i in $(seq 1 57); do kill -0 $pid 2>/dev/null || break; sleep 10; done; tail -12 /tm...
+= task_started
+= task_notification
+< [ERROR] /builds/looper/tacplus/homes/looper-273/tmp/tacplus-accounting-identity.Mzd6ZR/model/src/main/java/com/gitlab/example/tacplus/consumer/contractclient/model/s2sm/internal/grpc/servers/services/contractclient/ContractAuditApiMcpTest.java:[156,18] package McpSchema does not exist [ERROR] /build...
+= thinking_tokens
+= thinking_tokens
+The Java compile errors are about `McpSchema` in a generated MCP test. Checking whether any are accounting-related, and whether main shows the same.
+> Bash grep '^\[ERROR\].*\.java' /tmp/acct-id.log | grep -v McpSchema | head; grep -c '^\[ERROR\].*McpSchema' /tmp/acct-id.log; gh issue list --repo tacplus-dev/tacplus --state open --search "accounting-identity" --limit 5
+< [ERROR] /builds/looper/tacplus/homes/looper-273/tmp/tacplus-accounting-identity.Mzd6ZR/model/src/main/java/com/gitlab/example/tacplus/consumer/contractclient/model/s2sm/internal/grpc/servers/services/contractclient/ContractAuditApiMcp.java:[18,36] package io.modelcontextprotocol.json does not exist ...
+= thinking_tokens
+= thinking_tokens
+> Bash grep '^\[ERROR\].*\.java' /tmp/acct-id.log | grep -v 'McpSchema\|modelcontextprotocol\|reactor\|Mcp\.java\|McpTest\.java' | head -5; echo ---; grep '^\[ERROR\].*\.java' /tmp/acct-id.log | sed 's/.*\/\([A-Za-z]*\.java\).*/\1/' | sort | uniq -c
+< ---     140 ContractAuditApiMcp.java      42 ContractAuditApiMcpTest.java
+= thinking_tokens
+= thinking_tokens
+All errors are in the generated MCP files (the gate's pom lacks the MCP SDK). Confirming main fails the same way.
+> Bash rm -rf /tmp/main273 && mkdir /tmp/main273 && git -C /builds/looper/tacplus/issues/273 archive origin/main | tar -x -C /tmp/main273 && cd /tmp/main273 && git init -q && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm s && go generate ./pkg/internal/proto/spec/... >/dev/n...
+= task_started
+= task_notification
+< rc=1 ERROR: generated java did not compile     140 ContractAuditApiMcp.java      42 ContractAuditApiMcpTest.java Shell cwd was reset to /builds/looper/tacplus/issues/273
+= thinking_tokens
+= thinking_tokens
+Same failure on main: pre-existing, unrelated. Checking for an existing issue before filing a bug.
+> Bash gh issue list --repo tacplus-dev/tacplus --state open --search "modelcontextprotocol pom" --limit 5; gh issue list --repo tacplus-dev/tacplus --state open --search "accounting-identity compile" --limit 5; gh issue list --repo tacplus-dev/tacplus --state open --search "McpSchema" --limit 5
+< (Bash completed with no output)
+> Bash gh issue create --repo tacplus-dev/tacplus --label bug --title "accounting-identity gate: generated Java does not compile, its pom lacks the MCP SDK the generated MCP carrier needs" --body "$(cat <<'EOF' \`just accounting-identity\` (\`cross-test/accounting-identity/run.sh\`) fails on main (origin/m...
+< https://github.com/tacplus-dev/tacplus/issues/474
+= thinking_tokens
+= thinking_tokens
+The quoted heredoc left literal backslashes in the issue body. Fixing it.
+> Bash gh issue view 474 --repo tacplus-dev/tacplus --json body -q .body | sed 's/\\`/`/g' > /tmp/474.md && head -3 /tmp/474.md && gh issue edit 474 --repo tacplus-dev/tacplus --body-file /tmp/474.md | tail -1
+< `just accounting-identity` (`cross-test/accounting-identity/run.sh`) fails on main (origin/main at 55ab0b53) before any of its checks run:  ``` https://github.com/tacplus-dev/tacplus/issues/474
+> Bash rm -rf /tmp/main273 /tmp/t273b; grep '^=== \|PASS\|ERROR\|FAIL' /tmp/gates.log | tail -4; tail -1 /tmp/land.log; date -u +%H:%M
+<     PASS java quorum-write     PASS rust quorum-write     PASS go epoch-load     PASS java epoch-load [2026-11-09T01:03:41Z] queued: the manager of tacplus merges looper/tacplus-273 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If yo...
+= thinking_tokens
+= thinking_tokens
+Filed #474. Continuing to poll gates and land.
+> Bash pid=$(cat /tmp/gates.pid); for i in $(seq 1 58); do kill -0 $pid 2>/dev/null || break; sleep 10; done; grep '^=== \|PASS\|ERROR\|FAIL' /tmp/gates.log | tail -4; tail -1 /tmp/land.log; date -u +%H:%M
+= task_started
+= task_notification
+<     PASS rust epoch-load     PASS go tenant-route (harbor)     PASS go tenant-route (crew)     PASS java tenant-route (harbor) [2026-11-09T01:03:41Z] queued: the manager of tacplus merges looper/tacplus-273 after the lands queued before it, one at a time, and says on the issue what came of it; waiti...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash pid=$(cat /tmp/gates.pid); for i in $(seq 1 58); do kill -0 $pid 2>/dev/null || break; sleep 10; done; grep '^=== \|PASS\|ERROR\|FAIL' /tmp/gates.log | tail -4; tail -1 /tmp/land.log; date -u +%H:%M
+= task_started
+= task_notification
+<     PASS go tenant-route (crew)     PASS java tenant-route (harbor)     PASS java tenant-route (crew)     PASS rust tenant-route (harbor) [2026-11-09T01:03:41Z] queued: the manager of tacplus merges looper/tacplus-273 after the lands queued before it, one at a time, and says on the issue what came o...
+> Bash pid=$(cat /tmp/gates.pid); for i in $(seq 1 58); do kill -0 $pid 2>/dev/null || break; sleep 10; done; grep '^=== \|PASS\|ERROR\|FAIL' /tmp/gates.log | tail -4; tail -1 /tmp/land.log; gh issue view 273 --repo tacplus-dev/tacplus --comments | tail -8; date -u +%H:%M
+= task_started
+= task_notification
+<     PASS go redo-contract (stratum)     PASS go redo-contract (redo)     PASS java redo-contract (stratum)     PASS java redo-contract (redo) [2026-11-09T01:03:41Z] queued: the manager of tacplus merges looper/tacplus-273 after the lands queued before it, one at a time, and says on the issue what ca...
+= thinking_tokens
+= thinking_tokens
+About 40 minutes left. Posting a progress comment now so the record exists if I'm stopped before the land's verdict.
+> Bash cat > /tmp/progress.md <<'EOF' Progress from this run (looper): the change is committed as 09c0aa3f on `looper/tacplus-273` and **queued to land** (the manager's verdict will follow on this issue). Summary:  **What changed** - `sys/accounting.proto`: `RpcCompleted` is the one record of a call, with ...
+< https://github.com/tacplus-dev/tacplus/issues/273#issuecomment-6730857734
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 273 --checkpoint "Land of 09c0aa3f queued (01:03Z); progress comment posted. Local just gates: protoc-check/soundness/test green, current-generation all PASS so far. Next run: read the land verdict; if landed, comment final + write Blocked-by: tacplu...
+= task_started
+= task_notification
+< [2026-11-09T02:33:55Z] checkpoint of #273 (a step) pushed to looper/tacplus-273:  70 files changed, 6038 insertions(+), 2292 deletions(-)     PASS java redo-contract (stratum)     PASS java redo-contract (redo)     PASS rust redo-contract (stratum)     PASS rust redo-contract (redo) [2026-11-09T01:0...
+> Bash pid=$(cat /tmp/gates.pid); for i in $(seq 1 54); do kill -0 $pid 2>/dev/null || break; sleep 10; done; grep '^=== \|PASS\|ERROR\|FAIL' /tmp/gates.log | tail -4; tail -1 /tmp/land.log; date -u +%H:%M
+= task_started
+= task_notification
+<     PASS go tenant-record (tstratum)     PASS go tenant-record (tmessaging)     PASS java tenant-record (tstratum)     PASS java tenant-record (tmessaging) [2026-11-09T01:03:41Z] queued: the manager of tacplus merges looper/tacplus-273 after the lands queued before it, one at a time, and says on the...
+= thinking_tokens
+= thinking_tokens
+> Bash pid=$(cat /tmp/gates.pid); for i in $(seq 1 48); do kill -0 $pid 2>/dev/null || break; sleep 10; done; grep '^=== \|PASS\|ERROR\|FAIL' /tmp/gates.log | tail -5; tail -1 /tmp/land.log; date -u +%H:%M
+= task_started
+= task_notification
+<     PASS go tenant-record (tmessaging)     PASS java tenant-record (tstratum)     PASS java tenant-record (tmessaging)     PASS rust tenant-record (tstratum)     PASS rust tenant-record (tmessaging) [2026-11-09T01:03:41Z] queued: the manager of tacplus merges looper/tacplus-273 after the lands queue...
+= thinking_tokens
+= thinking_tokens
+Time is nearly up. The local gates won't finish and the land is still queued. The manager lands it after this run ends, so this is the final checkpoint.
+> Bash grep -c PASS /tmp/gates.log; /usr/local/bin/repo-looper --repo tacplus --issue 273 --checkpoint "Final for this run: 09c0aa3f queued to land since 01:03Z (no verdict yet). Local just gates when stopped: protoc-check, soundness, test rc=0; current-generation every fixture PASS in go/java/rust through...
+< 48 [2026-11-09T02:59:29Z] checkpoint of #273 (a step) pushed to looper/tacplus-273:  70 files changed, 6038 insertions(+), 2292 deletions(-)
+Issue #273 is implemented and committed as `09c0aa3f`, and is queued to land since 01:03Z with no verdict yet. The manager lands it after this run, the next run reads the verdict, and the issue stays open.
+
+**What changed**
+- **Proto:** every call now produces one record, `RpcCompleted`, carrying:
+  - the gRPC code;
+  - a typed outcome: `PERMITTED`, `DENIED_AUTHN`, `DENIED_AUTHZ`, `INVALID` or `FAILED`;
+  - a typed reason for where the call stopped, such as `NOT_ENTITLED` or `POLICY_DENIED`;
+  - numbers the handler can attach: `records_returned` and `bytes`.
+
+  The free-text parts are removed: `RpcError`, `TokenRejected`, `ErrorContext` with its stack trace, and the agent events (`CommandExecuted`, `ToolUsed`, `SubagentStarted`, `FileModified`, `Diagnostic`). Error text and stacks go to the console at DEBUG only.
+- **One rule set:** the mapping from code to outcome and from stage to reason lives in a single Go table, `pkg/internal/common/accountingpolicy`. Every language renders it, so they can't drift.
+- **Gate:** generation fails on any string or bytes field in an accounting event that isn't marked `(spec.accounting_safe)`. A unit test plants free-text fields and checks they are rejected.
+- **Wrappers (Go, Java, Rust):** every accounted call emits exactly one record on every exit path. Before this, Go and Java recorded nothing when a call was refused before reaching the handler. Go now also accounts paged (keyset) methods, which weren't accounted before.
+- **No recursion:** the accounting publisher sends a marker header, and a wrapper skips the record only when the verified caller is a service. A user who adds the header is still recorded. I chose this rule instead of "S2S wrappers only" because S2S calls aren't accounted at all today, so that version would never have fired. The pipeline's own health (ingested, dropped, spool depth) is counted, never recorded.
+
+**Acceptance tests:** each language has a test that drives the real generated wrapper, emitter and sink:
+- A query returning 3 records gives one `PERMITTED` record with `records_returned=3` and no request data.
+- A refused call gives one `DENIED_AUTHZ`/`NOT_ENTITLED` record, or `DENIED_AUTHN`/`TOKEN_REJECTED` for a bad token.
+- The call that stores the record adds no record of its own.
+
+Removing the marker check makes the Go version fail, so the test does catch the regression.
+
+**Local gates:** protoc-check, soundness and test passed. In current-generation, every fixture passed in all three languages up to tenant-record, including the accounting-sink fixture with the new tests. The remaining gates didn't finish before the time limit, so the land's own gate run is the full check.
+
+**Not done or not verified**
+- Storing records in each tenant's own Stratum, and the end-to-end "exactly one record through event bus and Stratum" test, depend on tacplus-dev/stratum#24. Once this lands, the issue should be marked `Blocked-by: tacplus-dev/stratum#24`. Records don't yet name their tenant (`AccountingRecord.namespace` is unset); I left that open in PROPOSALS.md rather than guess the contract.
+- The tracing half of the no-recursion requirement (the trace topic and `WatchTrace` must not trace themselves) belongs to #265.
+- The Java `accounting-identity` gate doesn't compile on main either, because its build file lacks the MCP dependencies. I filed #474. So the Java fixture changes there, and the Java `consumer-contract` changes, were not run.
+- This is a breaking change in a minor release for any service calling the removed emitters directly. PROPOSALS.md asks that the 2.7 release notes say so.
+- In Go, only unary calls (including paged ones) can attach metrics, not streams. Some stream errors in Java and Rust are classified as handler errors rather than response errors.
+
+I posted a progress comment on #273 and left a checkpoint saying what's left for the next run.
+= success: Issue #273 is implemented and committed as `09c0aa3f`, and is queued to land since 01:03Z with no verdict yet. The manager lands it after this run, the next run reads the verdict, and the issue stays open.
+
+**What changed**
+- **Proto:** every call now produces one record, `RpcCompleted`, carrying:
+  - the gRPC code;
+  - a typed outcome: `PERMITTED`, `DENIED_AUTHN`, `DENIED_AUTHZ`, `INVALID` or `FAILED`;
+  - a typed reason for where the call stopped, such as `NOT_ENTITLED` or `POLICY_DENIED`;
+  - numbers the handler can attach: `records_returned` and `bytes`.
+
+  The free-text parts are removed: `RpcError`, `TokenRejected`, `ErrorContext` with its stack trace, and the agent events (`CommandExecuted`, `ToolUsed`, `SubagentStarted`, `FileModified`, `Diagnostic`). Error text and stacks go to the console at DEBUG only.
+- **One rule set:** the mapping from code to outcome and from stage to reason lives in a single Go table, `pkg/internal/common/accountingpolicy`. Every language renders it, so they can't drift.
+- **Gate:** generation fails on any string or bytes field in an accounting event that isn't marked `(spec.accounting_safe)`. A unit test plants free-text fields and checks they are rejected.
+- **Wrappers (Go, Java, Rust):** every accounted call emits exactly one record on every exit path. Before this, Go and Java recorded nothing when a call was refused before reaching the handler. Go now also accounts paged (keyset) methods, which weren't accounted before.
+- **No recursion:** the accounting publisher sends a marker header, and a wrapper skips the record only when the verified caller is a service. A user who adds the header is still recorded. I chose this rule instead of "S2S wrappers only" because S2S calls aren't accounted at all today, so that version would never have fired. The pipeline's own health (ingested, dropped, spool depth) is counted, never recorded.
+
+**Acceptance tests:** each language has a test that drives the real generated wrapper, emitter and sink:
+- A query returning 3 records gives one `PERMITTED` record with `records_returned=3` and no request data.
+- A refused call gives one `DENIED_AUTHZ`/`NOT_ENTITLED` record, or `DENIED_AUTHN`/`TOKEN_REJECTED` for a bad token.
+- The call that stores the record adds no record of its own.
+
+Removing the marker check makes the Go version fail, so the test does catch the regression.
+
+**Local gates:** protoc-check, soundness and test passed. In current-generation, every fixture passed in all three languages up to tenant-record, including the accounting-sink fixture with the new tests. The remaining gates didn't finish before the time limit, so the land's own gate run is the full check.
+
+**Not done or not verified**
+- Storing records in each tenant's own Stratum, and the end-to-end "exactly one record through event bus and Stratum" test, depend on tacplus-dev/stratum#24. Once this lands, the issue should be marked `Blocked-by: tacplus-dev/stratum#24`. Records don't yet name their tenant (`AccountingRecord.namespace` is unset); I left that open in PROPOSALS.md rather than guess the contract.
+- The tracing half of the no-recursion requirement (the trace topic and `WatchTrace` must not trace themselves) belongs to #265.
+- The Java `accounting-identity` gate doesn't compile on main either, because its build file lacks the MCP dependencies. I filed #474. So the Java fixture changes there, and the Java `consumer-contract` changes, were not run.
+- This is a breaking change in a minor release for any service calling the removed emitters directly. PROPOSALS.md asks that the 2.7 release notes say so.
+- In Go, only unary calls (including paged ones) can attach metrics, not streams. Some stream errors in Java and Rust are classified as handler errors rather than response errors.
+
+I posted a progress comment on #273 and left a checkpoint saying what's left for the next run.

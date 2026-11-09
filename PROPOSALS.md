@@ -73,6 +73,10 @@ the looper then marks it `promoted` or `declined` here with the date.
   scan found advisories in exactly those: #312 (TypeScript, Rust, Go), #309 (Python build/dev floors), #308
   (rustls-pemfile), after #264. A recipe that generates the cross-test models for every language into `<dir>`, with a
   lock-resolved manifest per language, would make OSV-Scanner and cargo-deny catch the next one in the build.
+- **golang.org/x/crypto back on a tag** (2026-11-09, #312): GO-2026-5932 (openpgp, unmaintained) is fixed only in
+  v0.58.1-0.20261009181718-2f1f834330b2, after v0.58.0, the newest tag, so five fixture dependencies.yaml and eight
+  harness go.mods pin that pseudo-version, and `scripts/go_dependency_floor_test.go` floors it. Nothing generated
+  imports openpgp. When x/crypto tags v0.59.0, move the pins and the floor to it.
 - **Run outbound-deadline in the gates** (2026-11-03, #310): `cross-test/outbound-deadline/run.sh` (the issue #38
   deadline and lifetime facts, and with #310 the trace fact) has no recipe and runs in no gate or workflow, so a
   regression there is invisible. #310 adds the recipe; joining the mandatory `gates` set is a cost decision (one

@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by looper (#313).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-09 by looper (#312).
 
 - **Version / line:** v2.6.2 (latest release, 2026-11-07, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -89,6 +89,13 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   beside the MCP Java SDK, `tools.jackson.*` 3.1.8 (nine GHSAs in the SDK's 3.1.4); docs/USER.md tells Java
   consumers to pin the same. `scripts/java_dependency_floor_test.go` refuses a lower or missing pin (#200;
   backported to release/2.0 through release/2.5 by pull request, each line's next patch once it merges).
+  Every checked-in dependencies.yaml (example/proto's included) pins the TypeScript and Rust floors the generated
+  manifests declare past their advisories: axios ^1.20.0, js-yaml ^4.3.2, zod ^4.6.6, rustls 0.23.46, tokio 1.51.6,
+  webpki-roots 0.26.11, anyhow 1.0.103, jsonwebtoken 10.3.0 (also the harness Cargo.tomls' tokio), and the fixtures
+  and harness go.mods that pin golang.org/x/crypto pin v0.58.1-0.20261009181718-2f1f834330b2 (GO-2026-5932 is fixed
+  only after v0.58.0, the newest tag). `scripts/dependency_floor_test.go` and `scripts/go_dependency_floor_test.go`
+  refuse a lower pin (#312; backported to release/2.0 through release/2.6 by pull request, each line's next patch
+  once it merges).
   Generated member port (#212): `option (spec.member_port) = {}` makes the Java ServiceManager own a member port
   for the service's black-box member traffic (Hazelcast in Stratum). Since #321 it is a gRPC bidi stream of byte
   chunks (`/memberport.MemberTunnel/Open`, `sys/memberport.proto`) on its own TLS 1.3 listener with the auto-TLS

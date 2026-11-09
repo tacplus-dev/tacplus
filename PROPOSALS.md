@@ -22,6 +22,13 @@ the looper then marks it `promoted` or `declined` here with the date.
   tag form, and how build:2.6.0 gets there. Parked: Jody chose ghcr.io release images pushed by GitHub Actions with
   `GITHUB_TOKEN` for now (tacplus-dev/roadmap decisions/ci-on-gitlab-2026-10-27.md, addendum); revisited with
   tacplus-dev/looper#17, the GitLab build pipeline.
+- **A release tag never builds on another line's base** (2026-11-08, #283): a release tag's Images run starts its fresh
+  `build` from its line's `base:X.Y`, else `base:latest` (main's). Before any line rebuild had pushed a `base:X.Y`, the
+  v2.1.13–v2.5.13 runs took main's base (Swift 6.4.2) under their lines' Swift 6.1.3 plugins and failed the smoke test
+  (`protoc-gen-swift: undefined symbol`, run 42428041155), and so did every 2.1–2.5 tag cut since (v2.1.14–v2.5.15).
+  v2.0.20 passed, so `build:2.0.20` carries main's SDKs instead of 2.0's pins. Once the weekly line rebuild has pushed every `base:X.Y`, the fallback is unreachable for a supported
+  line. Still, the plan step should rebuild `base` from the tag when `base:X.Y` is missing, not fall back. That change
+  goes in `images.yml` on main and on each `release/*`.
 - **trace_id in 2.7: field 200 on every sys wire message, additive traced helper forms** (2026-11-06, #313 → #327):
   the hub's split of #313. Every request-building generated helper (state clients' `Fetch`/`Delete`/`Query`, record
   readers, record-plane and kernel state helpers) gets a form that takes `trace_id`, beside today's, and every sys

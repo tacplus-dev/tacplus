@@ -642,8 +642,10 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 	}
 	if accountingPublisher != nil {
 		declared := false
-		for _, publisher := range publishers {
-			if publisher.FnName == accountingPublisher.FnName {
+		for i := range publishers {
+			if publishers[i].FnName == accountingPublisher.FnName {
+				// A declared accounting publisher still stores accounting.
+				publishers[i].AccountingInternal = true
 				declared = true
 				break
 			}

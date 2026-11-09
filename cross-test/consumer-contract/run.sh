@@ -7004,13 +7004,14 @@ public final class Consumer {
       Map<Services.ContractclientRPCs, Integer> completed,
       Map<Services.ContractclientRPCs, Integer> errors) {
     for (Accounting.Event event : events) {
+      // tacplus#273: one RpcCompleted per call; its outcome says whether it failed.
       if (event.hasRpcCompleted()) {
         Services.ContractclientRPCs method = event.getRpcCompleted().getMethod().getContractclient();
-        completed.merge(method, 1, Integer::sum);
-      }
-      if (event.hasRpcError()) {
-        Services.ContractclientRPCs method = event.getRpcError().getMethod().getContractclient();
-        errors.merge(method, 1, Integer::sum);
+        if (event.getRpcCompleted().getOutcome() == Accounting.RpcOutcome.RPC_OUTCOME_PERMITTED) {
+          completed.merge(method, 1, Integer::sum);
+        } else {
+          errors.merge(method, 1, Integer::sum);
+        }
       }
     }
   }

@@ -58,7 +58,7 @@ func (e *Error) Unwrap() error {
 
 // ErrorWithCaller wraps an Error with call-site metadata captured at creation.
 // The caller info is not a proto field — it's carried as Go struct fields for
-// the accounting system to extract when building ErrorContext.
+// debugging; accounting never records it (tacplus#273).
 type ErrorWithCaller struct {
 	Err            *Error
 	callerFile     string

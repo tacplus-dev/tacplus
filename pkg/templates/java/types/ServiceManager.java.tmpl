@@ -1219,9 +1219,9 @@ public class ServiceManager implements AutoCloseable {
 {{- if and .HasGrpc .HasAccountingPublisher}}
 {{- with .AccountingPublisher}}
         // Wire the durable accounting emitter to every wrapper. The wrapper
-        // emit sites already exist on both the success and the error path of
-        // every accounted RPC; without this the field is null and accounting
-        // produces neither a record nor a log line.
+        // emits one record per accounted RPC on every exit path (tacplus#273);
+        // without this the field is null and accounting produces neither a
+        // record nor a log line.
         //
         // The sink never waits on this queue: it spools records and a drain
         // thread feeds the queue, so the queue depth is not what bounds an
@@ -2637,8 +2637,11 @@ public class ServiceManager implements AutoCloseable {
         java.util.concurrent.atomic.AtomicReference<io.grpc.stub.ClientCallStreamObserver<{{.TypeOuterClass}}.{{.TypeName}}>> requestRef =
                 new java.util.concurrent.atomic.AtomicReference<>();
 
+        // The publish stream carries the accounting_internal marker (tacplus#273):
+        // the store's wrapper accounts nothing for the call of a service caller, so
+        // storing a record never produces another record.
         io.grpc.stub.StreamObserver<{{.TypeOuterClass}}.{{.TypeName}}> outbound = io.grpc.stub.ClientCalls.asyncBidiStreamingCall(
-                ebConn.newCall(method, io.grpc.CallOptions.DEFAULT
+                io.grpc.ClientInterceptors.intercept(ebConn, AccountingManager.internalMarker()).newCall(method, io.grpc.CallOptions.DEFAULT
                         .withCallCredentials(identity.callCredentialsForAudience("{{.TargetService}}"))),
                 new io.grpc.stub.ClientResponseObserver<{{.TypeOuterClass}}.{{.TypeName}}, com.google.protobuf.Empty>() {
                     @Override public void beforeStart(io.grpc.stub.ClientCallStreamObserver<{{.TypeOuterClass}}.{{.TypeName}}> requestStream) {

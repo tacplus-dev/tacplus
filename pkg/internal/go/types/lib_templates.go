@@ -6,6 +6,7 @@ package types
 import (
 	"bytes"
 	"fmt"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/accountingpolicy"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -71,6 +72,7 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		KeepalivePermitMinTimeSecs int
 		HasAccountingRecord        bool // proto set declares accountingrecord.AccountingRecord
 		ServiceRPCs                []amServiceRPC
+		Acct                       accountingpolicy.Context // the accounting classification (tacplus#273)
 	}{
 		ModuleBasePath:             config.ModuleBasePath,
 		ServiceLabel:               config.ServiceLabel(),
@@ -81,6 +83,7 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		KeepalivePermitMinTimeSecs: keepaliveconst.PermitMinTimeSecs,
 		HasAccountingRecord:        hasAccountingRecord,
 		ServiceRPCs:                serviceRPCs,
+		Acct:                       accountingpolicy.TemplateContext(),
 	}
 
 	langFS, err := fs.Sub(templates.FS, "go/chassis")

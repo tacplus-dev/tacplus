@@ -28,6 +28,10 @@ type publisherEntry struct {
 	EventTypeName string // e.g. "GitLabConnectorEvent"
 	EventTypePath string // Rust path, e.g. "crate::types::vservices::gitlabconnectorsvc::GitLabConnectorEvent"
 	PublishPath   string // gRPC path, e.g. "/eventbus.EventBusTypedService/PublishGitlabconnectorGitLabConnectorEventBusEventStream"
+	// AccountingInternal: this publisher stores accounting, so every publish
+	// carries the accounting_internal marker (am::ACCOUNTING_INTERNAL_HEADER) and
+	// the S2S wrapper serving it accounts nothing for the call (tacplus#273).
+	AccountingInternal bool
 }
 
 // collectEventPublishers discovers explicit event_publish declarations for this
@@ -115,6 +119,7 @@ func collectAccountingPublisher(config *tactype.Config, protoDir string) (*publi
 	if entry.EventTypeName == "" {
 		return nil, nil
 	}
+	entry.AccountingInternal = true
 	return &entry, nil
 }
 

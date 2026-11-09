@@ -46,16 +46,24 @@ func TestJavaUnaryAccountingTreatsResponseValidationAsError(t *testing.T) {
 		nil,
 	)
 
+	// tacplus#273: the response is validated in the RESPONSE stage, after the
+	// handler returned, and before the call completes; a validation failure
+	// reaches the accounted observer's onError, which records it.
+	handlerStage := strings.Index(rendered, "__acct.stage(AccountingManager.Stage.HANDLER);")
+	handler := strings.Index(rendered, "response = handler.publicRead(caller, request);")
+	responseStage := strings.Index(rendered, "__acct.stage(AccountingManager.Stage.RESPONSE);")
 	validation := strings.Index(rendered, "Helpers.validateContractResponse(response);")
-	completed := strings.Index(rendered, "em.rpcCompleted")
-	if validation < 0 || completed < 0 {
-		t.Fatalf("rendered Java wrapper missing validation or completed accounting:\n%s", rendered)
+	completed := strings.LastIndex(rendered, "responseObserver.onCompleted();")
+	if handlerStage < 0 || handler < 0 || responseStage < 0 || validation < 0 || completed < 0 {
+		t.Fatalf("rendered Java wrapper missing a stage, the validation or the completion:\n%s", rendered)
 	}
-	if validation > completed {
-		t.Fatalf("Java response validation must run before rpcCompleted:\n%s", rendered)
+	if !(handlerStage < handler && handler < responseStage && responseStage < validation && validation < completed) {
+		t.Fatalf("Java unary must run HANDLER -> handler -> RESPONSE -> validation -> completion:\n%s", rendered)
 	}
-	if !strings.Contains(rendered[validation:completed], "em.rpcError") {
-		t.Fatalf("Java response-validation failure does not emit rpcError before completion:\n%s", rendered)
+	for _, gone := range []string{"em.rpcError", "em.rpcCompleted", "errorContextFromError", "startTime"} {
+		if strings.Contains(rendered, gone) {
+			t.Fatalf("Java wrapper still emits the removed accounting shape %q:\n%s", gone, rendered)
+		}
 	}
 }
 
@@ -124,17 +132,25 @@ func TestJavaWatchAccountingRunsInSenderThread(t *testing.T) {
 		nil,
 	)
 
+	// The stream's one record is emitted when the sender thread ends it: the
+	// sender writes through the accounted observer the override handed in.
+	if !strings.Contains(rendered, "watch__accounted(request, accountedResponseObserver(responseObserver, __acct), __acct);") {
+		t.Fatalf("Java WATCH body must receive the accounted response observer:\n%s", rendered)
+	}
 	thread := strings.Index(rendered, `Thread __watchThread = new Thread(() -> {`)
-	completed := strings.Index(rendered, "em.rpcCompleted(accountingMethod")
-	errored := strings.Index(rendered, "em.rpcError(accountingMethod")
-	if thread < 0 || completed < 0 || errored < 0 {
-		t.Fatalf("Java WATCH accounting must emit completed and error inside sender thread:\n%s", rendered)
+	completed := strings.Index(rendered, "__out.onCompleted();")
+	errored := strings.Index(rendered, "__out.onError(toGrpcError(t));")
+	if thread < 0 || completed < thread || errored < thread {
+		t.Fatalf("Java WATCH must end the stream (and so its record) inside the sender thread:\n%s", rendered)
 	}
-	if completed < thread || errored < thread {
-		t.Fatalf("Java WATCH accounting must run in the sender thread lifecycle:\n%s", rendered)
+	handlerStage := strings.Index(rendered, "__acct.stage(AccountingManager.Stage.HANDLER);")
+	source := strings.Index(rendered, "__source = handler.watch(caller, request);")
+	responseStage := strings.Index(rendered, "__acct.stage(AccountingManager.Stage.RESPONSE);")
+	if handlerStage < 0 || !(handlerStage < source && source < responseStage && responseStage < thread) {
+		t.Fatalf("Java WATCH must stage HANDLER around opening the source and RESPONSE before sending:\n%s", rendered)
 	}
-	if strings.Contains(rendered[:thread], "em.rpcCompleted(accountingMethod") {
-		t.Fatalf("Java WATCH accounting must not complete before the sender thread runs:\n%s", rendered)
+	if strings.Contains(rendered, "em.rpc") {
+		t.Fatalf("Java WATCH must not emit outside the accounted observer:\n%s", rendered)
 	}
 }
 
@@ -170,22 +186,25 @@ func TestJavaClientStreamingAccountingUsesAsyncLifecycle(t *testing.T) {
 	)
 
 	for _, want := range []string{
-		"AccountingMethod accountingMethod = AccountingMethod.newBuilder().setContract(Services.ContractRPCs.CONTRACT_RPCS_UPLOAD).build();",
-		"java.util.concurrent.atomic.AtomicBoolean __accounted = new java.util.concurrent.atomic.AtomicBoolean(false);",
-		"accountingResponseObserver(responseObserver, accountingMethod, startTime, callerIdentity, requestId, __accounted)",
-		"validatingResponseObserver(__accountingResponseObserver, value -> Helpers.validateContractResponse(value))",
-		"validatingRequestObserver(handler.upload(caller, validatingResponseObserver(__accountingResponseObserver",
+		"public StreamObserver<Contractclient.ContractRequest> upload(StreamObserver<Contractclient.ContractResponse> responseObserver) {",
+		"AccountingManager.Call __acct = AccountingManager.Call.begin(this.emitter,",
+		"AccountingMethod.newBuilder().setContract(Services.ContractRPCs.CONTRACT_RPCS_UPLOAD).build(), Auth.requestIdFromContext());",
+		"return accountedRequestObserver(upload__accounted(accountedResponseObserver(responseObserver, __acct), __acct), __acct);",
+		"private StreamObserver<Contractclient.ContractRequest> upload__accounted(StreamObserver<Contractclient.ContractResponse> responseObserver, AccountingManager.Call __acct) {",
+		"validatingResponseObserver(responseObserver, value -> Helpers.validateContractResponse(value))",
+		"validatingRequestObserver(handler.upload(caller, validatingResponseObserver(responseObserver",
 		"Helpers.validateContractRequest(value);",
-		"}, __accountingResponseObserver);",
-		"return accountingRequestObserver(__handlerObserver, accountingMethod, startTime, callerIdentity, requestId, __accounted);",
-		"__accountingResponseObserver.onError(toGrpcError(e));",
+		"__acct.authorized(callerIdentity);",
+		"__acct.stage(AccountingManager.Stage.HANDLER);",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("Java client-streaming accounting wrapper missing %q:\n%s", want, rendered)
 		}
 	}
-	if strings.Contains(rendered, "Accounting not supported") {
-		t.Fatalf("Java client-streaming accounting must not retain unsupported comments:\n%s", rendered)
+	for _, gone := range []string{"__accounted = new java.util.concurrent.atomic.AtomicBoolean", "accountingResponseObserver(", "accountingRequestObserver(", "Accounting not supported"} {
+		if strings.Contains(rendered, gone) {
+			t.Fatalf("Java client-streaming accounting wrapper still carries %q:\n%s", gone, rendered)
+		}
 	}
 }
 
@@ -222,22 +241,25 @@ func TestJavaBidiAccountingUsesAsyncLifecycle(t *testing.T) {
 	)
 
 	for _, want := range []string{
-		"AccountingMethod accountingMethod = AccountingMethod.newBuilder().setContract(Services.ContractRPCs.CONTRACT_RPCS_CHAT).build();",
-		"java.util.concurrent.atomic.AtomicBoolean __accounted = new java.util.concurrent.atomic.AtomicBoolean(false);",
-		"accountingResponseObserver(responseObserver, accountingMethod, startTime, callerIdentity, requestId, __accounted)",
-		"validatingResponseObserver(__accountingResponseObserver, value -> Helpers.validateContractEvent(value))",
-		"validatingRequestObserver(handler.chat(caller, validatingResponseObserver(__accountingResponseObserver",
+		"public StreamObserver<Contractclient.ContractRequest> chat(StreamObserver<Contractclient.ContractEvent> responseObserver) {",
+		"AccountingManager.Call __acct = AccountingManager.Call.begin(this.emitter,",
+		"AccountingMethod.newBuilder().setContract(Services.ContractRPCs.CONTRACT_RPCS_CHAT).build(), Auth.requestIdFromContext());",
+		"return accountedRequestObserver(chat__accounted(accountedResponseObserver(responseObserver, __acct), __acct), __acct);",
+		"private StreamObserver<Contractclient.ContractRequest> chat__accounted(StreamObserver<Contractclient.ContractEvent> responseObserver, AccountingManager.Call __acct) {",
+		"validatingResponseObserver(responseObserver, value -> Helpers.validateContractEvent(value))",
+		"validatingRequestObserver(handler.chat(caller, validatingResponseObserver(responseObserver",
 		"Helpers.validateContractRequest(value);",
-		"}, __accountingResponseObserver);",
-		"return accountingRequestObserver(__handlerObserver, accountingMethod, startTime, callerIdentity, requestId, __accounted);",
-		"__accountingResponseObserver.onError(toGrpcError(e));",
+		"__acct.authorized(callerIdentity);",
+		"__acct.stage(AccountingManager.Stage.HANDLER);",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("Java bidi accounting wrapper missing %q:\n%s", want, rendered)
 		}
 	}
-	if strings.Contains(rendered, "Accounting not supported") {
-		t.Fatalf("Java bidi accounting must not retain unsupported comments:\n%s", rendered)
+	for _, gone := range []string{"__accounted = new java.util.concurrent.atomic.AtomicBoolean", "accountingResponseObserver(", "accountingRequestObserver(", "Accounting not supported"} {
+		if strings.Contains(rendered, gone) {
+			t.Fatalf("Java bidi accounting wrapper still carries %q:\n%s", gone, rendered)
+		}
 	}
 }
 
@@ -476,13 +498,12 @@ func TestJavaAccountingCarriesVerifiedCallerIdentity(t *testing.T) {
 	if !strings.Contains(authorized, `callerIdentity = checkAuth("ContractApi/Read", request);`) {
 		t.Fatalf("authorized RPC must source its identity from checkAuth:\n%s", authorized)
 	}
-	for _, want := range []string{
-		"em.rpcCompleted(accountingMethod, durationMs, callerIdentity, requestId);",
-		"callerIdentity, requestId);",
-	} {
-		if !strings.Contains(authorized, want) {
-			t.Fatalf("authorized RPC accounting missing %q:\n%s", want, authorized)
-		}
+	// The record is attributed to the identity checkAuth returned, recorded
+	// on the call right after the check passes.
+	check := strings.Index(authorized, `callerIdentity = checkAuth("ContractApi/Read", request);`)
+	attributed := strings.Index(authorized, "__acct.authorized(callerIdentity);")
+	if attributed < 0 || attributed < check {
+		t.Fatalf("authorized RPC must attribute its record to the checked identity:\n%s", authorized)
 	}
 
 	// auth_disabled: nothing verifies a caller, so the record must carry no

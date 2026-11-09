@@ -701,7 +701,7 @@ run_java_generated_self_tests() {
   # install_backpressure_selftests and install_accounting_sink_selftests, so they are
   # present exactly in those builds.
   local bp_name bp_test bp_class
-  for bp_name in SubscribeBackpressureTest W2SBackpressureTest AccountingSinkSpoolTest AccountingSinkDurableTest; do
+  for bp_name in SubscribeBackpressureTest W2SBackpressureTest AccountingSinkSpoolTest AccountingSinkDurableTest AccountingOutcomeTest; do
     bp_test="$(find "$output/src/main/java" -type f -name "$bp_name.java" -print -quit)"
     if [[ -n "$bp_test" ]]; then
       bp_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$bp_test").$bp_name"
@@ -831,6 +831,17 @@ run_rust_spiffe_self_tests() {
       return 1
     }
     assert_clean_log "$log_dir/rust-am-test.log"
+  fi
+
+  # tacplus#273: the accounting-sink fixture's real AgentApi wrapper, driven with
+  # the real Emitter and EventBusSink (tests/accounting_outcome.rs, installed by
+  # install_accounting_sink_selftests).
+  if [[ -f "$output/tests/accounting_outcome.rs" ]]; then
+    (cd "$output" && cargo test --test accounting_outcome) >"$log_dir/rust-accounting-outcome-test.log" 2>&1 || {
+      dump_step_log "$log_dir/rust-accounting-outcome-test.log"
+      return 1
+    }
+    assert_clean_log "$log_dir/rust-accounting-outcome-test.log"
   fi
 
   # NEW-21: the model crate's own unit tests, which include the generated
@@ -1509,12 +1520,22 @@ install_accounting_sink_selftests() {
       [[ -n "$am" ]] || die "accounting-sink fixture (go): generated chassis/am package not found under $output"
       cp "$SELFTESTS_SRC/go/accounting_sink_spool_test.go" "$(dirname "$am")/"
       cp "$SELFTESTS_SRC/go/accounting_sink_durable_test.go" "$(dirname "$am")/"
+      # tacplus#273: the outcome, reason and metrics of the real wrapper's record.
+      local wrapper
+      wrapper="$(find "$output" -type f -path '*/s2sm/grpc/servers/services/agentsensor/agent_api.go' -print -quit)"
+      [[ -n "$wrapper" ]] || die "accounting-sink fixture (go): generated AgentApi wrapper not found under $output"
+      cp "$SELFTESTS_SRC/go/accounting_outcome_test.go" "$(dirname "$wrapper")/"
       ;;
     java)
       am="$(find "$output/src/main/java" -type f -path '*/chassis/am/AccountingManager.java' -print -quit)"
       [[ -n "$am" ]] || die "accounting-sink fixture (java): generated chassis/am package not found under $output"
       cp "$SELFTESTS_SRC/java/AccountingSinkSpoolTest.java" "$(dirname "$am")/"
       cp "$SELFTESTS_SRC/java/AccountingSinkDurableTest.java" "$(dirname "$am")/"
+      # tacplus#273: the outcome, reason and metrics of the real wrapper's record.
+      local java_wrapper
+      java_wrapper="$(find "$output/src/main/java" -type f -path '*/s2sm/internal/grpc/servers/services/agentsensor/AgentApi.java' -print -quit)"
+      [[ -n "$java_wrapper" ]] || die "accounting-sink fixture (java): generated AgentApi wrapper not found under $output"
+      cp "$SELFTESTS_SRC/java/AccountingOutcomeTest.java" "$(dirname "$java_wrapper")/"
       ;;
     rust)
       am="$(find "$output" -type f -path '*/chassis/am/Cargo.toml' -print -quit)"
@@ -1522,6 +1543,14 @@ install_accounting_sink_selftests() {
       mkdir -p "$(dirname "$am")/tests"
       cp "$SELFTESTS_SRC/rust/accounting_sink_spool.rs" "$(dirname "$am")/tests/accounting_sink_spool.rs"
       cp "$SELFTESTS_SRC/rust/accounting_sink_durable.rs" "$(dirname "$am")/tests/accounting_sink_durable.rs"
+      # tacplus#273: the outcome, reason and metrics of the real wrapper's record.
+      # The wrapper lives in the generated model crate, so the test is one of its
+      # integration tests (compile_current_output runs `cargo test --test
+      # accounting_outcome`).
+      [[ -f "$output/s2sm/internal/grpc/servers/services/agentsensor/agent_api.rs" ]] \
+        || die "accounting-sink fixture (rust): generated AgentApi wrapper not found under $output"
+      mkdir -p "$output/tests"
+      cp "$SELFTESTS_SRC/rust/accounting_outcome.rs" "$output/tests/accounting_outcome.rs"
       ;;
   esac
 }

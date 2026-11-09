@@ -3,8 +3,8 @@
 //
 // F10: an accounting record must name the principal the platform VERIFIED.
 //
-// Before the fix the generated Java wrapper emitted every RpcCompleted and
-// RpcError with an empty identity map, so the only thing tying a record to a
+// Before the fix the generated Java wrapper emitted every accounting record
+// with an empty identity map, so the only thing tying a record to a
 // caller was x-request-id — a request header the caller writes. Pick your own
 // x-request-id and the audit trail files a privileged action under it; reuse
 // someone else's and the action reads as theirs.
@@ -64,7 +64,7 @@ public final class AccountingIdentityTest {
     private static final String ISSUER = "test-issuer";
     private static final String ENTITLED_GRANT = "CONTRACTCLIENT_CONTRACT_AUDIT_API_EXECUTE_ENTITLED_AUDIT";
 
-    /** The item id the handler throws on, to reach the RpcError accounting path. */
+    /** The item id the handler throws on, to reach the FAILED accounting path. */
     private static final String BOOM = "boom";
 
     private static final Metadata.Key<String> AUTHORIZATION =
@@ -248,6 +248,8 @@ public final class AccountingIdentityTest {
         for (Accounting.Event e : events) {
             sb.append("\n    ").append(e.getEventCase())
               .append(" request_id=\"").append(e.getRequestId()).append('"')
+              .append(" outcome=").append(e.getRpcCompleted().getOutcome())
+              .append(" reason=").append(e.getRpcCompleted().getReason())
               .append(" identity=").append(e.getIdentityMap());
         }
         return sb.length() == 0 ? "\n    (no events)" : sb.toString();
@@ -299,12 +301,16 @@ public final class AccountingIdentityTest {
                             && "alice@example.com".equals(e2.get(0).getIdentityMap().get("sub")),
                     describe(e2));
 
-            // 3. The failure path is attributed too — an RpcError is an audit record.
+            // 3. The failure path is attributed too — a failed call's record is an
+            //    audit record (tacplus#273: one RpcCompleted, outcome FAILED, a
+            //    typed reason and no error text).
             List<Accounting.Event> e3 = record(() ->
                     call(server, alice, "req-3", stub -> stub.getAudit(request(BOOM))));
-            check("RpcError records the verified subject",
+            check("a failed call's record names the verified subject",
                     e3.size() == 1
-                            && e3.get(0).getEventCase() == Accounting.Event.EventCase.RPC_ERROR
+                            && e3.get(0).getEventCase() == Accounting.Event.EventCase.RPC_COMPLETED
+                            && e3.get(0).getRpcCompleted().getOutcome() == Accounting.RpcOutcome.RPC_OUTCOME_FAILED
+                            && e3.get(0).getRpcCompleted().getReason() == Accounting.RpcReason.RPC_REASON_HANDLER_ERROR
                             && "alice@example.com".equals(e3.get(0).getIdentityMap().get("sub")),
                     describe(e3));
 
@@ -322,12 +328,16 @@ public final class AccountingIdentityTest {
                     describe(e4));
 
             // 5. A forged bearer naming another subject is rejected on any RPC that
-            //    verifies — the forged sub never reaches the audit trail at all.
+            //    verifies — the refusal is recorded (tacplus#273: DENIED_AUTHN),
+            //    but the forged sub never reaches the audit trail.
             List<Accounting.Event> e5 = record(() ->
                     call(server, forgedTokenFor("alice@example.com"), "req-5",
                             stub -> stub.executeEntitledAudit(request("item-1"))));
-            check("forged token on a verifying RPC produces no record",
-                    e5.isEmpty(), describe(e5));
+            check("forged token on a verifying RPC is recorded as refused, with no identity",
+                    e5.size() == 1
+                            && e5.get(0).getRpcCompleted().getOutcome() == Accounting.RpcOutcome.RPC_OUTCOME_DENIED_AUTHN
+                            && e5.get(0).getIdentityMap().isEmpty(),
+                    describe(e5));
 
             // 6. THE FAIL-CLOSED HALF. ExecuteAudit is RPC_FLAG_PUBLIC_NO_AUTH:
             //    nothing on that path verifies anything. The record must say "no

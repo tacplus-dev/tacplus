@@ -5,6 +5,8 @@
 // CODE GENERATED - DO NOT EDIT
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 {{- if .HasAccountingRecord}}
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -14,8 +16,8 @@ use prost::Message as _;
 {{- end}}
 
 use {{.CrateBasePathUnderscore}}_types::sys::accounting::accounting::{
-    self as accounting_pb, event, Diagnostic, EndpointHealthChanged, ErrorContext, Event,
-    EventLevel, RpcCompleted, RpcError, StateUpdated, TokenRejected,
+    self as accounting_pb, event, EndpointHealthChanged, Event, EventLevel, RpcCompleted,
+    RpcMetrics, RpcOutcome, RpcReason, StateUpdated,
 };
 use {{.CrateBasePathUnderscore}}_types::generated::accounting_method::accounting_method::AccountingMethod;
 #[allow(unused_imports)]
@@ -23,6 +25,107 @@ use {{.CrateBasePathUnderscore}}_types::generated::services::services as service
 {{- if .HasAccountingRecord}}
 use {{.CrateBasePathUnderscore}}_types::vservices::accountingrecord::accountingrecord::AccountingRecord;
 {{- end}}
+
+// ---------------------------------------------------------------------------
+// Classification (tacplus#273) — rendered from accountingpolicy, the one
+// definition Go, Java and Rust share. Accounting never carries data: a call's
+// record says who called what, its outcome, its gRPC code, a typed reason and
+// typed metrics, never an error text or a stack.
+// ---------------------------------------------------------------------------
+
+/// ACCOUNTING_INTERNAL_HEADER is the gRPC metadata key a call made to store
+/// accounting carries. The generated accounting publisher sends it; a wrapper
+/// that sees it on a call whose verified caller is a SERVICE principal emits no
+/// record for the call.
+pub const ACCOUNTING_INTERNAL_HEADER: &str = "{{.Acct.InternalHeader}}";
+
+/// Reports whether incoming metadata carries the accounting_internal marker.
+pub fn accounting_internal(metadata: &tonic::metadata::MetadataMap) -> bool {
+    metadata.contains_key(ACCOUNTING_INTERNAL_HEADER)
+}
+
+/// Stage is where in the generated call path a call is: the reason of a call
+/// that stops is a function of the stage it reached and its outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+{{- range .Acct.Stages}}
+    {{pascal .}},
+{{- end}}
+}
+
+/// The outcome of a gRPC status code (0 is OK).
+pub fn outcome_for_code(code: i32) -> RpcOutcome {
+    match code {
+{{- range .Acct.CodeOutcomes}}
+        {{.Code}} => RpcOutcome::{{pascal .Outcome}}, // {{.Name}}
+{{- end}}
+        _ => RpcOutcome::{{pascal .Acct.DefaultOutcome}},
+    }
+}
+
+/// The reason of a call that stopped at `stage` with `outcome`. A permitted
+/// call has no reason.
+pub fn reason_for(stage: Stage, outcome: RpcOutcome) -> RpcReason {
+    match (stage, outcome) {
+        (_, RpcOutcome::Permitted) => RpcReason::Undefined,
+{{- range .Acct.StageReasons}}
+        (Stage::{{pascal .Stage}}, RpcOutcome::{{pascal .Outcome}}) => RpcReason::{{pascal .Reason}},
+{{- end}}
+        _ => RpcReason::Internal,
+    }
+}
+
+/// The level of an RpcCompleted with `outcome`.
+pub fn level_for(outcome: RpcOutcome) -> EventLevel {
+    match outcome {
+{{- range .Acct.OutcomeLevels}}
+        RpcOutcome::{{pascal .Outcome}} => EventLevel::{{pascal .Level}},
+{{- end}}
+        _ => EventLevel::Error,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Metrics a handler attaches to its call's record
+// ---------------------------------------------------------------------------
+
+/// Metrics are the typed numbers of one call, filled in by its handler.
+#[derive(Debug, Default)]
+pub struct Metrics {
+    records_returned: AtomicI64,
+    bytes: AtomicI64,
+}
+
+impl Metrics {
+    fn snapshot(&self) -> Option<RpcMetrics> {
+        let m = RpcMetrics {
+            records_returned: self.records_returned.load(Ordering::Relaxed),
+            bytes: self.bytes.load(Ordering::Relaxed),
+        };
+        if m.records_returned == 0 && m.bytes == 0 {
+            None
+        } else {
+            Some(m)
+        }
+    }
+}
+
+tokio::task_local! {
+    static METRICS: Arc<Metrics>;
+}
+
+/// Sets how many records the current call returned. The generated wrapper
+/// scopes the call's metrics around its handler; outside an accounted call this
+/// is a no-op.
+pub fn set_records_returned(n: i64) {
+    let _ = METRICS.try_with(|m| m.records_returned.store(n, Ordering::Relaxed));
+}
+
+/// Adds to how many payload bytes the current call moved. A no-op outside an
+/// accounted call.
+pub fn add_bytes(n: i64) {
+    let _ = METRICS.try_with(|m| m.bytes.fetch_add(n, Ordering::Relaxed));
+}
 
 // ---------------------------------------------------------------------------
 // Sink trait
@@ -76,56 +179,44 @@ impl Emitter {
         }
     }
 
-    /// Emits an INFO RpcCompleted event.
-    pub async fn rpc_completed(
+    /// Emits the one RpcCompleted record of a call that reached `stage` and
+    /// ended with `status` (None when it succeeded). The code, outcome, reason
+    /// and level are derived here; the error text goes to the debug console
+    /// only, never to the sink.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn rpc(
         &self,
         method: AccountingMethod,
+        stage: Stage,
+        status: Option<&tonic::Status>,
         duration_ms: i64,
+        metrics: Option<RpcMetrics>,
         identity: HashMap<String, String>,
         request_id: &str,
     ) {
-        let mut ev = self.new_event(EventLevel::Info, identity, request_id);
+        let code = status.map(|s| s.code() as i32).unwrap_or(0);
+        let outcome = outcome_for_code(code);
+        let reason = reason_for(stage, outcome);
+        if outcome == RpcOutcome::Failed {
+            if let Some(status) = status {
+                tracing::debug!(
+                    method = %method_label(&method),
+                    request_id = %request_id,
+                    code,
+                    stage = ?stage,
+                    error = %status.message(),
+                    "rpc failed"
+                );
+            }
+        }
+        let mut ev = self.new_event(level_for(outcome), identity, request_id);
         ev.event = Some(event::Event::RpcCompleted(RpcCompleted {
             method: Some(method),
             duration_ms,
-        }));
-        self.sink.emit(&ev).await;
-    }
-
-    /// Emits an ERROR RpcError event.
-    pub async fn rpc_error(
-        &self,
-        method: AccountingMethod,
-        code: i32,
-        message: &str,
-        duration_ms: i64,
-        error_context: Option<ErrorContext>,
-        identity: HashMap<String, String>,
-        request_id: &str,
-    ) {
-        let mut ev = self.new_event(EventLevel::Error, identity, request_id);
-        ev.event = Some(event::Event::RpcError(RpcError {
-            method: Some(method),
+            outcome: outcome.into(),
             code,
-            message: message.to_string(),
-            duration_ms,
-            error_context,
-        }));
-        self.sink.emit(&ev).await;
-    }
-
-    /// Emits a WARN TokenRejected event.
-    pub async fn token_rejected(
-        &self,
-        reason: &str,
-        method: AccountingMethod,
-        identity: HashMap<String, String>,
-        request_id: &str,
-    ) {
-        let mut ev = self.new_event(EventLevel::Warn, identity, request_id);
-        ev.event = Some(event::Event::TokenRejected(TokenRejected {
-            reason: reason.to_string(),
-            method: Some(method),
+            reason: reason.into(),
+            metrics,
         }));
         self.sink.emit(&ev).await;
     }
@@ -163,66 +254,190 @@ impl Emitter {
         }));
         self.sink.emit(&ev).await;
     }
+}
 
-    /// Emits an ERROR Diagnostic event (escape hatch).
-    pub async fn diagnostic(
-        &self,
-        message: &str,
-        context: &str,
-        error_context: Option<ErrorContext>,
-        identity: HashMap<String, String>,
+// ---------------------------------------------------------------------------
+// Call — one accounted call's record, emitted exactly once
+// ---------------------------------------------------------------------------
+
+/// Call is the accounting state of one call through a generated wrapper. The
+/// wrapper starts it before authentication, advances its stage as the call
+/// passes each seam, and finishes it on every exit path; `finish` emits at most
+/// one record, however many paths reach it.
+pub struct Call {
+    emitter: Option<Arc<Emitter>>,
+    method: AccountingMethod,
+    request_id: String,
+    internal: bool,
+    start: std::time::Instant,
+    metrics: Arc<Metrics>,
+    state: std::sync::Mutex<CallState>,
+    finished: AtomicBool,
+}
+
+struct CallState {
+    stage: Stage,
+    identity: HashMap<String, String>,
+    /// The verified caller is a SERVICE principal (token sub_type "service").
+    service_caller: bool,
+}
+
+impl Call {
+    /// Starts a call at Stage::Auth. `internal` is true when the request
+    /// carries the accounting_internal marker: such a call is not accounted
+    /// once its caller is verified as a SERVICE principal.
+    pub fn start(
+        emitter: Option<Arc<Emitter>>,
+        method: AccountingMethod,
         request_id: &str,
-    ) {
-        let mut ev = self.new_event(EventLevel::Error, identity, request_id);
-        ev.event = Some(event::Event::Diagnostic(Diagnostic {
-            message: message.to_string(),
-            context: context.to_string(),
-            error_context,
-        }));
-        self.sink.emit(&ev).await;
+        internal: bool,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            emitter,
+            method,
+            request_id: request_id.to_string(),
+            internal,
+            start: std::time::Instant::now(),
+            metrics: Arc::new(Metrics::default()),
+            state: std::sync::Mutex::new(CallState {
+                stage: Stage::Auth,
+                identity: HashMap::new(),
+                service_caller: false,
+            }),
+            finished: AtomicBool::new(false),
+        })
+    }
+
+    fn with_state<R>(&self, f: impl FnOnce(&mut CallState) -> R) -> R {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        f(&mut state)
+    }
+
+    /// Records the verified caller's claims, and whether the caller is a
+    /// SERVICE principal (its token's sub_type is exactly "service").
+    pub fn authenticated(&self, identity: &HashMap<String, String>, service_caller: bool) {
+        self.with_state(|s| {
+            s.identity = identity.clone();
+            s.service_caller = service_caller;
+        });
+    }
+
+    /// Advances the call to `stage`.
+    pub fn stage(&self, stage: Stage) {
+        self.with_state(|s| s.stage = stage);
+    }
+
+    /// Runs the handler future at Stage::Handler with the call's metrics in
+    /// scope, and moves the call to Stage::Response when it succeeds.
+    pub async fn handler<T, E, F>(&self, handler: F) -> Result<T, E>
+    where
+        F: std::future::Future<Output = Result<T, E>>,
+    {
+        self.stage(Stage::Handler);
+        let result = METRICS.scope(self.metrics.clone(), handler).await;
+        if result.is_ok() {
+            self.stage(Stage::Response);
+        }
+        result
+    }
+
+    /// Emits the call's record: `status` is None when it succeeded. Only the
+    /// first finish emits.
+    pub async fn finish(&self, status: Option<&tonic::Status>) {
+        if self.finished.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let Some(emitter) = self.emitter.as_ref() else {
+            return;
+        };
+        let (stage, identity, service_caller) =
+            self.with_state(|s| (s.stage, s.identity.clone(), s.service_caller));
+        if self.internal && service_caller {
+            return;
+        }
+        let duration_ms = self.start.elapsed().as_millis() as i64;
+        emitter
+            .rpc(
+                self.method.clone(),
+                stage,
+                status,
+                duration_ms,
+                self.metrics.snapshot(),
+                identity,
+                &self.request_id,
+            )
+            .await;
+    }
+
+    /// finish from a context that cannot await (a stream's poll or drop).
+    fn finish_detached(self: Arc<Self>, status: Option<tonic::Status>) {
+        if self.finished.load(Ordering::SeqCst) {
+            return;
+        }
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move { self.finish(status.as_ref()).await });
+        }
     }
 }
 
-// ---------------------------------------------------------------------------
-// ErrorContext capture
-// ---------------------------------------------------------------------------
+/// AccountedStream is a response stream whose call is accounted when the
+/// stream ends: on its end (OK), on its first error, or when the client drops
+/// it first (CANCELLED). The handler's metrics stay in scope while it is polled.
+pub struct AccountedStream<S> {
+    inner: S,
+    call: Option<Arc<Call>>,
+    metrics: Arc<Metrics>,
+}
 
-/// Builds an ErrorContext from the current call site.
-/// Rust captures file/line via `std::panic::Location` or `file!()`.
-/// Full stack traces use `std::backtrace::Backtrace` (nightly) or omitted.
-#[track_caller]
-pub fn capture_error_context(should_capture_stack: bool) -> ErrorContext {
-    let loc = std::panic::Location::caller();
-    let mut ec = ErrorContext {
-        caller: format!("{}:{}", loc.file(), loc.line()),
-        function: String::new(),
-        stack_trace: String::new(),
-    };
-    if should_capture_stack {
-        ec.stack_trace = format!("{:?}", std::backtrace::Backtrace::force_capture());
+impl<S> AccountedStream<S> {
+    /// Wraps the stream the handler returned for `call`.
+    pub fn new(call: Arc<Call>, inner: S) -> Self {
+        // An error the stream yields is the handler's.
+        call.stage(Stage::Handler);
+        let metrics = call.metrics.clone();
+        Self { inner, call: Some(call), metrics }
     }
-    ec
 }
 
-/// Returns true for tonic status codes that indicate our bugs
-/// (Internal, Unknown, DataLoss). Returns false for user errors.
-pub fn should_capture_stack(code: tonic::Code) -> bool {
-    matches!(
-        code,
-        tonic::Code::Internal | tonic::Code::Unknown | tonic::Code::DataLoss
-    )
+impl<S, T> tokio_stream::Stream for AccountedStream<S>
+where
+    S: tokio_stream::Stream<Item = Result<T, tonic::Status>> + Unpin,
+{
+    type Item = Result<T, tonic::Status>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let this = &mut *self;
+        let polled = METRICS.sync_scope(this.metrics.clone(), || {
+            std::pin::Pin::new(&mut this.inner).poll_next(cx)
+        });
+        if let std::task::Poll::Ready(item) = &polled {
+            match item {
+                Some(Err(status)) => {
+                    if let Some(call) = this.call.take() {
+                        call.finish_detached(Some(status.clone()));
+                    }
+                }
+                None => {
+                    if let Some(call) = this.call.take() {
+                        call.finish_detached(None);
+                    }
+                }
+                Some(Ok(_)) => {}
+            }
+        }
+        polled
+    }
 }
 
-/// Extracts the tonic status code from a tonic::Status.
-pub fn grpc_code_from_status(status: &tonic::Status) -> tonic::Code {
-    status.code()
-}
-
-/// Builds ErrorContext from a tonic::Status, capturing stack if appropriate.
-#[track_caller]
-pub fn error_context_from_status(status: &tonic::Status) -> ErrorContext {
-    let code = status.code();
-    capture_error_context(should_capture_stack(code))
+impl<S> Drop for AccountedStream<S> {
+    fn drop(&mut self) {
+        if let Some(call) = self.call.take() {
+            call.finish_detached(Some(tonic::Status::cancelled("the client closed the stream")));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -241,36 +456,33 @@ impl Sink for LoggerSink {
 
         match &event.event {
             Some(event::Event::RpcCompleted(p)) => {
-                tracing::info!(
-                    source_id = %source_id,
-                    timestamp_ms = timestamp_ms,
-                    request_id = %request_id,
-                    event = "rpc_completed",
-                    duration_ms = p.duration_ms,
-                    "accounting"
-                );
-            }
-            Some(event::Event::RpcError(p)) => {
-                tracing::error!(
-                    source_id = %source_id,
-                    timestamp_ms = timestamp_ms,
-                    request_id = %request_id,
-                    event = "rpc_error",
-                    code = p.code,
-                    error = %p.message,
-                    duration_ms = p.duration_ms,
-                    "accounting"
-                );
-            }
-            Some(event::Event::TokenRejected(p)) => {
-                tracing::warn!(
-                    source_id = %source_id,
-                    timestamp_ms = timestamp_ms,
-                    request_id = %request_id,
-                    event = "token_rejected",
-                    reason = %p.reason,
-                    "accounting"
-                );
+                let method = p.method.as_ref().map(method_label).unwrap_or_default();
+                let outcome = RpcOutcome::try_from(p.outcome).unwrap_or(RpcOutcome::Undefined);
+                let reason = RpcReason::try_from(p.reason).unwrap_or(RpcReason::Undefined);
+                let metrics = p.metrics.clone().unwrap_or_default();
+                macro_rules! rpc_completed {
+                    ($log:ident) => {
+                        tracing::$log!(
+                            source_id = %source_id,
+                            timestamp_ms = timestamp_ms,
+                            request_id = %request_id,
+                            event = "rpc_completed",
+                            method = %method,
+                            outcome = outcome.as_str_name(),
+                            code = p.code,
+                            reason = reason.as_str_name(),
+                            duration_ms = p.duration_ms,
+                            records_returned = metrics.records_returned,
+                            bytes = metrics.bytes,
+                            "accounting"
+                        )
+                    };
+                }
+                match level_for(outcome) {
+                    EventLevel::Error => rpc_completed!(error),
+                    EventLevel::Warn => rpc_completed!(warn),
+                    _ => rpc_completed!(info),
+                }
             }
             Some(event::Event::EndpointHealthChanged(p)) => {
                 tracing::warn!(
@@ -291,17 +503,6 @@ impl Sink for LoggerSink {
                     event = "state_updated",
                     entity_type = %p.entity_type,
                     entity_id = %p.entity_id,
-                    "accounting"
-                );
-            }
-            Some(event::Event::Diagnostic(p)) => {
-                tracing::error!(
-                    source_id = %source_id,
-                    timestamp_ms = timestamp_ms,
-                    request_id = %request_id,
-                    event = "diagnostic",
-                    message = %p.message,
-                    context = %p.context,
                     "accounting"
                 );
             }
@@ -397,11 +598,28 @@ pub fn method_label(method: &AccountingMethod) -> String {
 /// Accounting is an audit trail, so a record is dropped only when the spool itself
 /// is full. Every drop is counted and logged at ERROR with the running total. A
 /// record emitted after shutdown is dropped and logged too.
+///
+/// The pipeline's own health is counters (`stats`), never records: an
+/// accounting record about accounting would feed itself.
 pub struct EventBusSink {
     spool: tokio::sync::mpsc::Sender<AccountingRecord>,
     source_id: String,
     seq: std::sync::atomic::AtomicU64,
+    ingested: std::sync::atomic::AtomicU64,
     dropped: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Records the durable spool holds on disk not yet handed to the publisher.
+    disk_depth: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// SinkStats is an EventBusSink's pipeline health.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SinkStats {
+    /// Records accepted into the spool.
+    pub ingested: u64,
+    /// Records dropped: spool full, a failed spool write, or the publisher closed.
+    pub dropped: u64,
+    /// Records in the spool not yet handed to the publisher.
+    pub depth: u64,
 }
 
 /// Depth of the spool an EventBusSink holds records in while the publisher queue
@@ -450,7 +668,9 @@ impl EventBusSink {
             spool,
             source_id,
             seq: std::sync::atomic::AtomicU64::new(0),
+            ingested: std::sync::atomic::AtomicU64::new(0),
             dropped,
+            disk_depth: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -481,6 +701,8 @@ impl EventBusSink {
         let (spool, mut spooled) = tokio::sync::mpsc::channel::<AccountingRecord>(SPOOL_DEPTH);
         let dropped = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let dropped_in_task = dropped.clone();
+        let disk_depth = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(pending.len() as u64));
+        let disk_depth_in_task = disk_depth.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -492,7 +714,10 @@ impl EventBusSink {
                     }
                     Some(record) = spooled.recv() => {
                         match disk.append(&record) {
-                            Ok(()) => pending.push_back(record),
+                            Ok(()) => {
+                                pending.push_back(record);
+                                disk_depth_in_task.store(pending.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                            }
                             Err(e) => {
                                 let total = dropped_in_task.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                                 tracing::error!(
@@ -509,6 +734,7 @@ impl EventBusSink {
                             if let Some(record) = pending.pop_front() {
                                 permit.send(record);
                             }
+                            disk_depth_in_task.store(pending.len() as u64, std::sync::atomic::Ordering::Relaxed);
                         }
                         Err(_) => {
                             // The publisher queue is gone, which only happens on
@@ -543,7 +769,9 @@ impl EventBusSink {
             spool,
             source_id,
             seq: std::sync::atomic::AtomicU64::new(0),
+            ingested: std::sync::atomic::AtomicU64::new(0),
             dropped,
+            disk_depth,
         })
     }
 
@@ -551,6 +779,17 @@ impl EventBusSink {
     /// spool write, or the publisher closed.
     pub fn dropped_total(&self) -> u64 {
         self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The sink's pipeline health: records ingested, records dropped, and the
+    /// spool's depth (in memory plus, for a durable spool, on disk).
+    pub fn stats(&self) -> SinkStats {
+        let in_memory = (self.spool.max_capacity() - self.spool.capacity()) as u64;
+        SinkStats {
+            ingested: self.ingested.load(std::sync::atomic::Ordering::Relaxed),
+            dropped: self.dropped.load(std::sync::atomic::Ordering::Relaxed),
+            depth: in_memory + self.disk_depth.load(std::sync::atomic::Ordering::Relaxed),
+        }
     }
 
     /// Mints the record key. accounting_id is assert_required, so it has to be
@@ -568,36 +807,27 @@ impl EventBusSink {
     /// here would be overwritten, and setting one would be a claim about
     /// identity that nothing checked.
     fn flatten(&self, event: &Event) -> AccountingRecord {
-        let (method, code, duration_ms) = match &event.event {
-            Some(event::Event::RpcCompleted(p)) => (
-                p.method.as_ref().map(method_label).unwrap_or_default(),
-                0,
-                p.duration_ms,
-            ),
-            Some(event::Event::RpcError(p)) => (
-                p.method.as_ref().map(method_label).unwrap_or_default(),
-                p.code,
-                p.duration_ms,
-            ),
-            Some(event::Event::TokenRejected(p)) => (
-                p.method.as_ref().map(method_label).unwrap_or_default(),
-                0,
-                0,
-            ),
-            _ => (String::new(), 0, 0),
-        };
+        let mut record = AccountingRecord::default();
+        if let Some(event::Event::RpcCompleted(p)) = &event.event {
+            record.method = p.method.as_ref().map(method_label).unwrap_or_default();
+            record.code = p.code;
+            record.duration_ms = p.duration_ms;
+            record.outcome = p.outcome;
+            record.reason = p.reason;
+            if let Some(m) = &p.metrics {
+                record.records_returned = m.records_returned;
+                record.bytes = m.bytes;
+            }
+        }
         AccountingRecord {
             accounting_id: self.next_accounting_id(event.timestamp_ms),
             request_id: event.request_id.clone(),
             source_id: event.source_id.clone(),
             timestamp_ms: event.timestamp_ms,
             level: event.level,
-            method,
-            code,
-            duration_ms,
             // The principal the Authorizer verified, not a caller-written header.
             principal_sub: event.identity.get("sub").cloned().unwrap_or_default(),
-            ..Default::default()
+            ..record
         }
     }
 }
@@ -741,7 +971,9 @@ impl Sink for EventBusSink {
         let record = self.flatten(event);
         let accounting_id = record.accounting_id.clone();
         match self.spool.try_send(record) {
-            Ok(()) => {}
+            Ok(()) => {
+                self.ingested.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                 let total = self.dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 tracing::error!(

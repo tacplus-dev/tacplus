@@ -20,6 +20,18 @@ message AgentEvent {
   bytes body = 2;
 }
 
+// GetAgentEventsRequest asks for the agent events matching a filter. The
+// accounting self-test (tacplus#273) checks no request value reaches the record.
+message GetAgentEventsRequest {
+  string filter = 1;
+}
+
+message GetAgentEventsResponse {
+  repeated AgentEvent events = 1 [(spec.assert_max_size) = 100];
+  // total is how many events matched; the reply is not a bare collection.
+  int32 total = 2;
+}
+
 option (spec.grpc_w2s_client) = {service: "agentsensor.AgentApi"};
 
 service AgentApi {
@@ -27,6 +39,12 @@ service AgentApi {
 
   // Ping echoes an agent event back to the caller.
   rpc Ping(AgentEvent) returns (AgentEvent) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, auth_services: ["*"]};
+  }
+
+  // GetAgentEvents is the query of the accounting self-test: it returns N
+  // events and attaches records_returned = N to its accounting record.
+  rpc GetAgentEvents(GetAgentEventsRequest) returns (GetAgentEventsResponse) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, auth_services: ["*"]};
   }
 }

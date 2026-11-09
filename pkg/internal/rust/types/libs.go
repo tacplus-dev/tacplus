@@ -15,6 +15,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/accountingpolicy"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/keepaliveconst"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
@@ -38,6 +39,13 @@ type serviceRPCInfo struct {
 func toProstRPCEnumName(enumName string) string {
 	protoName := enumName + "RPCs"
 	return strutil.ToTonicCamelCase(protoName)
+}
+
+// libTemplateFuncs are the functions the chassis templates may call.
+var libTemplateFuncs = template.FuncMap{
+	// pascal renders a proto enum value suffix (e.g. "DENIED_AUTHN") as the
+	// variant name prost generates for it ("DeniedAuthn").
+	"pascal": strutil.UpperSnakeCaseToPascalCase,
 }
 
 // writeLibTemplates processes the embedded Rust library templates and writes them
@@ -186,13 +194,16 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		HasClientTokenExchanger     bool
 		ServiceRPCs                 []serviceRPCInfo // per-service RPC enum info for authorizer
 		HasAccountingRecord         bool             // proto set declares accountingrecord.AccountingRecord
-		ServiceLabel                string           // service identity baked into Authorizer
-		AcceptedAudiences           []string         // every `aud` the Authorizer accepts: own label + hosted traits
-		Spiffe                      commonspiffe.TemplateGrammar
-		KeepaliveTimeSecs           int
-		KeepaliveTimeoutSecs        int
-		KeepalivePermitMinTimeSecs  int
-		Author                      string // first line of the configured header; manifests omit authors when empty
+		// Acct is the accounting classification the am crate renders
+		// (tacplus#273): one definition shared with Go and Java.
+		Acct                       accountingpolicy.Context
+		ServiceLabel               string   // service identity baked into Authorizer
+		AcceptedAudiences          []string // every `aud` the Authorizer accepts: own label + hosted traits
+		Spiffe                     commonspiffe.TemplateGrammar
+		KeepaliveTimeSecs          int
+		KeepaliveTimeoutSecs       int
+		KeepalivePermitMinTimeSecs int
+		Author                     string // first line of the configured header; manifests omit authors when empty
 	}{
 		CrateBasePath:                  config.CrateBasePath,
 		CrateBasePathUnderscore:        strings.ReplaceAll(config.CrateBasePath, "-", "_"),
@@ -213,6 +224,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		HasClientTokenExchanger:        hasClientTokenExchanger,
 		ServiceRPCs:                    svcRPCInfos,
 		HasAccountingRecord:            hasAccountingRecord,
+		Acct:                           accountingpolicy.TemplateContext(),
 		ServiceLabel:                   config.ServiceLabel(),
 		AcceptedAudiences:              acceptedAudiences,
 		Spiffe:                         commonspiffe.TemplateData(),
@@ -246,7 +258,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		}
 
 		// Parse and execute template
-		tmpl, err := template.New(path).Parse(string(content))
+		tmpl, err := template.New(path).Funcs(libTemplateFuncs).Parse(string(content))
 		if err != nil {
 			return fmt.Errorf("failed to parse template %s: %w", path, err)
 		}

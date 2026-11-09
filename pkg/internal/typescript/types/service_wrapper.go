@@ -12,6 +12,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/accountingpolicy"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
@@ -411,27 +412,37 @@ func tsAccountingMethodExpression(grpcName, methodName string, accountingMap map
 	return fmt.Sprintf("create(accountingTypes.AccountingMethodSchema, { %s: %d })", fieldName, ordinal)
 }
 
-func tsAccountingSuccessBlock(methodExpr, metadataExpr, startExpr string) string {
-	if methodExpr == "" {
-		return ""
-	}
-	return fmt.Sprintf("this.emitAccounting(%s, %s, null, %s);", methodExpr, startExpr, metadataExpr)
-}
-
-func tsAccountingErrorBlock(methodExpr, metadataExpr, startExpr, errExpr string) string {
-	if methodExpr == "" {
-		return ""
-	}
-	return fmt.Sprintf("this.emitAccounting(%s, %s, %s, %s);", methodExpr, startExpr, errExpr, metadataExpr)
-}
-
+// tsAccountingTryPreamble opens an accounted call (tacplus#273): its start
+// time, the error it ends with, and the stage of the generated call path it
+// has reached, which starts at authentication.
 func tsAccountingTryPreamble(methodExpr string) string {
 	if methodExpr == "" {
 		return ""
 	}
-	return `                    const __tacplusAccountingStart = Date.now();
+	return fmt.Sprintf(`                    const __tacplusAccountingStart = Date.now();
                     let __tacplusAccountingError: unknown = null;
-`
+                    let __tacplusAccountingStage: accounting.Stage = '%s';
+`, accountingpolicy.StageAuth)
+}
+
+// tsAccountingStage is the statement that advances an accounted call to stage,
+// empty for an unaccounted method.
+func tsAccountingStage(methodExpr, stage string) string {
+	if methodExpr == "" {
+		return ""
+	}
+	return fmt.Sprintf("__tacplusAccountingStage = '%s';", stage)
+}
+
+// tsJoinStatements joins the non-empty statements of a wrapper's try body.
+func tsJoinStatements(statements ...string) string {
+	var out []string
+	for _, st := range statements {
+		if strings.TrimSpace(st) != "" {
+			out = append(out, st)
+		}
+	}
+	return strings.Join(out, "\n                        ")
 }
 
 func tsAccountingCatchMark(methodExpr, errExpr string) string {
@@ -442,13 +453,42 @@ func tsAccountingCatchMark(methodExpr, errExpr string) string {
 	                        __tacplusAccountingError = %s;`, errExpr)
 }
 
+// tsAccountingFinally emits the call's one record on every exit path.
 func tsAccountingFinally(methodExpr, metadataExpr string) string {
 	if methodExpr == "" {
 		return ""
 	}
 	return fmt.Sprintf(`
 	                    } finally {
-	                        this.emitAccounting(%s, __tacplusAccountingStart, __tacplusAccountingError, %s);`, methodExpr, metadataExpr)
+	                        this.emitAccounting(%s, __tacplusAccountingStage, __tacplusAccountingStart, __tacplusAccountingError, %s, __tacplusAccountingMetrics);`, methodExpr, metadataExpr)
+}
+
+// tsStageLine places a stage statement on its own line between two
+// statements of a wrapper's try body.
+func tsStageLine(stageResponse string) string {
+	if stageResponse == "" {
+		return ""
+	}
+	return "\n\t                        " + stageResponse
+}
+
+// tsAccountedCall runs an accounted wrapper method's async body through
+// accounting.runWithMetrics, so the metrics the handler sets with
+// setRecordsReturned/addBytes are scoped to this call and reach its record.
+// Every wrapper shape opens its body with one "(async () => {" and closes it
+// with a final "})();".
+func tsAccountedCall(methodExpr, rendered string) string {
+	if methodExpr == "" {
+		return rendered
+	}
+	const open, close = "(async () => {", "})();"
+	i := strings.Index(rendered, open)
+	j := strings.LastIndex(rendered, close)
+	if i < 0 || j < i {
+		return rendered
+	}
+	return rendered[:i] + "accounting.runWithMetrics(async (__tacplusAccountingMetrics) => {" +
+		rendered[i+len(open):j] + "});" + rendered[j+len(close):]
 }
 
 // generateTsHandlerMethodSignature generates a single handler interface method signature.
@@ -542,6 +582,15 @@ func generateTsServiceDefinitionEntry(svc *parser.ServiceInfo, method *parser.Me
 
 // generateTsGRPCWrapperMethod generates a single gRPC method implementation for the wrapper.
 func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePackage, parentDir, grpcName string, accountingMap map[string]service.AccountingInfo) string {
+	methodExpr := tsAccountingMethodExpression(grpcName, method.Name, accountingMap)
+	return tsAccountedCall(methodExpr, generateTsGRPCWrapperMethodBody(svc, method, servicePackage, grpcName, accountingMap))
+}
+
+// generateTsGRPCWrapperMethodBody renders one wrapper method. An accounted
+// method (tacplus#273) records the stage its call reached — AUTH, then REQUEST
+// once authenticated, HANDLER once the request is valid, RESPONSE once the
+// handler returned — and emits one RpcCompleted from its finally on every exit.
+func generateTsGRPCWrapperMethodBody(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePackage, grpcName string, accountingMap map[string]service.AccountingInfo) string {
 	methodName := strutil.ToLowerCamelCase(method.Name)
 	emptyInput := method.FullInputType == "google.protobuf.Empty"
 	emptyOutput := method.FullOutputType == "google.protobuf.Empty"
@@ -563,6 +612,9 @@ func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 		outputValidationRef = validateOutput
 	}
 	accountingMethodExpr := tsAccountingMethodExpression(grpcName, method.Name, accountingMap)
+	stageRequest := tsAccountingStage(accountingMethodExpr, accountingpolicy.StageRequest)
+	stageHandler := tsAccountingStage(accountingMethodExpr, accountingpolicy.StageHandler)
+	stageResponse := tsAccountingStage(accountingMethodExpr, accountingpolicy.StageResponse)
 	traceNoErrorArgs := ""
 	traceErrorArgs := "err?.message ?? String(err)"
 	if accountingMethodExpr != "" {
@@ -607,6 +659,7 @@ func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 			}
 			streamAuthorize = fmt.Sprintf("async (msg: any) => { await this.authorize('%s', stream.metadata, msg); }", fullMethodPath)
 		}
+		authLine = tsJoinStatements(authLine, stageRequest, stageHandler)
 		return fmt.Sprintf(`            %s: (stream: grpc.ServerDuplexStream<any, any>) => {
 	                (async () => {
 %s
@@ -657,7 +710,7 @@ func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 	                    }
 	                })();
 	            },
-	`, method.Name, tsAccountingTryPreamble(accountingMethodExpr), authLine, inputValidationBlockForTS(validateInput, "call.request"), outputValidationRef, tier3HandlerCall, tsAccountingCatchMark(accountingMethodExpr, "err"), tsAccountingFinally(accountingMethodExpr, "call.metadata"))
+	`, method.Name, tsAccountingTryPreamble(accountingMethodExpr), tsJoinStatements(authLine, stageRequest), tsJoinStatements(inputValidationBlockForTS(validateInput, "call.request"), stageHandler), outputValidationRef, tier3HandlerCall, tsAccountingCatchMark(accountingMethodExpr, "err"), tsAccountingFinally(accountingMethodExpr, "call.metadata"))
 	}
 
 	if method.IsTier2SnapshotCollection() {
@@ -690,7 +743,7 @@ func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 	                    }
 	                })();
 	            },
-	`, method.Name, tsAccountingTryPreamble(accountingMethodExpr), authLine, inputValidationBlockForTS(validateInput, "call.request"), outputValidationRef, tier2HandlerCall, tsAccountingCatchMark(accountingMethodExpr, "err"), tsAccountingFinally(accountingMethodExpr, "call.metadata"))
+	`, method.Name, tsAccountingTryPreamble(accountingMethodExpr), tsJoinStatements(authLine, stageRequest), tsJoinStatements(inputValidationBlockForTS(validateInput, "call.request"), stageHandler), outputValidationRef, tier2HandlerCall, tsAccountingCatchMark(accountingMethodExpr, "err"), tsAccountingFinally(accountingMethodExpr, "call.metadata"))
 	}
 
 	if method.IsWatchCollection() {
@@ -733,7 +786,7 @@ func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 	                    }
 	                })();
 	            },
-	`, method.Name, tsAccountingTryPreamble(accountingMethodExpr), authLine, inputValidationBlockForTS(validateInput, "call.request"), outputValidationRef,
+	`, method.Name, tsAccountingTryPreamble(accountingMethodExpr), tsJoinStatements(authLine, stageRequest), tsJoinStatements(inputValidationBlockForTS(validateInput, "call.request"), stageHandler), outputValidationRef,
 			sourceCall, fromRevisionExpr, outputType,
 			outputSchema, method.Resolved.WatchOneOf,
 			outputSchema, method.Resolved.WatchOneOf,
@@ -762,7 +815,7 @@ func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 	                    }
 	                })();
 	            },
-	`, method.Name, tsAccountingTryPreamble(accountingMethodExpr), authLine, inputValidationBlockForTS(validateInput, "call.request"), outputValidationRef, strings.ReplaceAll(handlerCall, "call)", "validatedCall)"), tsAccountingCatchMark(accountingMethodExpr, "err"), tsAccountingFinally(accountingMethodExpr, "call.metadata"))
+	`, method.Name, tsAccountingTryPreamble(accountingMethodExpr), tsJoinStatements(authLine, stageRequest), tsJoinStatements(inputValidationBlockForTS(validateInput, "call.request"), stageHandler), outputValidationRef, strings.ReplaceAll(handlerCall, "call)", "validatedCall)"), tsAccountingCatchMark(accountingMethodExpr, "err"), tsAccountingFinally(accountingMethodExpr, "call.metadata"))
 	}
 
 	if method.ClientStreaming {
@@ -775,13 +828,14 @@ func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 			}
 			streamAuthorize = fmt.Sprintf("async (msg: any) => { await this.authorize('%s', call.metadata, msg); }", fullMethodPath)
 		}
+		clientAuthLine = tsJoinStatements(clientAuthLine, stageRequest, stageHandler)
 		return fmt.Sprintf(`            %s: (call: grpc.ServerReadableStream<any, any>, callback: grpc.sendUnaryData<any>) => {
 	                (async () => {
 %s
 	                    try {
 	                        %s
 	                        const validatedCall = this.wrapReadableForRequestValidation(call, %s, %s);
-	                        const resp = await this.handler.%s(validatedCall);
+	                        const resp = await this.handler.%s(validatedCall);%s
 	                        this.validateResponse(%s, resp);
 	                        callback(null, resp);
 	                    } catch (err: any) {
@@ -791,7 +845,7 @@ func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 	                    }
 	                })();
 	            },
-	`, method.Name, tsAccountingTryPreamble(accountingMethodExpr), clientAuthLine, inputValidationRef, streamAuthorize, methodName, outputValidationRef, tsAccountingCatchMark(accountingMethodExpr, "err"), tsAccountingFinally(accountingMethodExpr, "call.metadata"))
+	`, method.Name, tsAccountingTryPreamble(accountingMethodExpr), clientAuthLine, inputValidationRef, streamAuthorize, methodName, tsStageLine(stageResponse), outputValidationRef, tsAccountingCatchMark(accountingMethodExpr, "err"), tsAccountingFinally(accountingMethodExpr, "call.metadata"))
 	}
 
 	if method.IsPageCollection() {
@@ -801,12 +855,13 @@ func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 		// (never a silent reset to page 1).
 		itemsKey := strutil.ToLowerCamelCase(method.Resolved.PageItemsField)
 		outputSchema := tsSchemaRef(method.FullOutputType, method.OutputType, servicePackage)
-		pageAuthLine := authLineFor("call.metadata", "call.request")
+		pageAuthLine := tsJoinStatements(authLineFor("call.metadata", "call.request"), stageRequest)
 		var pageInputValidation string
 		if validateInput != "" && !emptyInput {
 			pageInputValidation = fmt.Sprintf(`
                         %s(call.request);`, validateInput)
 		}
+
 		handlerCall := fmt.Sprintf("this.handler.%s(call.request, { limit, after })", methodName)
 		if emptyInput {
 			handlerCall = fmt.Sprintf("this.handler.%s({ limit, after })", methodName)
@@ -825,12 +880,12 @@ func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 	                    try {
 	                        %s%s
 	                        const after = decodePageToken(String((call.request as any).pageToken ?? (call.request as any).page_token ?? ''));
-	                        const limit = effectivePageSize(Number((call.request as any).pageSize ?? (call.request as any).page_size ?? 0), %d, %d);
+	                        const limit = effectivePageSize(Number((call.request as any).pageSize ?? (call.request as any).page_size ?? 0), %d, %d);%s
 	                        const page = await %s;
 	                        const resp = create(%s, {
 	                            %s: page.items,
 	                            nextPageToken: encodePageToken(page.nextAfter),%s
-	                        });
+	                        });%s
 	                        this.validateResponse(%s, resp);
 	                        callback(null, resp);
 	                    } catch (err: any) {
@@ -841,8 +896,8 @@ func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 	                })();
 	            },
 	`, method.Name, tsAccountingTryPreamble(accountingMethodExpr), pageAuthLine, pageInputValidation,
-			method.Resolved.DefaultPageSize, method.Resolved.MaxPageSize, handlerCall,
-			outputSchema, itemsKey, totalField, outputValidationRef,
+			method.Resolved.DefaultPageSize, method.Resolved.MaxPageSize, tsStageLine(stageHandler), handlerCall,
+			outputSchema, itemsKey, totalField, tsStageLine(stageResponse), outputValidationRef,
 			tsAccountingCatchMark(accountingMethodExpr, "err"), tsAccountingFinally(accountingMethodExpr, "call.metadata"))
 	}
 
@@ -863,7 +918,13 @@ func generateTsGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 		handlerCall = fmt.Sprintf("this.handler.%s()", methodName)
 	}
 
-	unaryAuthLine := authLineFor("call.metadata", "call.request")
+	unaryAuthLine := tsJoinStatements(authLineFor("call.metadata", "call.request"), stageRequest)
+	if stageHandler != "" {
+		inputValidationBlock += "\n                        " + stageHandler
+	}
+	if stageResponse != "" {
+		outputValidationBlock = tsStageLine(stageResponse) + outputValidationBlock
+	}
 
 	if emptyOutput {
 		return fmt.Sprintf(`            %s: (call: grpc.ServerUnaryCall<any, any>, callback: grpc.sendUnaryData<any>) => {

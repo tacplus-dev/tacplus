@@ -3,6 +3,7 @@
 
 package {{.ChassisBase}}.grpcserver;
 
+import {{.ChassisBase}}.am.AccountingManager;
 import {{.ChassisBase}}.approval.Approval;
 import {{.ChassisBase}}.backoff.Backoff;
 import {{.ChassisBase}}.jwk.ImmutableJwk;
@@ -257,13 +258,15 @@ public class Authorizer {
                     ServerCallHandler<ReqT, RespT> next) {
                 String authHeader = headers.get(AUTH_METADATA_KEY);
                 // (spec.rpc).requires_device reads two more headers off the
-                // call. gRPC-Java, unlike gRPC-Go, does not put incoming
-                // metadata on the Context by itself, so they are copied in
-                // here — the one interceptor every generated server installs.
-                Context ctx = Approval.capture(
+                // call, and an S2S wrapper the accounting_internal marker
+                // (tacplus#273). gRPC-Java, unlike gRPC-Go, does not put
+                // incoming metadata on the Context by itself, so they are
+                // copied in here — the one interceptor every generated server
+                // installs.
+                Context ctx = AccountingManager.captureInternal(Approval.capture(
                         Auth.withVerifiedTokenSlot(Context.current())
                                 .withValue(AUTH_HEADER_CTX_KEY, authHeader),
-                        headers);
+                        headers), headers);
                 return Contexts.interceptCall(ctx, call, headers, next);
             }
         };

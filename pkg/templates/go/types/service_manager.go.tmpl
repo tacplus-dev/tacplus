@@ -2107,7 +2107,9 @@ token, err := tp()
 if err != nil {
 return fmt.Errorf("token for {{.Label}}: %w", err)
 }
-authCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+// The accounting_internal marker (tacplus#273): storing accounting emits no
+// accounting, so the broker's wrapper does not record this publish.
+authCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token, am.AccountingInternalHeader, "1")
 
 sd := &grpc.StreamDesc{
 StreamName:    "{{.PublishStreamName}}",

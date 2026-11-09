@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by looper (#313).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by looper (#273).
 
 - **Version / line:** v2.6.2 (latest release, 2026-11-07, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -64,6 +64,16 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   (`cross-test/trace-carry`, in `just gates`; on main for 2.7, and backported to release/2.0 through release/2.6 by pull requests #330-#336, each line's next patch).
   Gap: sys contract messages mostly lack field 200, and helpers that build their own request take no `trace_id`
   (#327, 2.7); a message without field 200 is not yet refused (#328, 3.0).
+  Accounting, typed and without data (#273, 2.7, on main): the Go, Java and Rust wrappers emit exactly one
+  `RpcCompleted` per call on every exit path, refusals before the handler included, with the gRPC code, a typed
+  outcome (`PERMITTED`/`DENIED_AUTHN`/`DENIED_AUTHZ`/`INVALID`/`FAILED`) and reason classified from one table
+  (`accountingpolicy`), and the `RpcMetrics` a handler attaches (`records_returned`, `bytes`); the free-text events
+  and `ErrorContext` are gone, `(spec.accounting_safe)` gates every accounting string field, the accounting
+  publisher carries the `x-tacplus-accounting-internal` marker a wrapper honours for a service caller, and the sink counts its own
+  health (`current-generation`'s accounting-sink fixture drives a query and a denial through the real wrapper).
+  Gaps: Go stream RPCs cannot attach metrics (unary only); the store side, per-tenant Stratum, is
+  tacplus-dev/stratum#24, so nothing stores a record yet, and the end-to-end exactly-one test through the event bus
+  and Stratum waits for it; tracing's own non-recursion is #265's.
   The build image's docker-buildx is built from the v0.38.1 source with moby/go-archive 0.3.3 and golang.org/x/net
   0.62.0 (CVE-2026-17106, CVE-2026-78669, CVE-2026-78661, CVE-2026-97045; `tacplus-smoke` checks the floors)
   (#190; backported to release/2.0 through release/2.5 by pull request, as v2.0.13, v2.1.6, v2.2.3, v2.3.5, v2.4.4

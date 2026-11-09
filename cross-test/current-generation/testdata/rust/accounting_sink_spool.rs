@@ -121,3 +121,174 @@ fn drops_only_when_spool_is_full() {
         );
     });
 }
+
+// tacplus#273: the stored record carries the call's typed outcome, reason, code
+// and metrics, and the sink's health is counters, never records.
+#[test]
+fn record_carries_typed_outcome_and_metrics() {
+    use agentsensor_model_types::sys::accounting::accounting::{
+        event, RpcCompleted, RpcMetrics, RpcOutcome, RpcReason,
+    };
+    run_within_bound("typed record", EMIT_BOUND, async {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<AccountingRecord>(4);
+        let sink = EventBusSink::new(tx, "test-4".to_string());
+        let mut ev = event(0);
+        ev.event = Some(event::Event::RpcCompleted(RpcCompleted {
+            method: None,
+            duration_ms: 12,
+            outcome: RpcOutcome::DeniedAuthz.into(),
+            code: 7,
+            reason: RpcReason::NotEntitled.into(),
+            metrics: Some(RpcMetrics { records_returned: 3, bytes: 10 }),
+        }));
+        sink.emit(&ev).await;
+        let rec = rx.recv().await.expect("record reached the publisher");
+        assert_eq!(rec.outcome, i32::from(RpcOutcome::DeniedAuthz));
+        assert_eq!(rec.reason, i32::from(RpcReason::NotEntitled));
+        assert_eq!(rec.code, 7);
+        assert_eq!(rec.duration_ms, 12);
+        assert_eq!(rec.records_returned, 3);
+        assert_eq!(rec.bytes, 10);
+        let stats = sink.stats();
+        assert_eq!(stats.ingested, 1, "ingested counts records accepted into the spool");
+        assert_eq!(stats.dropped, 0);
+    });
+}
+
+// RecordingSink keeps every event it is handed.
+struct RecordingSink(Arc<std::sync::Mutex<Vec<Event>>>);
+
+#[tonic::async_trait]
+impl Sink for RecordingSink {
+    async fn emit(&self, event: &Event) {
+        self.0.lock().unwrap().push(event.clone());
+    }
+}
+
+fn recording_emitter() -> (Arc<am::Emitter>, Arc<std::sync::Mutex<Vec<Event>>>) {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let emitter = Arc::new(am::Emitter::new("test".to_string(), Box::new(RecordingSink(events.clone()))));
+    (emitter, events)
+}
+
+fn completed(ev: &Event) -> agentsensor_model_types::sys::accounting::accounting::RpcCompleted {
+    use agentsensor_model_types::sys::accounting::accounting::event;
+    match &ev.event {
+        Some(event::Event::RpcCompleted(p)) => p.clone(),
+        other => panic!("want an RpcCompleted, got {other:?}"),
+    }
+}
+
+// A call refused at each stage is recorded once, with the outcome of its code
+// and the reason of the stage it reached; a permitted call carries the metrics
+// its handler attached. A SERVICE caller's call carrying the accounting_internal
+// marker is not recorded; a user's call carrying it is.
+#[test]
+fn call_records_once_per_exit_path() {
+    use agentsensor_model_types::generated::accounting_method::accounting_method::AccountingMethod;
+    use agentsensor_model_types::sys::accounting::accounting::{EventLevel, RpcOutcome, RpcReason};
+    run_within_bound("call accounting", EMIT_BOUND, async {
+        let (emitter, events) = recording_emitter();
+        let start = |internal| am::Call::start(Some(emitter.clone()), AccountingMethod::default(), "r1", internal);
+
+        // Denied by the auth check: no identity, NOT_ENTITLED.
+        let call = start(false);
+        call.finish(Some(&tonic::Status::permission_denied("no"))).await;
+        call.finish(Some(&tonic::Status::permission_denied("no"))).await;
+
+        // Denied by a guard after authentication: POLICY_DENIED, with identity.
+        let call = start(false);
+        let identity = std::collections::HashMap::from([("sub".to_string(), "alice".to_string())]);
+        call.authenticated(&identity, false);
+        call.stage(am::Stage::Request);
+        call.finish(Some(&tonic::Status::permission_denied("guard"))).await;
+
+        // Permitted, with metrics the handler attached.
+        let call = start(false);
+        call.authenticated(&identity, false);
+        call.stage(am::Stage::Request);
+        let out: Result<(), tonic::Status> = call
+            .handler(async {
+                am::set_records_returned(5);
+                am::add_bytes(7);
+                am::add_bytes(1);
+                Ok(())
+            })
+            .await;
+        call.finish(out.as_ref().err()).await;
+
+        // Handler error: HANDLER_ERROR, FAILED.
+        let call = start(false);
+        call.stage(am::Stage::Request);
+        let out: Result<(), tonic::Status> = call.handler(async { Err(tonic::Status::internal("boom")) }).await;
+        call.finish(out.as_ref().err()).await;
+
+        // accounting_internal from a service caller: nothing.
+        let call = start(true);
+        call.authenticated(&identity, true);
+        call.finish(None).await;
+
+        // accounting_internal from a user: recorded.
+        let call = start(true);
+        call.authenticated(&identity, false);
+        call.finish(None).await;
+
+        // Outside an accounted call the metrics setters are no-ops.
+        am::set_records_returned(9);
+
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 5, "one record per call, none for the service's internal call: {events:?}");
+
+        let denied = completed(&events[0]);
+        assert_eq!(denied.outcome, i32::from(RpcOutcome::DeniedAuthz));
+        assert_eq!(denied.reason, i32::from(RpcReason::NotEntitled));
+        assert_eq!(denied.code, 7);
+        assert!(events[0].identity.is_empty());
+        assert_eq!(events[0].level, i32::from(EventLevel::Warn));
+
+        let guarded = completed(&events[1]);
+        assert_eq!(guarded.reason, i32::from(RpcReason::PolicyDenied));
+        assert_eq!(events[1].identity.get("sub").map(String::as_str), Some("alice"));
+
+        let ok = completed(&events[2]);
+        assert_eq!(ok.outcome, i32::from(RpcOutcome::Permitted));
+        assert_eq!(ok.reason, i32::from(RpcReason::Undefined));
+        assert_eq!(ok.code, 0);
+        let metrics = ok.metrics.expect("metrics attached");
+        assert_eq!((metrics.records_returned, metrics.bytes), (5, 8));
+        assert_eq!(events[2].level, i32::from(EventLevel::Info));
+
+        let failed = completed(&events[3]);
+        assert_eq!(failed.outcome, i32::from(RpcOutcome::Failed));
+        assert_eq!(failed.reason, i32::from(RpcReason::HandlerError));
+        assert_eq!(events[3].level, i32::from(EventLevel::Error));
+
+        assert_eq!(completed(&events[4]).outcome, i32::from(RpcOutcome::Permitted), "a user's marker is ignored");
+    });
+}
+
+// A response stream is recorded once, when it ends.
+#[test]
+fn stream_records_when_it_ends() {
+    use agentsensor_model_types::generated::accounting_method::accounting_method::AccountingMethod;
+    use agentsensor_model_types::sys::accounting::accounting::RpcOutcome;
+    use tokio_stream::StreamExt;
+    run_within_bound("stream accounting", EMIT_BOUND, async {
+        let (emitter, events) = recording_emitter();
+        let call = am::Call::start(Some(emitter.clone()), AccountingMethod::default(), "r1", false);
+        let items = tokio_stream::iter(vec![Ok::<i32, tonic::Status>(1), Ok(2)]);
+        let mut stream = am::AccountedStream::new(call, items);
+        while stream.next().await.is_some() {}
+        drop(stream);
+        // The record is emitted from a spawned task.
+        for _ in 0..100 {
+            if !events.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 1, "one record per stream: {events:?}");
+        assert_eq!(completed(&events[0]).outcome, i32::from(RpcOutcome::Permitted));
+    });
+}

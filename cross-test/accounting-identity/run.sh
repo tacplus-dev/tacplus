@@ -6,7 +6,7 @@
 #
 # An accounting record has to name the principal the platform verified, not one
 # the caller asserted. Before this gate the generated Java wrapper emitted every
-# RpcCompleted/RpcError with an empty identity map, so the only correlation key
+# accounting record with an empty identity map, so the only correlation key
 # on the record was x-request-id — a request header the caller writes.
 #
 # This gate generates the consumer-contract fixture with two extra methods on

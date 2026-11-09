@@ -17,6 +17,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/accountingpolicy"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/tmplutil"
 )
 
@@ -99,7 +100,9 @@ func TestPythonAccountingPublisherWiresEventBusSinkOnEveryWrapper(t *testing.T) 
 	rendered := out.String()
 
 	for _, want := range []string{
-		"from svc.chassis.am import EventBusSink, Emitter",
+		"from svc.chassis.am import ACCOUNTING_INTERNAL_HEADER, EventBusSink, Emitter",
+		// The publisher carries the accounting_internal marker (tacplus#273).
+		`metadata = [("authorization", f"Bearer {token}"), (ACCOUNTING_INTERNAL_HEADER, "1")]`,
 		"from svc.types.vservices.accountingrecord import accountingrecord_pb2 as accountingrecord_pb",
 		"def _create_accounting_emitter(self):",
 		"sink = EventBusSink(queue, self.instance_id)",
@@ -215,7 +218,9 @@ func TestPythonAccountingManagerEventBusSinkRendersValidPython(t *testing.T) {
 		ServicesImportFrom         string
 		ServicesPbModule           string
 		ServiceRPCs                []struct{ FieldName, EnumName string }
+		Acct                       accountingpolicy.Context
 	}{
+		Acct:                       accountingpolicy.TemplateContext(),
 		HasAccountingRecord:        true,
 		AccountingRecordImportFrom: "svc.types.vservices.accountingrecord",
 		AccountingRecordPbModule:   "accountingrecord_pb2",
@@ -268,7 +273,10 @@ func TestPythonAccountingManagerOmitsEventBusSinkWithoutRecord(t *testing.T) {
 		t.Fatalf("parse accounting_manager template: %v", err)
 	}
 
-	data := struct{ HasAccountingRecord bool }{HasAccountingRecord: false}
+	data := struct {
+		HasAccountingRecord bool
+		Acct                accountingpolicy.Context
+	}{HasAccountingRecord: false, Acct: accountingpolicy.TemplateContext()}
 
 	var out bytes.Buffer
 	if err := tmpl.Execute(&out, data); err != nil {
@@ -311,7 +319,7 @@ for i in range(EMITS):
         "request_id": "r%d" % i,
         "identity": {},
         "level": 2,
-        "rpc_completed": {"method": None, "duration_ms": 1},
+        "rpc_completed": {"method": None, "duration_ms": 1, "outcome": "RPC_OUTCOME_PERMITTED", "code": 0, "reason": "RPC_REASON_UNDEFINED"},
     })
 held = []
 while not queue.empty():
@@ -345,7 +353,9 @@ func TestPythonEventBusSinkNeverHoldsEmitWhenPublisherBlocked(t *testing.T) {
 		ServicesImportFrom         string
 		ServicesPbModule           string
 		ServiceRPCs                []struct{ FieldName, EnumName string }
+		Acct                       accountingpolicy.Context
 	}{
+		Acct:                       accountingpolicy.TemplateContext(),
 		HasAccountingRecord:        true,
 		AccountingRecordImportFrom: "stub",
 		AccountingRecordPbModule:   "accountingrecord_pb2",

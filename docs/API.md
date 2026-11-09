@@ -1055,6 +1055,19 @@ Generated service wrappers emit typed trace/accounting data where the surface
 requires it. Request handlers are responsible for propagating non-empty
 `trace_id` fields into downstream requests they create.
 
+Accounting (#273, USER.md, Accounting): the Go, Java and Rust wrappers emit
+exactly one `accounting.RpcCompleted` per call of an accounted RPC, on every
+exit path including a refusal before the handler, with the gRPC `code`, a typed
+`outcome` (`PERMITTED`, `DENIED_AUTHN`, `DENIED_AUTHZ`, `INVALID`, `FAILED`), a
+typed `reason` and the handler's `RpcMetrics` (`records_returned`, `bytes`).
+Accounting carries no data: no error text, stack trace or request value, and
+generation fails on an unmarked string or bytes field of an accounting event
+(`(spec.accounting_safe)`). The `am` emitter's one RPC method replaces the
+removed `RpcError`, `TokenRejected` and `Diagnostic`, and the `ErrorContext`
+helpers are gone. Calls that store accounting carry the
+`x-tacplus-accounting-internal` marker, which a wrapper honours by recording
+nothing, only when the verified caller is a service.
+
 Durable accounting (an `accountingrecord.AccountingRecord` event-bus topic)
 never holds an RPC in Go, Java, Rust, Python or TypeScript. The sink hands each
 record to a bounded in-process spool of 4096 records and returns; the publisher

@@ -17,6 +17,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/accountingpolicy"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/tmplutil"
 )
 
@@ -125,7 +126,9 @@ func TestTypeScriptAccountingPublisherWiresEventBusSinkOnEveryAccountedWrapper(t
 	rendered := out.String()
 
 	for _, want := range []string{
-		"import { EventBusSink, Emitter } from '../chassis/am/index.js';",
+		"import { ACCOUNTING_INTERNAL_HEADER, EventBusSink, Emitter } from '../chassis/am/index.js';",
+		// The publisher carries the accounting_internal marker (tacplus#273).
+		"metadata.set(ACCOUNTING_INTERNAL_HEADER, '1');",
 		"import { type AccountingRecord, AccountingRecordSchema } from '../types/vservices/accountingrecord/index.js';",
 		"private createAccountingEmitter(): Emitter {",
 		"const sink = new EventBusSink(queue, this.instanceId, wake);",
@@ -249,7 +252,9 @@ func TestTypeScriptAccountingManagerEventBusSinkRendersValidTypeScript(t *testin
 		HasAccountingRecord        bool
 		AccountingRecordImportPath string
 		ServiceRPCs                []serviceRPCEntry
+		Acct                       accountingpolicy.Context
 	}{
+		Acct:                       accountingpolicy.TemplateContext(),
 		HasAccountingRecord:        true,
 		AccountingRecordImportPath: "../../types/vservices/accountingrecord/index.js",
 		ServiceRPCs: []serviceRPCEntry{
@@ -301,7 +306,10 @@ func TestTypeScriptAccountingManagerOmitsEventBusSinkWithoutRecord(t *testing.T)
 		t.Fatalf("parse AccountingManager template: %v", err)
 	}
 
-	data := struct{ HasAccountingRecord bool }{HasAccountingRecord: false}
+	data := struct {
+		HasAccountingRecord bool
+		Acct                accountingpolicy.Context
+	}{HasAccountingRecord: false, Acct: accountingpolicy.TemplateContext()}
 
 	var out bytes.Buffer
 	if err := tmpl.Execute(&out, data); err != nil {
@@ -339,7 +347,7 @@ for (let i = 0; i < EMITS; i++) {
     requestId: 'r' + i,
     identity: {},
     level: 2,
-    event: { case: 'rpcCompleted', value: { method: undefined, durationMs: 1n } },
+    event: { case: 'rpcCompleted', value: { method: undefined, durationMs: 1n, outcome: 1, code: 0, reason: 0 } },
   } as any);
 }
 console.log(JSON.stringify({ held: queue.map((r) => r.requestId), dropped: (sink as any).dropped }));
@@ -367,7 +375,9 @@ func TestTypeScriptEventBusSinkBoundsPublisherQueueWhenBlocked(t *testing.T) {
 		HasAccountingRecord        bool
 		AccountingRecordImportPath string
 		ServiceRPCs                []struct{ FieldName string }
+		Acct                       accountingpolicy.Context
 	}{
+		Acct:                       accountingpolicy.TemplateContext(),
 		HasAccountingRecord:        true,
 		AccountingRecordImportPath: "../../types/vservices/accountingrecord/index.js",
 	}
@@ -382,6 +392,7 @@ func TestTypeScriptEventBusSinkBoundsPublisherQueueWhenBlocked(t *testing.T) {
 		"node_modules/@bufbuild/protobuf/package.json": `{"name": "@bufbuild/protobuf", "type": "module", "main": "index.js"}`,
 		"node_modules/@bufbuild/protobuf/index.js":     "export function create(_schema, init) { return init; }\n",
 		"types/vservices/accountingrecord/index.js":    "export const AccountingRecordSchema = {};\n",
+		"types/sys/accounting/index.js":                tsAccountingEnumsStub,
 		"chassis/am/AccountingManager.ts":              rendered.String(),
 		"driver.ts":                                    tsEventBusSinkDriver,
 	}

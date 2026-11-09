@@ -271,8 +271,14 @@ func TestJavaPage_WrapperAccounting_DoesNotRedeclareResponse(t *testing.T) {
 			"catalog": {RPCs: map[string]bool{"ListEvents": true}},
 		},
 		"catalog", "services", map[string]string{}, proto.SkippedTraceTypes{}, nil, nil, nil)
-	if !strings.Contains(got, "Catalog.ListEventsPage response;\n            try {") {
-		t.Fatalf("PAGE accounting wrapper must declare response before the handler try block\ngot:\n%s", got)
+	// tacplus#273: the response is declared once, ahead of the page body, and
+	// the handler call sits between the HANDLER and RESPONSE stage markers.
+	decl := strings.Index(got, "Catalog.ListEventsPage response;\n")
+	handlerStage := strings.Index(got, "__acct.stage(AccountingManager.Stage.HANDLER);")
+	handler := strings.Index(got, "handler.listEvents(caller, request, new CollectionRuntime.PageParams(__limit, __after))")
+	responseStage := strings.Index(got, "__acct.stage(AccountingManager.Stage.RESPONSE);")
+	if decl < 0 || handlerStage < decl || handler < handlerStage || responseStage < handler {
+		t.Fatalf("PAGE accounting wrapper must declare response, then stage HANDLER, call the handler, stage RESPONSE\ngot:\n%s", got)
 	}
 	if strings.Contains(got, "Catalog.ListEventsPage response = __builder.build()") {
 		t.Fatalf("PAGE accounting wrapper must not redeclare response inside the handler try block\ngot:\n%s", got)

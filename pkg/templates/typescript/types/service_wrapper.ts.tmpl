@@ -21,6 +21,9 @@ import { type WatchSource, WatchHub, type PageParams, type Page, decodePageToken
 {{.HandlerInterface}}
 {{- end}}
 
+/** What an auth callback resolves to: the verified token's sub_type, if it reports one. */
+type AuthResult = void | string;
+
 /**
  * {{.WrapperName}} wraps {{.ServiceName}} with authorization and validation.
  */
@@ -31,8 +34,8 @@ export class {{.WrapperName}} {
     private handler: any;
 {{- end}}
 {{.WatchFields}}
-    private authorizeFunc: ((fullMethod: string, metadata: Record<string, string>, req: unknown) => void | Promise<void>) | null;
-    private authenticateFunc: ((metadata: Record<string, string>, targetNamespace?: string, fullMethod?: string) => void | Promise<void>) | null;
+    private authorizeFunc: ((fullMethod: string, metadata: Record<string, string>, req: unknown) => AuthResult | Promise<AuthResult>) | null;
+    private authenticateFunc: ((metadata: Record<string, string>, targetNamespace?: string, fullMethod?: string) => AuthResult | Promise<AuthResult>) | null;
 {{- if .HasAccounting}}
     private emitter: any | null;
 {{- end}}
@@ -64,12 +67,12 @@ export class {{.WrapperName}} {
     }
 
     /** Sets the authorization function. */
-    setAuthorizeFunc(f: ((fullMethod: string, metadata: Record<string, string>, req: unknown) => void | Promise<void>) | null): void {
+    setAuthorizeFunc(f: ((fullMethod: string, metadata: Record<string, string>, req: unknown) => AuthResult | Promise<AuthResult>) | null): void {
         this.authorizeFunc = f;
     }
 
     /** Sets the authentication function (auth_any_user: token-only verification). */
-    setAuthenticateFunc(f: ((metadata: Record<string, string>, targetNamespace?: string, fullMethod?: string) => void | Promise<void>) | null): void {
+    setAuthenticateFunc(f: ((metadata: Record<string, string>, targetNamespace?: string, fullMethod?: string) => AuthResult | Promise<AuthResult>) | null): void {
         this.authenticateFunc = f;
     }
 
@@ -119,23 +122,25 @@ export class {{.WrapperName}} {
         return map['x-request-id'] ?? map['request-id'] ?? '';
     }
 
+    /**
+     * Emits the call's one RpcCompleted (tacplus#273). stage is how far the
+     * call got; err is what it ended with (null on success). A call whose verified caller is a service principal and that carries
+     * the accounting_internal marker stores accounting, and is not itself
+     * accounted.
+     */
     private emitAccounting(
         method: accountingTypes.AccountingMethod,
+        stage: accounting.Stage,
         startMs: number,
         err: unknown,
         metadata: grpc.Metadata,
+        metrics: accounting.Metrics,
     ): void {
         if (this.emitter === null) return;
+        if (accounting.isAccountingInternal(metadata.get(accounting.ACCOUNTING_INTERNAL_HEADER).length > 0)) return;
         const durationMs = BigInt(Math.max(0, Date.now() - startMs));
         const requestId = this.requestIdFromMetadata(metadata);
-        if (err == null) {
-            this.emitter.rpcCompleted(method, durationMs, {}, requestId);
-            return;
-        }
-        const code = accounting.grpcCodeFromError(err);
-        const errorContext = accounting.errorContextFromError(err, accounting.shouldCaptureStack(code));
-        const message = err instanceof Error ? err.message : String(err);
-        this.emitter.rpcError(method, code, message, durationMs, errorContext, {}, requestId);
+        this.emitter.rpc(method, stage, err, durationMs, metrics, {}, requestId);
     }
 {{- end}}
 
@@ -146,7 +151,10 @@ export class {{.WrapperName}} {
         if (this.authorizeFunc === null) {
             throw new Error(`authorizer not configured for ${fullMethod} — auth is mandatory and cannot be disabled`);
         }
-        await this.authorizeFunc(fullMethod, this.metadataToRecord(metadata), req);
+        const subType = await this.authorizeFunc(fullMethod, this.metadataToRecord(metadata), req);
+{{- if .HasAccounting}}
+        accounting.setVerifiedCaller(typeof subType === 'string' ? subType : '');
+{{- end}}
     }
 
     /** Check authentication only (auth_any_user). Fail-closed: a missing func rejects.
@@ -156,7 +164,10 @@ export class {{.WrapperName}} {
         if (this.authenticateFunc === null) {
             throw new Error('authenticator not configured — auth is mandatory and cannot be disabled');
         }
-        await this.authenticateFunc(this.metadataToRecord(metadata), targetNamespace, fullMethod);
+        const subType = await this.authenticateFunc(this.metadataToRecord(metadata), targetNamespace, fullMethod);
+{{- if .HasAccounting}}
+        accounting.setVerifiedCaller(typeof subType === 'string' ? subType : '');
+{{- end}}
     }
 
 {{- if .HasHandler}}

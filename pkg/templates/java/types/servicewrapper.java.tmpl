@@ -161,103 +161,77 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
         this.emitter = emitter;
     }
 
-    private void emitRpcCompleted(AccountingMethod accountingMethod, long startTime,
-            java.util.Map<String, String> callerIdentity, String requestId) {
-        AccountingManager.Emitter em = this.emitter;
-        if (em == null) {
-            return;
-        }
-        long durationMs = System.currentTimeMillis() - startTime;
-        em.rpcCompleted(accountingMethod, durationMs, callerIdentity, requestId);
-    }
-
-    private void emitRpcError(AccountingMethod accountingMethod, Throwable t, long startTime,
-            java.util.Map<String, String> callerIdentity, String requestId) {
-        AccountingManager.Emitter em = this.emitter;
-        if (em == null) {
-            return;
-        }
-        long durationMs = System.currentTimeMillis() - startTime;
-        io.grpc.Status.Code code = AccountingManager.grpcCodeFromError(t);
-        em.rpcError(accountingMethod, code.value(), t.getMessage(), durationMs,
-                AccountingManager.errorContextFromError(t, AccountingManager.shouldCaptureStack(code)),
-                callerIdentity, requestId);
-    }
-
-    private <T> StreamObserver<T> accountingResponseObserver(
+    /**
+     * Wraps a call's response observer so that the call's first end, whichever
+     * path reaches it, emits the call's one accounting record (tacplus#273):
+     * onCompleted as OK, onError with the status it carries. A server call's
+     * observer stays a ServerCallStreamObserver, which the flow-controlled
+     * shapes cast to.
+     */
+    private static <T> StreamObserver<T> accountedResponseObserver(
             StreamObserver<T> delegate,
-            AccountingMethod accountingMethod,
-            long startTime,
-            java.util.Map<String, String> callerIdentity,
-            String requestId,
-            java.util.concurrent.atomic.AtomicBoolean accounted) {
-        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
+            AccountingManager.Call acct) {
+        if (delegate instanceof io.grpc.stub.ServerCallStreamObserver) {
+            io.grpc.stub.ServerCallStreamObserver<T> sco = (io.grpc.stub.ServerCallStreamObserver<T>) delegate;
+            return new io.grpc.stub.ServerCallStreamObserver<T>() {
+                @Override public void onNext(T value) { sco.onNext(value); }
+                @Override public void onError(Throwable t) { acct.finish(t); sco.onError(t); }
+                @Override public void onCompleted() { acct.finish(null); sco.onCompleted(); }
+                @Override public boolean isCancelled() { return sco.isCancelled(); }
+                @Override public void setOnCancelHandler(Runnable r) { sco.setOnCancelHandler(r); }
+                @Override public void setOnCloseHandler(Runnable r) { sco.setOnCloseHandler(r); }
+                @Override public void setCompression(String c) { sco.setCompression(c); }
+                @Override public boolean isReady() { return sco.isReady(); }
+                @Override public void setOnReadyHandler(Runnable r) { sco.setOnReadyHandler(r); }
+                @Override public void disableAutoInboundFlowControl() { sco.disableAutoInboundFlowControl(); }
+                @Override public void disableAutoRequest() { sco.disableAutoRequest(); }
+                @Override public void request(int n) { sco.request(n); }
+                @Override public void setMessageCompression(boolean enable) { sco.setMessageCompression(enable); }
+            };
+        }
         return new StreamObserver<T>() {
-            @Override
-            public void onNext(T value) {
-                delegate.onNext(value);
-            }
-
-            @Override
-            public void onError(Throwable t) {
-                if (closed.compareAndSet(false, true)) {
-                    if (accounted.compareAndSet(false, true)) {
-                        emitRpcError(accountingMethod, t, startTime, callerIdentity, requestId);
-                    }
-                    delegate.onError(t);
-                }
-            }
-
-            @Override
-            public void onCompleted() {
-                if (closed.compareAndSet(false, true)) {
-                    if (accounted.compareAndSet(false, true)) {
-                        emitRpcCompleted(accountingMethod, startTime, callerIdentity, requestId);
-                    }
-                    delegate.onCompleted();
-                }
-            }
+            @Override public void onNext(T value) { delegate.onNext(value); }
+            @Override public void onError(Throwable t) { acct.finish(t); delegate.onError(t); }
+            @Override public void onCompleted() { acct.finish(null); delegate.onCompleted(); }
         };
     }
 
-    private <T> StreamObserver<T> accountingRequestObserver(
+    /**
+     * Wraps the request observer of an accounted client- or bidi-streaming call:
+     * each callback runs bound to the call, so AccountingManager.Metrics reach
+     * it from the handler; a handler that throws on a message ends the call
+     * with that error; a client that errors (or cancels) the stream ends it too.
+     */
+    private static <T> StreamObserver<T> accountedRequestObserver(
             StreamObserver<T> delegate,
-            AccountingMethod accountingMethod,
-            long startTime,
-            java.util.Map<String, String> callerIdentity,
-            String requestId,
-            java.util.concurrent.atomic.AtomicBoolean accounted) {
-        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
+            AccountingManager.Call acct) {
         return new StreamObserver<T>() {
             @Override
             public void onNext(T value) {
-                if (closed.get()) {
-                    return;
-                }
+                io.grpc.Context prev = acct.bind();
                 try {
                     delegate.onNext(value);
                 } catch (Throwable t) {
-                    if (accounted.compareAndSet(false, true)) {
-                        emitRpcError(accountingMethod, t, startTime, callerIdentity, requestId);
-                    }
+                    acct.finish(toGrpcError(t));
                     throw t;
+                } finally {
+                    acct.unbind(prev);
                 }
             }
 
             @Override
             public void onError(Throwable t) {
-                if (closed.compareAndSet(false, true)) {
-                    if (accounted.compareAndSet(false, true)) {
-                        emitRpcError(accountingMethod, t, startTime, callerIdentity, requestId);
-                    }
-                    delegate.onError(t);
-                }
+                acct.finish(t);
+                delegate.onError(t);
             }
 
             @Override
             public void onCompleted() {
-                if (!closed.get()) {
+                io.grpc.Context prev = acct.bind();
+                try {
                     delegate.onCompleted();
+                } finally {
+                    acct.unbind(prev);
                 }
             }
         };

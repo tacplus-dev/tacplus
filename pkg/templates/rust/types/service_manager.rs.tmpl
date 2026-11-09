@@ -2800,6 +2800,14 @@ async fn {{.StreamFn}}(
         format!("Bearer {}", token).parse()
             .map_err(|_| -> Box<dyn std::error::Error + Send + Sync> { "invalid token metadata".into() })?,
     );
+{{- if .AccountingInternal}}
+    // This call stores accounting: the accounting_internal marker tells the
+    // event bus's wrapper not to account it (tacplus#273).
+    grpc_req.metadata_mut().insert(
+        am::ACCOUNTING_INTERNAL_HEADER,
+        tonic::metadata::MetadataValue::from_static("1"),
+    );
+{{- end}}
 
     let mut grpc = tonic::client::Grpc::new(channel.clone());
     grpc.ready().await.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {

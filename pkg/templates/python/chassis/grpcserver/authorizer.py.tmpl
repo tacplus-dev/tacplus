@@ -302,10 +302,12 @@ class Authorizer:
         """Returns the JWK cache for direct key access."""
         return self._jwk_cache
 
-    def authorize(self, metadata: Dict[str, str], full_method: str, request: Any = None) -> None:
+    def authorize(self, metadata: Dict[str, str], full_method: str, request: Any = None) -> str:
         """
         Authorizes a request by verifying token signature, audience, and
-        service_entitlements claim.
+        service_entitlements claim. Returns the verified token's sub_type,
+        which accounting reads to honour the accounting_internal marker
+        (tacplus#273) only for a service caller.
 
         Args:
             metadata: Request metadata/headers
@@ -397,7 +399,7 @@ class Authorizer:
 
             # Level-or-below check (applies to S2S when target_namespace_field is set).
             self._check_target_namespace(method_key, tw.get_namespace(), request)
-            return
+            return sub_type
 
         # C2S path: user tokens carry service_entitlements.
         method_name = _extract_method_name(full_method)
@@ -414,16 +416,18 @@ class Authorizer:
         # Level-or-below check: caller's namespace must be at or above the target namespace
         # named by the method's target_namespace_field annotation.
         self._check_target_namespace(_qualified_method_key(full_method), tw.get_namespace() or "", request)
+        return sub_type
 
     def authenticate(
         self,
         metadata: Dict[str, str],
         target_namespace: str | None = None,
         full_method: str | None = None,
-    ) -> None:
+    ) -> str:
         """
         Authenticates a request by verifying token signature and audience only.
-        Does NOT check entitlements. Used for auth_any_user services.
+        Does NOT check entitlements. Used for auth_any_user services. Returns
+        the verified token's sub_type (see authorize).
 
         Args:
             metadata: Request metadata/headers
@@ -495,6 +499,7 @@ class Authorizer:
                 )
 
         # auth_any_user: token is valid and correctly scoped — allow.
+        return tw.get_sub_type()
 
     def close(self) -> None:
         """Closes the authorizer. Safe to call multiple times."""

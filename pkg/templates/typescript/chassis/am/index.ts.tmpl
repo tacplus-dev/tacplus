@@ -10,8 +10,22 @@
  * Typed accounting event emitter using the delegation pattern.
  */
 
-export { Emitter, LoggerSink, captureErrorContext, shouldCaptureStack, grpcCodeFromError, errorContextFromError } from './AccountingManager.js';
-export type { Sink } from './AccountingManager.js';
+export {
+  ACCOUNTING_INTERNAL_HEADER,
+  Emitter,
+  LoggerSink,
+  addBytes,
+  grpcCodeFromError,
+  isAccountingInternal,
+  levelFor,
+  outcomeForCode,
+  reasonFor,
+  runWithMetrics,
+  setRecordsReturned,
+  setVerifiedCaller,
+} from './AccountingManager.js';
+export type { Level, Metrics, Outcome, Reason, Sink, Stage } from './AccountingManager.js';
 {{- if .HasAccountingRecord}}
 export { EventBusSink, methodLabel } from './AccountingManager.js';
+export type { SinkStats } from './AccountingManager.js';
 {{- end}}

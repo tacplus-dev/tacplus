@@ -17,12 +17,11 @@ package am
 
 import (
 	"context"
-	"fmt"
-	"runtime"
 	"strings"
 	{{if .HasAccountingRecord}}
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -39,6 +38,7 @@ import (
 	{{end}}
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	{{if .HasAccountingRecord}}
 	"google.golang.org/protobuf/proto"
@@ -82,44 +82,28 @@ func (e *Emitter) newEvent(level accounting_pb.EventLevel, identity map[string]s
 	}
 }
 
-// RpcCompleted emits an INFO RpcCompleted event.
-func (e *Emitter) RpcCompleted(ctx context.Context, method *accounting_method_pb.AccountingMethod,
-	durationMs int64, identity map[string]string, requestID string) {
-	ev := e.newEvent(accounting_pb.EventLevel_EVENT_LEVEL_INFO, identity, requestID)
+// Rpc emits the RPC record of one call: one RpcCompleted, whatever its outcome
+// (tacplus#273). err is the error the call ends with (nil when it succeeded),
+// stage how far the generated call path got, metrics what the handler attached
+// (nil for none). The record carries the outcome, the gRPC code and a typed
+// reason, never the error's text: that goes to the console at DEBUG only.
+func (e *Emitter) Rpc(ctx context.Context, method *accounting_method_pb.AccountingMethod, stage Stage,
+	err error, durationMs int64, metrics *accounting_pb.RpcMetrics, identity map[string]string, requestID string) {
+	code := GrpcCodeFromError(err)
+	outcome, reason := Classify(stage, code)
+	if outcome == accounting_pb.RpcOutcome_RPC_OUTCOME_FAILED && err != nil {
+		zap.L().Debug("rpc failed", zap.String("request_id", requestID), zap.String("stage", string(stage)),
+			zap.Error(err), zap.Stack("stack"))
+	}
+	ev := e.newEvent(LevelFor(outcome), identity, requestID)
 	ev.Event = &accounting_pb.Event_RpcCompleted{
 		RpcCompleted: &accounting_pb.RpcCompleted{
 			Method:     method,
 			DurationMs: durationMs,
-		},
-	}
-	e.sink.Emit(ctx, ev)
-}
-
-// RpcError emits an ERROR RpcError event.
-func (e *Emitter) RpcError(ctx context.Context, method *accounting_method_pb.AccountingMethod,
-	code int32, message string, durationMs int64, errCtx *accounting_pb.ErrorContext,
-	identity map[string]string, requestID string) {
-	ev := e.newEvent(accounting_pb.EventLevel_EVENT_LEVEL_ERROR, identity, requestID)
-	ev.Event = &accounting_pb.Event_RpcError{
-		RpcError: &accounting_pb.RpcError{
-			Method:       method,
-			Code:         code,
-			Message:      message,
-			DurationMs:   durationMs,
-			ErrorContext: errCtx,
-		},
-	}
-	e.sink.Emit(ctx, ev)
-}
-
-// TokenRejected emits a WARN TokenRejected event.
-func (e *Emitter) TokenRejected(ctx context.Context, reason string,
-	method *accounting_method_pb.AccountingMethod, identity map[string]string, requestID string) {
-	ev := e.newEvent(accounting_pb.EventLevel_EVENT_LEVEL_WARN, identity, requestID)
-	ev.Event = &accounting_pb.Event_TokenRejected{
-		TokenRejected: &accounting_pb.TokenRejected{
-			Reason: reason,
-			Method: method,
+			Outcome:    outcome,
+			Code:       int32(code),
+			Reason:     reason,
+			Metrics:    metrics,
 		},
 	}
 	e.sink.Emit(ctx, ev)
@@ -152,56 +136,62 @@ func (e *Emitter) StateUpdated(ctx context.Context, entityType, entityID string,
 	e.sink.Emit(ctx, ev)
 }
 
-// Diagnostic emits an ERROR Diagnostic event (escape hatch).
-func (e *Emitter) Diagnostic(ctx context.Context, message, errContext string,
-	errCtx *accounting_pb.ErrorContext, identity map[string]string, requestID string) {
-	ev := e.newEvent(accounting_pb.EventLevel_EVENT_LEVEL_ERROR, identity, requestID)
-	ev.Event = &accounting_pb.Event_Diagnostic{
-		Diagnostic: &accounting_pb.Diagnostic{
-			Message:      message,
-			Context:      errContext,
-			ErrorContext: errCtx,
-		},
-	}
-	e.sink.Emit(ctx, ev)
-}
-
 // ---------------------------------------------------------------------------
-// ErrorContext capture
+// Classification — rendered from the compiler's one table (accountingpolicy),
+// the same in Go, Java and Rust.
 // ---------------------------------------------------------------------------
 
-// CaptureErrorContext builds an ErrorContext from the current call site.
-// Captures caller (file:line) and function name cheaply via runtime.Caller.
-// Captures full stack trace only when shouldCaptureStack is true.
-func CaptureErrorContext(skip int, shouldCaptureStack bool) *accounting_pb.ErrorContext {
-	ec := &accounting_pb.ErrorContext{}
+// Stage is how far a generated call path got before the call ended.
+type Stage string
 
-	pc, file, line, ok := runtime.Caller(skip + 1)
-	if ok {
-		ec.Caller = fmt.Sprintf("%s:%d", file, line)
-		if fn := runtime.FuncForPC(pc); fn != nil {
-			ec.Function = fn.Name()
-		}
-	}
+const (
+	// StageAuth: authentication and the method's declared auth check.
+	StageAuth Stage = "AUTH"
+	// StageRequest: request validation and the declared pre-handler guards.
+	StageRequest Stage = "REQUEST"
+	// StageHandler: the handler.
+	StageHandler Stage = "HANDLER"
+	// StageResponse: the guards, filters and validation run on the response.
+	StageResponse Stage = "RESPONSE"
+)
 
-	if shouldCaptureStack {
-		buf := make([]byte, 4096)
-		n := runtime.Stack(buf, false)
-		ec.StackTrace = string(buf[:n])
-	}
-
-	return ec
-}
-
-// ShouldCaptureStack returns true for gRPC codes that indicate our bugs
-// (Internal, Unknown, DataLoss). Returns false for user errors
-// (InvalidArgument, Unauthenticated, PermissionDenied, etc.).
-func ShouldCaptureStack(code codes.Code) bool {
+// OutcomeFor is the outcome of a call that ended with code.
+func OutcomeFor(code codes.Code) accounting_pb.RpcOutcome {
 	switch code {
-	case codes.Internal, codes.Unknown, codes.DataLoss:
-		return true
+{{- range .Acct.CodeOutcomes}}
+	case {{.Code}}: // {{.Name}}
+		return accounting_pb.RpcOutcome_RPC_OUTCOME_{{.Outcome}}
+{{- end}}
 	default:
-		return false
+		return accounting_pb.RpcOutcome_RPC_OUTCOME_{{.Acct.DefaultOutcome}}
+	}
+}
+
+// Classify returns the outcome of a call that ended with code, and the reason
+// of one that stopped at stage. A permitted call has no reason.
+func Classify(stage Stage, code codes.Code) (accounting_pb.RpcOutcome, accounting_pb.RpcReason) {
+	outcome := OutcomeFor(code)
+	switch {
+	case outcome == accounting_pb.RpcOutcome_RPC_OUTCOME_PERMITTED:
+		return outcome, accounting_pb.RpcReason_RPC_REASON_UNDEFINED
+{{- range .Acct.StageReasons}}
+	case stage == "{{.Stage}}" && outcome == accounting_pb.RpcOutcome_RPC_OUTCOME_{{.Outcome}}:
+		return outcome, accounting_pb.RpcReason_RPC_REASON_{{.Reason}}
+{{- end}}
+	default:
+		return outcome, accounting_pb.RpcReason_RPC_REASON_INTERNAL
+	}
+}
+
+// LevelFor is the event level of an RPC record with the outcome.
+func LevelFor(outcome accounting_pb.RpcOutcome) accounting_pb.EventLevel {
+	switch outcome {
+{{- range .Acct.OutcomeLevels}}
+	case accounting_pb.RpcOutcome_RPC_OUTCOME_{{.Outcome}}:
+		return accounting_pb.EventLevel_EVENT_LEVEL_{{.Level}}
+{{- end}}
+	default:
+		return accounting_pb.EventLevel_EVENT_LEVEL_ERROR
 	}
 }
 
@@ -217,36 +207,66 @@ func GrpcCodeFromError(err error) codes.Code {
 	return codes.Unknown
 }
 
-// ErrorContextFromError extracts ErrorContext from an error.
-// If the error is an *ErrorWithCaller (our enhanced error type), it uses the
-// caller info captured at error creation. Otherwise, captures from the current
-// call site.
-func ErrorContextFromError(err error, shouldCaptureStack bool) *accounting_pb.ErrorContext {
-	// Try to extract caller info from our enhanced error type.
-	// ErrorWithCaller is defined in the errors package — we use the interface
-	// pattern to avoid an import cycle.
-	type callerProvider interface {
-		CallerFile() string
-		CallerLine() int
-		CallerFunction() string
-	}
-	if cp, ok := err.(callerProvider); ok {
-		ec := &accounting_pb.ErrorContext{
-			Caller:   fmt.Sprintf("%s:%d", cp.CallerFile(), cp.CallerLine()),
-			Function: cp.CallerFunction(),
-		}
-		if shouldCaptureStack {
-			// Stack trace from creation site is not available via the error;
-			// capture current stack as a fallback.
-			buf := make([]byte, 4096)
-			n := runtime.Stack(buf, false)
-			ec.StackTrace = string(buf[:n])
-		}
-		return ec
-	}
+// ---------------------------------------------------------------------------
+// Metrics a handler attaches to its call's record
+// ---------------------------------------------------------------------------
 
-	// Fallback: capture from current call site (skip this function + caller).
-	return CaptureErrorContext(1, shouldCaptureStack)
+// MetricsKey is the context key of a call's RpcMetrics. The generated
+// wrapper's sanitized handler context passes it through, and nothing else.
+type MetricsKey struct{}
+
+// WithMetrics returns ctx carrying a fresh RpcMetrics for one call, and the
+// metrics. The generated wrapper installs it around the handler.
+func WithMetrics(ctx context.Context) (context.Context, *accounting_pb.RpcMetrics) {
+	m := &accounting_pb.RpcMetrics{}
+	return context.WithValue(ctx, MetricsKey{}, m), m
+}
+
+func metricsFrom(ctx context.Context) *accounting_pb.RpcMetrics {
+	m, _ := ctx.Value(MetricsKey{}).(*accounting_pb.RpcMetrics)
+	return m
+}
+
+// SetRecordsReturned records how many records the call returns (a query's
+// rows) on the call's accounting record. Outside an accounted call it does
+// nothing.
+func SetRecordsReturned(ctx context.Context, n int64) {
+	if m := metricsFrom(ctx); m != nil {
+		m.RecordsReturned = n
+	}
+}
+
+// AddBytes adds n payload bytes to the call's accounting record. Outside an
+// accounted call it does nothing.
+func AddBytes(ctx context.Context, n int64) {
+	if m := metricsFrom(ctx); m != nil {
+		m.Bytes += n
+	}
+}
+
+// MetricsOrNil returns m, or nil when the handler attached nothing, so an
+// unreported record carries no metrics message.
+func MetricsOrNil(m *accounting_pb.RpcMetrics) *accounting_pb.RpcMetrics {
+	if m == nil || (m.RecordsReturned == 0 && m.Bytes == 0) {
+		return nil
+	}
+	return m
+}
+
+// ---------------------------------------------------------------------------
+// The accounting_internal marker
+// ---------------------------------------------------------------------------
+
+// AccountingInternalHeader is the metadata a call made to store accounting
+// carries. A wrapper that sees it on a call whose verified caller is a service
+// emits no accounting for that call, so storing accounting never produces
+// accounting. A user's call is recorded with or without it.
+const AccountingInternalHeader = "{{.Acct.InternalHeader}}"
+
+// IsAccountingInternal reports whether the incoming call carries the marker.
+func IsAccountingInternal(ctx context.Context) bool {
+	md, ok := metadata.FromIncomingContext(ctx)
+	return ok && len(md.Get(AccountingInternalHeader)) > 0
 }
 
 // ---------------------------------------------------------------------------
@@ -276,27 +296,15 @@ func (LoggerSink) Emit(_ context.Context, event *accounting_pb.Event) error {
 		fields = append(fields,
 			zap.String("event", "rpc_completed"),
 			zap.Any("method", payload.RpcCompleted.Method),
+			zap.String("outcome", payload.RpcCompleted.Outcome.String()),
+			zap.Int32("code", payload.RpcCompleted.Code),
+			zap.String("reason", payload.RpcCompleted.Reason.String()),
 			zap.Int64("duration_ms", payload.RpcCompleted.DurationMs))
-	case *accounting_pb.Event_RpcError:
-		fields = append(fields,
-			zap.String("event", "rpc_error"),
-			zap.Any("method", payload.RpcError.Method),
-			zap.Int32("code", payload.RpcError.Code),
-			zap.String("error", payload.RpcError.Message),
-			zap.Int64("duration_ms", payload.RpcError.DurationMs))
-		if ec := payload.RpcError.ErrorContext; ec != nil {
+		if m := payload.RpcCompleted.Metrics; m != nil {
 			fields = append(fields,
-				zap.String("caller", ec.Caller),
-				zap.String("function", ec.Function))
-			if ec.StackTrace != "" {
-				fields = append(fields, zap.String("stack_trace", ec.StackTrace))
-			}
+				zap.Int64("records_returned", m.RecordsReturned),
+				zap.Int64("bytes", m.Bytes))
 		}
-	case *accounting_pb.Event_TokenRejected:
-		fields = append(fields,
-			zap.String("event", "token_rejected"),
-			zap.String("reason", payload.TokenRejected.Reason),
-			zap.Any("method", payload.TokenRejected.Method))
 	case *accounting_pb.Event_SessionSummary:
 		fields = append(fields,
 			zap.String("event", "session_summary"),
@@ -320,45 +328,6 @@ func (LoggerSink) Emit(_ context.Context, event *accounting_pb.Event) error {
 			zap.String("entity_type", payload.StateUpdated.EntityType),
 			zap.String("entity_id", payload.StateUpdated.EntityId),
 			zap.String("action", payload.StateUpdated.Action.String()))
-	case *accounting_pb.Event_CommandExecuted:
-		fields = append(fields,
-			zap.String("event", "command_executed"),
-			zap.String("tool", payload.CommandExecuted.Tool),
-			zap.String("command", payload.CommandExecuted.Command),
-			zap.Int64("duration_ms", payload.CommandExecuted.DurationMs),
-			zap.Bool("success", payload.CommandExecuted.Success))
-		if payload.CommandExecuted.ErrorMessage != "" {
-			fields = append(fields, zap.String("error_message", payload.CommandExecuted.ErrorMessage))
-		}
-	case *accounting_pb.Event_ToolUsed:
-		fields = append(fields,
-			zap.String("event", "tool_used"),
-			zap.String("tool_name", payload.ToolUsed.ToolName),
-			zap.Int64("duration_ms", payload.ToolUsed.DurationMs),
-			zap.String("session_id", payload.ToolUsed.SessionId))
-	case *accounting_pb.Event_SubagentStarted:
-		fields = append(fields,
-			zap.String("event", "subagent_started"),
-			zap.String("agent_type", payload.SubagentStarted.AgentType),
-			zap.String("session_id", payload.SubagentStarted.SessionId))
-	case *accounting_pb.Event_FileModified:
-		fields = append(fields,
-			zap.String("event", "file_modified"),
-			zap.String("path", payload.FileModified.Path),
-			zap.String("action", payload.FileModified.Action.String()))
-	case *accounting_pb.Event_Diagnostic:
-		fields = append(fields,
-			zap.String("event", "diagnostic"),
-			zap.String("message", payload.Diagnostic.Message),
-			zap.String("context", payload.Diagnostic.Context))
-		if ec := payload.Diagnostic.ErrorContext; ec != nil {
-			fields = append(fields,
-				zap.String("caller", ec.Caller),
-				zap.String("function", ec.Function))
-			if ec.StackTrace != "" {
-				fields = append(fields, zap.String("stack_trace", ec.StackTrace))
-			}
-		}
 	}
 
 	switch event.Level {
@@ -480,6 +449,8 @@ type EventBusSink struct {
 	stop    <-chan struct{}
 	seq     atomic.Uint64
 	dropped atomic.Uint64
+	// ingested counts the records Emit accepted into the spool.
+	ingested atomic.Uint64
 	// disk is the durable spool, nil for the memory spool. acks carries one
 	// signal per record the publisher has acknowledged, in order.
 	disk *accountingDiskSpool
@@ -809,16 +780,19 @@ func (s *EventBusSink) flatten(event *accounting_pb.Event) *accountingrecord_pb.
 	var method string
 	var code int32
 	var durationMs int64
+	var outcome accounting_pb.RpcOutcome
+	var reason accounting_pb.RpcReason
+	var recordsReturned, bytes int64
 	switch payload := event.Event.(type) {
 	case *accounting_pb.Event_RpcCompleted:
-		method = MethodLabel(payload.RpcCompleted.Method)
-		durationMs = payload.RpcCompleted.DurationMs
-	case *accounting_pb.Event_RpcError:
-		method = MethodLabel(payload.RpcError.Method)
-		code = payload.RpcError.Code
-		durationMs = payload.RpcError.DurationMs
-	case *accounting_pb.Event_TokenRejected:
-		method = MethodLabel(payload.TokenRejected.Method)
+		rc := payload.RpcCompleted
+		method = MethodLabel(rc.Method)
+		code = rc.Code
+		durationMs = rc.DurationMs
+		outcome = rc.Outcome
+		reason = rc.Reason
+		recordsReturned = rc.GetMetrics().GetRecordsReturned()
+		bytes = rc.GetMetrics().GetBytes()
 	}
 	return &accountingrecord_pb.AccountingRecord{
 		AccountingId: s.nextAccountingID(event.TimestampMs),
@@ -829,9 +803,32 @@ func (s *EventBusSink) flatten(event *accounting_pb.Event) *accountingrecord_pb.
 		Method:       method,
 		Code:         code,
 		DurationMs:   durationMs,
+		Outcome:      outcome,
+		Reason:       reason,
+		// Typed numbers only: accounting carries no data (tacplus#273).
+		RecordsReturned: recordsReturned,
+		Bytes:           bytes,
 		// The principal the Authorizer verified, not a caller-written header.
 		PrincipalSub: event.Identity["sub"],
 	}
+}
+
+// SinkStats is the accounting pipeline's own health. It is counted, never
+// recorded: a record about the pipeline would itself go down the pipeline
+// (tacplus#273).
+type SinkStats struct {
+	// Ingested is the records Emit accepted into the spool.
+	Ingested uint64
+	// Dropped is the records dropped: the spool was full, or the service was
+	// shutting down.
+	Dropped uint64
+	// Depth is the records in the in-memory spool, not yet handed on.
+	Depth int
+}
+
+// Stats returns the sink's counters.
+func (s *EventBusSink) Stats() SinkStats {
+	return SinkStats{Ingested: s.ingested.Load(), Dropped: s.dropped.Load(), Depth: len(s.spool)}
 }
 
 // Emit flattens event and spools it without waiting on the publisher. It returns
@@ -850,6 +847,7 @@ func (s *EventBusSink) Emit(_ context.Context, event *accounting_pb.Event) error
 	}
 	select {
 	case s.spool <- record:
+		s.ingested.Add(1)
 		return nil
 	default:
 		total := s.dropped.Add(1)

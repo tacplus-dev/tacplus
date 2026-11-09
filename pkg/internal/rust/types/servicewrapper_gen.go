@@ -876,34 +876,6 @@ func rustProstEnumVariant(upperSnake string) string {
 	return strutil.UpperSnakeCaseToPascalCase(upperSnake)
 }
 
-// buildRustAccountingBlock generates the Rust accounting emit code for a single RPC method.
-// Returns empty string if the service has no matching AccountingMethod entry.
-// accountingMap maps grpcName → AccountingInfo (EnumName + valid RPCs).
-func buildRustAccountingBlock(method *parser.MethodInfo, grpcName, svcProtoName string, accountingMap map[string]service.AccountingInfo) string {
-	methodLiteral := rustAccountingMethodLiteral(method, grpcName, accountingMap)
-	if methodLiteral == "" {
-		return ""
-	}
-
-	return fmt.Sprintf(`
-        // Emit accounting event
-        {
-            let emitter_guard = self.emitter.read().await;
-            if let Some(ref emitter) = *emitter_guard {
-                let method = %s;
-                match &result {
-                    Ok(_) => {
-                        emitter.rpc_completed(method, duration_ms, __tacplus_caller_identity.clone(), &request_id).await;
-                    }
-                    Err(status) => {
-                        let err_ctx = am::error_context_from_status(status);
-                        emitter.rpc_error(method, status.code() as i32, status.message(), duration_ms, Some(err_ctx), __tacplus_caller_identity.clone(), &request_id).await;
-                    }
-                }
-            }
-        }`, methodLiteral)
-}
-
 func rustAccountingMethodLiteral(method *parser.MethodInfo, grpcName string, accountingMap map[string]service.AccountingInfo) string {
 	info, ok := accountingMap[grpcName]
 	if !ok || !info.RPCs[method.Name] {
@@ -927,6 +899,63 @@ AccountingMethod {
             %s: services_pb::%s::%s as i32,
             ..Default::default()
         }`, fieldName, rustEnumType, rustEnumVariant)
+}
+
+// rustAccountedMethod wraps a rendered method wrapper so the call is accounted
+// exactly once on every exit path (tacplus#273). The accounting Call starts
+// before authentication, noting the accounting_internal marker (honored only
+// for a verified SERVICE caller, see rustAccountedAuthLine); the body runs as an async block whose every `?` and
+// `return` lands on the single finish below. A response stream is accounted
+// when it ends (am::AccountedStream).
+//
+// The body is the method as rendered, already carrying its stage seams:
+// rustAccountedAuthLine after auth, awaitHandler around the handler call.
+func rustAccountedMethod(rendered string, method *parser.MethodInfo, methodLiteral string) (string, error) {
+	sig := strings.Index(rendered, ") -> ")
+	if sig < 0 {
+		return "", fmt.Errorf("accounting %s: no return type in the rendered wrapper", method.Name)
+	}
+	open := strings.Index(rendered[sig:], " {\n")
+	end := strings.LastIndex(rendered, "}")
+	if open < 0 || end < sig+open {
+		return "", fmt.Errorf("accounting %s: no body in the rendered wrapper", method.Name)
+	}
+	open += sig
+	ret := rendered[sig+len(") -> ") : open]
+	head := rendered[:open+len(" {\n")]
+	body := strings.TrimRight(rendered[open+len(" {\n"):end], " \t\n")
+
+	var b strings.Builder
+	b.WriteString(head)
+	fmt.Fprintf(&b, `        // Accounting (tacplus#273): exactly one record for this call, whatever
+        // its exit path, classified by the stage the call reached.
+        let __tacplus_call = am::Call::start(
+            self.emitter.read().await.clone(),
+            %s,
+            &servicemanager::auth::extract_request_id(&request),
+            am::accounting_internal(request.metadata()),
+        );
+        let __tacplus_result: %s = async {
+%s
+        }.await;
+`, strings.TrimSpace(methodLiteral), ret, body)
+	if method.ServerStreaming {
+		fmt.Fprintf(&b, `        match __tacplus_result {
+            Ok(response) => Ok(response.map(|stream| {
+                Box::pin(am::AccountedStream::new(__tacplus_call, stream)) as Self::%sStream
+            })),
+            Err(status) => {
+                __tacplus_call.finish(Some(&status)).await;
+                Err(status)
+            }
+        }
+    }`, method.Name)
+	} else {
+		b.WriteString(`        __tacplus_call.finish(__tacplus_result.as_ref().err()).await;
+        __tacplus_result
+    }`)
+	}
+	return b.String(), nil
 }
 
 // rustCallerIdentityVar is the local the generated wrapper binds the
@@ -965,6 +994,37 @@ func rustCallerUnverified(svc *parser.ServiceInfo, method *parser.MethodInfo) bo
 // When target_namespace_field is set on a non-client-streaming method, also emit a
 // level-or-below check using the named request field.
 func rustAuthLine(svc *parser.ServiceInfo, method *parser.MethodInfo, fullMethod string) string {
+	return rustAuthLineWith(svc, method, fullMethod, false)
+}
+
+// rustAccountedAuthLine is rustAuthLine on an accounted method: the verified
+// identity is handed to the accounting Call the moment the authorizer returns
+// it, and the call moves to Stage::Request once every auth check has passed.
+// A call refused here is accounted at Stage::Auth with no identity.
+func rustAccountedAuthLine(svc *parser.ServiceInfo, method *parser.MethodInfo, fullMethod string) string {
+	return rustAuthLineWith(svc, method, fullMethod, true) + "\n        __tacplus_call.stage(am::Stage::Request);"
+}
+
+// rustServiceCallerExpr reports whether the request's bearer token is a
+// SERVICE principal's (sub_type exactly "service"). It is only evaluated after
+// the authorizer verified that same header, so the re-parse is safe for the
+// same reason rustCallerExtraction's is. Only a service caller's
+// accounting_internal marker is honored: a user (or workload) token carrying
+// the header is still recorded.
+const rustServiceCallerExpr = `request.metadata()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .and_then(|t| token::Token::parse(t).ok())
+            .is_some_and(|t| t.sub_type() == Some("service"))`
+
+func rustAuthLineWith(svc *parser.ServiceInfo, method *parser.MethodInfo, fullMethod string, accounted bool) string {
+	// verified is the statement that hands the authorizer-verified identity
+	// to the accounting Call.
+	verified := ""
+	if accounted {
+		verified = "\n        __tacplus_call.authenticated(&" + rustCallerIdentityVar + ", " + rustServiceCallerExpr + ");"
+	}
 	var base string
 	// c2d (client-to-daemon) services are local IPC over a unix-domain
 	// socket whose filesystem permissions (0600, owner-only) are the access
@@ -984,12 +1044,12 @@ func rustAuthLine(svc *parser.ServiceInfo, method *parser.MethodInfo, fullMethod
 		// exactly at "/", denying every real caller.
 		targetNamespace := strings.TrimSpace(method.TargetNamespaceField)
 		if targetNamespace == "" {
-			base = fmt.Sprintf("let %s = self.enforce_authenticated(\"%s\", &request).await?;", rustCallerIdentityVar, fullMethod)
+			base = fmt.Sprintf("let %s = self.enforce_authenticated(\"%s\", &request).await?;", rustCallerIdentityVar, fullMethod) + verified
 		} else {
-			base = fmt.Sprintf("let %s = self.enforce_at_or_below(\"%s\", &request, %q).await?;", rustCallerIdentityVar, fullMethod, targetNamespace)
+			base = fmt.Sprintf("let %s = self.enforce_at_or_below(\"%s\", &request, %q).await?;", rustCallerIdentityVar, fullMethod, targetNamespace) + verified
 		}
 	} else {
-		base = fmt.Sprintf("let %s = self.authorize_method(\"%s\", &request).await?;", rustCallerIdentityVar, fullMethod)
+		base = fmt.Sprintf("let %s = self.authorize_method(\"%s\", &request).await?;", rustCallerIdentityVar, fullMethod) + verified
 	}
 
 	// target_namespace_field: emit level-or-below enforcement using direct field access.
@@ -1240,8 +1300,34 @@ func rustFromRevisionExpr(method *parser.MethodInfo) string {
 // generateRustGRPCWrapper generates a gRPC method wrapper with validation for ValidationWrapper.
 // grpcName is the service's grpc_config name (e.g. "sentinel") used to construct the AccountingMethod.
 func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, grpcName string, accountingMap map[string]service.AccountingInfo, skippedTraceTypes proto.SkippedTraceTypes, san *rustEgressSanitizer) (string, error) {
+	rendered, err := renderRustGRPCWrapper(svc, method, servicePackage, parentDir, crossPkgTypes, grpcName, accountingMap, skippedTraceTypes, san)
+	if err != nil {
+		return "", err
+	}
+	methodLiteral := rustAccountingMethodLiteral(method, grpcName, accountingMap)
+	if methodLiteral == "" {
+		return rendered, nil
+	}
+	return rustAccountedMethod(rendered, method, methodLiteral)
+}
+
+// renderRustGRPCWrapper renders the method wrapper. On an accounted method its
+// auth line and handler call carry the accounting stage seams;
+// generateRustGRPCWrapper then wraps the whole body so every exit path is
+// accounted exactly once.
+func renderRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, grpcName string, accountingMap map[string]service.AccountingInfo, skippedTraceTypes proto.SkippedTraceTypes, san *rustEgressSanitizer) (string, error) {
 	methodSnake := prostSnakeName(method.Name)
 	fullMethod := fmt.Sprintf("/%s/%s.%s/%s", parentDir, servicePackage, svc.Name, method.Name)
+	hasAccounting := rustAccountingMethodLiteral(method, grpcName, accountingMap) != ""
+	// awaitHandler awaits a handler call. On an accounted method the call runs
+	// through the accounting Call: stage HANDLER, the call's metrics in scope,
+	// stage RESPONSE once it succeeds.
+	awaitHandler := func(call string) string {
+		if hasAccounting {
+			return "__tacplus_call.handler(" + call + ").await"
+		}
+		return call + ".await"
+	}
 
 	// The peer half of a record query plane, whoever hosts it. It is the one
 	// s2s surface whose caller can be either a /system peer (fleet-wide, as
@@ -1260,6 +1346,9 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	recordPlaneS2S := !svc.IsC2S && svc.SynthesizedKind == parser.SynthesizedKindRecordMap
 	inputType, outputType := resolveRustTypeQualified(method, servicePackage, crossPkgTypes)
 	authLine := rustAuthLine(svc, method, fullMethod)
+	if hasAccounting {
+		authLine = rustAccountedAuthLine(svc, method, fullMethod)
+	}
 
 	emptyInput := method.FullInputType == "google.protobuf.Empty"
 	handlerEmpty := emptyInput || method.FullInputType == "trace.TraceRequest"
@@ -1289,11 +1378,6 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	if ownerDefaultGuard != "" && (handlerEmpty || method.StreamingType() != "unary" || method.IsPageCollection()) {
 		return "", fmt.Errorf("%s touches a type declaring (spec.owner_default) that contradicts its access, but its %s request shape has no validation seam at which the caller can be compared to the row's principal", method.Name, method.StreamingType())
 	}
-	hasAccounting := false
-	if amInfo, ok := accountingMap[grpcName]; ok {
-		hasAccounting = amInfo.RPCs[method.Name]
-	}
-
 	// Trace v2: event-based tracing with Herald-issued trace_id.
 	// A non-empty trace_id publishes a TraceEvent at this hop. If noop=true,
 	// the handler is skipped and a default response is returned. If noop=false
@@ -1395,11 +1479,6 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	if method.ClientStreaming || method.ServerStreaming {
 		streamType := fmt.Sprintf(responseStreamFmt, outputType)
 
-		// Build streaming accounting block
-		var streamAccountingBlock string
-		if hasAccounting {
-			streamAccountingBlock = buildRustAccountingBlock(method, grpcName, svc.Name, accountingMap)
-		}
 		serverStreamInputValidation := rustServerRequestValidationBlock("request.get_ref()", method.FullInputType) +
 			rustRouteCheck(method, "self", "request.get_ref()", "        ")
 		// (spec.principal)/(spec.namespace) on a server-streaming request. The
@@ -1433,9 +1512,9 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 		// returns a materialized Vec; chunk it into the stream (tonic/tokio apply
 		// backpressure). Output validation, if any, runs per item.
 		if !method.ClientStreaming && method.ServerStreaming && method.IsTier2SnapshotCollection() {
-			tier2HandlerCall := fmt.Sprintf("self.handler.%s(caller.as_ref(), %s).await", methodSnake, serverStreamReqExpr)
+			tier2HandlerCall := awaitHandler(fmt.Sprintf("self.handler.%s(caller.as_ref(), %s)", methodSnake, serverStreamReqExpr))
 			if handlerEmpty {
-				tier2HandlerCall = fmt.Sprintf("self.handler.%s(caller.as_ref()).await", methodSnake)
+				tier2HandlerCall = awaitHandler(fmt.Sprintf("self.handler.%s(caller.as_ref())", methodSnake))
 			}
 			streamExpr := "tokio_stream::iter(items.into_iter().map(Ok::<_, tonic::Status>))"
 			if rustW2SCanValidate(method.FullOutputType) {
@@ -1452,29 +1531,6 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 				streamExpr = "{\n            let items: Vec<_> = items.into_iter().map(|m| " + t.sanitizeExpr("&m") + ").collect();\n            " + streamExpr + "\n            }"
 			}
 			serverStreamInputValidation := tier2Pre
-			if hasAccounting {
-				return fmt.Sprintf(`    type %sStream = %s;
-
-    async fn %s(
-        &self,
-        request: tonic::Request<%s>,
-    ) -> Result<tonic::Response<Self::%sStream>, tonic::Status> {
-        %s
-        let request_id = servicemanager::auth::extract_request_id(&request);
-        let caller: Option<servicemanager::auth::Caller> = None;
-        tracing::debug!(method = "%s", request_id = %%request_id, "rpc");
-        let start = std::time::Instant::now();
-        let result = async {
-%s
-            let items = %s?;
-            let stream = %s;
-            Ok(tonic::Response::new(Box::pin(stream) as Self::%sStream))
-        }.await;
-        let duration_ms = start.elapsed().as_millis() as i64;
-%s
-        result
-    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, serverStreamInputValidation, tier2HandlerCall, streamExpr, method.Name, streamAccountingBlock), nil
-			}
 			return fmt.Sprintf(`    type %sStream = %s;
 
     async fn %s(
@@ -1498,9 +1554,9 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 			itemType, changeType := rustWatchTypes(method, servicePackage, crossPkgTypes)
 			oneofPath := rustOneofEnumPath(outputType, method.OutputType, method.Resolved.WatchOneOf)
 			fieldName := methodSnakeNameLower(method.Name) + "_watch_hub"
-			handlerCall := fmt.Sprintf("self.handler.%s(caller.as_ref(), req_msg).await", methodSnake)
+			handlerCall := awaitHandler(fmt.Sprintf("self.handler.%s(caller.as_ref(), req_msg)", methodSnake))
 			if handlerEmpty {
-				handlerCall = fmt.Sprintf("self.handler.%s(caller.as_ref()).await", methodSnake)
+				handlerCall = awaitHandler(fmt.Sprintf("self.handler.%s(caller.as_ref())", methodSnake))
 			}
 			validateEnvelope := ""
 			if rustW2SCanValidate(method.FullOutputType) {
@@ -1567,68 +1623,9 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 			watchPre += rustWatchEgressPreamble(watchEgress, method.Name, recordPlaneS2S)
 			itemSan = rustWatchEgressGuardStmts(watchEgress.Item, "item", method.Name, "                            ", recordPlaneS2S) + itemSan
 			changeSan = rustWatchEgressGuardStmts(watchEgress.Change, "change", method.Name, "                        ", recordPlaneS2S) + changeSan
-			accountingSetup := ""
 			sendClosed := "return;"
 			sendErr := `let _ = tx.send(Err(err)).await;
                             return;`
-			completed := ""
-			if hasAccounting {
-				methodLiteral := rustAccountingMethodLiteral(method, grpcName, accountingMap)
-				accountingSetup = fmt.Sprintf(`
-        let __tacplus_accounting_start = std::time::Instant::now();
-        let __tacplus_accounting_method = %s;
-        let __tacplus_emitter = self.emitter.clone();
-        let __tacplus_request_id = request_id.clone();
-        let __tacplus_accounting_identity = __tacplus_caller_identity.clone();
-        macro_rules! __tacplus_watch_rpc_error {
-            ($status:expr) => {{
-                let duration_ms = __tacplus_accounting_start.elapsed().as_millis() as i64;
-                let emitter_guard = __tacplus_emitter.read().await;
-                if let Some(ref emitter) = *emitter_guard {
-                    let err_ctx = am::error_context_from_status(&$status);
-                    emitter.rpc_error(
-                        __tacplus_accounting_method.clone(),
-                        $status.code() as i32,
-                        $status.message(),
-                        duration_ms,
-                        Some(err_ctx),
-                        __tacplus_accounting_identity.clone(),
-                        &__tacplus_request_id,
-                    ).await;
-                }
-            }};
-        }
-        macro_rules! __tacplus_watch_rpc_completed {
-            () => {{
-                let duration_ms = __tacplus_accounting_start.elapsed().as_millis() as i64;
-                let emitter_guard = __tacplus_emitter.read().await;
-                if let Some(ref emitter) = *emitter_guard {
-                    emitter.rpc_completed(
-                        __tacplus_accounting_method.clone(),
-                        duration_ms,
-                        __tacplus_accounting_identity.clone(),
-                        &__tacplus_request_id,
-                    ).await;
-                }
-            }};
-        }
-`, methodLiteral)
-				sourceBinding = fmt.Sprintf(`let source: collection::WatchSource<%s, %s> = match %s {
-            Ok(source) => source,
-            Err(status) => {
-                __tacplus_watch_rpc_error!(status);
-                return Err(status);
-            }
-        };`, itemType, changeType, handlerCall)
-				sendClosed = `let status = tonic::Status::cancelled("client closed Watch stream");
-                                __tacplus_watch_rpc_error!(status);
-                                return;`
-				sendErr = `__tacplus_watch_rpc_error!(err);
-                            let _ = tx.send(Err(err)).await;
-                            return;`
-				completed = `
-            __tacplus_watch_rpc_completed!();`
-			}
 			return fmt.Sprintf(`    type %sStream = %s;
 
     async fn %s(
@@ -1680,26 +1677,25 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
                     }
                 }
             }
-%s
         });
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         Ok(tonic::Response::new(Box::pin(stream) as Self::%sStream))
-    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, serverStreamInputValidation+watchPre+accountingSetup,
+    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, serverStreamInputValidation+watchPre,
 				serverStreamReqExpr, rustFromRevisionExpr(method),
 				sourceBinding, fieldName, changeType, prostSnakeName(method.Resolved.WatchRevisionField),
 				itemSan, outputType, method.Resolved.WatchOneOf, oneofPath, validateEnvelope, sendClosed,
 				sendErr,
 				outputType, method.Resolved.WatchOneOf, oneofPath, validateEnvelope, sendClosed,
 				changeSan, outputType, method.Resolved.WatchOneOf, oneofPath, validateEnvelope, sendClosed,
-				sendErr, completed,
+				sendErr,
 				method.Name), nil
 		}
 
 		// Streaming methods - extract caller, delegate to handler
 		if !method.ClientStreaming && method.ServerStreaming {
-			handlerCall := fmt.Sprintf("self.handler.%s(caller.as_ref(), %s).await", methodSnake, serverStreamReqExpr)
+			handlerCall := awaitHandler(fmt.Sprintf("self.handler.%s(caller.as_ref(), %s)", methodSnake, serverStreamReqExpr))
 			if handlerEmpty {
-				handlerCall = fmt.Sprintf("self.handler.%s(caller.as_ref()).await", methodSnake)
+				handlerCall = awaitHandler(fmt.Sprintf("self.handler.%s(caller.as_ref())", methodSnake))
 			}
 			// Egress data entitlement: the handler returns the stream itself (this is
 			// also the Tier-3 SNAPSHOT cursor route in Rust) — wrap it so every
@@ -1735,28 +1731,6 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 			// quiet at exactly N-1 discloses the crossing by silence.
 			streamResponseReturn = rustMinGroupSizeStreamGuard(method, san.minGroupSizeField(method.FullOutputType, servicePackage)) +
 				lazySan + streamResponseReturn
-			if hasAccounting {
-				return fmt.Sprintf(`    type %sStream = %s;
-
-    async fn %s(
-        &self,
-        request: tonic::Request<%s>,
-    ) -> Result<tonic::Response<Self::%sStream>, tonic::Status> {
-        %s
-        let request_id = servicemanager::auth::extract_request_id(&request);
-	        let caller: Option<servicemanager::auth::Caller> = None;
-	        tracing::debug!(method = "%s", request_id = %%request_id, "rpc");
-	        let start = std::time::Instant::now();
-	        let result = async {
-	%s
-	            let response = %s?;
-	%s
-	        }.await;
-	        let duration_ms = start.elapsed().as_millis() as i64;
-	%s
-	        result
-	    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, serverStreamInputValidation, handlerCall, streamResponseReturn, streamAccountingBlock), nil
-			}
 			return fmt.Sprintf(`    type %sStream = %s;
 
     async fn %s(
@@ -1772,28 +1746,6 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	%s
 	    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, serverStreamInputValidation, handlerCall, streamResponseReturn), nil
 		} else if method.ClientStreaming && method.ServerStreaming {
-			if hasAccounting {
-				return fmt.Sprintf(`    type %sStream = %s;
-
-    async fn %s(
-        &self,
-        request: tonic::Request<tonic::Streaming<%s>>,
-    ) -> Result<tonic::Response<Self::%sStream>, tonic::Status> {
-        %s
-        let request_id = servicemanager::auth::extract_request_id(&request);
-	        let caller: Option<servicemanager::auth::Caller> = None;
-	        tracing::debug!(method = "%s", request_id = %%request_id, "rpc");
-	        let start = std::time::Instant::now();
-	%s
-	        let result = async {
-	            let response = self.handler.%s(caller.as_ref(), request).await?;
-	%s
-	        }.await;
-	        let duration_ms = start.elapsed().as_millis() as i64;
-	%s
-	        result
-	    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, requestStreamBlock, methodSnake, streamResponseReturn, streamAccountingBlock), nil
-			}
 			return fmt.Sprintf(`    type %sStream = %s;
 
     async fn %s(
@@ -1805,32 +1757,11 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	        let caller: Option<servicemanager::auth::Caller> = None;
 	        tracing::debug!(method = "%s", request_id = %%request_id, "rpc");
 	%s
-	        let response = self.handler.%s(caller.as_ref(), request).await?;
+	        let response = %s?;
 	%s
-	    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, requestStreamBlock, methodSnake, streamResponseReturn), nil
+	    }`, method.Name, streamType, methodSnake, inputType, method.Name, authLine, fullMethod, requestStreamBlock, awaitHandler(fmt.Sprintf("self.handler.%s(caller.as_ref(), request)", methodSnake)), streamResponseReturn), nil
 		} else {
 			// Client streaming only
-			if hasAccounting {
-				return fmt.Sprintf(`    async fn %s(
-        &self,
-        request: tonic::Request<tonic::Streaming<%s>>,
-    ) -> Result<tonic::Response<%s>, tonic::Status> {
-        %s
-        let request_id = servicemanager::auth::extract_request_id(&request);
-	        let caller: Option<servicemanager::auth::Caller> = None;
-	        tracing::debug!(method = "%s", request_id = %%request_id, "rpc");
-	        let start = std::time::Instant::now();
-	%s
-	        let result = async {
-	            let response = self.handler.%s(caller.as_ref(), request).await?;
-	%s
-	            Ok(response)
-	        }.await;
-	        let duration_ms = start.elapsed().as_millis() as i64;
-	%s
-	        result
-	    }`, methodSnake, inputType, outputType, authLine, fullMethod, requestStreamBlock, methodSnake, unaryStreamResponseValidation, streamAccountingBlock), nil
-			}
 			return fmt.Sprintf(`    async fn %s(
 	        &self,
         request: tonic::Request<tonic::Streaming<%s>>,
@@ -1840,15 +1771,12 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	        let caller: Option<servicemanager::auth::Caller> = None;
 	        tracing::debug!(method = "%s", request_id = %%request_id, "rpc");
 	%s
-	        let response = self.handler.%s(caller.as_ref(), request).await?;
+	        let response = %s?;
 	%s
 	        Ok(response)
-	    }`, methodSnake, inputType, outputType, authLine, fullMethod, requestStreamBlock, methodSnake, unaryStreamResponseValidation), nil
+	    }`, methodSnake, inputType, outputType, authLine, fullMethod, requestStreamBlock, awaitHandler(fmt.Sprintf("self.handler.%s(caller.as_ref(), request)", methodSnake)), unaryStreamResponseValidation), nil
 		}
 	}
-
-	// Build accounting emit block for unary methods
-	accountingBlock := buildRustAccountingBlock(method, grpcName, svc.Name, accountingMap)
 
 	// Handler call args — TraceRequest has no user fields, handler takes no req
 	handlerArgs := "caller.as_ref(), req"
@@ -1957,7 +1885,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         let after = collection::decode_page_token(&req.page_token)?;
         // Resolve the effective page size: default when unset, clamped to the trust ceiling.
         let limit = collection::effective_page_size(req.page_size as i64, %d, %d);
-        let page = self.handler.%s(caller.as_ref(), req, collection::PageParams { limit, after }).await?;%s
+        let page = %s?;%s
         let mut resp = <%s>::default();
         resp.%s = page.items;
         resp.next_page_token = collection::encode_page_token(page.next_after.as_ref());%s
@@ -1965,7 +1893,8 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         Ok(tonic::Response::new(resp))
     }`, methodSnake, inputType, outputType, authLine,
 			fullMethod, pageValidation,
-			method.Resolved.DefaultPageSize, method.Resolved.MaxPageSize, methodSnake, pageSan,
+			method.Resolved.DefaultPageSize, method.Resolved.MaxPageSize,
+			awaitHandler(fmt.Sprintf("self.handler.%s(caller.as_ref(), req, collection::PageParams { limit, after })", methodSnake)), pageSan,
 			outputType, itemsField, totalBlock, responseValidationBlock)
 		return pageBody, nil
 	}
@@ -2012,59 +1941,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 		unaryEgressFilter + responseValidationBlock
 
 	// Unary methods - authorize, extract caller, validate, delegate to handler
-	if hasAccounting {
-		if emptyInput {
-			return fmt.Sprintf(`    async fn %s(
-        &self,
-        request: tonic::Request<%s>,
-    ) -> Result<tonic::Response<%s>, tonic::Status> {
-        %s
 
-        let request_id = servicemanager::auth::extract_request_id(&request);
-        let caller: Option<servicemanager::auth::Caller> = None;
-        tracing::debug!(method = "%s", request_id = %%request_id, "rpc");
-
-	        // Call the handler
-	        let start = std::time::Instant::now();
-	        let result = async {
-	            let resp = self.handler.%s(caller.as_ref()).await?;
-		%s
-	            Ok::<%s, tonic::Status>(resp)
-	        }.await;
-	        let duration_ms = start.elapsed().as_millis() as i64;
-		%s
-		        let resp = result?;
-		        Ok(tonic::Response::new(resp))
-		    }`, methodSnake, inputType, outputType, authLine, fullMethod, methodSnake, responseValidationBlock, outputType, accountingBlock), nil
-		}
-
-		return fmt.Sprintf(`    async fn %s(
-        &self,
-        request: tonic::Request<%s>,
-    ) -> Result<tonic::Response<%s>, tonic::Status> {
-        %s
-
-        let request_id = servicemanager::auth::extract_request_id(&request);
-        let caller: Option<servicemanager::auth::Caller> = None;
-        let %sreq = request.into_inner();
-        tracing::debug!(method = "%s", request_id = %%request_id, "rpc");
-%s%s
-	        // Call the handler
-	        let start = std::time::Instant::now();
-	        let result = async {
-	            let %sresp = self.handler.%s(%s).await?;
-		%s%s
-	            Ok::<%s, tonic::Status>(resp)
-	        }.await;
-	        let duration_ms = start.elapsed().as_millis() as i64;
-	%s
-	%s
-		        let resp = result?;
-		        Ok(tonic::Response::new(resp))
-		    }`, methodSnake, inputType, outputType, authBlock, reqMut, fullMethod, validationBlock, traceAppend, respMut, methodSnake, handlerArgs, responseValidationBlock, traceCopy, outputType, traceErrorOnResult, accountingBlock), nil
-	}
-
-	// No accounting — original behavior
 	if emptyInput {
 		return fmt.Sprintf(`    async fn %s(
         &self,
@@ -2077,11 +1954,11 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         tracing::debug!(method = "%s", request_id = %%request_id, "rpc");
 
 	        // Call the handler
-	        let resp = self.handler.%s(caller.as_ref()).await?;
+	        let resp = %s?;
 	%s
 
 	        Ok(tonic::Response::new(resp))
-	    }`, methodSnake, inputType, outputType, authLine, fullMethod, methodSnake, responseValidationBlock), nil
+	    }`, methodSnake, inputType, outputType, authLine, fullMethod, awaitHandler(fmt.Sprintf("self.handler.%s(caller.as_ref())", methodSnake)), responseValidationBlock), nil
 	}
 
 	return fmt.Sprintf(`    async fn %s(
@@ -2097,7 +1974,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 %s%s
         // Call the handler
         let result = async {
-	        let %sresp = self.handler.%s(%s).await?;
+	        let %sresp = %s?;
 	%s
             Ok::<%s, tonic::Status>(resp)
         }.await;
@@ -2105,7 +1982,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
         let resp = result?;
 %s
 	        Ok(tonic::Response::new(resp))
-	    }`, methodSnake, inputType, outputType, authBlock, reqMut, fullMethod, validationBlock, traceAppend, respMut, methodSnake, handlerArgs, responseValidationBlock, outputType, traceErrorOnResult, traceCopy), nil
+	    }`, methodSnake, inputType, outputType, authBlock, reqMut, fullMethod, validationBlock, traceAppend, respMut, awaitHandler(fmt.Sprintf("self.handler.%s(%s)", methodSnake, handlerArgs)), responseValidationBlock, outputType, traceErrorOnResult, traceCopy), nil
 }
 
 // rustAppendOnlyRecordOnMethod returns the append-only record type a row-mutating

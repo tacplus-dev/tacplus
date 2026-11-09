@@ -108,8 +108,8 @@ func TestTypeScriptServiceWrapperAuthWiringRendersMetadataAndMethodPolicies(t *t
 	rendered := readOnlyFileInDir(t, outputDir)
 
 	for _, want := range []string{
-		"private authorizeFunc: ((fullMethod: string, metadata: Record<string, string>, req: unknown) => void | Promise<void>) | null;",
-		"private authenticateFunc: ((metadata: Record<string, string>, targetNamespace?: string, fullMethod?: string) => void | Promise<void>) | null;",
+		"private authorizeFunc: ((fullMethod: string, metadata: Record<string, string>, req: unknown) => AuthResult | Promise<AuthResult>) | null;",
+		"private authenticateFunc: ((metadata: Record<string, string>, targetNamespace?: string, fullMethod?: string) => AuthResult | Promise<AuthResult>) | null;",
 		"await this.authorizeFunc(fullMethod, this.metadataToRecord(metadata), req);",
 		"await this.authenticateFunc(this.metadataToRecord(metadata), targetNamespace, fullMethod);",
 		"authorizer.setMethodAuth(\"demo.DemoService/Read\", [\"identity\", \"opa\"]);",
@@ -207,7 +207,7 @@ func TestTypeScriptGrpcAuthorizerJwkWatchUsesJwkViewStreamWithBoundedReconnect(t
 		"throw AuthError.permissionDenied(`caller namespace \"${callerNamespace}\" is not at-or-above target \"${target}\"`);",
 		"private _methodTargetNamespaceFields: Map<string, string>;",
 		"setMethodTargetNamespaceField(methodKey: string, fieldName: string): void {",
-		"async authorize(metadata: Record<string, string>, fullMethod: string, request?: unknown): Promise<void> {",
+		"async authorize(metadata: Record<string, string>, fullMethod: string, request?: unknown): Promise<string> {",
 		"this.checkTargetNamespace(methodKey, tw.getNamespace(), request);",
 		"function readStringField(request: Record<string, unknown>, protoFieldName: string): unknown {",
 		"function isAtOrBelow(caller: string, target: string): boolean {",

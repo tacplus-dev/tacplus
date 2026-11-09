@@ -2212,6 +2212,87 @@ receiver propagates it. `cross-test/trace-carry` (in `just gates`) checks the
 projection copy and a write followed by a raw read of the store, in Go, Java
 and Rust.
 
+## Accounting
+
+Accounting says who called what, and what became of it: "user x made call y to
+service s, and it was permitted, denied or failed", with typed numbers such as
+the records a query returned. It never carries data (#273). It is durable and
+always on, unlike a trace, which is never recorded; the two share only
+`trace_id` and `request_id`.
+
+### One record per call
+
+The generated Go, Java and Rust service wrappers emit exactly one
+`accounting.RpcCompleted` per call of an accounted RPC, on every exit path:
+a call refused by authentication, by its auth check, by request validation or
+a declared guard is recorded as well as one its handler served. The record
+carries the method, the duration, the gRPC status `code`, a typed `outcome`
+and a typed `reason`, the verified caller's claims (`sub`, `aud`, `iss`,
+`azp`, `act`; none when authentication failed) and the handler's metrics.
+
+The outcome is a function of the status code alone, the same in every
+language (`pkg/internal/common/accountingpolicy`):
+
+| Code | Outcome | Level |
+|---|---|---|
+| `OK` | `PERMITTED` | INFO |
+| `UNAUTHENTICATED` | `DENIED_AUTHN` | WARN |
+| `PERMISSION_DENIED` | `DENIED_AUTHZ` | WARN |
+| `INVALID_ARGUMENT`, `NOT_FOUND`, `ALREADY_EXISTS`, `FAILED_PRECONDITION`, `OUT_OF_RANGE` | `INVALID` | WARN |
+| any other | `FAILED` | ERROR |
+
+The reason says where the call stopped: `TOKEN_REJECTED` (authentication),
+`NOT_ENTITLED` (the method's auth check), `POLICY_DENIED` (a declared guard:
+namespace, owner, tenant, device, egress), `REQUEST_INVALID`, `HANDLER_ERROR`
+(the handler returned the error), `RESPONSE_INVALID` or `INTERNAL`; none on a
+permitted call. A denied call is therefore `DENIED_AUTHZ` with `NOT_ENTITLED`
+or `POLICY_DENIED`, never reconstructed from an error text.
+
+### Metrics a handler attaches
+
+A handler may attach typed numbers to its call's record (`RpcMetrics`):
+`records_returned` and `bytes`. Numbers only, so they cannot carry data. A
+call outside an accounted RPC ignores them.
+
+| Language | Attach |
+|---|---|
+| Go | `am.SetRecordsReturned(ctx, n)`, `am.AddBytes(ctx, n)` on the context the handler received (unary RPCs) |
+| Java | `AccountingManager.Metrics.setRecordsReturned(n)`, `AccountingManager.Metrics.addBytes(n)` on the handler's thread |
+| Rust | `am::set_records_returned(n)`, `am::add_bytes(n)` inside the handler's future |
+
+### No data, enforced
+
+Every string or bytes field reachable from `accounting.Event`, and from a
+declared `accountingrecord.AccountingRecord`, must be an identifier or an
+enum-like code and say so with `(spec.accounting_safe)`; generation fails on
+one that does not, and refuses the annotation on any other type. Error texts
+and stack traces go to the console at DEBUG only, never to the sink. The free
+text events of earlier releases (`RpcError`, `TokenRejected`,
+`CommandExecuted`, `ToolUsed`, `SubagentStarted`, `FileModified`,
+`Diagnostic`, `ErrorContext`) are gone, with their emitter methods.
+
+A proto set that declares the accounting record declares the typed fields the
+sink fills: `accounting.RpcOutcome outcome`, `accounting.RpcReason reason`,
+`int64 records_returned` and `int64 bytes`, beside `method`, `code` and
+`duration_ms` (`cross-test/proto-accounting-sink`).
+
+### Accounting never accounts for itself
+
+Storing accounting is itself RPCs, and every RPC is accounted, so:
+
+- the accounting topic's own publish RPC is not accounted (by type, in the
+  generated broker wrapper);
+- the generated accounting publisher sends `x-tacplus-accounting-internal`,
+  and a wrapper that sees it on a call whose verified caller is a service
+  (token `sub_type` `service`) records nothing. A user's call is recorded with
+  or without it: a user cannot switch its own accounting off. (S2S RPCs are not
+  accounted at all: the accounting enums carry the C2S RPCs);
+- the pipeline's own health is counted, never recorded: the sink's
+  ingested, dropped and spool-depth counters (Go `EventBusSink.Stats()`).
+
+Accounting records go to the tenant's own Stratum, the system's to the system
+Stratum; the store side is `tacplus-dev/stratum#24`.
+
 ## Fleet Build
 
 A service is generated alone, in its own repo, against its own proto plus the sys

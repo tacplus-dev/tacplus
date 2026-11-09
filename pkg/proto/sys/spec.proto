@@ -2330,6 +2330,15 @@ extend google.protobuf.FieldOptions {
   // Example: string secret_version = 4 [(spec.not_sensitive) = true];
   bool not_sensitive = 60096;
 
+  // accounting_safe: this string or bytes field of an accounting event is an
+  // identifier or an enum-like code (a request id, a claim, a method name, a
+  // host:port), never free text or request data (tacplus#273). Accounting
+  // carries no data: generation fails when a string or bytes field reachable
+  // from accounting.Event, or from a declared accountingrecord.AccountingRecord,
+  // does not carry it. Refused on any other field type.
+  // Example: string request_id = 3 [(spec.accounting_safe) = true];
+  bool accounting_safe = 60098;
+
   // ----- Principal annotations (§4b: the principal is a property of the type) -----
   // These two say WHERE the caller's principal lives, once, on the type. The
   // generated service wrapper then owns the stamp, the forgery refusal and the

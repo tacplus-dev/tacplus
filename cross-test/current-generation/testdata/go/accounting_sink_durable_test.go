@@ -90,6 +90,10 @@ func TestDurableSpoolReplaysUnacknowledgedAfterRestart(t *testing.T) {
 	tx1 := make(chan *accountingrecord_pb.AccountingRecord, 1)
 	sink1 := durableSink(t, tx1, stop1, dir)
 	emitAll(t, sink1, 5)
+	// Emit only queues: wait until all five are in the log before acknowledging any.
+	// An ack that catches up with the log compacts it, and the records after it
+	// start a new log with its own cursor (#339).
+	waitForLines(t, dir, 5)
 	if got := receiveRequestIDs(t, sink1, tx1, 3); strings.Join(got, ",") != "r0,r1,r2" {
 		t.Fatalf("first run delivered %v, want r0,r1,r2", got)
 	}

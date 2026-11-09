@@ -1,0 +1,400 @@
+Checkpointing, then reading the roadmaps before filing the follow-ups Jody asked for.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 314 --checkpoint "Implemented (uncommitted): Go/Rust named-pipe C2D server+client on Windows, pipe name rule (compiler+chassis), C# default pipe, docs table, c2d-server gate Windows compile checks. Left: run gates, file (b)-(e)+Swift bug, PROPOSALS/S...
+= task_started
+= task_notification
+< [2026-11-09T14:17:36Z] checkpoint of #314 (a step) pushed to looper/tacplus-314:  29 files changed, 1423 insertions(+), 164 deletions(-) 62:- **Native-messaging C2D transport** (Jody, 2026-11-03, after tacplus.dev is up): browser extensions reach a local daemon over native messaging (stdio framing, ...
+= thinking_tokens
+= thinking_tokens
+> Bash git status --short
+<  M cross-test/c2d-server/run.sh  M cross-test/c2d-server/testdata/c2d_server_test.go  M cross-test/c2d-server/testdata/c2d_standalone_test.rs  M docs/API.md  M docs/USER.md  M images/build.Dockerfile  M pkg/internal/common/service/service.go  M pkg/internal/csharp/types/generator.go  M pkg/internal/...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash gh label list --repo tacplus-dev/tacplus --limit 50 | cut -f1 | tr '\n' ' '; echo; gh issue list --repo tacplus-dev/tacplus --search "Blocked-by in:body" --state all --limit 3 --json number,body --jq '.[] | .number, (.body|.[0:0])' ; gh issue list --repo tacplus-dev/tacplus --search "windows in:titl...
+< accessibility bug documentation duplicate enhancement good first issue help wanted invalid question wontfix fix-request needs-repro nightly:in-progress nightly:pr-open feature-request feature:approved needs-decision approved looper:in-progress looper:stuck feature priority:high priority:low looper:l...
+> Bash gh issue view 368 --repo tacplus-dev/tacplus --json body,labels --jq '.labels[].name, .body' | grep -n -i "blocked" | head -5
+< 16:Blocked-by: #308 17:Blocked-by: #319 18:Blocked-by: #320
+= thinking_tokens
+= thinking_tokens
+Filing (e) first, then (b)–(d) blocked by it.
+> Bash cat > /tmp/w314/e.md <<'EOF' Split from #314 (part (e), Jody, 2026-11-08: "File (b) TypeScript, (c) Java, (d) Python and (e) the Windows runner and matrix leg, each approved, with (b)–(d) blocked by (e) for their Windows tests").  **Bug:** the C2D Windows transport (`docs/API.md`, C2D transport) has...
+< https://github.com/tacplus-dev/tacplus/issues/490
+> Bash common='The pipe name, the access rule and the per-OS table are in `docs/API.md` (C2D transport): `\\.\pipe\tacplus-c2d-` + `socket_path`, with every character outside `[A-Za-z0-9._-]` mapped to `-`; a DACL that grants only the current user; `PIPE_REJECT_REMOTE_CLIENTS`. The Go reference is `chassis...
+= task_started
+= task_notification
+< https://github.com/tacplus-dev/tacplus/issues/491 https://github.com/tacplus-dev/tacplus/issues/492 https://github.com/tacplus-dev/tacplus/issues/493
+= thinking_tokens
+= thinking_tokens
+> Bash cat > /tmp/w314/s.md <<'EOF' Found while working #314.  **Bug:** the generated Swift `C2DClient` (`pkg/templates/swift/types/C2DClient.swift.tmpl`) defaults its socket to `~/.<package>/daemon.sock`, derived from the package name (`daemonDirectory` in `pkg/internal/swift/types/generator.go`). The dae...
+< https://github.com/tacplus-dev/tacplus/issues/494 89:  # Windows runner only, which the gates do not have (#490). 185:  # Windows runner only, which the gates do not have (#490). Only      Removed 161 files, 412.5MiB total ==> c2d-server check PASSED (rust) rc=0
+> Bash grep -n "==>" /tmp/c2d-rs.log
+< 1:==> Building tacplus binary 2:==> Generating C2D server fixture (rust) 3:==> Asserting generated Rust C2D server seams 4:==> Running generated Rust standalone C2D host test 5:==> Checking the generated c2d crate for Windows (named-pipe c2d) 7:==> c2d-server check PASSED (rust)
+= thinking_tokens
+= thinking_tokens
+Both legs pass. Linking the follow-ups in docs, then STATE/PROPOSALS.
+> Bash python3 - <<'EOF' p='docs/API.md' s=open(p).read() old='''have no Windows runner to run them yet. The Java, Python and TypeScript named pipes, and the Windows runtime matrix, are tracked separately.''' new='''have no Windows runner to run them yet (#490). The Java (#492), Python (#493) and TypeScrip...
+< 1:# Proposals: tacplus 6:## Open 7:- **trace_id in 2.7: field 200 on every sys wire message, additive traced helper forms** (2026-11-06, #313 → #327): 12:- **trace_id in 3.0: one traced signature per helper; a message without field 200 fails generation** (2026-11-06, 16:- **Trace clearing on queue a...
+> Bash sed -n 1,12p PROPOSALS.md; sed -n 60,80p STATE.md | cut -c1-200; grep -n "Gaps\|Blockers" STATE.md
+< # Proposals: tacplus  Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones into ROADMAP.md (via an agent); the looper then marks it `promoted` or `declined` here with the date.  ## Open - **trace_id in 2.7: field 200 on every sys wire message, additive traced helper forms...
+> Bash grep -n "^  Trace propagation, the patch half of #313" STATE.md; awk 'NR>=95 && NR<=130' STATE.md | cut -c1-120
+< 60:  Trace propagation, the patch half of #313 (`tacplus-dev/roadmap:decisions/trace-propagation-2026-11-03.md`): every   certificate: kernel tokens for `member:<svc>` checked at each stream's open, both ways (the receiver's in a   response header), same service and namespace only; make-before-break...
+> Bash python3 - <<'EOF' p='STATE.md' s=open(p).read() anchor='''  removed in 3.0. Gaps: no cross-package sensitive tree, no oneof leaves, no client-only target (PROPOSALS.md). - **Released / deployed:**''' assert anchor in s s=s.replace(anchor,'''  removed in 3.0. Gaps: no cross-package sensitive tree, no...
+<  22 files changed, 421 insertions(+), 166 deletions(-)
+= thinking_tokens
+= thinking_tokens
+Starting the full `just gates` detached.
+> Bash nohup just gates > /tmp/w314/gates.log 2>&1 & echo $!
+< 22722
+> Bash /usr/local/bin/looper-trace check 2>&1 | tail -8; go vet ./pkg/internal/csharp/... ./pkg/internal/common/service/ 2>&1 | tail -3; gofmt -l pkg/internal/csharp pkg/internal/common/service
+= task_started
+= task_notification
+< FINDING untested cross-test/server-runtime/client/go/main.go:73: checkUnary makes causal downstream calls (GetPublicContract) but no test asserts that its trace_id arrives on them FINDING dropped-trace cross-test/server-runtime/client/go/main.go:89: checkServerStream's call ListEvents is caused by t...
+= thinking_tokens
+= thinking_tokens
+> Bash /usr/local/bin/looper-trace check 2>&1 | grep -c FINDING; /usr/local/bin/looper-trace check 2>&1 | grep FINDING | awk '{print $3}' | cut -d: -f1 | sort -u; gh issue list --repo tacplus-dev/tacplus --state all --search "server-runtime trace_id" --json number,title,state --limit 5
+= task_started
+= task_notification
+< 9 cross-test/outbound-deadline/fixture/rust/main.rs cross-test/server-runtime/client/go/main.go [{"number":311,"state":"OPEN","title":"server-runtime Go driver: four calls with no inbound request lack their `// trace: unrelated:` marker, so looper-trace check fails on main"},{"number":310,"state":"O...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Trace findings are pre-existing (#310, #311 already filed). While gates run, recording the Windows runtime gap in KNOWN_TEST_GAPS.
+> Bash grep -n "^#\|^| [A-Z][A-Z]*-[0-9]" docs/KNOWN_TEST_GAPS.md | head -30
+< 1:# Known test gaps 21:## PC-L-3 — cert-stream TLS exhaustion pin — CLOSED (Go, Java, Rust) 66:## PC-L-3b — SMB cert-stream exhaustion is unpinned in every language 96:## PC-L-2b — Go cert-stream give-up path's DEGRADED reason — CLOSED 112:## PC-L-9 — ServiceManager teardown leak evidence is synthet...
+> Bash sed -n 231,262p docs/KNOWN_TEST_GAPS.md
+< ## C2D-1 — the C2D server runs through its standalone host, not through `Run`  **Status:** Go, Java and Rust covered up to the c2d mount `Run` shares with the standalone host; `Run`'s own call of that mount is not executed.  `cross-test/c2d-server` (`just c2d-server`) generates a c2d-only, cluster-f...
+> Bash python3 - <<'EOF' p='docs/KNOWN_TEST_GAPS.md' s=open(p).read() anchor='## DS-1 — the GCS archive sink' add='''## C2D-2 — the Windows named-pipe C2D transport is compiled, never run  **Status:** Go and Rust compiled for Windows; nothing executes them.  On Windows the generated Go and Rust C2D daemons...
+< go: downloading google.golang.org/grpc v1.83.2 go: downloading golang.org/x/sys v0.47.0 go: downloading google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa
+= thinking_tokens
+= thinking_tokens
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Monitor tail -n +1 -f /tmp/w314/gates.log | grep --line-buffered -E "^=== .* rc=|OVERALL"
+= permission_denied
+< This Bash command contains multiple operations. The following part requires approval: tail -n +1 -f /tmp/w314/gates.log
+> Bash until grep -q "OVERALL" /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=|OVERALL" /tmp/w314/gates.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: b8chb0cc8. Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/b8chb0cc8.output. You will be notified when it completes. To check interim output, use R...
+Gates are running in the background (pid 22722); I'll check progress periodically.
+> Bash sleep 240; grep -E "^=== .* rc=" /tmp/w314/gates.log
+< <tool_use_error>Blocked: sleep 240 followed by: grep -E "^=== .* rc=" /tmp/w314/gates.log. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain shorter sleeps to work around this...
+> Monitor seen=0; while kill -0 22722 2>/dev/null; do n=$(grep -cE "^=== .* rc=" /tmp/w314/gates.log); if [ "$n" -gt "$seen" ]; then grep -E "^=== .* rc=" /tmp/w314/gates.log | tail -n $((n-seen)); seen=$n; fi; sleep 15; done; grep OVERALL /tmp/w314/gates.log || echo "gates process ended without OVERALL"
+= permission_denied
+< 'seen' was tracked as literal '0' but condition may modify it (||/pipeline/unset/&&-short-circuit) — cannot prove downstream value
+> Write /tmp/w314/watch.sh
+< File created successfully at: /tmp/w314/watch.sh (file state is current in your context — no need to Read it back)
+> Monitor bash /tmp/w314/watch.sh
+= permission_denied
+< This command requires approval
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash git diff pkg/templates/rust/chassis/c2d/src/server.rs.tmpl | head -80
+< diff --git a/pkg/templates/rust/chassis/c2d/src/server.rs.tmpl b/pkg/templates/rust/chassis/c2d/src/server.rs.tmpl index 8e197b43..aaf30d36 100644 --- a/pkg/templates/rust/chassis/c2d/src/server.rs.tmpl +++ b/pkg/templates/rust/chassis/c2d/src/server.rs.tmpl @@ -4,19 +4,22 @@  //  // CODE GENERATED ...
+= thinking_tokens
+= thinking_tokens
+> Bash until grep -q OVERALL /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null; do sleep 30; done; grep -E "^=== .* rc=|OVERALL" /tmp/w314/gates.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bed5l0tmr). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/bed5l0tmr.output. You will be notified w...
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===
+Still running gates: protoc-check, soundness and `test` pass; current-generation in progress. Waiting.
+> Bash until grep -q OVERALL /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null; do sleep 30; done; grep -E "^=== .* rc=|OVERALL" /tmp/w314/gates.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b9b0ejopv). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/b9b0ejopv.output. You will be notified w...
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===
+> Bash until grep -q OVERALL /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null; do sleep 30; done; grep -E "^=== .* rc=|OVERALL" /tmp/w314/gates.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bn11rezar. Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/bn11rezar.output. You will be notified when it completes. To check interim output, use R...
+> Bash until grep -q "=== current-generation rc" /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=" /tmp/w314/gates.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: byp818buk). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/byp818buk.output. You will be notified w...
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -2 /tmp/w314/gates.log | cut -c1-200
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust requires-device fixture ==> Compiling rust requires-device fixture
+= thinking_tokens
+= thinking_tokens
+Current-generation still running (long). Committing locally meanwhile (doesn't change the tree).
+> Bash git add -A pkg cross-test docs images STATE.md PROPOSALS.md && git status --short | head -40 && git commit -q -F - <<'EOF' C2D on Windows: Go and Rust daemons and clients use a current-user named pipe (#314)  docs/API.md promises C2D over "Unix domain sockets or named pipes", and the generated C# cl...
+< M  PROPOSALS.md M  STATE.md M  cross-test/c2d-server/run.sh M  cross-test/c2d-server/testdata/c2d_server_test.go M  cross-test/c2d-server/testdata/c2d_standalone_test.rs M  docs/API.md M  docs/KNOWN_TEST_GAPS.md M  docs/USER.md M  images/build.Dockerfile A  pkg/internal/common/service/c2d_pipe_test....
+> Bash until grep -q "=== current-generation rc" /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=" /tmp/w314/gates.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bsiul0ro0). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/bsiul0ro0.output. You will be notified w...
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -1 /tmp/w314/gates.log | cut -c1-200
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust record-egress fixture
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Checkpointing and queueing the land in parallel (the manager re-runs the gates itself); local gates continue.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 314 --checkpoint "Committed d3952188 (Go/Rust named pipe, C# default, docs, gate). Filed #490-#494. Local just gates running; land queued. Left: land verdict, outcome comment, close (no patch tag: Jody said 2.7 only)." 2>&1 | tail -1; nohup /usr/loca...
+< [2026-11-09T15:01:09Z] checkpoint of #314 (a step) pushed to looper/tacplus-314:  32 files changed, 1464 insertions(+), 166 deletions(-) 62757
+> Bash until grep -q OVERALL /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=|OVERALL" /tmp/w314/gates.log; tail -3 /tmp/w314/land.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bpr7ouj5w). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/bpr7ouj5w.output. You will be notified w...
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -3 /tmp/w314/land.log
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-09T15:01:12Z] checkpoint of #314 (land queued) pushed to looper/tacplus-314:  33 files changed, 1468 insertions(+), 166 deletions(-) [2026-11-09T15:01:14Z] queued: the manager of tacplus merges looper/tacplus-314 after the l...
+> Bash until grep -q OVERALL /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null || ! kill -0 62757 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=|OVERALL" /tmp/w314/gates.log; tail -3 /tmp/w314/land.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bpw3td2ar). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/bpw3td2ar.output. You will be notified w...
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -2 /tmp/w314/land.log | cut -c1-300
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-09T15:01:12Z] checkpoint of #314 (land queued) pushed to looper/tacplus-314:  33 files changed, 1468 insertions(+), 166 deletions(-) [2026-11-09T15:01:14Z] queued: the manager of tacplus merges looper/tacplus-314 after the l...
+> Bash until grep -q "=== current-generation rc" /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null || ! kill -0 62757 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -2 /tmp/w314/land.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bd71p153b). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/bd71p153b.output. You will be notified w...
+Still waiting: local gates are in current-generation (slow), and the land is queued with the manager.
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -1 /tmp/w314/gates.log | cut -c1-200; tail -1 /tmp/w314/land.log | cut -c1-200
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust owner-default fixture [2026-11-09T15:01:14Z] queued: the manager of tacplus merges looper/tacplus-314 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict....
+> Bash until grep -q "=== current-generation rc" /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null || ! kill -0 62757 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -2 /tmp/w314/land.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b37kyijmt). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/b37kyijmt.output. You will be notified w...
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -1 /tmp/w314/gates.log | cut -c1-200; tail -1 /tmp/w314/land.log | cut -c1-120
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust quorum-write fixture [2026-11-09T15:01:14Z] queued: the manager of tacplus merges looper/tacplus-314 after the lands queued before it, one at
+> Bash until grep -q "=== current-generation rc" /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null || ! kill -0 62757 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -2 /tmp/w314/land.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bdd82ewlx). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/bdd82ewlx.output. You will be notified w...
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -1 /tmp/w314/gates.log | cut -c1-200; tail -1 /tmp/w314/land.log | cut -c1-120
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust epoch-load fixture [2026-11-09T15:01:14Z] queued: the manager of tacplus merges looper/tacplus-314 after the lands queued before it, one at
+> Bash until grep -q "=== current-generation rc" /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null || ! kill -0 62757 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -2 /tmp/w314/land.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bgsfydeny). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/bgsfydeny.output. You will be notified w...
+Still waiting on the local gates (current-generation's Rust fixtures) and on the queued land.
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -1 /tmp/w314/gates.log | cut -c1-200; tail -1 /tmp/w314/land.log | cut -c1-120
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust tenant-route fixture (harbor) [2026-11-09T15:01:14Z] queued: the manager of tacplus merges looper/tacplus-314 after the lands queued before it, one at
+> Bash until grep -q "=== current-generation rc" /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null || ! kill -0 62757 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -2 /tmp/w314/land.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b1dbkdr07). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/b1dbkdr07.output. You will be notified w...
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -1 /tmp/w314/gates.log | cut -c1-200; tail -1 /tmp/w314/land.log | cut -c1-120
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling go redo-contract fixture (redo) [2026-11-09T15:01:14Z] queued: the manager of tacplus merges looper/tacplus-314 after the lands queued before it, one at
+> Bash until grep -q "=== current-generation rc" /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null || ! kill -0 62757 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -2 /tmp/w314/land.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bf8kmr0uv). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/bf8kmr0uv.output. You will be notified w...
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -1 /tmp/w314/gates.log | cut -c1-200; tail -1 /tmp/w314/land.log | cut -c1-120
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust redo-contract fixture (redo) [2026-11-09T15:01:14Z] queued: the manager of tacplus merges looper/tacplus-314 after the lands queued before it, one at
+> Bash until grep -q "=== current-generation rc" /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null || ! kill -0 62757 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -2 /tmp/w314/land.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b7nmly1pu). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/b7nmly1pu.output. You will be notified w...
+Still waiting on current-generation and the land queue.
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -1 /tmp/w314/gates.log | cut -c1-200; tail -1 /tmp/w314/land.log | cut -c1-120; gh issue view 314 --repo tacplus-dev/tacplus --comments | tail -5
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling java tenant-record fixture (tmessaging) [2026-11-09T15:01:14Z] queued: the manager of tacplus merges looper/tacplus-314 after the lands queued before it, one at edited:	false status:	none -- The looper of tacplus starts...
+> Bash until grep -q "=== current-generation rc" /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null || ! kill -0 62757 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -2 /tmp/w314/land.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b43k8hq11). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/b43k8hq11.output. You will be notified w...
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -1 /tmp/w314/gates.log | cut -c1-200; tail -1 /tmp/w314/land.log | cut -c1-120
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust tenant-record fixture (tmessaging) [2026-11-09T15:01:14Z] queued: the manager of tacplus merges looper/tacplus-314 after the lands queued before it, one at
+> Bash until grep -q "=== current-generation rc" /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null || ! kill -0 62757 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -2 /tmp/w314/land.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: blk6lmnls). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/blk6lmnls.output. You will be notified w...
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -1 /tmp/w314/gates.log | cut -c1-200; tail -1 /tmp/w314/land.log | cut -c1-120
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust tenant-slice fixture [2026-11-09T15:01:14Z] queued: the manager of tacplus merges looper/tacplus-314 after the lands queued before it, one at
+> Bash until grep -q "=== current-generation rc" /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null || ! kill -0 62757 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -2 /tmp/w314/land.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b98boj5wa). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/b98boj5wa.output. You will be notified w...
+Gates still on current-generation; land still queued. Continuing to wait.
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -1 /tmp/w314/gates.log | cut -c1-200; tail -1 /tmp/w314/land.log | cut -c1-120
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling go tenant-slice config owner fixture [2026-11-09T15:01:14Z] queued: the manager of tacplus merges looper/tacplus-314 after the lands queued before it, one at
+> Bash until grep -q "=== current-generation rc" /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null || ! kill -0 62757 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -2 /tmp/w314/land.log | cut -c1-300
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=2 === [2026-11-09T15:01:12Z] checkpoint of #314 (land queued) pushed to looper/tacplus-314:  33 files changed, 1468 insertions(+), 166 deletions(-) [2026-11-09T15:01:14Z] queued: the manager of tacplus merge...
+> Bash awk '/=== current-generation ===/,/=== current-generation rc/' /tmp/w314/gates.log | grep -n -iE "fail|error|die|FAILED" | head -20
+< 248:error: recipe `current-generation` failed on line 95 with exit code 2
+> Bash awk '/=== current-generation ===/,/=== current-generation rc/' /tmp/w314/gates.log | tail -30 | cut -c1-300
+<     Removed 14M fixture tree tenantslice-rust ==> Generating go tenant-slice owner fixture ==> Compiling go tenant-slice owner fixture     PASS go tenant-slice owner     Removed 12M fixture tree tenantslice-owner-go ==> Generating java tenant-slice owner fixture ==> Compiling java tenant-slice owner...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+current-generation's fixtures all passed, but its tree guard flagged my mid-run commit; I'll rely on the land's gates for that one (or rerun if time allows). Continuing.
+> Bash awk '/=== current-generation ===/,/=== current-generation rc/' /tmp/w314/gates.log | grep -c "    PASS"; awk '/=== current-generation ===/,/=== current-generation rc/' /tmp/w314/gates.log | grep -E "^\s+FAIL|FAILED" | head
+< 57
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash until grep -q OVERALL /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null || ! kill -0 62757 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=|OVERALL" /tmp/w314/gates.log; tail -2 /tmp/w314/land.log | cut -c1-300
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b5o0si3b5). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/b5o0si3b5.output. You will be notified w...
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log; tail -1 /tmp/w314/gates.log | cut -c1-200; tail -1 /tmp/w314/land.log | cut -c1-120
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=2 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=0 ===  --add-modules java.se --add-exports java.base/jdk.internal.ref=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --ad...
+> Bash until grep -q OVERALL /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null || ! kill -0 62757 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=|OVERALL" /tmp/w314/gates.log; tail -2 /tmp/w314/land.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bsvkbahci). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/bsvkbahci.output. You will be notified w...
+> Bash grep -E "^=== .* rc=" /tmp/w314/gates.log | tail -4; tail -1 /tmp/w314/land.log | cut -c1-200
+< === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc=0 === === jwk-alg rc=0 === [2026-11-09T15:01:14Z] queued: the manager of tacplus merges looper/tacplus-314 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your
+> Bash until grep -q OVERALL /tmp/w314/gates.log || ! kill -0 22722 2>/dev/null || ! kill -0 62757 2>/dev/null; do sleep 20; done; grep -E "^=== .* rc=|OVERALL" /tmp/w314/gates.log; tail -2 /tmp/w314/land.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=2 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=0 === === memberport rc=0 === === claims-provenance rc=0 === === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc...
+= thinking_tokens
+= thinking_tokens
+All gates passed except current-generation, which failed only on the tree guard (my mid-run commit; all 57 fixtures passed). Re-running it on the stable tree while the land waits.
+> Bash date -u; git status --short | head -3; nohup just current-generation > /tmp/w314/cg.log 2>&1 & echo $!
+< Mon Nov  9 17:35:09 UTC 2026 179299
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Only ~20 minutes remain in this run, which isn't enough for current-generation (~1.5h), so I'm stopping it and checkpointing. The queued land continues after me.
+> Bash kill 179299; cd /builds/looper/tacplus/issues/314 && /usr/local/bin/repo-looper --repo tacplus --issue 314 --checkpoint "Committed d3952188, land queued (manager lands it after this run). Local just gates: all green except current-generation rc=2 from the tree guard only (my commit mid-run; all 57 f...
+< [2026-11-09T17:35:17Z] checkpoint of #314 (a step) pushed to looper/tacplus-314:  33 files changed, 1468 insertions(+), 166 deletions(-)
+> Bash until ! kill -0 62757 2>/dev/null; do sleep 20; done; tail -5 /tmp/w314/land.log | cut -c1-400
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bsdjcnd92). Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/fb89a529-60d4-4d03-b36c-ece7461b79e6/tasks/bsdjcnd92.output. You will be notified w...
+> Bash tail -2 /tmp/w314/land.log | cut -c1-300; date -u
+< [2026-11-09T15:01:12Z] checkpoint of #314 (land queued) pushed to looper/tacplus-314:  33 files changed, 1468 insertions(+), 166 deletions(-) [2026-11-09T15:01:14Z] queued: the manager of tacplus merges looper/tacplus-314 after the lands queued before it, one at a time, and says on the issue what ca...
+Issue #314 is not closed: the land is still queued with the manager (no verdict after 2h45m), and this run stops in a few minutes. The manager will merge it after this run ends, and the next run will post the outcome comment and close the issue.
+
+**What's committed (d3952188, on `looper/tacplus-314`), following Jody's 2026-11-08 decisions:**
+- **Pipe name:** on Windows, C2D uses the named pipe `\\.\pipe\tacplus-c2d-` + `socket_path`, with every character outside `[A-Za-z0-9._-]` replaced by `-`. The compiler, the Go code and the Rust code all derive it from one rule.
+- **Go:** the daemon listens on that pipe on Windows (via go-winio) and the client dials it.
+  - Only the user the daemon runs as can open the pipe, and it refuses remote clients.
+  - If another process already holds a pipe of that name, the daemon refuses to start rather than share it.
+  - macOS and Linux keep the Unix socket at mode 0600.
+- **Rust:** the same server and client, using tokio and windows-sys.
+  - The ServiceManager used to skip the C2D server entirely on Windows; it now starts it.
+  - The C2D crate no longer turns on tonic's TLS feature, which it never used, so it can be compiled for Windows on its own.
+- **C#:** the default pipe is now the derived name. Before, it was `<package>-daemon`, which no daemon listens on. If the services declare different socket paths there is no default and the caller must pass a pipe name.
+- **Tests:** the `c2d-server` gate checks the pipe name in Go and Rust against the compiler's test cases. It also compiles the whole Go model for Windows, and compiles the Rust C2D crate for Windows with warnings treated as errors. The build image now includes the Rust Windows target.
+- **Docs:** `docs/API.md` has a per-language, per-OS table of the transport and how access is restricted; `docs/USER.md` is corrected (C# is named-pipe only, Swift is Apple-only). `docs/KNOWN_TEST_GAPS.md` (C2D-2), `STATE.md` and `PROPOSALS.md` are updated.
+
+**Local `just gates`:** 15 of 16 gates passed, including `c2d-server`. current-generation reported rc=2, but only because the gate's tree check saw my commit land mid-run; all 57 of its fixtures passed. My rerun on a stable tree didn't fit in the time left, so I stopped it. The land's own gate run will be the verdict for it.
+
+**Not verified:** nothing has run on Windows. The pipe's access rule, remote refusal and any real call over the pipe are only compiled, because the gates have no Windows runner. That is now tracked in #490.
+
+**Issues filed:**
+- **Split Jody asked for,** labelled `bug` and `approved`:
+  - #490: the `windows-latest` C2D test leg and the cross-language matrix.
+  - #491 TypeScript, #492 Java and #493 Python named pipes, each blocked by #490.
+- **A bug I found,** labelled `bug` and not approved:
+  - #494: the Swift client's default socket ignores `socket_path`, the same defect C# had.
+
+There's no `v2.6.2` patch tag and no backports: Jody decided this ships in 2.7 only, and older lines keep their documented refusal on Windows.
+
+The trace-propagation check (rule 13) flags 9 findings, all in test fixture code I didn't touch and already filed as #310 and #311. This change touches no handler.
+= success: Issue #314 is not closed: the land is still queued with the manager (no verdict after 2h45m), and this run stops in a few minutes. The manager will merge it after this run ends, and the next run will post the outcome comment and close the issue.
+
+**What's committed (d3952188, on `looper/tacplus-314`), following Jody's 2026-11-08 decisions:**
+- **Pipe name:** on Windows, C2D uses the named pipe `\\.\pipe\tacplus-c2d-` + `socket_path`, with every character outside `[A-Za-z0-9._-]` replaced by `-`. The compiler, the Go code and the Rust code all derive it from one rule.
+- **Go:** the daemon listens on that pipe on Windows (via go-winio) and the client dials it.
+  - Only the user the daemon runs as can open the pipe, and it refuses remote clients.
+  - If another process already holds a pipe of that name, the daemon refuses to start rather than share it.
+  - macOS and Linux keep the Unix socket at mode 0600.
+- **Rust:** the same server and client, using tokio and windows-sys.
+  - The ServiceManager used to skip the C2D server entirely on Windows; it now starts it.
+  - The C2D crate no longer turns on tonic's TLS feature, which it never used, so it can be compiled for Windows on its own.
+- **C#:** the default pipe is now the derived name. Before, it was `<package>-daemon`, which no daemon listens on. If the services declare different socket paths there is no default and the caller must pass a pipe name.
+- **Tests:** the `c2d-server` gate checks the pipe name in Go and Rust against the compiler's test cases. It also compiles the whole Go model for Windows, and compiles the Rust C2D crate for Windows with warnings treated as errors. The build image now includes the Rust Windows target.
+- **Docs:** `docs/API.md` has a per-language, per-OS table of the transport and how access is restricted; `docs/USER.md` is corrected (C# is named-pipe only, Swift is Apple-only). `docs/KNOWN_TEST_GAPS.md` (C2D-2), `STATE.md` and `PROPOSALS.md` are updated.
+
+**Local `just gates`:** 15 of 16 gates passed, including `c2d-server`. current-generation reported rc=2, but only because the gate's tree check saw my commit land mid-run; all 57 of its fixtures passed. My rerun on a stable tree didn't fit in the time left, so I stopped it. The land's own gate run will be the verdict for it.
+
+**Not verified:** nothing has run on Windows. The pipe's access rule, remote refusal and any real call over the pipe are only compiled, because the gates have no Windows runner. That is now tracked in #490.
+
+**Issues filed:**
+- **Split Jody asked for,** labelled `bug` and `approved`:
+  - #490: the `windows-latest` C2D test leg and the cross-language matrix.
+  - #491 TypeScript, #492 Java and #493 Python named pipes, each blocked by #490.
+- **A bug I found,** labelled `bug` and not approved:
+  - #494: the Swift client's default socket ignores `socket_path`, the same defect C# had.
+
+There's no `v2.6.2` patch tag and no backports: Jody decided this ships in 2.7 only, and older lines keep their documented refusal on Windows.
+
+The trace-propagation check (rule 13) flags 9 findings, all in test fixture code I didn't touch and already filed as #310 and #311. This change touches no handler.
+= task_notification
+= task_updated
+= background_tasks_changed

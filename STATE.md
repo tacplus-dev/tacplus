@@ -158,7 +158,7 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   nightly is tacplus-dev/looper#74, its nightly off until #257 passes. The new build image (Kani, cargo-fuzz, the launcher) is verified by
   images.yml once pushed; the launcher and `tacplus pin` by the gates. The fleet build's image lookup on a private package is
   verified against a fake registry only: the looper's token has no `read:packages` (a public image resolves live).
-  `depends`/`src` at a line can take a pre-release (#214). The record plane's tenant checks assume a tenant's
+  The record plane's tenant checks assume a tenant's
   namespace is `/tenants/<tid>`; kernel#23's `/tenants/<name>` namespaces need #202 first (PROPOSALS.md).
   The record write surface stamps no `(spec.identity_spiffe_subject)` (PROPOSALS.md). A fleet's service images must be on ghcr.io from a
   github.com repo (PROPOSALS.md).

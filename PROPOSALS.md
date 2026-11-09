@@ -37,6 +37,11 @@ the looper then marks it `promoted` or `declined` here with the date.
   (#359, #368) fixed in the generator or accepted in a new `security-exceptions.yaml`. Open: exceptions match by id
   repo-wide (a path scope is a looper change), lite clients (Swift, C#), backport to 2.6.x. Approved at hub triage
   2026-11-08; needs a ROADMAP.md line citing #376.
+- **One version resolver for `depends`/`src` and the fleet build** (2026-11-06, #214): `pkg/protosrc/resolve.go`
+  (`findLatestPatchTag`, `compareSemverTags`, `exactVersionRe`) and `pkg/fleet/version.go` (`parseVersion`,
+  `highest`, `resolveVersion`) each parse and rank `vMAJOR.MINOR.PATCH[-pre]` tags. #214 was the protosrc copy
+  disagreeing with the fleet one on pre-releases. A small shared package (parse, compare, latest release of a line)
+  used by both would keep "a line is its latest patch release, pre-releases only when named" in one place.
 - **trace_id in 2.7: field 200 on every sys wire message, additive traced helper forms** (2026-11-06, #313 → #327):
   the hub's split of #313. Every request-building generated helper (state clients' `Fetch`/`Delete`/`Query`, record
   readers, record-plane and kernel state helpers) gets a form that takes `trace_id`, beside today's, and every sys

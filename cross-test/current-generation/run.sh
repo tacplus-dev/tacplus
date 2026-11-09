@@ -1347,13 +1347,21 @@ install_json_key_selftest() {
   cp "$SELFTESTS_SRC/rust/json_key_test.rs" "$output/tests/"
 }
 
-# install_backpressure_selftests copies the two Java backpressure self-tests into
-# the generated packages they drive: the subscribe test beside the AgentState
+# install_backpressure_selftests copies the fixture's self-tests into the
+# generated packages they drive. Java: the subscribe test beside the AgentState
 # StateClient (its topic iterator), the W2S test beside the AgentUploadApi W2S
-# client (its WebSocket listener).
+# client (its WebSocket listener). Go: the state topic test (#454) beside the
+# AgentState state client (its Publish and Subscribe).
 install_backpressure_selftests() {
   local output="$1"
+  local language="${2:-java}"
   local state_client w2s_client
+  if [[ "$language" == go ]]; then
+    state_client="$(find "$output" -type f -path '*/s2sm/state/services/agent_state/state.go' -print -quit)"
+    [[ -n "$state_client" ]] || die "event-bus backpressure fixture (go): AgentState state client not generated under $output"
+    cp "$SELFTESTS_SRC/go/state_topic_test.go" "$(dirname "$state_client")/"
+    return 0
+  fi
   state_client="$(find "$output/src/main/java" -type f -path '*/s2sm/internal/state/services/agentsensor/agentstate/StateClient.java' -print -quit)"
   [[ -n "$state_client" ]] || die "event-bus backpressure fixture (java): AgentState StateClient not generated under $output"
   cp "$SELFTESTS_SRC/java/SubscribeBackpressureTest.java" "$(dirname "$state_client")/"
@@ -2583,13 +2591,13 @@ if [[ -d "$RECORDEGRESS_PROTO_SRC" ]]; then
 fi
 
 # event-bus backpressure fixture: the ONLY place a store-hosted state's topic
-# iterator (the generated AgentState StateClient) and a client-streaming W2S
-# WebSocket listener are compiled and driven by a standing gate. Java only: both
-# self-tests pin Java runtime code, and no other language emits these surfaces
-# with the same defect.
+# (the generated AgentState state client) and a client-streaming W2S WebSocket
+# listener are compiled and driven by a standing gate. Java drives the topic
+# iterator's and the W2S listener's backpressure; Go drives the state topic's
+# Publish and Subscribe (#454: its state client did not compile).
 if [[ -d "$EVENTBUS_BACKPRESSURE_PROTO_SRC" ]]; then
   for language in "${languages[@]}"; do
-    [[ "$language" == java ]] || continue
+    [[ "$language" == java || "$language" == go ]] || continue
     dir="$WORK_ROOT/eventbus-backpressure-$language"
     log="$WORK_ROOT/eventbus-backpressure-$language.log"
     rm -rf "$dir"
@@ -2602,7 +2610,7 @@ if [[ -d "$EVENTBUS_BACKPRESSURE_PROTO_SRC" ]]; then
     fi
     output_root="$(resolve_output_root "$dir/tacplus")"
     assert_spiffe_soundness "$dir/tacplus"
-    install_backpressure_selftests "$output_root"
+    install_backpressure_selftests "$output_root" "$language"
     echo "==> Compiling $language event-bus backpressure fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor"
     echo "    PASS $language event-bus backpressure"

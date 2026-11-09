@@ -28,6 +28,8 @@ import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
@@ -45,6 +47,9 @@ import org.junit.jupiter.api.Test;
 class HazelcastMemberPortTest {
     static final String X = MemberPortBehaviorTest.X;
     static final String Y = MemberPortBehaviorTest.Y;
+    /** A member that sends no heartbeat for this long is removed. */
+    static final long NO_HEARTBEAT_SECONDS = 8;
+    static final long HEARTBEAT_SECONDS = 1;
 
     MemberPortBehaviorTest.Fleet fleet;
     final List<AutoCloseable> closers = new ArrayList<>();
@@ -160,6 +165,8 @@ class HazelcastMemberPortTest {
         final InetSocketAddress portAddress;
         final AtomicReference<InetSocketAddress> publicAddress = new AtomicReference<>();
         final AtomicInteger removed = new AtomicInteger();
+        /** Counted down by the next member removal this member sees. */
+        volatile CountDownLatch removal = new CountDownLatch(1);
         HazelcastInstance hz;
 
         Member(String namespace, long ttl, long renewBefore) throws Exception {
@@ -183,9 +190,9 @@ class HazelcastMemberPortTest {
             Properties p = c.getProperties();
             p.setProperty("hazelcast.logging.type", "none");
             p.setProperty("hazelcast.phone.home.enabled", "false");
-            p.setProperty("hazelcast.max.no.heartbeat.seconds", "8");
+            p.setProperty("hazelcast.max.no.heartbeat.seconds", String.valueOf(NO_HEARTBEAT_SECONDS));
             p.setProperty("hazelcast.max.join.seconds", "10");
-            p.setProperty("hazelcast.heartbeat.interval.seconds", "1");
+            p.setProperty("hazelcast.heartbeat.interval.seconds", String.valueOf(HEARTBEAT_SECONDS));
             p.setProperty("hazelcast.merge.first.run.delay.seconds", "5");
             p.setProperty("hazelcast.merge.next.run.delay.seconds", "5");
             NetworkConfig n = c.getNetworkConfig();
@@ -229,6 +236,7 @@ class HazelcastMemberPortTest {
                 @Override
                 public void memberRemoved(MembershipEvent e) {
                     removed.incrementAndGet();
+                    removal.countDown();
                 }
             });
             closers.add(hz::shutdown);
@@ -344,11 +352,19 @@ class HazelcastMemberPortTest {
         // Each seeds the other: the address it reaches the other at.
         startTogether(x1, List.of(x2.publicAddress.get()), x2, List.of(x1.publicAddress.get()));
         MemberPortBehaviorTest.waitFor("the cluster", 60_000, () -> x1.clusterSize() == 2);
-        // x2's identity stops renewing: its connections into x1 must be cut
-        // when the token in hand expires, and new ones refused.
+        // x2's identity stops renewing: every connection between the two must
+        // be cut when the token in hand expires, whichever member opened it
+        // (#465: x1's sessions into x2 checked x2's token only at their open),
+        // and new ones refused.
+        x1.removal = new CountDownLatch(1);
         x2.minter.neverRenew = true;
-        MemberPortBehaviorTest.waitFor("x2's connections into x1 to be dropped", 15_000,
-                () -> x1.relay.open.get() == 0);
-        MemberPortBehaviorTest.waitFor("x2 to be removed from x1's cluster", 30_000, () -> x1.clusterSize() == 1);
+        long cut = (x2.minter.ttl + 2) * 1_000;
+        MemberPortBehaviorTest.waitFor("x2's connections into x1 to be dropped", cut, () -> x1.relay.open.get() == 0);
+        MemberPortBehaviorTest.waitFor("x1's connections into x2 to be dropped", cut, () -> x2.relay.open.get() == 0);
+        // With no connection left, x1 stops hearing x2's heartbeats and removes
+        // it within the no-heartbeat bound.
+        assertTrue(x1.removal.await(NO_HEARTBEAT_SECONDS + 2 * HEARTBEAT_SECONDS, TimeUnit.SECONDS),
+                "x1 must remove x2 within the no-heartbeat bound; x1 still sees " + x1.clusterSize() + " members");
+        assertEquals(1, x1.clusterSize());
     }
 }

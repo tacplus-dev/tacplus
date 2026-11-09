@@ -326,8 +326,9 @@ before the client's `last`.
 
 **Status:** open.
 
-The client rotates at 75% of its token's lifetime on its own clock, and the
-server closes a stream at `exp` on its clock; nothing runs two members with
+The client rotates at 75% of the stream's lifetime (to the earlier `exp` of
+its token and the receiver's, #465) on its own clock, and the server closes a
+stream at that `exp` on its clock; nothing runs two members with
 skewed clocks, so the margin (a quarter of the lifetime) is argued, not tested.
 The soak that measures the gRPC tunnel's throughput and latency against a direct
 connection is opt-in (`MEMBERPORT_SOAK=1`) and asserts nothing: a throughput

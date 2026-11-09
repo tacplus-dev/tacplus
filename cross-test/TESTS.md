@@ -54,12 +54,16 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   session drops, nothing spliced, the target's connection reset) and a receiver
   that ends without `last` (the sender's local connection reset), a cutover with
   `last` both ways in order; a mint failure (dropped at expiry), a revoked
-  caller (cut off within one lifetime), a refused tunnel resetting its local
+  caller (cut off within one lifetime), a revoked receiver (cut off within
+  its token's lifetime, though the caller's token is good for minutes, #465)
+  and a receiver's renewals carried by rotation, a refused tunnel resetting its local
   connection in under a second (`ECONNRESET`), an unreachable JWKS, a
   certificate rotation mid-stream, and the sender's checks of the receiver (its
   certificate and its token); `MemberPortStreamExpiryTest` (also run by
   `just stream-expiry`): an unrotated stream ends with `UNAUTHENTICATED` at `exp`
-  and a reset; then two tenants' Hazelcast 5.7 members through the port.
+  and a reset; then two tenants' Hazelcast 5.7 members through the port, and a
+  member whose token lapses losing every connection, whichever member opened
+  it, then removed within Hazelcast's no-heartbeat bound.
   `MEMBERPORT_SOAK=1` adds a soak that prints throughput and latency against a
   direct connection. Go and Rust must refuse the annotation at generation until
   #322.

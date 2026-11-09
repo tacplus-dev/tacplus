@@ -780,6 +780,46 @@ class MemberPortBehaviorTest {
     }
 
     @Test
+    void aRevokedReceiverIsCutOffWithinOneLifetime() throws Exception {
+        // The receiver's identity is revoked (#465): the sender admitted its
+        // token at the stream's open and holds a token of its own good for
+        // minutes, yet the session must end when the receiver's token does.
+        Minter revoked = new Minter(fleet, X, 3, 1);
+        MemberPort b = member(revoked, new AtomicReference<>(fleet.leaf(X, SVC, "Ed25519")), fleet.jwks::get);
+        MemberportPeer.Server echo = echo();
+        InetSocketAddress fwd = tunnel(member(X), b, echo);
+        revoked.token();
+        revoked.neverRenew = true;
+        long start = System.currentTimeMillis();
+        MemberportPeer.Result r = MemberportPeer.exchange(fwd, 43, 2_000_000, 43, 2048, 10, 0);
+        long elapsed = System.currentTimeMillis() - start;
+        assertTrue(!r.ok(2_000_000) && r.firstMismatch < 0, "cut, intact: " + r);
+        assertTrue(reset(r), "the local connection is reset: " + r);
+        assertTrue(elapsed < 4_500, "cut off within the receiver's token lifetime, took " + elapsed + "ms");
+        // And a new connection to the receiver, whose token has expired, is refused at once.
+        MemberportPeer.Result again = MemberportPeer.exchange(fwd, 44, 1000, 44);
+        assertTrue(!again.ok(1000) && again.received == 0, "refused: " + again);
+    }
+
+    @Test
+    void aRotationCarriesTheReceiversRenewedToken() throws Exception {
+        // The receiver's tokens are short and the sender's long: the sender
+        // rotates for the receiver's renewals, and the session outlives several.
+        Minter bm = new Minter(fleet, X, 3, 2);
+        MemberPort b = member(bm, new AtomicReference<>(fleet.leaf(X, SVC, "Ed25519")), fleet.jwks::get);
+        MemberportPeer.Server server = track(new MemberportPeer.Server(MemberportPeer.Mode.PUSH, 45, 800_000, 46, 4096, 20));
+        InetSocketAddress fwd = tunnel(member(X), b, server);
+        long start = System.currentTimeMillis();
+        MemberportPeer.Result r = MemberportPeer.exchange(fwd, 46, 800_000, 45, 4096, 20, 0);
+        long elapsed = System.currentTimeMillis() - start;
+        assertTrue(r.ok(800_000), "client: no loss, duplication or reordering: " + r);
+        waitFor("server result", 10_000, () -> server.results.size() == 1);
+        assertTrue(server.results.get(1).ok(800_000), "server: " + server.results.get(1));
+        assertTrue(elapsed > 6_000, "the session must outlive two of the receiver's tokens, took " + elapsed + "ms");
+        assertEquals(1, server.accepted.get(), "one byte session: the target was dialled once");
+    }
+
+    @Test
     void aRefusedTunnelResetsItsLocalConnectionWellUnderASecond() throws Exception {
         MemberPort x = member(X);
         MemberportPeer.Server behind = echo();

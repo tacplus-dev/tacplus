@@ -591,7 +591,10 @@ the archived SPIFFE_IDENTITY_NORMALIZATION_PLAN (not in this repository)):
   Java template (`chassis/memberport/MemberPort.java.tmpl`) builds the method
   descriptor itself, since the tunnel is no rpc of the service's API and carries
   no `(spec.rpc)` policy. A token is checked only at a stream's open (metadata,
-  never a chunk); nothing is forwarded, and the target is not dialled, before
+  never a chunk), the receiver's too, so each side ends a stream at the earlier
+  `exp` of its two tokens and a rotation is how either side's renewal reaches the
+  other (#465: a session that checked only the client's let a lapsed member keep
+  the sessions it had accepted); nothing is forwarded, and the target is not dialled, before
   admission and the first chunk; a peer is admitted only as the same service in
   the same namespace with audience `member:<service>`, and a rotation only for
   the same subject; refusals are `UNAUTHENTICATED`/`PERMISSION_DENIED` with no

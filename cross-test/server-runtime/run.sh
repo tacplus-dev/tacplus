@@ -242,7 +242,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/soheilhy/cmux v0.1.5
 	go.uber.org/zap v1.27.1
-	golang.org/x/crypto v0.47.0
+	golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2
 	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.19.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa
@@ -399,7 +399,7 @@ contractclient-model = { path = "$RUST_MODEL_DIR/model" }
 futures = "0.3.31"
 grpcserver = { path = "$RUST_MODEL_DIR/model/chassis/grpcserver" }
 servicemanager = { path = "$RUST_MODEL_DIR/model/chassis/servicemanager" }
-tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "net", "signal", "sync"] }
+tokio = { version = "1.51.6", features = ["rt-multi-thread", "macros", "net", "signal", "sync"] }
 tokio-stream = { version = "0.1.17", features = ["net"] }
 tonic = "0.14.0"
 EOF

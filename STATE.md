@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by looper (#313).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-09 by looper (#455).
 
 - **Version / line:** v2.6.2 (latest release, 2026-11-07, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -64,6 +64,10 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   (`cross-test/trace-carry`, in `just gates`; on main for 2.7, and backported to release/2.0 through release/2.6 by pull requests #330-#336, each line's next patch).
   Gap: sys contract messages mostly lack field 200, and helpers that build their own request take no `trace_id`
   (#327, 2.7); a message without field 200 is not yet refused (#328, 3.0).
+  Cross-language runtime evidence for java and rust (`cross-test/server-runtime`: the generated java and rust servers
+  driven by the go client, java client -> rust host, rust client -> java host) is in `just gates` since #455; it had
+  stopped building on main unnoticed (its config lacked `grpc-servers: all`, and the java fixture predated the claims-
+  returning `Authenticator` and the MCP SDK dependency).
   The build image's docker-buildx is built from the v0.38.1 source with moby/go-archive 0.3.3 and golang.org/x/net
   0.62.0 (CVE-2026-17106, CVE-2026-78669, CVE-2026-78661, CVE-2026-97045; `tacplus-smoke` checks the floors)
   (#190; backported to release/2.0 through release/2.5 by pull request, as v2.0.13, v2.1.6, v2.2.3, v2.3.5, v2.4.4

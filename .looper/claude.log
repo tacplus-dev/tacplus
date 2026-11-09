@@ -1,0 +1,378 @@
+= init
+> Bash cd /builds/looper/tacplus/issues/351; gh issue view 351 --repo tacplus-dev/tacplus --comments | tail -20; grep -n "linked" cross-test/current-generation/run.sh | head -40; sed -n 25,40p cross-test/current-generation/run.sh
+< author:	jodydadescott association:	member edited:	false status:	none -- Hub triage, 2026-11-07: **approved.** A vacuous security check is a real gap, since #171 retired the claim. Make the filter exclude only build output outside the generated tree, not every path under the work root, and skip descr...
+> Bash cd /builds/looper/tacplus/issues/351; sed -n 1870,1900p cross-test/current-generation/run.sh; sed -n 2140,2200p cross-test/current-generation/run.sh; ls cross-test/current-generation/; grep -n "current-generation" justfile | head; ls cross-test | head -50
+< # # The counts are exact and identical in all three languages, which is the point: # a language that drops one seam, or splices the filter onto every method instead # of the row-bearing ones, changes a count. Both failures compile. # #   6 / 2 aborts          — the (spec.store_namespace)/(spec.recor...
+> Bash cd /builds/looper/tacplus/issues/351; ls -R cross-test/current-generation/testdata | head; ls cross-test/lib; grep -rn "self-test\|selftest\|self_test" cross-test/current-generation/run.sh justfile | head -20
+< cross-test/current-generation/testdata: go java rust  cross-test/current-generation/testdata/go: accounting_sink_durable_test.go accounting_sink_spool_test.go epoch_load_test.go quorum_write_test.go cargo-target.sh java-compile.sh tree-guard.sh cross-test/current-generation/run.sh:503:run_java_gener...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/351; head -40 cross-test/lib/tree-guard.sh; grep -rln "tree-guard.sh\|cargo-target.sh" --include=*.sh --include=justfile --include=*.yaml . | head; cat gates.yaml 2>/dev/null | head -60
+< #!/usr/bin/env bash # Copyright (c) 2026 Jody Scott # SPDX-License-Identifier: Apache-2.0 # # A gate's verdict is about the tree it was asked to test. Anything that # changes the working tree while a gate runs (a checkout, a stash, an edit) # silently turns the verdict into one about a different tre...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/351; ls; sed -n 150,220p justfile; ls *.yaml; grep -rn "_test.sh\|test-lib\|bats" justfile cross-test/justfile | head
+< AGENTS.md CODE_OF_CONDUCT.md CONTRIBUTING.md Dockerfile HISTORY.md LICENSE PROPOSALS.md README.md README.src.md ROADMAP.md SECURITY.md STATE.md cmd cross-test docs example go.mod go.sum images justfile main.go pkg roadmap scripts site       echo "  A mismatch does NOT surface as a version error: it ...
+= thinking_tokens
+= thinking_tokens
+I've read the issue and the vacuous check; now looking at how the repo tests its shell helpers so I can add one for this check.
+> Bash cd /builds/looper/tacplus/issues/351; ls scripts; grep -ln "cross-test" scripts/*_test.go | head; grep -n "^test:" -A6 justfile
+< check-registry-query-prose.sh cross_test_cargo_target_test.go fix-looper go_dependency_floor_test.go images-plan.sh images-tags.sh images_plan_test.go images_smoke_test.go images_tags_test.go java_dependency_floor_test.go lint-patterns multi-vendor-fix-loop.sh verify-changed.sh verify.sh verify_test...
+> Bash cd /builds/looper/tacplus/issues/351; cat scripts/cross_test_cargo_target_test.go | head -80; cat cross-test/lib/cargo-target.sh | head -30
+< // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0  package scripts  import ( 	"os" 	"os/exec" 	"path/filepath" 	"regexp" 	"strings" 	"testing" )  // Every cross-test leg that builds generated Rust compiles the same heavy // dependency set (tonic, prost, tokio, rustls). A per-le...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/351; sed -n 40,80p cross-test/current-generation/run.sh; grep -n "assert_recordegress_output\b\|assert_recordegress_output \|^assert_recordegress" cross-test/current-generation/run.sh; grep -n "^source\|^\. \|lib/" cross-test/current-generation/run.sh | head
+< Usage:   cross-test/current-generation/run.sh [options]  Options:   --language LANG   Run one service language: go, java, rust   --workdir DIR     Use a specific generated-output work directory   --tacplus BIN     Use an existing tacplus binary   --keep            Keep generated outputs after succes...
+> Bash cd /builds/looper/tacplus/issues/351; sed -n 2740,2800p cross-test/current-generation/run.sh; cat cross-test/lib/java-compile.sh | head -30
+< # (spec.store_principal) / (spec.record).private egress ROW FILTERS are generated # AND COMPILED by a standing gate. cross-test/proto is types-only, so it emits no # server wrapper — the one surface the filters land on; cross-test/consumer- # contract carries records with these annotations but no se...
+= thinking_tokens
+= thinking_tokens
+Writing the test first (a Go test in `scripts/` that sources a new helper), then the helper.
+> Write /builds/looper/tacplus/issues/351/scripts/cross_test_retired_claims_test.go
+< File created successfully at: /builds/looper/tacplus/issues/351/scripts/cross_test_retired_claims_test.go (file state is current in your context — no need to Read it back)
+> Bash cd /builds/looper/tacplus/issues/351/scripts && go test -run LinkedClaim . 2>&1 | tail -8; grep -n "func writeFile" *.go
+= task_started
+= task_notification
+<     cross_test_retired_claims_test.go:57: linked_claim_readers: exit status 1         bash: line 1: /builds/looper/tacplus/issues/351/cross-test/lib/retired-claims.sh: No such file or directory --- FAIL: TestLinkedClaimReadersIgnoresTheReservedNameInADescriptor (0.00s)     cross_test_retired_claims_...
+Fails as expected. Now the helper.
+> Write /builds/looper/tacplus/issues/351/cross-test/lib/retired-claims.sh
+< File created successfully at: /builds/looper/tacplus/issues/351/cross-test/lib/retired-claims.sh (file state is current in your context — no need to Read it back)
+> Bash go test -run LinkedClaim -v . 2>&1 | tail -8
+< === RUN   TestLinkedClaimReadersFiresUnderTheGateWorkRoot --- PASS: TestLinkedClaimReadersFiresUnderTheGateWorkRoot (0.02s) === RUN   TestLinkedClaimReadersIgnoresTheReservedNameInADescriptor --- PASS: TestLinkedClaimReadersIgnoresTheReservedNameInADescriptor (0.03s) PASS ok  	github.com/tacplus-dev...
+= thinking_tokens
+= thinking_tokens
+Now wire it into `run.sh`.
+> Bash cd /builds/looper/tacplus/issues/351 && python3 - <<'EOF' p='cross-test/current-generation/run.sh' s=open(p).read() old='''  local linked_hits   linked_hits="$(grep -rnE --include='*.go' --include='*.java' --include='*.rs' \\     'GetLinked\\(|SetLinked\\(|LinkedFromContext|getLinked\\(|setLinked\\(...
+< #!/usr/bin/env bash set -euo pipefail  ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)" # shellcheck source=../lib/cargo-target.sh source "$ROOT_DIR/cross-test/lib/cargo-target.sh" # shellcheck source=../lib/tree-guard.sh source "$ROOT_DIR/cross-test/lib/tree-guard.sh" tree_guard_begin "$ROOT_DIR" # ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Unit tests pass. Checkpointing, then running the full gate set detached (it exercises the real check on generated Go/Java/Rust under `target/`).
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 351 --checkpoint "linked_claim_readers helper (cross-test/lib/retired-claims.sh) + Go test + run.sh wiring done; left: just gates, commit, land, tag v2.6.2, comment, close" 2>&1 | tail -2; nohup just gates > /tmp/gates351.log 2>&1 & echo $!
+< remote:  [2026-11-08T22:11:19Z] checkpoint of #351 (a step) pushed to looper/tacplus-351:  5 files changed, 341 insertions(+), 4 deletions(-) 2316
+> Bash git status --short; git log --oneline -1; git describe --tags --abbrev=0 origin/main; git log --oneline v2.6.1..origin/main | head -20; git branch -r | grep release
+<  M cross-test/current-generation/run.sh ?? cross-test/lib/retired-claims.sh ?? scripts/cross_test_retired_claims_test.go 55ab0b53 HISTORY.md: releases (looper) v2.6.1 55ab0b53 HISTORY.md: releases (looper) 73720eca HISTORY.md: #321 (looper) 54ceaf15 trace_id: projections copy it, every generated sto...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash git fetch -q --tags origin; git log --oneline -1 v2.6.1; git merge-base --is-ancestor v2.6.1 origin/main && echo onmain; git log --oneline v2.6.1..origin/main | wc -l; git tag --sort=-creatordate | head -5; gh issue view 321 --repo tacplus-dev/tacplus --json labels,title -q '.title,.labels[].name'; ...
+< 59419d54 Bound the disk the cross-test gates use: prune each leg's build once it passes (#282) onmain 14 v2.6.4 v2.5.15 v2.4.14 v2.3.14 v2.2.12 Member port moves onto gRPC: a bidi stream of byte chunks with make-before-break session rotation (Java), in place of #212's TLS framing approved feature pr...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b: $(git show origin/release/$b:cross-test/current-generation/run.sh | grep -c "grep -v '/target/'") latest=$(git tag --merged origin/release/$b --sort=-v:refname | head -1)"; done; gh pr list --repo tacplus-dev/tacplus --state all --search "backport 3...
+< 2.0: 0 latest=v2.0.21 2.1: 0 latest=v2.1.15 2.2: 0 latest=v2.2.12 2.3: 0 latest=v2.3.14 2.4: 0 latest=v2.4.14 2.5: 0 latest=v2.5.15 2.6: 1 latest=v2.6.4 370	[release/2.1] Durable-spool selftests wait on spool state, not a fixed 1s (#341)	backport/341-release-2.1	DRAFT	2026-11-08T05:52:19Z 375	[relea...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash gh pr view 375 --repo tacplus-dev/tacplus --json body,isDraft,labels -q '.body,.isDraft,.labels[].name'; tail -3 /tmp/gates351.log
+< Backport of 862a7316 from main (#341). Its hash on main follows the land, and this pull request stays a draft until then. **Once this merges, cut the line's next free patch tag on `release/2.6` at the merge commit: `v2.6.3` today**, unless another backport on this line takes it first. The open backp...
+= thinking_tokens
+= thinking_tokens
+> Bash (command -v shellcheck && shellcheck cross-test/lib/retired-claims.sh && echo sc-ok); grep -n "shellcheck" justfile | head -3
+< (Bash completed with no output)
+No shellcheck here. Waiting on gates.
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Monitor tail -n0 -F /tmp/gates351.log | grep -E --line-buffered "^=== .* rc=|OVERALL|linked claim|record-egress"; 
+= permission_denied
+< This Bash command contains multiple operations. The following part requires approval: tail -n0 -F /tmp/gates351.log
+> Bash until grep -qE "OVERALL|current-generation rc=" /tmp/gates351.log; do sleep 20; done; grep -E "^=== .* rc=|OVERALL|linked claim|PASS .*record-egress" /tmp/gates351.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: b197m9t1f. Output is being written to: /builds/looper/tacplus/homes/looper-351/tmp/claude-61000/-builds-looper-tacplus-issues-351/0c63cb18-6dbe-4bda-8141-9a77d1f152e0/tasks/b197m9t1f.output. You will be notified when it completes. To check interim output, use R...
+Meanwhile, preparing the release/2.6 backport in a separate worktree.
+> Bash git worktree add -q /tmp/bp351 -b backport/351-release-2.6 origin/release/2.6 && cd /tmp/bp351 && sed -n 1,14p cross-test/current-generation/run.sh; grep -n "grep -v '/target/'" -B5 -A4 cross-test/current-generation/run.sh; ls cross-test/lib scripts/*_test.go
+< #!/usr/bin/env bash set -euo pipefail  ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)" # shellcheck source=../lib/cargo-target.sh source "$ROOT_DIR/cross-test/lib/cargo-target.sh" # shellcheck source=../lib/tree-guard.sh source "$ROOT_DIR/cross-test/lib/tree-guard.sh" tree_guard_begin "$ROOT_DIR" # ...
+Identical; the diff will apply cleanly. Applying it and running the unit test there:
+> Bash (git diff; git diff --no-index /dev/null cross-test/lib/retired-claims.sh; git diff --no-index /dev/null scripts/cross_test_retired_claims_test.go) > /tmp/351.patch; cd /tmp/bp351 && git apply /tmp/351.patch && git status --short && cd scripts && go test -run LinkedClaim . 2>&1 | tail -2
+<  M cross-test/current-generation/run.sh ?? cross-test/lib/retired-claims.sh ?? scripts/cross_test_retired_claims_test.go ok  	github.com/tacplus-dev/tacplus/scripts	0.297s Shell cwd was reset to /builds/looper/tacplus/issues/351
+= thinking_tokens
+= thinking_tokens
+Now waiting on the main gates.
+> Bash sleep 1; tail -c 300 /tmp/gates351.log; grep -E "rc=" /tmp/gates351.log
+<  github.com/spf13/pflag v1.0.10 go: downloading go.uber.org/multierr v1.11.0 go: downloading google.golang.org/grpc v1.83.2 go: downloading google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa go: downloading golang.org/x/sys v0.47.0 go: downloading golang.org/x/sync v0.22.0 ...
+> Bash until grep -qE "OVERALL|current-generation rc=" /tmp/gates351.log; do sleep 30; done; grep -E "rc=|OVERALL|linked claim|PASS .*record-egress" /tmp/gates351.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bfxiwwr7c). Output is being written to: /builds/looper/tacplus/homes/looper-351/tmp/claude-61000/-builds-looper-tacplus-issues-351/0c63cb18-6dbe-4bda-8141-9a77d1f152e0/tasks/bfxiwwr7c.output. You will be notified w...
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 18); do grep -qE "OVERALL|current-generation rc=" /tmp/gates351.log && break; sleep 30; done; grep -E "rc=|OVERALL|linked claim|PASS .*record-egress" /tmp/gates351.log; tail -2 /tmp/gates351.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust health-only fixture ==> Compiling rust health-only fixture
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL|current-generation rc=|record-egress" /tmp/gates351.log && break; sleep 30; done; grep -E "rc=|OVERALL|linked claim|record-egress" /tmp/gates351.log; tail -1 /tmp/gates351.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling go requires-device fixture
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL|current-generation rc=|PASS go record-egress" /tmp/gates351.log && break; sleep 30; done; grep -E "rc=|OVERALL|linked claim|record-egress" /tmp/gates351.log; tail -1 /tmp/gates351.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating go record-egress fixture ==> Compiling go record-egress fixture     PASS go record-egress ==> Generating java record-egress fixture ==> Compiling java record-egress fixture ==> Compiling java record-egress fixture
+= thinking_tokens
+= thinking_tokens
+Go record-egress passes with the check now live under `target/`. Continuing.
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL|current-generation rc=|PASS rust record-egress$" /tmp/gates351.log && break; sleep 30; done; grep -E "rc=|OVERALL|linked claim|PASS .* record-egress" /tmp/gates351.log; tail -1 /tmp/gates351.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===     PASS go record-egress     PASS java record-egress     PASS rust record-egress ==> Compiling go record-egress HOST fixture
+= thinking_tokens
+= thinking_tokens
+All three languages pass. Checking on real generated output under `target/` with a planted reader in a scratch copy:
+> Bash W=target/cross-test/current-generation; ls $W | head -30; d=$(ls -d $W/recordegress-host-go 2>/dev/null); echo "dir=$d"; grep -rl "JWT_PAYLOAD_TYPE_LINKED" $W 2>/dev/null | head -3
+< c2sonly-go.log go go.log healthonly-rust.log java java.log recordegress-go.log recordegress-host-go recordegress-host-go.log recordegress-java.log recordegress-rust.log requiresdevice-go.log requiresdevice-java.log requiresdevice-rust.log rust rust.log zerorpc-rust.log dir=target/cross-test/current-...
+= thinking_tokens
+= thinking_tokens
+> Bash S=target/cross-test/scratch351; rm -rf $S; mkdir -p $S; cp -r target/cross-test/current-generation/recordegress-host-go $S/ 2>/dev/null; cp -r target/cross-test/current-generation/java $S/ 2>/dev/null; source cross-test/lib/retired-claims.sh; for o in $S/recordegress-host-go/tacplus $S/java/tacplus;...
+< == target/cross-test/scratch351/recordegress-host-go/tacplus target/cross-test/scratch351/recordegress-host-go/tacplus/model/types/sys/token/token.pb.go hits: [] == target/cross-test/scratch351/java/tacplus hits: [] plant in target/cross-test/scratch351/recordegress-host-go/tacplus/model/s2sm/grpc/s...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash rm -rf target/cross-test/scratch351; /usr/local/bin/repo-looper --repo tacplus --issue 351 --checkpoint "fix + test done, current-generation record-egress passes in go/java/rust with the check live; backport worktree /tmp/bp351 prepared; left: finish just gates, commit, land, backport PR release/2.6...
+< [2026-11-08T22:58:03Z] checkpoint of #351 (a step) pushed to looper/tacplus-351:  5 files changed, 452 insertions(+), 4 deletions(-)
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL" /tmp/gates351.log && break; sleep 30; done; grep -E "rc=|OVERALL" /tmp/gates351.log; tail -1 /tmp/gates351.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating java event-bus backpressure fixture
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL" /tmp/gates351.log && break; sleep 30; done; grep -E "rc=|OVERALL" /tmp/gates351.log; tail -1 /tmp/gates351.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust accounting-sink fixture
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL" /tmp/gates351.log && break; sleep 30; done; grep -E "rc=|OVERALL" /tmp/gates351.log; tail -1 /tmp/gates351.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling go quorum-write fixture
+= thinking_tokens
+= thinking_tokens
+The gates are slow. I'm committing and starting the land now (it re-runs the gates itself) while the local run continues.
+> Bash git add cross-test/current-generation/run.sh cross-test/lib/retired-claims.sh scripts/cross_test_retired_claims_test.go && git commit -q -F - <<'EOF' current-generation: the retired-linked-claim check runs under the gate's work root (#351)  The record-egress fixture's check that no generated code re...
+< 19a2ec34 current-generation: the retired-linked-claim check runs under the gate's work root (#351) 69217
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL" /tmp/gates351.log && break; sleep 30; done; grep -E "rc=|OVERALL" /tmp/gates351.log; tail -1 /tmp/gates351.log; echo ---; tail -5 /tmp/land351.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling go epoch-load fixture --- [2026-11-08T23:26:48Z] checkpoint of #351 (land queued) pushed to looper/tacplus-351:  6 files changed, 474 insertions(+), 4 deletions(-) [2026-11-08T23:26:50Z] queued: the manager of tacplus m...
+Meanwhile, committing the backport branch (pushed as a draft PR once main has the hash).
+> Bash cd /tmp/bp351 && git add -A cross-test scripts && git commit -q -F - <<'EOF' current-generation: the retired-linked-claim check runs under the gate's work root (#351)  Backport to release/2.6. The record-egress fixture's check that no generated code reads the retired `linked` claim (#171) dropped ev...
+< e68d659e current-generation: the retired-linked-claim check runs under the gate's work root (#351) 31f69e94 Merge pull request #336 from tacplus-dev/backport/313-release-2.6 Shell cwd was reset to /builds/looper/tacplus/issues/351
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL" /tmp/gates351.log && break; grep -qE "landed|merged nothing|not merged" /tmp/land351.log && break; sleep 30; done; grep -E "rc=|OVERALL" /tmp/gates351.log; tail -1 /tmp/gates351.log; echo ---; tail -3 /tmp/land351.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling go tenant-route fixture (crew) --- [2026-11-08T23:26:48Z] checkpoint of #351 (land queued) pushed to looper/tacplus-351:  6 files changed, 474 insertions(+), 4 deletions(-) [2026-11-08T23:26:50Z] queued: the manager of ...
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL" /tmp/gates351.log && break; kill -0 69217 2>/dev/null || break; sleep 30; done; grep -E "rc=|OVERALL" /tmp/gates351.log; tail -1 /tmp/gates351.log; echo ---; tail -3 /tmp/land351.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust tenant-route fixture (crew) --- [2026-11-08T23:26:48Z] checkpoint of #351 (land queued) pushed to looper/tacplus-351:  6 files changed, 474 insertions(+), 4 deletions(-) [2026-11-08T23:26:50Z] queued: the manager o...
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL" /tmp/gates351.log && break; kill -0 69217 2>/dev/null || break; sleep 30; done; grep -E "rc=|OVERALL" /tmp/gates351.log; tail -1 /tmp/gates351.log; echo ---; tail -3 /tmp/land351.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating java redo-contract fixture (redo) --- [2026-11-08T23:26:48Z] checkpoint of #351 (land queued) pushed to looper/tacplus-351:  6 files changed, 474 insertions(+), 4 deletions(-) [2026-11-08T23:26:50Z] queued: the manager...
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL" /tmp/gates351.log && break; kill -0 69217 2>/dev/null || break; sleep 30; done; grep -E "rc=|OVERALL" /tmp/gates351.log; tail -1 /tmp/gates351.log; echo ---; tail -3 /tmp/land351.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating go tenant-record fixture (tstratum) --- [2026-11-08T23:26:48Z] checkpoint of #351 (land queued) pushed to looper/tacplus-351:  6 files changed, 474 insertions(+), 4 deletions(-) [2026-11-08T23:26:50Z] queued: the manag...
+= thinking_tokens
+= thinking_tokens
+> Bash date -u; for i in $(seq 1 19); do grep -qE "OVERALL" /tmp/gates351.log && break; kill -0 69217 2>/dev/null || break; sleep 30; done; grep -E "rc=|OVERALL" /tmp/gates351.log; tail -1 /tmp/gates351.log; echo ---; tail -3 /tmp/land351.log
+= task_started
+= task_notification
+< Mon Nov  9 00:14:37 UTC 2026 === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust tenant-record fixture (tstratum) --- [2026-11-08T23:26:48Z] checkpoint of #351 (land queued) pushed to looper/tacplus-351:  6 files changed, 474 insertions(+), 4 deletions(-) [2026-11-0...
+Still waiting: local `just gates` is deep in current-generation (all passing so far), and the land is queued with the manager.
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL" /tmp/gates351.log && break; kill -0 69217 2>/dev/null || break; sleep 30; done; grep -E "rc=|OVERALL" /tmp/gates351.log; tail -1 /tmp/gates351.log; echo ---; tail -3 /tmp/land351.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling go tenant-slice fixture --- [2026-11-08T23:26:48Z] checkpoint of #351 (land queued) pushed to looper/tacplus-351:  6 files changed, 474 insertions(+), 4 deletions(-) [2026-11-08T23:26:50Z] queued: the manager of tacplus...
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL" /tmp/gates351.log && break; kill -0 69217 2>/dev/null || break; sleep 30; done; grep -E "rc=|OVERALL" /tmp/gates351.log; tail -1 /tmp/gates351.log; echo ---; tail -3 /tmp/land351.log; gh issue view 351 --repo tacplus-dev/tacplus --comments | tail -5
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling go tenant-slice owner fixture --- [2026-11-08T23:26:48Z] checkpoint of #351 (land queued) pushed to looper/tacplus-351:  6 files changed, 474 insertions(+), 4 deletions(-) [2026-11-08T23:26:50Z] queued: the manager of t...
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL" /tmp/gates351.log && break; kill -0 69217 2>/dev/null || break; sleep 30; done; date -u; grep -E "rc=|OVERALL" /tmp/gates351.log; tail -1 /tmp/gates351.log; echo ---; tail -3 /tmp/land351.log
+= task_started
+= task_notification
+< Mon Nov  9 00:52:47 UTC 2026 === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling go tenant-slice config owner fixture --- [2026-11-08T23:26:48Z] checkpoint of #351 (land queued) pushed to looper/tacplus-351:  6 files changed, 474 insertions(+), 4 deletions(-) [2026-11-08...
+= thinking_tokens
+= thinking_tokens
+About an hour left in this run. I'm opening the release/2.6 backport as a draft now, the way the other backports do.
+> Bash cd /tmp/bp351 && git push -q origin backport/351-release-2.6 2>&1 | tail -2; gh pr list --repo tacplus-dev/tacplus --state open --base release/2.6 --json number,title -q '.[]|"\(.number) \(.title)"' | head
+= vcs_state_changed
+< remote:      https://github.com/tacplus-dev/tacplus/pull/new/backport/351-release-2.6         remote:  472 [release/2.6] Rust/TypeScript chassis: no hardcoded floors that admit known advisories (#338) 463 [release/2.6] Release workflow: mark a release Latest only on the newest line (#337) 453 [relea...
+> Bash cd /tmp/bp351 && gh pr create --repo tacplus-dev/tacplus --draft --base release/2.6 --head backport/351-release-2.6 --title "[release/2.6] current-generation: the retired-linked-claim check runs under the gate's work root (#351)" --body-file - <<'EOF' Backport of 19a2ec34 from main (#351). Its hash ...
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/473 Shell cwd was reset to /builds/looper/tacplus/issues/351
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 351 --checkpoint "committed 19a2ec34, land queued; draft backport PR #473 (release/2.6, tag v2.6.5 or next). Local just gates: soundness/test rc=0, current-generation record-egress PASS go/java/rust, still running. Left: land verdict, un-draft #473 w...
+= task_started
+= task_notification
+< [2026-11-09T00:53:08Z] checkpoint of #351 (a step) pushed to looper/tacplus-351:  6 files changed, 529 insertions(+), 4 deletions(-) Mon Nov  9 01:01:38 UTC 2026 === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=2 === ==> java/base: generating twice into se...
+= thinking_tokens
+= thinking_tokens
+current-generation exited 2. That looks like the tree guard (I committed mid-run). Checking:
+> Bash grep -nE "tree guard|ERROR" /tmp/gates351.log | head; grep -n "current-generation rc" -B4 /tmp/gates351.log | head
+< 699:tree guard: the working tree at /builds/looper/tacplus/issues/351 changed while this gate ran; its verdict is about a different tree. Re-run it. 697-     Removed 594 files, 2.7GiB total 698-    Removed 14M fixture tree tenantslice-config-owner-rust 699-tree guard: the working tree at /builds/loo...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL" /tmp/gates351.log && break; kill -0 69217 2>/dev/null || break; sleep 30; done; date -u; grep -E "rc=|OVERALL" /tmp/gates351.log; tail -1 /tmp/gates351.log; echo ---; tail -3 /tmp/land351.log
+= task_started
+= task_notification
+< Mon Nov  9 01:11:16 UTC 2026 === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=2 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=0 === === memberport rc=0 === ==> generating java --- [2026-11-08T23:26:48Z] checkpoint of #351 (land...
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL" /tmp/gates351.log && break; kill -0 69217 2>/dev/null || break; sleep 30; done; date -u; grep -E "rc=|OVERALL" /tmp/gates351.log | tail -8; tail -1 /tmp/gates351.log; echo ---; tail -3 /tmp/land351.log
+= task_started
+= task_notification
+< Mon Nov  9 01:20:49 UTC 2026 === stream-expiry rc=0 === === memberport rc=0 === === claims-provenance rc=0 === === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc=0 === === jwk-alg rc=0 === === redact rc=0 === ==> Building the java leg --- [2026-11-08T23:26:48Z] checkpoint of #351 ...
+> Bash for i in $(seq 1 19); do grep -qE "OVERALL" /tmp/gates351.log && break; kill -0 69217 2>/dev/null || break; sleep 30; done; date -u; grep -E "rc=|OVERALL" /tmp/gates351.log | tail -3; echo ---; tail -3 /tmp/land351.log
+= task_started
+= task_notification
+< Mon Nov  9 01:22:51 UTC 2026 === trace-carry rc=0 === === tacplus-script rc=0 === === OVERALL fail=1 === --- [2026-11-08T23:26:48Z] checkpoint of #351 (land queued) pushed to looper/tacplus-351:  6 files changed, 474 insertions(+), 4 deletions(-) [2026-11-08T23:26:50Z] queued: the manager of tacplus...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 351 --checkpoint "DONE: fix 19a2ec34 committed, land queued (manager lands it even if this run stops). Draft backport PR #473 to release/2.6 (tag next free v2.6.x after merge). Local just gates: all rc=0 except current-generation rc=2 = tree guard tr...
+< [2026-11-09T01:22:59Z] checkpoint of #351 (a step) pushed to looper/tacplus-351:  6 files changed, 586 insertions(+), 4 deletions(-)
+> Bash for i in $(seq 1 19); do kill -0 69217 2>/dev/null || break; sleep 30; done; date -u; tail -5 /tmp/land351.log
+= task_started
+= task_notification
+< Mon Nov  9 01:32:31 UTC 2026 [2026-11-08T23:26:48Z] checkpoint of #351 (land queued) pushed to looper/tacplus-351:  6 files changed, 474 insertions(+), 4 deletions(-) [2026-11-08T23:26:50Z] queued: the manager of tacplus merges looper/tacplus-351 after the lands queued before it, one at a time, and ...
+> Bash for i in $(seq 1 19); do kill -0 69217 2>/dev/null || break; sleep 30; done; date -u; tail -5 /tmp/land351.log
+= task_started
+= task_notification
+< Mon Nov  9 01:42:03 UTC 2026 [2026-11-08T23:26:48Z] checkpoint of #351 (land queued) pushed to looper/tacplus-351:  6 files changed, 474 insertions(+), 4 deletions(-) [2026-11-08T23:26:50Z] queued: the manager of tacplus merges looper/tacplus-351 after the lands queued before it, one at a time, and ...
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 17); do kill -0 69217 2>/dev/null || break; sleep 30; done; date -u; tail -3 /tmp/land351.log
+= task_started
+= task_notification
+< Mon Nov  9 01:50:36 UTC 2026 [2026-11-08T23:26:48Z] checkpoint of #351 (land queued) pushed to looper/tacplus-351:  6 files changed, 474 insertions(+), 4 deletions(-) [2026-11-08T23:26:50Z] queued: the manager of tacplus merges looper/tacplus-351 after the lands queued before it, one at a time, and ...
+= thinking_tokens
+= thinking_tokens
+The fix is committed (19a2ec34) and queued to land, but #351 is still open. The land had no verdict when this run reached its time limit; the manager lands it anyway, and the next run finishes the issue.
+
+**The fix:** the check now looks only inside the fixture's own output, so it runs under `target/cross-test/...` instead of filtering every path out.
+- **Build output:** it skips only a `target/` directory inside that output.
+- **Descriptor strings:** it ignores text inside string literals, so the reserved `JWT_PAYLOAD_TYPE_LINKED` name in a protoc descriptor no longer counts as a reader.
+- **Where it lives:** the check is now a small shared script, `cross-test/lib/retired-claims.sh`, which `cross-test/current-generation/run.sh` calls.
+
+**Tests:** a new Go test, `scripts/cross_test_retired_claims_test.go`, was written first and failed before the fix. It now passes and covers:
+- planted Go, Java and Rust readers under a `target/cross-test/...` path are reported;
+- a reader in a `target/` directory inside the output is ignored;
+- the reserved name inside Go and Java descriptor strings stays quiet, but the same name outside a string is reported.
+
+**Checked on real generated output:**
+- The record-egress fixture passes in Go, Java and Rust with the check actually running.
+- In a scratch copy of the real output under `target/cross-test/`, the real `token.pb.go` descriptor (the issue's false positive) gave no hits, and a planted `GetLinked(` was reported.
+
+**Local `just gates`:** protoc-check, soundness, test, determinism, cert-stream, stream-expiry, memberport, claims-provenance, w2s-validate, c2d-server, zero-rpc-s2s, jwk-alg, redact, trace-carry and tacplus-script all ended `rc=0`. current-generation ended `rc=2`, so the run's last line is `=== OVERALL fail=1 ===`. The cause was the gate's guard against the source tree changing mid-run, tripped by my own commit while it ran. No fixture failed before it stopped, but I did not re-run current-generation cleanly. The land re-runs the gates.
+
+**Release:** I did not tag v2.6.2 from main, because main has taken a feature (#321) since v2.6.1. Of the release branches, only release/2.6 has this check, so the fix goes there as backport pull request #473 (draft). It says to cut the next free patch tag on release/2.6 once it merges (v2.6.5 today, unless another backport takes it first).
+
+**Left for the next run** (all in the last checkpoint):
+- read the land verdict and which gate set it ran;
+- put the main commit hash in #473 and mark it ready;
+- post the outcome comment and close #351.
+
+No service handlers changed, so the trace rule doesn't apply here.
+= success: The fix is committed (19a2ec34) and queued to land, but #351 is still open. The land had no verdict when this run reached its time limit; the manager lands it anyway, and the next run finishes the issue.
+
+**The fix:** the check now looks only inside the fixture's own output, so it runs under `target/cross-test/...` instead of filtering every path out.
+- **Build output:** it skips only a `target/` directory inside that output.
+- **Descriptor strings:** it ignores text inside string literals, so the reserved `JWT_PAYLOAD_TYPE_LINKED` name in a protoc descriptor no longer counts as a reader.
+- **Where it lives:** the check is now a small shared script, `cross-test/lib/retired-claims.sh`, which `cross-test/current-generation/run.sh` calls.
+
+**Tests:** a new Go test, `scripts/cross_test_retired_claims_test.go`, was written first and failed before the fix. It now passes and covers:
+- planted Go, Java and Rust readers under a `target/cross-test/...` path are reported;
+- a reader in a `target/` directory inside the output is ignored;
+- the reserved name inside Go and Java descriptor strings stays quiet, but the same name outside a string is reported.
+
+**Checked on real generated output:**
+- The record-egress fixture passes in Go, Java and Rust with the check actually running.
+- In a scratch copy of the real output under `target/cross-test/`, the real `token.pb.go` descriptor (the issue's false positive) gave no hits, and a planted `GetLinked(` was reported.
+
+**Local `just gates`:** protoc-check, soundness, test, determinism, cert-stream, stream-expiry, memberport, claims-provenance, w2s-validate, c2d-server, zero-rpc-s2s, jwk-alg, redact, trace-carry and tacplus-script all ended `rc=0`. current-generation ended `rc=2`, so the run's last line is `=== OVERALL fail=1 ===`. The cause was the gate's guard against the source tree changing mid-run, tripped by my own commit while it ran. No fixture failed before it stopped, but I did not re-run current-generation cleanly. The land re-runs the gates.
+
+**Release:** I did not tag v2.6.2 from main, because main has taken a feature (#321) since v2.6.1. Of the release branches, only release/2.6 has this check, so the fix goes there as backport pull request #473 (draft). It says to cut the next free patch tag on release/2.6 once it merges (v2.6.5 today, unless another backport takes it first).
+
+**Left for the next run** (all in the last checkpoint):
+- read the land verdict and which gate set it ran;
+- put the main commit hash in #473 and mark it ready;
+- post the outcome comment and close #351.
+
+No service handlers changed, so the trace rule doesn't apply here.

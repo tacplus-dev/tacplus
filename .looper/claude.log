@@ -1,0 +1,400 @@
+> Bash curl -s https://proxy.golang.org/golang.org/x/net/@v/v0.62.0.mod; curl -s https://proxy.golang.org/google.golang.org/grpc/@v/v1.83.2.mod | grep crypto
+< module golang.org/x/net  go 1.26.0  require ( 	golang.org/x/crypto v0.58.0 	golang.org/x/sys v0.49.0 	golang.org/x/term v0.47.0 	golang.org/x/text v0.43.0 ) 	golang.org/x/crypto v0.55.0 // indirect
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/312; python3 - <<'EOF' p='scripts/go_dependency_floor_test.go' s=open(p).read() s=s.replace('''var goDependencyFloors = map[string]string{ 	// GO-2026-6603/6611/6612/6617 (HTTP/2 server, fixed in v0.60.0) and 	// GO-2026-6860/6866 (html, fixed in v0.62.0). 	"golang.o...
+= task_started
+= task_notification
+<     dependency_floor_test.go:79: cross-test/proto/dependencies.yaml pins rust anyhow 1.0.101, below its floor 1.0.103     dependency_floor_test.go:79: cross-test/proto/dependencies.yaml pins rust jsonwebtoken 9.3.1, below its floor 10.3.0     dependency_floor_test.go:79: cross-test/redact/proto/depe...
+Tests fail as expected. Now raising the pins.
+> Bash cd /builds/looper/tacplus/issues/312; PS='v0.58.1-0.20261009181718-2f1f834330b2' files=$(git ls-files '*dependencies.yaml') sed -i -E \  -e 's/^(\s+)axios: \^1\.13\.5$/\1axios: ^1.20.0/' \  -e 's/^(\s+)js-yaml: \^4\.1\.0$/\1js-yaml: ^4.3.2/' \  -e 's/^(\s+)zod: \^4\.3\.6$/\1zod: ^4.6.6/' \  -e 's/^(...
+<  example/proto/dependencies.yaml                      | 16 ++++++++--------  scripts/go_dependency_floor_test.go                  | 20 +++++++++++++++-----  44 files changed, 255 insertions(+), 245 deletions(-) ok  	github.com/tacplus-dev/tacplus/scripts	0.250s
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/312; git grep -h -E "^\s+(axios|js-yaml|zod|rustls|tokio|webpki-roots|anyhow|jsonwebtoken|golang.org/x/crypto):" -- '*dependencies.yaml' | sed 's/^ *//' | sort -u | while IFS=': ' read -r name ver; do ver=${ver#^}; case $name in axios|js-yaml|zod) eco=npm;; golang.or...
+< crates.io anyhow 1.0.103 -> "" npm axios 1.20.0 -> "" Go golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2 -> "" npm js-yaml 4.3.2 -> "" crates.io jsonwebtoken 10.3.0 -> "" npm jsonwebtoken 9.0.2 -> "" crates.io rustls 0.23.46 -> "" crates.io tokio 1.51.6 -> "" crates.io webpki-roots 0.26.11...
+= thinking_tokens
+= thinking_tokens
+All pins come back clean from OSV. Now I'm starting `just gates` and then `just consumer-build` in the background.
+> Bash cd /builds/looper/tacplus/issues/312; grep -n "^consumer-build" -A3 justfile; nohup bash -c 'just gates; echo "GATES_EXIT=$?"; just consumer-build; echo "CONSUMER_EXIT=$?"' > /tmp/gates-312.log 2>&1 & echo $!
+< 482:consumer-build: 483-  {{lock}} bash cross-test/consumer-contract/run.sh 484- 485:consumer-build-go: 486-  {{lock}} bash cross-test/consumer-contract/run.sh --language go 487- 488:consumer-build-java: 489-  {{lock}} bash cross-test/consumer-contract/run.sh --language java 490- 491:consumer-build-...
+= thinking_tokens
+= thinking_tokens
+While those run, I'm updating STATE.md and PROPOSALS.md and preparing the backports.
+> Bash cd /builds/looper/tacplus/issues/312; git show d2078cd0 -- STATE.md PROPOSALS.md | head -60; grep -n -i "floor\|advisor" STATE.md | head -30
+< commit d2078cd04c56c94d71c33ff7fa287efe006417e0 Author: jodydadescott <jody@thescottsweb.com> Date:   Fri Oct 30 18:52:41 2026 +0000      Pin golang.org/x/net at v0.62.0 in the cross-test harnesses and the example (#199)          The harness go.mods and dependencies.yaml pinned golang.org/x/net belo...
+> Bash cd /builds/looper/tacplus/issues/312; sed -n 1,4p STATE.md; sed -n 84,95p STATE.md; grep -n "#264\|cargo audit of a generated" PROPOSALS.md | head
+< # State: tacplus  Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by looper (#313).    HTTP/2 server the generated Go chassis reaches, and GO-2026-6860/6866) in every go.mod they write and every   dependencies.yaml; `scripts/go_dependency_floor_test.go` refuses a lower or ...
+> Bash cd /builds/looper/tacplus/issues/312; sed -n 22,40p PROPOSALS.md; sed -n 68,80p PROPOSALS.md
+<   0.68 panics compiling it), a nested message, a map field (prost's `HashMap` default makes a syscall Kani does not   model) or a sensitive check; they stub `std::fmt::format`, which Kani cannot finish. Wider coverage: bounded   strings/bytes (`kani::vec::any_vec` behind `String::from_utf8`) for the...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/312; python3 - <<'EOF' p='STATE.md' s=open(p).read() s=s.replace("Last updated: 2026-11-08 by looper (#313).","Last updated: 2026-11-09 by looper (#312).") anchor="""  backported to release/2.0 through release/2.5 by pull request, each line's next patch once it merge...
+<  PROPOSALS.md | 4 ++++  STATE.md     | 9 ++++++++-  2 files changed, 12 insertions(+), 1 deletion(-)
+> Bash cd /builds/looper/tacplus/issues/312; git grep -n -E "1\.13\.5|0\.23\.25|0\.26\.8|tokio.*1\.49|v0\.47\.0" -- docs site README* example | head; tail -3 /tmp/gates-312.log
+< Generated code outside sys/spiffe must not hand-roll SPIFFE URI parsing/construction, and descriptor lookups must not strip package context before matching names. - ✓ no hand-rolled SPIFFE parsing/construction or bare-name descriptor-match shapes found
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/312; git add -A && git commit -q -F - <<'EOF' Raise the TypeScript, Rust and Go x/crypto floors past their advisories (#312)  The generator writes the dependencies.yaml pins into the generated package.json, Cargo.toml and go.mod as they stand, and dependencies.yaml i...
+< 8404f2a5 Raise the TypeScript, Rust and Go x/crypto floors past their advisories (#312) remote:      https://github.com/tacplus-dev/tacplus/pull/new/looper/tacplus-312         remote:  [2026-11-09T13:32:33Z] checkpoint of #312 (a step) pushed to looper/tacplus-312:  49 files changed, 725 insertions(...
+= thinking_tokens
+= thinking_tokens
+Committed and checkpointed. Checking the commit holds only my files, since `git add -A` could have picked up gate output.
+> Bash cd /builds/looper/tacplus/issues/312; git show --stat HEAD | tail -55 | grep -v dependencies.yaml
+<     v0.58.1-0.20261009181718-2f1f834330b2: GO-2026-5932 (openpgp) is fixed     only after v0.58.0, the newest tag. The harness Cargo.tomls' tokio moves     too. scripts/dependency_floor_test.go and go_dependency_floor_test.go     refuse a lower pin from now on.          Co-Authored-By: Claude <norep...
+= thinking_tokens
+= thinking_tokens
+Commit is clean. Now surveying what each release branch pins.
+> Bash cd /builds/looper/tacplus/issues/312; git fetch -q origin; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do r=origin/release/$b; echo "== $b $(git ls-tree -r --name-only $r | grep -c 'dependencies.yaml$') files, latest tag $(git tag -l "v$b.*" --sort=-v:refname | head -1), floor tests: $(git ls-tree --name-...
+< == 2.0 24 files, latest tag v2.0.22, floor tests: scripts/go_dependency_floor_test.go scripts/java_dependency_floor_test.go       24 anyhow: 1.0.101;     14 axios: ^1.13.5;      3 golang.org/x/crypto: v0.47.0;     13 js-yaml: ^4.1.0;     24 jsonwebtoken: 9.3.1;     10 jsonwebtoken: ^9.0.2;     24 ru...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/312; gh pr list --repo tacplus-dev/tacplus --state all --search "head:backport/313-release-2.6" --json number,title,body,state -q '.[0] | "\(.number) \(.state) \(.title)\n\(.body)"'; git diff --stat origin/release/2.6...origin/backport/313-release-2.6 | tail -3; for ...
+< 336 MERGED [release/2.6] trace_id: projections copy it, every generated store path clears it (#313) Backport of #313 to release/2.6. It is a correctness and privacy fix, and the hub's split on #313 (2026-11-06) ships this half (items 3 and 4) as a patch on every supported line. The fix on main is #3...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/312; PS='v0.58.1-0.20261009181718-2f1f834330b2'; mkdir -p ~/bp; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do d=~/bp/$b; git worktree add -q -b backport/312-release-$b $d origin/release/$b || continue; ( cd $d files=$(git ls-files '*dependencies.yaml') sed -i -E \  -e 's/...
+= task_started
+= task_notification
+< == 2.0:  32 files changed, 188 insertions(+), 178 deletions(-) ok  	github.com/tacplus-dev/tacplus/scripts	0.307s == 2.1:  34 files changed, 197 insertions(+), 187 deletions(-) ok  	github.com/tacplus-dev/tacplus/scripts	0.718s == 2.2:  34 files changed, 197 insertions(+), 187 deletions(-) ok  	gith...
+= thinking_tokens
+= thinking_tokens
+Backports applied cleanly on all seven lines, and the floor tests pass on each. Committing them, then checking gate progress.
+> Bash cd /builds/looper/tacplus/issues/312; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do (cd ~/bp/$b && git add -A && git commit -q -F <(git -C /builds/looper/tacplus/issues/312 log -1 --format=%B 8404f2a5 | sed "1s/(#312)/(#312, backport to release\/$b)/") && git log --oneline -1); done; grep -E "^=== |EXIT=...
+< 6eb8360b Raise the TypeScript, Rust and Go x/crypto floors past their advisories (#312, backport to release/2.0) 3b7bb3f8 Raise the TypeScript, Rust and Go x/crypto floors past their advisories (#312, backport to release/2.1) d23a4080 Raise the TypeScript, Rust and Go x/crypto floors past their advi...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/312; sed -n 180,203p justfile; ls gates.yaml .looper* 2>/dev/null
+< Exit code 2   fail=0   # Toolchain preflight: a protoc/runtime mismatch breaks three of the gates   # below with an error that names neither protoc nor a version.   echo "=== protoc-check ==="   just protoc-check   rc=$?   echo "=== protoc-check rc=$rc ==="   if [[ $rc -ne 0 ]]; then     echo "=== O...
+= thinking_tokens
+= thinking_tokens
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Monitor tail -n +1 -f /tmp/gates-312.log | grep -E --line-buffered "^=== .* rc=|OVERALL|EXIT=|Killed|OOM"
+= permission_denied
+< This Bash command contains multiple operations. The following part requires approval: tail -n +1 -f /tmp/gates-312.log
+> Bash until grep -qE "CONSUMER_EXIT=|GATES_EXIT=[1-9]" /tmp/gates-312.log; do sleep 30; done; grep -E "rc=|OVERALL|EXIT=" /tmp/gates-312.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bvw7nlxrd. Output is being written to: /builds/looper/tacplus/homes/looper-312/tmp/claude-61000/-builds-looper-tacplus-issues-312/cc32d81a-bd13-45a9-be45-4251517d680b/tasks/bvw7nlxrd.output. You will be notified when it completes. To check interim output, use R...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+While the gates run, a quick check of the trace-propagation rule (my change touches no handlers, so this is only a sanity pass):
+> Bash cd /builds/looper/tacplus/issues/312; /usr/local/bin/looper-trace check 2>&1 | tail -15
+= task_started
+= task_notification
+< handler cross-test/server-runtime/client/go/main.go:112 checkPage (inbound: api)   causal cross-test/server-runtime/client/go/main.go:114 ListEventsPaged: DROPS the inbound trace_id handler cross-test/server-runtime/client/go/main.go:137 checkFailClosed (inbound: api)   causal cross-test/server-runt...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+These findings are in handlers my change doesn't touch. Checking whether they're already filed:
+> Bash cd /builds/looper/tacplus/issues/312; gh issue list --repo tacplus-dev/tacplus --state all --search "looper-trace server-runtime in:body" --json number,title,state -q '.[]|"\(.number) \(.state) \(.title)"' | head; gh issue list --repo tacplus-dev/tacplus --state all --search "outbound-deadline trace...
+< 311 OPEN server-runtime Go driver: four calls with no inbound request lack their `// trace: unrelated:` marker, so looper-trace check fails on main 310 OPEN outbound-deadline fixture: mid forwards the trace_id to leaf but no test asserts it arrives; the gate has no just recipe 	defer cancel()  	chec...
+Both are already filed (#311, #310), so there's nothing new to open. Waiting for the gates.
+> Bash until grep -qE "CONSUMER_EXIT=|GATES_EXIT=[1-9]|rc=[1-9]" /tmp/gates-312.log; do sleep 20; done; grep -E "rc=|OVERALL|EXIT=" /tmp/gates-312.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bh92vtgll). Output is being written to: /builds/looper/tacplus/homes/looper-312/tmp/claude-61000/-builds-looper-tacplus-issues-312/cc32d81a-bd13-45a9-be45-4251517d680b/tasks/bh92vtgll.output. You will be notified w...
+> Bash grep -E "rc=|OVERALL|EXIT=" /tmp/gates-312.log; tail -3 /tmp/gates-312.log
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===     PASS java ==> Generating rust cross-test fixture ==> Compiling rust cross-test fixture
+= thinking_tokens
+= thinking_tokens
+current-generation is now compiling Rust against the new pins. I'll wait for it before opening backport PRs.
+> Bash until grep -qE "current-generation rc=" /tmp/gates-312.log; do sleep 20; done; grep -E "rc=" /tmp/gates-312.log | tail -2
+= background_tasks_changed
+= task_started
+< Command running in background with ID: b2rg3w68k. Output is being written to: /builds/looper/tacplus/homes/looper-312/tmp/claude-61000/-builds-looper-tacplus-issues-312/cc32d81a-bd13-45a9-be45-4251517d680b/tasks/b2rg3w68k.output. You will be notified when it completes. To check interim output, use R...
+> Bash until grep -qE "current-generation rc=" /tmp/gates-312.log; do sleep 15; done; grep -E "rc=" /tmp/gates-312.log | tail -2
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bxpyx8oz0). Output is being written to: /builds/looper/tacplus/homes/looper-312/tmp/claude-61000/-builds-looper-tacplus-issues-312/cc32d81a-bd13-45a9-be45-4251517d680b/tasks/bxpyx8oz0.output. You will be notified w...
+That poller hit its time limit and stopped; two others, b2rg3w68k and bvw7nlxrd, are still watching the log. Waiting for current-generation to finish.
+> Bash sleep 540; grep -E "rc=" /tmp/gates-312.log | tail -3; tail -2 /tmp/gates-312.log
+< <tool_use_error>Blocked: sleep 540 followed by: grep -E "rc=" /tmp/gates-312.log tail -3 tail -2 /tmp/gates-312.log. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain shorter ...
+= thinking_tokens
+= thinking_tokens
+> Monitor until grep -qE "current-generation rc=" /tmp/gates-312.log; do sleep 15; done; grep -E "rc=" /tmp/gates-312.log | tail -2
+= permission_denied
+< This Bash command contains multiple operations. The following part requires approval: until grep -qE "current-generation rc=" /tmp/gates-312.log; do sleep 15; done; grep -E "rc=" /tmp/gates-312.log
+> Bash until grep -qE "current-generation rc=" /tmp/gates-312.log; do sleep 15; done
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b4o3blt3x). Output is being written to: /builds/looper/tacplus/homes/looper-312/tmp/claude-61000/-builds-looper-tacplus-issues-312/cc32d81a-bd13-45a9-be45-4251517d680b/tasks/b4o3blt3x.output. You will be notified w...
+> Bash grep -E "rc=" /tmp/gates-312.log | tail -3; tail -4 /tmp/gates-312.log; ps -o pid,etime,cmd --ppid 2812 | head
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===     PASS java requires-device     Removed 49M fixture tree requiresdevice-java ==> Generating rust requires-device fixture ==> Compiling rust requires-device fixture     PID     ELAPSED CMD    2813       32:30 just gates
+= thinking_tokens
+= thinking_tokens
+> Bash grep -E "PASS|FAIL|error" /tmp/gates-312.log | tail -20
+< - streaming/error-path trace and accounting completeness is covered by consumer-contract runtime cases. include timeouts, structured errors, and streaming-method stubs. - `swift W2S structured errors` ✓ (pkg/templates/swift/types/W2SClient.swift.tmpl) - `csharp W2S structured errors` ✓ (pkg/template...
+= thinking_tokens
+= thinking_tokens
+Rust and Go builds pass against the new pins so far; TypeScript comes later in current-generation.
+> Bash until grep -qE "current-generation rc=" /tmp/gates-312.log; do sleep 15; done; grep -E "rc=" /tmp/gates-312.log | tail -1
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bj4fkoi3i. Output is being written to: /builds/looper/tacplus/homes/looper-312/tmp/claude-61000/-builds-looper-tacplus-issues-312/cc32d81a-bd13-45a9-be45-4251517d680b/tasks/bj4fkoi3i.output. You will be notified when it completes. To check interim output, use R...
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'until grep -qE "current-generation rc=" /tmp/gates-312.log; do sleep 15; done'; grep -E "rc=" /tmp/gates-312.log | tail -1; tail -1 /tmp/gates-312.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === test rc=0 === ==> Compiling rust record-egress fixture
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/312; /usr/local/bin/repo-looper --repo tacplus --issue 312 --checkpoint "Fix 8404f2a5 committed; local gates running (soundness,test pass; current-generation rust/go pass so far); landing now. Backport commits ready locally in ~/bp/2.0..2.6 (branches backport/312-rel...
+< [2026-11-09T14:14:35Z] checkpoint of #312 (a step) pushed to looper/tacplus-312:  49 files changed, 857 insertions(+), 246 deletions(-) 51077
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Land queued (PID 51077). Now pushing the backport branches and opening their PRs.
+> Bash cd ~/bp/2.6; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do git -C ~/bp/$b push -q origin backport/312-release-$b 2>&1 | grep -v '^remote:' ; done; git ls-remote origin 'refs/heads/backport/312-*' | wc -l; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b: $(git tag -l "v$b.*" --sort=-v:refname | head -1)...
+= task_started
+= task_notification
+= vcs_state_changed
+< 7 2.0: v2.0.22 2.1: v2.1.16 2.2: v2.2.13 2.3: v2.3.15 2.4: v2.4.15 2.5: v2.5.16 2.6: v2.6.5 Shell cwd was reset to /builds/looper/tacplus/issues/312
+> Bash cd /builds/looper/tacplus/issues/312; git fetch -q --tags origin; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do latest=$(git tag -l "v$b.*" --sort=-v:refname | head -1); next="v$b.$(( ${latest##*.} + 1 ))"; n=$(git ls-tree -r --name-only origin/release/$b | grep -c 'dependencies.yaml$'); body=$(cat <<EOF...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/483 https://github.com/tacplus-dev/tacplus/pull/484 https://github.com/tacplus-dev/tacplus/pull/485 https://github.com/tacplus-dev/tacplus/pull/486 https://github.com/tacplus-dev/tacplus/pull/487 https://github.com/tacplus-dev/tacplus/pull/488 https://gith...
+Backport PRs #483–#489 are open. Waiting on the local gates and the land.
+> Bash timeout 590 bash -c 'until grep -qE "current-generation rc=" /tmp/gates-312.log; do sleep 15; done'; grep -E "rc=" /tmp/gates-312.log | tail -2; tail -3 /tmp/land-312.log
+= task_started
+= task_notification
+< === soundness rc=0 === === test rc=0 === [2026-11-09T14:14:38Z] checkpoint of #312 (land queued) pushed to looper/tacplus-312:  50 files changed, 862 insertions(+), 246 deletions(-) [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one ...
+> Bash timeout 590 bash -c 'until grep -qE "current-generation rc=" /tmp/gates-312.log; do sleep 15; done'; grep -E "rc=" /tmp/gates-312.log | tail -2; tail -1 /tmp/gates-312.log; tail -1 /tmp/land-312.log
+= task_started
+= task_notification
+< === soundness rc=0 === === test rc=0 === ==> Compiling rust accounting-sink fixture [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out f...
+> Bash timeout 590 bash -c 'until grep -qE "current-generation rc=" /tmp/gates-312.log; do sleep 15; done'; grep -E "rc=" /tmp/gates-312.log | tail -2; tail -1 /tmp/gates-312.log; tail -1 /tmp/land-312.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === soundness rc=0 === === test rc=0 === ==> Compiling rust owner-default fixture [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out fir...
+> Bash timeout 590 bash -c 'until grep -qE "current-generation rc=" /tmp/gates-312.log; do sleep 15; done'; grep -E "rc=" /tmp/gates-312.log | tail -2; tail -1 /tmp/gates-312.log; tail -1 /tmp/land-312.log
+= task_started
+= task_notification
+< === soundness rc=0 === === test rc=0 === ==> Compiling rust quorum-write fixture [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out firs...
+> Bash timeout 590 bash -c 'until grep -qE "current-generation rc=" /tmp/gates-312.log; do sleep 15; done'; grep -E "rc=" /tmp/gates-312.log | tail -2; tail -1 /tmp/gates-312.log; tail -1 /tmp/land-312.log
+= task_started
+= task_notification
+< === soundness rc=0 === === test rc=0 === ==> Compiling go tenant-route fixture (harbor) [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs o...
+> Bash timeout 590 bash -c 'until grep -qE "current-generation rc=" /tmp/gates-312.log; do sleep 15; done'; grep -E "rc=" /tmp/gates-312.log | tail -2; tail -1 /tmp/gates-312.log; tail -1 /tmp/land-312.log
+= task_started
+= task_notification
+< === soundness rc=0 === === test rc=0 === ==> Compiling rust tenant-route fixture (harbor) [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs...
+Still waiting: current-generation is working through the Rust fixtures (now tenant-route), and the land is queued behind the other lands. Nothing has failed so far.
+> Bash timeout 590 bash -c 'until grep -qE "current-generation rc=" /tmp/gates-312.log; do sleep 15; done'; grep -E "rc=" /tmp/gates-312.log | tail -2; tail -1 /tmp/gates-312.log; tail -1 /tmp/land-312.log
+= task_started
+= task_notification
+< === soundness rc=0 === === test rc=0 === ==> Compiling go redo-contract fixture (redo) [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs ou...
+> Bash timeout 590 bash -c 'until grep -qE "current-generation rc=" /tmp/gates-312.log; do sleep 15; done'; grep -E "rc=" /tmp/gates-312.log | tail -2; tail -1 /tmp/gates-312.log; tail -1 /tmp/land-312.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === soundness rc=0 === === test rc=0 === ==> Compiling rust redo-contract fixture (redo) [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs ...
+> Bash timeout 590 bash -c 'until grep -qE "current-generation rc=" /tmp/gates-312.log; do sleep 15; done'; grep -E "rc=" /tmp/gates-312.log | tail -2; tail -1 /tmp/gates-312.log; tail -1 /tmp/land-312.log; date -u
+= task_started
+= task_notification
+< === soundness rc=0 === === test rc=0 === ==> Compiling rust tenant-record fixture (tstratum) [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time r...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'until grep -qE "current-generation rc=" /tmp/gates-312.log || ! grep -q queued <(tail -1 /tmp/land-312.log); do sleep 15; done'; grep -E "rc=" /tmp/gates-312.log | tail -2; tail -1 /tmp/gates-312.log; tail -2 /tmp/land-312.log
+= task_started
+= task_notification
+< === soundness rc=0 === === test rc=0 === ==> Compiling go tenant-slice fixture [2026-11-09T14:14:38Z] checkpoint of #312 (land queued) pushed to looper/tacplus-312:  50 files changed, 862 insertions(+), 246 deletions(-) [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 ...
+> Bash timeout 590 bash -c 'until grep -qE "current-generation rc=" /tmp/gates-312.log || ! tail -1 /tmp/land-312.log | grep -q queued; do sleep 15; done'; grep -E "rc=" /tmp/gates-312.log | tail -2; tail -1 /tmp/gates-312.log; tail -1 /tmp/land-312.log
+= task_started
+= task_notification
+< === soundness rc=0 === === test rc=0 === ==> Compiling go tenant-slice owner fixture [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out ...
+> Bash timeout 590 bash -c 'until grep -qE "current-generation rc=" /tmp/gates-312.log || ! tail -1 /tmp/land-312.log | grep -q queued; do sleep 15; done'; grep -E "rc=" /tmp/gates-312.log | tail -2; tail -1 /tmp/gates-312.log; tail -1 /tmp/land-312.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === soundness rc=0 === === test rc=0 === ==> Generating java tenant-slice config owner fixture [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time...
+= thinking_tokens
+= thinking_tokens
+> Bash grep -iE "typescript|tsc|npm" /tmp/gates-312.log | grep -viE "^- |template" | tail -8; date -u
+< | constraint | go | java | python | rust | typescript | langs | | probe | go | java | python | rust | typescript | langs | | guarantee | go | java | python | rust | typescript | langs | | constraint | go | java | python | rust | typescript | langs | | probe | go | java | python | rust | typescript |...
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'until grep -qE "current-generation rc=" /tmp/gates-312.log || ! tail -1 /tmp/land-312.log | grep -q queued; do sleep 15; done'; grep -E "rc=" /tmp/gates-312.log | tail -2; tail -1 /tmp/gates-312.log; tail -1 /tmp/land-312.log
+= task_started
+= task_notification
+< === test rc=0 === === current-generation rc=0 === ==> go/base: generating twice into separate work dirs [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If ...
+> Bash grep -B12 "current-generation rc=0" /tmp/gates-312.log | head -14; grep -E "PASS typescript|typescript.*(OK|PASS)" /tmp/gates-312.log | head
+<     PASS go tenant-slice config owner     Removed 12M fixture tree tenantslice-config-owner-go ==> Generating java tenant-slice config owner fixture ==> Compiling java tenant-slice config owner fixture     PASS java tenant-slice config owner     Removed 53M fixture tree tenantslice-config-owner-java...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'until grep -qE "jwk-alg rc=|OVERALL" /tmp/gates-312.log || ! tail -1 /tmp/land-312.log | grep -q queued; do sleep 15; done'; grep -E "rc=" /tmp/gates-312.log | tail -3; tail -1 /tmp/land-312.log; date -u
+= task_started
+= task_notification
+< === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=0 === [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, i...
+> Bash timeout 590 bash -c 'until grep -qE "jwk-alg rc=|OVERALL" /tmp/gates-312.log || ! tail -1 /tmp/land-312.log | grep -q queued; do sleep 15; done'; grep -E "rc=" /tmp/gates-312.log | tail -4; tail -1 /tmp/land-312.log; date -u
+= task_started
+= task_notification
+< === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc=0 === === jwk-alg rc=0 === [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your ti...
+> Bash grep -E "rc=" /tmp/gates-312.log; grep -B3 "jwk-alg rc=0" /tmp/gates-312.log | head -4
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=0 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=0 === === memberport rc=0 === === claims-provenance rc=0 === === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc...
+Thirteen of sixteen gates pass so far, including jwk-alg's TypeScript chassis. Three remain (redact, trace-carry, tacplus-script), then consumer-build.
+> Bash timeout 590 bash -c 'until grep -qE "OVERALL" /tmp/gates-312.log || ! tail -1 /tmp/land-312.log | grep -q queued; do sleep 15; done'; grep -E "rc=|OVERALL|EXIT" /tmp/gates-312.log | tail -4; tail -1 /tmp/land-312.log; date -u
+= task_started
+= task_notification
+< === trace-carry rc=0 === === tacplus-script rc=0 === === OVERALL fail=0 === GATES_EXIT=0 [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs ...
+= thinking_tokens
+= thinking_tokens
+The full local `just gates` passes (`OVERALL fail=0`). consumer-build is running now; the land is still queued.
+> Bash timeout 590 bash -c 'until grep -qE "CONSUMER_EXIT" /tmp/gates-312.log || ! tail -1 /tmp/land-312.log | grep -q queued; do sleep 15; done'; grep -E "EXIT" /tmp/gates-312.log; tail -3 /tmp/gates-312.log; tail -1 /tmp/land-312.log; date -u
+= task_started
+= task_notification
+< GATES_EXIT=0 ==> go/both: compiling generated output when supported ==> go/c2d: generating ==> go/c2d: compiling generated output when supported [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one at a time, and says on the issue what...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+consumer-build won't finish before my limit. Posting the status comment and a final checkpoint now; the issue stays open so the next run can finish it.
+> Bash cd /builds/looper/tacplus/issues/312; gh issue comment 312 --repo tacplus-dev/tacplus --body-file - <<'EOF' Status from this run. The fix is committed and queued to land, but it has not landed yet, so this issue stays open.  **Fix:** 8404f2a5 on `looper/tacplus-312`, queued with the manager at 14:14...
+= task_started
+= task_notification
+< https://github.com/tacplus-dev/tacplus/issues/312#issuecomment-6745980143 [2026-11-09T16:54:06Z] checkpoint of #312 (a step) pushed to looper/tacplus-312:  50 files changed, 982 insertions(+), 246 deletions(-)
+> Bash timeout 590 bash -c 'until grep -qE "CONSUMER_EXIT" /tmp/gates-312.log || ! tail -1 /tmp/land-312.log | grep -q queued; do sleep 15; done'; grep -E "EXIT" /tmp/gates-312.log; tail -2 /tmp/gates-312.log; tail -1 /tmp/land-312.log; date -u
+= task_started
+= task_notification
+< GATES_EXIT=0 CONSUMER_EXIT=1 error: recipe `consumer-build` failed on line 483 with exit code 1 CONSUMER_EXIT=1 [2026-11-09T14:14:40Z] queued: the manager of tacplus merges looper/tacplus-312 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verd...
+> Bash grep -nE "FAIL|error|Error|failed|go: " /tmp/gates-312.log | awk -F: '$1>0' | tail -25
+< 37581:go: found google.golang.org/grpc/grpclog in google.golang.org/grpc v1.85.0 37582:go: found golang.org/x/text/unicode/norm in golang.org/x/text v0.43.0 37583:go: found google.golang.org/protobuf/encoding/protojson in google.golang.org/protobuf v1.36.12 37584:go: found github.com/pelletier/go-to...
+> Bash sed -n 37895,37906p /tmp/gates-312.log
+< 2026-11-09T17:03:05.990Z	INFO	created embedded proto file	{"file": "sys/x509.proto"} 2026-11-09T17:03:05.990Z	INFO	loaded registry	{"path": "/builds/looper/tacplus/homes/looper-312/tmp/tacplus-consumer-contract.QukFI9/python/c2s/client-only-proto/registry.yaml", "services": 1, "vservices": 0} 2026-1...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/312; gh issue comment 312 --repo tacplus-dev/tacplus --body-file - <<'EOF' Update: `just consumer-build` on 8404f2a5 finished with exit 1. It failed while generating the Python surface of `consumer-contract` (`python/c2s`), before anything compiled against these pins...
+= task_started
+= task_notification
+< https://github.com/tacplus-dev/tacplus/issues/312#issuecomment-6746219993 [2026-11-09T17:03:34Z] checkpoint of #312 (a step) pushed to looper/tacplus-312:  50 files changed, 982 insertions(+), 246 deletions(-)
+The fix for #312 is committed (8404f2a5) and queued to land, but it hadn't landed when my time ran out. `just consumer-build` also failed, apparently for an unrelated reason, so I left the issue open; the next run picks up from my last checkpoint.
+
+**What changed:**
+- **Pins raised:** every one of the 32 `dependencies.yaml` copies (`example/proto` included) now pins axios ^1.20.0, js-yaml ^4.3.2, zod ^4.6.6, rustls 0.23.46, tokio 1.51.6, webpki-roots 0.26.11, anyhow 1.0.103 and jsonwebtoken 10.3.0. The Cargo.toml files the cross-test scripts write for their own harnesses also had tokio 1.49.0; they now use 1.51.6.
+- **x/crypto goes past what the issue recommended:** the five fixtures and eight harness go.mod files now pin `v0.58.1-0.20261009181718-2f1f834330b2` instead of `v0.58.0`. OSV now reports GO-2026-5932 (the unmaintained openpgp package) against v0.58.0, and only this untagged commit fixes it. Nothing generated imports openpgp. I noted in PROPOSALS.md to move back to a tag once v0.59.0 exists.
+- **Tests:** a new `scripts/dependency_floor_test.go`, plus an x/crypto floor in `scripts/go_dependency_floor_test.go`. Both failed on the old pins before I raised them, and now refuse any lower pin.
+- **OSV:** every distinct pin of the nine packages comes back with no advisory.
+
+**Gates:**
+- **`just gates`:** passes locally on the fix, all 16 gates ending `=== OVERALL fail=0 ===`. That includes jwk-alg building the generated TypeScript (`165 cases, 11 accepted`).
+- **`just consumer-build`:** failed with exit 1. It stopped while generating the fixture's Python client, on an MCP annotation check (`ContractApi owns MCP tools but is being generated for language "python"`). This change touches no proto, MCP check or Python pin, so I believe main already fails this way, but I didn't have time to confirm on origin/main. Only its Go builds ran; its TypeScript and Rust builds did not.
+
+**Release:** main has taken a feature since v2.6.1 (#321), so main gets no tag. I opened backport pull requests #483–#489 against release/2.0 through release/2.6, which name the patches to cut on merge: v2.0.23, v2.1.17, v2.2.14, v2.3.16, v2.4.16, v2.5.17 and v2.6.6. On those branches I only ran the floor tests (they pass), not the full gates.
+
+**Trace rule:** this change touches no handlers. `looper-trace check` flags only handlers outside this change, and those findings are already filed as #311 and #310.
+
+**Left for the next run:**
+1. Confirm the land's verdict.
+2. Run `just consumer-build` on origin/main. If it fails the same way, file it as a bug, then run `just consumer-build-typescript`, `-rust` and `-go` on the fix.
+3. Post the final comment and close #312.
+
+I posted both status comments on the issue.
+= success: The fix for #312 is committed (8404f2a5) and queued to land, but it hadn't landed when my time ran out. `just consumer-build` also failed, apparently for an unrelated reason, so I left the issue open; the next run picks up from my last checkpoint.
+
+**What changed:**
+- **Pins raised:** every one of the 32 `dependencies.yaml` copies (`example/proto` included) now pins axios ^1.20.0, js-yaml ^4.3.2, zod ^4.6.6, rustls 0.23.46, tokio 1.51.6, webpki-roots 0.26.11, anyhow 1.0.103 and jsonwebtoken 10.3.0. The Cargo.toml files the cross-test scripts write for their own harnesses also had tokio 1.49.0; they now use 1.51.6.
+- **x/crypto goes past what the issue recommended:** the five fixtures and eight harness go.mod files now pin `v0.58.1-0.20261009181718-2f1f834330b2` instead of `v0.58.0`. OSV now reports GO-2026-5932 (the unmaintained openpgp package) against v0.58.0, and only this untagged commit fixes it. Nothing generated imports openpgp. I noted in PROPOSALS.md to move back to a tag once v0.59.0 exists.
+- **Tests:** a new `scripts/dependency_floor_test.go`, plus an x/crypto floor in `scripts/go_dependency_floor_test.go`. Both failed on the old pins before I raised them, and now refuse any lower pin.
+- **OSV:** every distinct pin of the nine packages comes back with no advisory.
+
+**Gates:**
+- **`just gates`:** passes locally on the fix, all 16 gates ending `=== OVERALL fail=0 ===`. That includes jwk-alg building the generated TypeScript (`165 cases, 11 accepted`).
+- **`just consumer-build`:** failed with exit 1. It stopped while generating the fixture's Python client, on an MCP annotation check (`ContractApi owns MCP tools but is being generated for language "python"`). This change touches no proto, MCP check or Python pin, so I believe main already fails this way, but I didn't have time to confirm on origin/main. Only its Go builds ran; its TypeScript and Rust builds did not.
+
+**Release:** main has taken a feature since v2.6.1 (#321), so main gets no tag. I opened backport pull requests #483–#489 against release/2.0 through release/2.6, which name the patches to cut on merge: v2.0.23, v2.1.17, v2.2.14, v2.3.16, v2.4.16, v2.5.17 and v2.6.6. On those branches I only ran the floor tests (they pass), not the full gates.
+
+**Trace rule:** this change touches no handlers. `looper-trace check` flags only handlers outside this change, and those findings are already filed as #311 and #310.
+
+**Left for the next run:**
+1. Confirm the land's verdict.
+2. Run `just consumer-build` on origin/main. If it fails the same way, file it as a bug, then run `just consumer-build-typescript`, `-rust` and `-go` on the fix.
+3. Post the final comment and close #312.
+
+I posted both status comments on the issue.

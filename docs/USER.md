@@ -657,6 +657,16 @@ Fields within a state root can be:
 | **Topic** | `(spec.topic) = true` | Pub/sub. Every subscriber gets every message. |
 | **View** | `(spec.view_sources)` or `(spec.view_member)` | Read-only union of multiple collections. |
 
+A topic's state service declares two bidi-streaming RPCs, `PublishTo<Field>`
+(the topic message in, `eventbus_support.PublishResponse` acks out) and
+`SubscribeTo<Field>` (`eventbus_support.SubscribeRequest` in,
+`<Root><Field>SubscribeRecord` records out: EventBus metadata and the payload).
+The generated state client wraps them. In Go, `<Field>().Publish(ctx, msg)`
+publishes one message and returns the broker's ack, and
+`<Field>().Subscribe(ctx, req)` sends `req` (nil for the defaults) and returns
+the stream: `Recv` the records, `Send` later flow control, and cancel `ctx` to
+end the subscription. A read-only client has no `Publish`.
+
 ### Cross-Service State Access
 
 **1. The owning service exports its state:**

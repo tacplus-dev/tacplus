@@ -1,0 +1,7 @@
+# The flock gate's cross-language vector (tacplus#206): the digests of vectorScenario
+# (cross-test/flock/testdata), which every leg must reproduce byte for byte.
+merged b1049cfbacd3a61a607269cec3a0625eb399f58c2d6765f3b872de4ac14eef3a
+survivor 0bb90eaaff7bd7ab1ae53754476673a34d79d83d36b6c79bc25126577727c52d
+loser cbe2d90b04eecb140dfef27942605784a11c63cb493ef759710ab6f7b8733f95
+marked 23ea13882c30d758f4b174f3ba431d0aae49c7df7c2e0961fe84689095376d95
+session 066705b41606e1a079fe87c8204db52ff0afe1eb5ea543c32b561ac815b21a6c

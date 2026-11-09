@@ -258,6 +258,10 @@ func processProtoFiles(protocDir, outputDir string) ([]model.ProtoFile, error) {
 		writeUndefaults(&b, pf, hasDefaults)
 		writeMerge(&b, pf)
 		if len(pf.Messages) > 0 {
+			// flock state (tacplus#206): the merge of every flock entry in the package.
+			writeFlock(&b, pf, protoFiles)
+		}
+		if len(pf.Messages) > 0 {
 			writeEnvVar(&b, pf)
 		}
 		if len(pf.Messages) > 0 {

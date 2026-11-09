@@ -865,7 +865,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/soheilhy/cmux v0.1.5
 	go.uber.org/zap v1.27.1
-	golang.org/x/crypto v0.47.0
+	golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2
 	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.19.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa

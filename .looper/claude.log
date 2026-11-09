@@ -1,0 +1,248 @@
+= init
+> Bash cd /builds/looper/tacplus/issues/311; gh issue view 311 --repo tacplus-dev/tacplus --comments | tail -20; sed -n 60,145p cross-test/server-runtime/client/go/main.go; git log --oneline v2.6.1..origin/main | head -30; git branch -r | grep release
+< association:	member edited:	false status:	none -- The looper of tacplus holds this issue back for now: both touch cross-test (#313, waiting too). It plans again as each running issue ends, and every 5m while they run. Plan record: job https://gitlab.com/tacplus-dev/looper/-/jobs/17716114337, artifac...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/311; /usr/local/bin/looper-trace check . 2>&1 | tail -15; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b $(git log -1 --format=%ci v$b.0 2>/dev/null) $(git cat-file -e origin/release/$b:cross-test/server-runtime/client/go/main.go 2>/dev/null && echo has || echo no...
+= task_started
+= task_notification
+< handler cross-test/server-runtime/client/go/main.go:112 checkPage (inbound: api)   causal cross-test/server-runtime/client/go/main.go:114 ListEventsPaged: DROPS the inbound trace_id handler cross-test/server-runtime/client/go/main.go:137 checkFailClosed (inbound: api)   causal cross-test/server-runt...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/311; f=cross-test/server-runtime/client/go/main.go python3 - "$f" <<'EOF' import sys,re p=sys.argv[1]; s=open(p).read() m="// trace: unrelated: gate driver; the call starts here, no inbound request to propagate\n" for pat in ["\tresp, err := api.GetPublicContract(", ...
+= task_started
+= task_notification
+<  cross-test/server-runtime/client/go/main.go | 4 ++++  1 file changed, 4 insertions(+) handler cross-test/server-runtime/client/go/main.go:73 checkUnary (inbound: api)   unrelated cross-test/server-runtime/client/go/main.go:75 GetPublicContract: gate driver; the call starts here, no inbound request ...
+= thinking_tokens
+= thinking_tokens
+Acceptance criterion 1 met. The remaining finding (outbound-deadline Rust fixture) is outside this issue; I'll check whether it's filed. Now the run.sh and gates.
+> Bash cd /builds/looper/tacplus/issues/311; nohup bash cross-test/server-runtime/run.sh > /tmp/sr311.log 2>&1 & echo $!; grep -n "^gates" -A15 justfile | head -30; gh issue list --repo tacplus-dev/tacplus --state all --search "outbound-deadline trace" --json number,title,state | head
+< 783 171:gates: 172-  #!/usr/bin/env bash 173-  set -uo pipefail 174-  # Hold the tree lock across the WHOLE suite, not once per gate: taking it per 175-  # gate would let another job interleave a regeneration between two of them. 176-  # The nested `just` calls below re-enter this same lock. 177-  i...
+= thinking_tokens
+= thinking_tokens
+#310 already covers the remaining outbound-deadline finding. Commit and checkpoint while run.sh runs.
+> Bash cd /builds/looper/tacplus/issues/311; git commit -qam "server-runtime Go driver: mark its four gate calls trace-unrelated (#311)  checkUnary, checkServerStream, checkPage and checkFailClosed receive no request: main starts each with a context and the generated client, and the call's request is built...
+< 001c3bf3 server-runtime Go driver: mark its four gate calls trace-unrelated (#311) remote:  [2026-11-09T13:28:12Z] checkpoint of #311 (a step) pushed to looper/tacplus-311:  3 files changed, 214 insertions(+)
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/311; git status --short; timeout 590 bash -c 'while kill -0 783 2>/dev/null; do sleep 10; done'; tail -15 /tmp/sr311.log
+< ==> Building local tacplus binary go: downloading github.com/spf13/cobra v1.10.2 go: downloading go.uber.org/zap v1.27.1 go: downloading gopkg.in/yaml.v3 v3.0.1 go: downloading google.golang.org/protobuf v1.36.11 go: downloading github.com/BurntSushi/toml v1.6.0 go: downloading golang.org/x/mod v0.4...
+The run needs the generated tree first; let me see how the justfile invokes it.
+> Bash cd /builds/looper/tacplus/issues/311; grep -n "server-runtime\|^generate\|^[a-z-]*:" justfile | head -60
+< 24:#   cross-test/server-runtime/fixture/java/pom.xml 33:default: install 35:generate: 38:build: generate 42:install: generate 54:test: generate soundness 58:soundness: 61:vet: 66:example: 74:site: site-venv 81:site-serve: site-venv 85:site-venv: 94:current-generation: 97:current-generation-go: 100:...
+> Bash cd /builds/looper/tacplus/issues/311; sed -n 30,60p justfile; sed -n 186,203p justfile
+< # exists so that never happens silently again. protoc_version := "36.0"  default: install  generate:   {{lock}} go generate ./pkg/internal/proto/spec/...  build: generate   mkdir -p bin   {{lock}} go build -trimpath -ldflags="-s -w" -o bin/tacplus .  install: generate   #!/usr/bin/env bash   set -eu...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/311; nohup bash -c 'just generate && bash cross-test/server-runtime/run.sh; echo "RUNSH rc=$?"; just gates; echo "GATES rc=$?"' > /tmp/v311.log 2>&1 & echo $!
+< 985
+Meanwhile, prepare backports. Check each release branch's file for the four calls.
+> Bash cd /builds/looper/tacplus/issues/311; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "== $b"; git show origin/release/$b:cross-test/server-runtime/client/go/main.go | grep -nE "^\s*(resp, err := api.GetPublicContract\(|seq, err := api.ListEvents\(|for event, err := range api.ListEventsPaged\(|resp, e...
+< == 2.0 74:	resp, err := api.GetPublicContract(ctx, validRequest()) 89:	seq, err := api.ListEvents(ctx, validRequest()) 114:	for event, err := range api.ListEventsPaged(ctx, &types.ContractPageRequest{ 138:	resp, err := api.GetContract(ctx, validRequest()) == 2.1 74:	resp, err := api.GetPublicContrac...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Identical on all seven lines. I'll wait for verification before landing.
+> Bash timeout 590 bash -c 'while kill -0 985 2>/dev/null && ! grep -q "RUNSH rc" /tmp/v311.log; do sleep 15; done'; grep -E "RUNSH|OK against|=== .* rc=" /tmp/v311.log; tail -3 /tmp/v311.log
+= task_started
+= task_notification
+< RUNSH rc=1 === protoc-check rc=0 === - `csharp W2S streaming method stub` ✓ (pkg/templates/csharp/types/W2SClient.cs.tmpl) - `swift W2S structured errors` ✓ (pkg/templates/swift/types/W2SClient.swift.tmpl) - `csharp W2S structured errors` ✓ (pkg/templates/csharp/types/W2SClient.cs.tmpl)
+> Bash grep -n -B25 "RUNSH rc" /tmp/v311.log | head -60
+< 8-go: downloading github.com/google/go-cmp v0.7.0 9-go: downloading github.com/golang/protobuf v1.5.4 10-go: downloading golang.org/x/sys v0.49.0 11-go: downloading go.opentelemetry.io/otel v1.44.0 12-go: downloading go.opentelemetry.io/otel/sdk/metric v1.44.0 13-go: downloading go.opentelemetry.io/...
+= thinking_tokens
+= thinking_tokens
+run.sh fails building the Go client against the generated consumer. Checking whether that's pre-existing and how the suite invokes it.
+> Bash cd /builds/looper/tacplus/issues/311; grep -rn "server-runtime/run.sh\|server-runtime\"" --include=*.go --include=justfile --include=*.yml --include=*.yaml . | grep -v "^./target" | head; grep -n "consumer\|tacplus \|TACPLUS\|go client build" cross-test/server-runtime/run.sh | head -40
+< ./cross-test/server-runtime/client/go/main.go:36:		Metadata:        map[string]string{"owner": "server-runtime"}, ./cross-test/justfile:77:    bash {{root}}/server-runtime/run.sh ./cross-test/justfile:80:    bash {{root}}/server-runtime/run.sh --server java ./cross-test/justfile:83:    bash {{root}}...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/311; sed -n 20,30p cross-test/server-runtime/client/go/main.go; sed -n 222,285p cross-test/server-runtime/run.sh; git log --oneline -5 -- cross-test/server-runtime/ cross-test/consumer-contract/
+< 	client "gitlab.com/example/tacplus/consumer/contractclient/model/c2sm/grpc/clients/contract/contractclient" 	types "gitlab.com/example/tacplus/consumer/contractclient/model/types/contract/contractclient" 	"google.golang.org/grpc" 	"google.golang.org/grpc/codes" 	"google.golang.org/grpc/credentials/...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/311; rm -rf /tmp/sr311w; mkdir -p /tmp/sr311w; TACPLUS_SERVER_RUNTIME_KEEP=true TACPLUS_SERVER_RUNTIME_WORKDIR=/tmp/sr311w timeout 580 bash cross-test/server-runtime/run.sh > /tmp/sr311b.log 2>&1; echo rc=$?; tail -3 /tmp/sr311b.log; ls /tmp/sr311w/go-client /tmp/sr3...
+= task_started
+= task_notification
+< rc=1 go: gitlab.com/example/tacplus/consumer/contractclient/server-runtime-client imports 	gitlab.com/example/tacplus/consumer/contractclient/model/types/contract/contractclient: module gitlab.com/example/tacplus/consumer/contractclient@latest found (v0.0.0-00010101000000-000000000000, replaced by ....
+> Bash cd /tmp/sr311w/go-client; cat tacplus.yaml; tail -5 generate.log; find model/types model/s2sm -maxdepth 3 -type d | head -20
+< language: "go" pkg: "com.gitlab.example.tacplus.consumer.contractclient" src: "/builds/looper/tacplus/issues/311/cross-test/consumer-contract/proto" output-dir: "model" 2026-11-09T13:29:58.071Z	INFO	Library templates written successfully 2026-11-09T13:29:58.071Z	INFO	Stripping spec annotations from ...
+= thinking_tokens
+= thinking_tokens
+The generated layout no longer matches the driver's imports — a pre-existing break on main. Finding when it happened:
+> Bash cd /builds/looper/tacplus/issues/311; ls cross-test/consumer-contract/proto -R | head; git log --oneline -6 -- cross-test/consumer-contract/proto; grep -rn "package\|go_package" cross-test/consumer-contract/proto | head; ls /tmp/sr311w/go-client/model/s2sm -R | head -20
+< cross-test/consumer-contract/proto: contract dependencies.yaml registry.yaml services vservices  cross-test/consumer-contract/proto/contract: contract.proto  e88ac7fe Generated Rust chassis on the digest 0.11 stack, off block-buffer 0.10 (#215) d2078cd0 Pin golang.org/x/net at v0.62.0 in the cross-t...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/311; grep -i "contract.proto\|skip\|warn" /tmp/sr311w/go-client/generate.log | head; head -30 cross-test/consumer-contract/proto/contract/contract.proto; grep -rln "server-runtime" .github/ .gitlab-ci.yml gates.yaml 2>/dev/null
+< Exit code 2 2026-11-09T13:29:50.496Z	INFO	No grpc_config annotations found, skipping ConfigState injection // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0  syntax = "proto3";  package contractclient;  import "sys/spec.proto";  option (spec.service) = {name: "contract"}; optio...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/311; sed -n 195,221p cross-test/server-runtime/run.sh; grep -n "tacplus.yaml\|language:\|pkg:\|contract/contractclient\|c2sm" cross-test/consumer-contract/*.sh | head -20
+<     die "warning/error output found in $log"   fi }  write_config() {   local dir="$1"   local language="$2"   mkdir -p "$dir"   cat > "$dir/tacplus.yaml" <<EOF language: "$language" pkg: "com.gitlab.example.tacplus.consumer.contractclient" src: "$PROTO_SRC" output-dir: "model" EOF }  generate_model...
+> Bash cd /builds/looper/tacplus/issues/311; sed -n 400,425p cross-test/consumer-contract/run.sh; grep -n "canonical_pkg()" -A12 cross-test/consumer-contract/run.sh
+<   # runner. Client surfaces are driven purely by proto declarations   # (spec.grpc_c2s_client / spec.grpc_w2s_client / service_c2d). The per-case   # proto is what selects surfaces now — see prepare_case_proto below.   # grpc-servers: all — the canonical tree holds several services   # (contractclie...
+= thinking_tokens
+= thinking_tokens
+The consumer-contract gate gained `grpc-servers: all`; server-runtime didn't. Let me find when.
+> Bash cd /builds/looper/tacplus/issues/311; git log --oneline -S"grpc-servers: all" -- cross-test/ | cat; gh issue list --repo tacplus-dev/tacplus --state open --search "server-runtime" --json number,title
+< ca6873ed (spec.approval_broker); cross-test fixtures on the 2.4 sys contract (#161) [{"number":455,"title":"cross-test/server-runtime does not build on main: the generated contractclient model has no c2sm or contract types (Go and Rust legs)"},{"number":311,"title":"server-runtime Go driver: four ca...
+= thinking_tokens
+= thinking_tokens
+#455 already tracks this. Let me look at it.
+> Bash gh issue view 455 --repo tacplus-dev/tacplus --json labels,body,comments,author --jq '.author.login, ([.labels[].name]|join(",")), .body[0:1500], (.comments[]|.author.login+": "+.body[0:300])'
+< app/tacplus-looper bug,approved Found while working #320. `cross-test/server-runtime` does not build on `main` (`55ab0b53`), in either leg, before any test runs. It is not part of `just gates`, so no gate catches it.  ``` $ bash cross-test/server-runtime/run.sh --client rust ==> Generating rust mode...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+#455 (approved, open) tracks the server-runtime break. Quick experiment: does adding `grpc-servers: all` to a temp copy of run.sh make the Go driver build? That would show my edit compiles.
+> Bash cd /builds/looper/tacplus/issues/311; sed 's|^output-dir: "model"$|output-dir: "model"\ngrpc-servers: all|' cross-test/server-runtime/run.sh > cross-test/server-runtime/.run311.sh; grep -n "grpc-servers" cross-test/server-runtime/.run311.sh; rm -rf /tmp/sr311w; mkdir /tmp/sr311w; TACPLUS_SERVER_RUNT...
+= task_started
+= task_notification
+< 208:grpc-servers: all rc=1 ==> Building local tacplus binary ==> Generating go model ERROR: warning/error output found in /tmp/sr311w/go-client/generate.log
+> Bash grep -iE "warn|error" /tmp/sr311w/go-client/generate.log | head -5
+< 2026-11-09T13:30:56.272Z	INFO	created embedded proto file	{"file": "sys/errors.proto"} warning: deprecated: contractclient.ContractEvent.payload (spec.redact), contractfixtures.FixtureContact.phone (spec.redact), contractfixtures.FixtureEvent.contact_email (spec.redact), contractfixtures.FixtureEven...
+= thinking_tokens
+= thinking_tokens
+Generation succeeded apart from a deprecation warning the gate treats as fatal (more of #455). I'll build my edited driver directly against that generated model:
+> Bash cd /tmp/sr311w/go-client && ls model | tr '\n' ' '; bash -c 'source <(sed -n "/^write_go_mod()/,/^}/p;/^write_client_mod()/,/^}/p" /builds/looper/tacplus/issues/311/cross-test/server-runtime/run.sh); write_go_mod go.mod; mkdir -p client; cp /builds/looper/tacplus/issues/311/cross-test/server-runtime...
+= task_started
+= task_notification
+< AGENT.md c2dm c2sm chassis grants meta_data.go proto registry.json registry.schema.json s2sm subscribe types utils w2sm BUILD-OK Shell cwd was reset to /builds/looper/tacplus/issues/311
+= thinking_tokens
+= thinking_tokens
+The edited driver builds and vets against the generated client. I'll add what I found to #455, since it narrows that bug down:
+> Bash gh issue comment 455 --repo tacplus-dev/tacplus --body "From #311's run (data for whoever works this): the server-runtime \`write_config\` (cross-test/server-runtime/run.sh) lacks \`grpc-servers: all\`, which consumer-contract's config gained in ca6873ed (#161). Without it, generation is scoped to c...
+< https://github.com/tacplus-dev/tacplus/issues/455#issuecomment-6741304098
+> Bash timeout 590 bash -c 'while kill -0 985 2>/dev/null; do sleep 20; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===
+> Bash timeout 590 bash -c 'while kill -0 985 2>/dev/null; do sleep 20; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log; df -h /tmp | tail -1
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === overlay         193G   63G  131G  33% /
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log | tail -4
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===
+> Bash tail -c 600 /tmp/v311.log; echo; ls -la /tmp/v311.log; date
+< althonly-rust ==> Generating rust zero-rpc fixture ==> Compiling rust zero-rpc fixture     PASS rust zero-rpc      Removed 594 files, 2.4GiB total     Removed 12M fixture tree zerorpc-rust ==> Generating go requires-device fixture ==> Compiling go requires-device fixture     PASS go requires-device ...
+Progressing (current-generation). Continuing to poll.
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log | tail -4
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log | tail -4
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log | tail -4; grep -E "FAIL|ERROR" /tmp/v311.log | head
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ERROR: go client build failed
+(That `ERROR` comes from the earlier run.sh attempt in the same log.) Still running current-generation.
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log | tail -4; tail -2 /tmp/v311.log
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log | tail -4; tail -2 /tmp/v311.log
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log | tail -4; tail -2 /tmp/v311.log
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log | tail -4; tail -2 /tmp/v311.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust owner-default fixture ==> Compiling rust owner-default fixture
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust quorum-write fixture ==> Compiling rust quorum-write fixture
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating go tenant-route fixture (harbor) ==> Compiling go tenant-route fixture (harbor)
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust tenant-route fixture (harbor) ==> Compiling rust tenant-route fixture (harbor)
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Full gates are slow (about 85 min so far, still in current-generation). The land's own gates run before anything merges, so I'll queue the land now alongside, after a checkpoint.
+> Bash cd /builds/looper/tacplus/issues/311; /usr/local/bin/repo-looper --repo tacplus --issue 311 --checkpoint "fix committed 001c3bf3; looper-trace clean for server-runtime; driver builds against generated client with grpc-servers: all (run.sh itself broken by #455); just gates running; landing now. Left...
+= task_started
+= task_notification
+< [2026-11-09T15:11:08Z] checkpoint of #311 (a step) pushed to looper/tacplus-311:  3 files changed, 359 insertions(+) 101118
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null && kill -0 101118 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log | tail -3; tail -5 /tmp/land311.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-09T15:11:10Z] checkpoint of #311 (land queued) pushed to looper/tacplus-311:  4 files changed, 366 insertions(+) [2026-11-09T15:11:12Z] queued: the manager of tacplus merges looper/tacplus-311 after the lands queued before i...
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null && kill -0 101118 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log | tail -3; tail -3 /tmp/land311.log
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null && kill -0 101118 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log | tail -3; tail -3 /tmp/land311.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-09T15:11:10Z] checkpoint of #311 (land queued) pushed to looper/tacplus-311:  4 files changed, 366 insertions(+) [2026-11-09T15:11:12Z] queued: the manager of tacplus merges looper/tacplus-311 after the lands queued before i...
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-09T15:11:10Z] checkpoint of #311 (land queued) pushed to looper/tacplus-311:  4 files changed, 366 insertions(+) [2026-11-09T15:11:12Z] queued: the manager of tacplus merges looper/tacplus-311 after the lands queued before i...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null && kill -0 101118 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log | tail -3; tail -2 /tmp/land311.log
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null && kill -0 101118 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log | tail -3; tail -2 /tmp/land311.log
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null && kill -0 101118 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log | tail -3; tail -2 /tmp/land311.log; tail -1 /tmp/v311.log
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null && kill -0 101118 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL|GATES" /tmp/v311.log | tail -3; tail -2 /tmp/land311.log; tail -1 /tmp/v311.log; date
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-09T15:11:10Z] checkpoint of #311 (land queued) pushed to looper/tacplus-311:  4 files changed, 366 insertions(+) [2026-11-09T15:11:12Z] queued: the manager of tacplus merges looper/tacplus-311 after the lands queued before i...
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-09T15:11:10Z] checkpoint of #311 (land queued) pushed to looper/tacplus-311:  4 files changed, 366 insertions(+) [2026-11-09T15:11:12Z] queued: the manager of tacplus merges looper/tacplus-311 after the lands queued before i...
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-09T15:11:10Z] checkpoint of #311 (land queued) pushed to looper/tacplus-311:  4 files changed, 366 insertions(+) [2026-11-09T15:11:12Z] queued: the manager of tacplus merges looper/tacplus-311 after the lands queued before i...
+= task_started
+= task_notification
+< === test rc=0 === === current-generation rc=0 === === determinism rc=0 === [2026-11-09T15:11:10Z] checkpoint of #311 (land queued) pushed to looper/tacplus-311:  4 files changed, 366 insertions(+) [2026-11-09T15:11:12Z] queued: the manager of tacplus merges looper/tacplus-311 after the lands queued ...
+= thinking_tokens
+= thinking_tokens
+About 55 minutes left in this run; 11 gates remain. I'll poll until about 16:50, then write the outcome either way.
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null && kill -0 101118 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL" /tmp/v311.log | tail -3; tail -1 /tmp/land311.log; date
+> Bash timeout 595 bash -c 'while kill -0 985 2>/dev/null && kill -0 101118 2>/dev/null; do sleep 30; done'; grep -E "^=== .* rc=|OVERALL" /tmp/v311.log | tail -3; tail -1 /tmp/land311.log; date
+= task_started
+= task_notification
+< === stream-expiry rc=0 === === memberport rc=0 === === claims-provenance rc=0 === [2026-11-09T15:11:12Z] queued: the manager of tacplus merges looper/tacplus-311 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out fir...
+= task_started
+= task_notification
+< === jwk-alg rc=0 === === redact rc=0 === === trace-carry rc=0 === [2026-11-09T15:11:12Z] queued: the manager of tacplus merges looper/tacplus-311 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lan...
+> Bash timeout 400 bash -c 'while kill -0 985 2>/dev/null && kill -0 101118 2>/dev/null; do sleep 20; done'; grep -E "^=== .* rc=|OVERALL" /tmp/v311.log | tail -18; tail -2 /tmp/land311.log; date
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=0 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=0 === === memberport rc=0 === === claims-provenance rc=0 === === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc...
+= thinking_tokens
+= thinking_tokens
+`just gates` passed (OVERALL fail=0). The land is still queued, and the manager finishes it after me. I'll comment on the issue now and record the block on #455.
+> Bash cd /builds/looper/tacplus/issues/311; gh issue comment 311 --repo tacplus-dev/tacplus --body-file - <<'EOF' **What changed:** commit `001c3bf3` on `looper/tacplus-311`. It adds `// trace: unrelated: gate driver; the call starts here, no inbound request to propagate` above the four calls in `cross-te...
+< https://github.com/tacplus-dev/tacplus/issues/311#issuecomment-6745655099 Blocked-by: #455
+The fix for #311 is committed and queued to land, but the issue stays open, blocked by #455. Its second acceptance criterion (`run.sh` passes) can't be checked until #455 is fixed, so no patch release or backports were made.
+
+**The change:** commit `001c3bf3` adds the comment `// trace: unrelated: gate driver; the call starts here, no inbound request to propagate` above the four calls in `cross-test/server-runtime/client/go/main.go`. It changes comments only, no behaviour.
+
+**What I checked:**
+- **`looper-trace check .`:** all four calls now show as unrelated. Its finding count drops from 9 to 1, and the remaining one (the outbound-deadline Rust fixture) is already tracked by #310.
+- **`just gates`:** passed on this commit; all 16 gates returned 0 (`OVERALL fail=0`).
+- **The land:** queued with the manager at 15:11Z. Its verdict hadn't arrived when the run ended, so the hash on main and the gate set it ran aren't known yet; the manager will post them on the issue.
+
+**What I couldn't check:** `bash cross-test/server-runtime/run.sh` fails on main whether or not this change is in. The Go client build fails because the generated model lacks the client packages the driver imports. That is #455, which is open and approved. The cause is that the gate's `tacplus.yaml` lacks `grpc-servers: all`. With that line added, the gate then trips on a 2.6 `(spec.redact)` deprecation warning, which it treats as an error. I posted both findings on #455. As a substitute, I generated the model with `grpc-servers: all` and built the changed driver against it by hand; `go build` and `go vet` both pass.
+
+**Release:** main has taken features since v2.6.1, so the patch has to come from `release/2.6` as a backport rather than from main. All seven release lines (2.0 to 2.6) have the same four unmarked calls, and each line's .0 tag is under twelve months old. I held the backport pull requests and patch tags until #455 lands, so each one can be checked the same way. The outcome file says `Blocked-by: #455`, and the issue comment covers all of this.
+= success: The fix for #311 is committed and queued to land, but the issue stays open, blocked by #455. Its second acceptance criterion (`run.sh` passes) can't be checked until #455 is fixed, so no patch release or backports were made.
+
+**The change:** commit `001c3bf3` adds the comment `// trace: unrelated: gate driver; the call starts here, no inbound request to propagate` above the four calls in `cross-test/server-runtime/client/go/main.go`. It changes comments only, no behaviour.
+
+**What I checked:**
+- **`looper-trace check .`:** all four calls now show as unrelated. Its finding count drops from 9 to 1, and the remaining one (the outbound-deadline Rust fixture) is already tracked by #310.
+- **`just gates`:** passed on this commit; all 16 gates returned 0 (`OVERALL fail=0`).
+- **The land:** queued with the manager at 15:11Z. Its verdict hadn't arrived when the run ended, so the hash on main and the gate set it ran aren't known yet; the manager will post them on the issue.
+
+**What I couldn't check:** `bash cross-test/server-runtime/run.sh` fails on main whether or not this change is in. The Go client build fails because the generated model lacks the client packages the driver imports. That is #455, which is open and approved. The cause is that the gate's `tacplus.yaml` lacks `grpc-servers: all`. With that line added, the gate then trips on a 2.6 `(spec.redact)` deprecation warning, which it treats as an error. I posted both findings on #455. As a substitute, I generated the model with `grpc-servers: all` and built the changed driver against it by hand; `go build` and `go vet` both pass.
+
+**Release:** main has taken features since v2.6.1, so the patch has to come from `release/2.6` as a backport rather than from main. All seven release lines (2.0 to 2.6) have the same four unmarked calls, and each line's .0 tag is under twelve months old. I held the backport pull requests and patch tags until #455 lands, so each one can be checked the same way. The outcome file says `Blocked-by: #455`, and the issue comment covers all of this.

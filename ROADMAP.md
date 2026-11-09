@@ -8,6 +8,7 @@ Latest release: v2.4.1 (2026-10-27). 2.4 is the line with the global registry an
 Release lines with branches: 2.0 through 2.4.
 
 ## Next
+- Product layer: `/products/<name>` between `/system` and the tenants; tenant → product and product → `/system` only; tenant data there only as a custodian keyed by the token's tid; design first (#475) (Jody, 2026-11-08)
 - Formal verification out of the gates: nightly (and on release tags), not per land (#275) (Jody, 2026-11-02)
 - Redact for any type: annotated sensitive fields, deterministic generated Redact<T>, Secrets redacted by construction, a gate for unannotated sensitive-looking fields; the uni-config's redacted view for LLM review (#274) (Jody, 2026-11-01)
 - Accounting: typed outcome (permitted/denied/failed) and typed metrics (e.g. records returned), no data ever (f (#273) (Jody, 2026-11-01)

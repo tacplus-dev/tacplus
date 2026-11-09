@@ -73,7 +73,8 @@ class HazelcastMemberPortTest {
     /** A loopback TCP relay that counts what reaches the protocol behind it. */
     static final class Relay implements AutoCloseable {
         final ServerSocket socket;
-        final InetSocketAddress target;
+        /** Where Hazelcast listens: moved when its first port was taken before it bound. */
+        volatile InetSocketAddress target;
         final AtomicInteger accepted = new AtomicInteger();
         final AtomicInteger open = new AtomicInteger();
 
@@ -159,7 +160,8 @@ class HazelcastMemberPortTest {
     final class Member {
         final String namespace;
         final MemberPortBehaviorTest.Minter minter;
-        final int hzPort;
+        /** Hazelcast's port: free when picked, and picked again if taken before Hazelcast binds it. */
+        volatile int hzPort;
         final Relay relay;
         final MemberPort port;
         final InetSocketAddress portAddress;
@@ -183,8 +185,31 @@ class HazelcastMemberPortTest {
             this.portAddress = port.listen(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), relay.address());
         }
 
-        /** Starts Hazelcast, joining {@code seeds} (the loopback forwards to the other members). */
+        /**
+         * Starts Hazelcast, joining {@code seeds} (the loopback forwards to the
+         * other members). A port picked free can be taken by another socket
+         * before Hazelcast binds it: then it picks another and tries again.
+         */
         void start(List<InetSocketAddress> seeds) {
+            for (int attempt = 1; ; attempt++) {
+                try {
+                    startOn(seeds);
+                    return;
+                } catch (com.hazelcast.core.HazelcastException e) {
+                    if (attempt == 5 || !String.valueOf(e.getMessage()).contains("already in use")) {
+                        throw e;
+                    }
+                    try {
+                        hzPort = freePort();
+                    } catch (IOException io) {
+                        throw new java.io.UncheckedIOException(io);
+                    }
+                    relay.target = new InetSocketAddress(InetAddress.getLoopbackAddress(), hzPort);
+                }
+            }
+        }
+
+        private void startOn(List<InetSocketAddress> seeds) {
             Config c = new Config();
             c.setClusterName("grid");
             Properties p = c.getProperties();
@@ -276,7 +301,7 @@ class HazelcastMemberPortTest {
         Member y1 = new Member(Y, 300, 60);
         pair(x1, x2);
         InetSocketAddress yToX1 = y1.port.forward(x1.portAddress);
-        y1.publicAddress.set(new InetSocketAddress(InetAddress.getLoopbackAddress(), y1.hzPort));
+        // y1's public address is its bind address: no member of X reaches it.
 
         // Each seeds the other: the address it reaches the other at.
         startTogether(x1, List.of(x2.publicAddress.get()), x2, List.of(x1.publicAddress.get()));

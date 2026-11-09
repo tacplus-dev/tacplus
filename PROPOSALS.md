@@ -29,6 +29,14 @@ the looper then marks it `promoted` or `declined` here with the date.
   v2.0.20 passed, so `build:2.0.20` carries main's SDKs instead of 2.0's pins. Once the weekly line rebuild has pushed every `base:X.Y`, the fallback is unreachable for a supported
   line. Still, the plan step should rebuild `base` from the tag when `base:X.Y` is missing, not fall back. That change
   goes in `images.yml` on main and on each `release/*`.
+- **`just generated <dir>`: tacplus's security checks scan its generated output** (2026-11-09, #376): the other
+  half of tacplus-dev/looper#108 (services' scans skip their `output-dir`, so generated code is scanned nowhere until
+  tacplus scans it). A recipe generating Go/Rust/Java (chassis included) and Python/TypeScript into `<dir>/<set>/<lang>/`,
+  each loadable by its scanners (`go.sum`, `Cargo.lock`, compiled `target/classes` for SpotBugs, npm lock), touching no
+  tracked file; the `current-generation` fixtures until #196's kitchensink replaces the list. First scan's findings
+  (#359, #368) fixed in the generator or accepted in a new `security-exceptions.yaml`. Open: exceptions match by id
+  repo-wide (a path scope is a looper change), lite clients (Swift, C#), backport to 2.6.x. Approved at hub triage
+  2026-11-08; needs a ROADMAP.md line citing #376.
 - **trace_id in 2.7: field 200 on every sys wire message, additive traced helper forms** (2026-11-06, #313 → #327):
   the hub's split of #313. Every request-building generated helper (state clients' `Fetch`/`Delete`/`Query`, record
   readers, record-plane and kernel state helpers) gets a form that takes `trace_id`, beside today's, and every sys

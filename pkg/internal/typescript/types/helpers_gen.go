@@ -530,7 +530,7 @@ func writeSerializationAndValidation(b *strings.Builder, pf model.ProtoFile) err
 	b.WriteString("// ============================================================\n")
 
 	for _, msg := range pf.Messages {
-		if err := generateTypeScriptValidationFunction(b, msg); err != nil {
+		if err := generateTypeScriptValidationFunction(b, msg, pf.Enums); err != nil {
 			return err
 		}
 	}
@@ -1400,7 +1400,7 @@ func typescriptEnumValueNameByType(enumTypeName, valueName string) string {
 
 func typescriptEnumValueNameByTypeAndValues(enumTypeName string, values []model.EnumValue, valueName string) string {
 	prefix := typescriptEnumSharedPrefix(enumTypeName, values)
-	if prefix != "" {
+	if prefix != "" && strings.HasPrefix(strings.ToLower(valueName), prefix) && len(valueName) > len(prefix) {
 		valueName = valueName[len(prefix):]
 	}
 	return safeTypescriptObjectProperty(valueName)

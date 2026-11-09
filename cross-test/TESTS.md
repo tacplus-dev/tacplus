@@ -22,8 +22,8 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   checks, and compile handwritten downstream consumers. Runs per-language in the
   `consumer-*-contract-mr` CI jobs and in the nightly matrix.
 - `current-generation` (`cross-test/current-generation/run.sh`): generate and
-  compile the migrated broad service fixture in Go, Java, and Rust into ignored
-  `target/` output. Runs in the nightly matrix.
+  compile the migrated broad service fixture in Go, Java, and Rust, and its
+  TypeScript model (`tsc`, #464), into ignored `target/` output. Runs in the nightly matrix.
 - `smb` (`cross-test/smb/run.sh`) and `cert-stream`
   (`cross-test/cert-stream/run.sh`): service-mesh-boundary and certificate-stream
   runtime gates for Go, Java, and Rust. Run in the nightly matrix.
@@ -227,6 +227,7 @@ just -f cross-test/justfile current-generation
 just -f cross-test/justfile current-generation-go
 just -f cross-test/justfile current-generation-java
 just -f cross-test/justfile current-generation-rust
+just -f cross-test/justfile current-generation-typescript
 ```
 
 This gate uses `cross-test/proto`, which covers the larger 80-type fixture and

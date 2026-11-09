@@ -41,7 +41,8 @@ Usage:
   cross-test/current-generation/run.sh [options]
 
 Options:
-  --language LANG   Run one service language: go, java, rust
+  --language LANG   Run one language: go, java, rust, or typescript (the main
+                    fixture's model only)
   --workdir DIR     Use a specific generated-output work directory
   --tacplus BIN     Use an existing tacplus binary
   --keep            Keep generated outputs after success
@@ -99,9 +100,13 @@ done
 [[ -d "$PROTO_SRC" ]] || die "cross-test proto fixture not found: $PROTO_SRC"
 
 all_languages=(go java rust)
+# Model-only languages generate and compile the main fixture alone (#464: a
+# TypeScript model of cross-test/proto that tsc refused went unnoticed).
+model_languages=(typescript)
 case "$LANG_FILTER" in
   "" ) languages=("${all_languages[@]}") ;;
-  go|java|rust ) languages=("$LANG_FILTER") ;;
+  go|java|rust ) languages=("$LANG_FILTER"); model_languages=() ;;
+  typescript ) languages=(); model_languages=("$LANG_FILTER") ;;
   * ) die "unsupported language: $LANG_FILTER" ;;
 esac
 
@@ -1069,7 +1074,14 @@ compile_current_output() {
       ;;
     typescript)
       if [[ -f "$output/package.json" ]]; then
-        (cd "$output" && npm install && npm run build) >"$log_dir/npm-build.log" 2>&1 || {
+        # Only the compile is held to a clean log: npm install warns about the
+        # registry's packages (an install script not yet allowed), not the
+        # generated code.
+        (cd "$output" && npm install) >"$log_dir/npm-install.log" 2>&1 || {
+          dump_step_log "$log_dir/npm-install.log"
+          return 1
+        }
+        (cd "$output" && npm run build) >"$log_dir/npm-build.log" 2>&1 || {
           dump_step_log "$log_dir/npm-build.log"
           return 1
         }
@@ -2331,6 +2343,26 @@ for language in "${languages[@]}"; do
   compile_current_output "$output_root" "$language" "$dir/tacplus"
   echo "    PASS $language"
   prune_fixture "$dir" "$output_root" keep-sources
+done
+
+for language in "${model_languages[@]}"; do
+  command -v npm >/dev/null || die "npm is required for the $language model"
+  dir="$WORK_ROOT/$language"
+  log="$WORK_ROOT/$language.log"
+  rm -rf "$dir"
+  write_config "$dir" "$language"
+
+  echo "==> Generating $language cross-test model"
+  if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$PROTO_SRC" >"$log" 2>&1); then
+    tail -120 "$log" >&2 || true
+    die "$language generation failed; log: $log"
+  fi
+  output_root="$(resolve_output_root "$dir/tacplus")"
+  assert_current_output "$output_root" "$language" "$dir/tacplus"
+  echo "==> Compiling $language cross-test model"
+  compile_current_output "$output_root" "$language" "$dir/tacplus"
+  echo "    PASS $language"
+  prune_fixture "$dir" "$output_root"
 done
 
 # Config-defaults cross-language parity: for every proto message that has

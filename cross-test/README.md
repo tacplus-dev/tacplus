@@ -51,7 +51,8 @@ just consumer-smoke-typescript
 `current-generation` runs `cross-test/proto` through Go, Java, and Rust
 generation, asserts that the output uses the current `sys/spec.proto` model
 rather than the old committed `special` fixture layout, and compiles each
-generated output with that language's normal local tooling.
+generated output with that language's normal local tooling. It also generates
+the TypeScript model of `cross-test/proto` and compiles it with `tsc` (#464).
 
 `consumer-build` is the stronger public API gate for public surface shape. It
 generates a focused consumer-contract fixture into a temporary work directory,

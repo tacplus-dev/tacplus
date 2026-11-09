@@ -26,6 +26,9 @@ base64 = { workspace = true }
 hmac = "0.13"
 sha2 = "0.11"
 hex = "0.4"
+# flock state (#206): flock_new_key draws 128 bits from the OS CSPRNG. 0.2 is the
+# line rand 0.8 already locks, so no second getrandom enters the lockfile.
+getrandom = "0.2"
 {{- if .HasServiceWrappers}}
 tonic = { workspace = true }
 tonic-prost = { workspace = true }

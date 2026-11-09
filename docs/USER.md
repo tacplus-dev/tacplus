@@ -1088,6 +1088,130 @@ For a `service_store`, the generated disk helpers carry the store's floor (the s
 
 Java can also ship the redo log to a Google Cloud Storage bucket: set `grpcconfig.disk_persistence.archive` (`gcs_bucket`, `prefix`, `checkpoint_interval_seconds`, `segment_interval_seconds`, and `member`, a name that survives restarts such as the pod name, to archive under instead of the instance id) and pin `com.google.cloud:google-cloud-storage` in `dependencies.yaml`. Restore uses `ArchiveRestore.restore`. The writer never deletes from the bucket: expire old segments and checkpoints with a bucket lifecycle rule whose age is well beyond `checkpoint_interval_seconds` (7 days or more for the daily default), because an age-based rule cannot tell that the newest checkpoint is the restore anchor and a shorter age deletes the live recovery chain. See `docs/API.md`, Archive to an object store.
 
+### flock state (fleet-wide convergent state)
+
+Kernel's state stays within its cluster. **flock** state spans the fleet: every
+cluster holds a copy of each flock table, copies take writes on their own
+(through a partition too), and they converge with no locks of any kind. Both use
+the one state model; a flock table is a state root labelled `flock`, and moving
+a root from kernel to flock is a label change plus merge rules. Design:
+tacplus-dev/roadmap `items/flock-design-2026-10-28.md` and
+`decisions/flock-panel-2026-10-28/SYNTHESIS.md` (tacplus#206). tacplus generates
+the merge code; the flock service that runs the copies and gossips between them
+is a follow-up.
+
+```protobuf
+import "sys/flock.proto";
+
+message Link {
+  string idp = 1 [(spec.identity) = true];        // idp + subject identify a link
+  string subject = 2 [(spec.identity) = true];
+  int64 added_ms = 3 [(spec.merge) = MERGE_RULE_MIN];
+}
+
+message Person {
+  string key = 1 [(spec.store_key) = true, (spec.indexed) = true]; // flock creates it
+  flock.Hlc created = 2 [(spec.merge) = MERGE_RULE_IMMUTABLE];   // the creation stamp
+  flock.Hlc written = 3 [(spec.store_epoch) = true];             // the hybrid clock of the last write
+  flock.DeletionMark deleted = 4 [(spec.deleted_flag) = true];   // the deletion mark
+  uint64 generation = 5 [(spec.merge) = MERGE_RULE_MAX];
+  string display = 6 [(spec.merge) = MERGE_RULE_LAST_WRITE];
+  Profile profile = 7;                                           // merged field by field
+  repeated Link links = 8 [(spec.merge) = MERGE_RULE_SET_REMOVE_WINS, (spec.unique) = true, (spec.assert_max_size) = 64];
+  map<string, Device> devices = 9 [(spec.merge) = MERGE_RULE_SET_REMOVE_WINS, (spec.assert_max_size) = 64];
+}
+
+message Session {                                  // replaced whole: no per-field rules
+  string key = 1 [(spec.store_key) = true, (spec.indexed) = true];
+  flock.Hlc created = 2 [(spec.merge) = MERGE_RULE_IMMUTABLE];
+  flock.Hlc written = 3 [(spec.store_epoch) = true];
+  flock.DeletionMark deleted = 4 [(spec.deleted_flag) = true];
+  string device_id = 5;
+}
+
+message PeopleState {
+  option (spec.service_state) = {label: ["flock"], export: true};
+  repeated Person people = 1 [(spec.persistence) = true, (spec.assert_max_size) = 100000];
+  repeated Session sessions = 2 [(spec.persistence) = true, (spec.assert_max_size) = 100000,
+                                 (spec.merge) = MERGE_RULE_LAST_WRITE];
+}
+```
+
+**The shape.** Every field of a flock root is a boundary: a `repeated` entry
+message with `(spec.persistence)` and `(spec.assert_max_size)`. Every entry has
+four system fields: a string `(spec.store_key)` that is also `(spec.indexed)`
+(flock creates it at random, never the caller), one `flock.Hlc` with
+`(spec.merge) = MERGE_RULE_IMMUTABLE` (the creation stamp flock sets, which ranks
+duplicates), a `flock.Hlc` `(spec.store_epoch)` (the hybrid clock of the last
+write) and a `flock.DeletionMark` `(spec.deleted_flag)`. tacplus adds the merge
+metadata, `flock.Meta flock_meta = 100000`, to every entry message. Readers use
+`(spec.state_import)` and the same generated state clients and Watch as for
+kernel. `flock` is a well-known routing label, like `kernel`.
+
+**Merge rules.** Generation refuses a flock root with a field that has no rule.
+
+| Rule | Field | Merge |
+|---|---|---|
+| `MERGE_RULE_IMMUTABLE` | singular scalar, enum, bytes, `flock.Hlc` | set once; two copies that set it differently are a conflict, kept in `flock_meta.conflicts`, which fails closed |
+| `MERGE_RULE_MIN` / `MERGE_RULE_MAX` | singular integer or string | the smallest / largest value set (an unset value takes no part) |
+| `MERGE_RULE_LAST_WRITE` | any non-map field | the value of the newest write, by hybrid clock |
+| `MERGE_RULE_SET_ADD_WINS` / `MERGE_RULE_SET_REMOVE_WINS` | repeated scalar, repeated message, map of messages | a set with causal metadata: each add and remove is an op with its own clock time that names what it saw, so a re-add after a remove and the removal of a device both survive any delivery order; an add concurrent with a remove wins under ADD_WINS and loses under REMOVE_WINS |
+| *(none)* | singular message | merged field by field; its fields need rules |
+| `MERGE_RULE_LAST_WRITE` on a boundary | the entry | the newer entry replaces the whole entry (its fields take no rules) |
+
+A set of messages names its elements' identity with `(spec.identity)` (at least
+one field); a map's key is its identity. An element's other fields merge by MIN,
+MAX or LAST_WRITE. `(spec.unique)` on a set field says no two live entries share
+an element. A merge rule never changes once released: the first generation pins
+each rule in the proto source's `registry.yaml` (`flock:`), and a later
+generation that changes one fails.
+
+**Generated helpers** (Go, Rust, Java; API.md, Flock):
+
+- `merge(a, b)`: two copies of one entry, two arguments only. It is commutative,
+  associative and idempotent over whole entries plus marks, so more copies are a
+  fold.
+- `merge_entries(a, b, at)`: two different entries that are one. The older (by
+  creation stamp, then key) survives, whatever the order and on whatever copy,
+  and absorbs the other in a full join, removals included; the other is returned
+  with a `MERGED` mark into it. Re-apply it whenever new state for the loser
+  arrives.
+- The unique check: a conflict seen on a **local write is refused**
+  (`check_unique`); two live entries that gossip brings together sharing an
+  element **merge only in the partition race** (both were created with the
+  element, within the window: `overlap` says `AUTO_MERGE`), and **any other
+  overlap is quarantined**: no use of that element, an alert, and a person
+  resolves it with proof. An entry is created with an element when the add's
+  clock time is the entry's creation stamp.
+- Writers per field path (`set`, `add`, `remove`, `put`), which keep the clock
+  stamps and ops; the deletion mark helpers; and a digest (SHA-256 over the
+  canonical encoding) that is equal on two copies exactly when they hold the
+  same entry, in every language.
+
+**Deletion marks.** A mark (`DELETE_REASON_MERGED`, `_USER`, `_EXPIRED`) wins
+every merge and is never undone, and a marked entry is refused at once (`live`):
+a MERGED one names its survivor (`redirect`), the others are gone. Two marks are
+ordered deterministically (USER over MERGED over EXPIRED; for MERGED, the oldest
+target, then the target key; then the earliest), and a redirect only ever points
+to an older entry, so a chain has no cycle. A mark is purged once **every** copy
+in the membership list has acknowledged it (`ack`, `purge_ready`), and a copy
+drops replicated state older than `FLOCK_MAX_MESSAGE_AGE_MS` (10 minutes), so a
+message in flight cannot bring a purged entry back. A copy absent for more than
+30 days (`must_rebuild`) is wiped and rebuilt from its peers, never merged. A
+MERGED entry's redirect stub lasts for the longest credential lifetime, which the
+runtime passes to `stub_expired`.
+
+**The clock.** `(spec.store_epoch)` on a flock entry is a hybrid logical clock
+(`flock.Hlc`: wall milliseconds, a counter, the copy). The generated clock's
+`now()` is later than everything the copy has made or seen; `observe(remote)`
+refuses a time more than `FLOCK_MAX_SKEW_MS` (60 s) ahead of local time without
+moving the clock, and the write is held until local time catches up.
+
+`cross-test/flock` (`just flock`) runs, in every language, the per-schema
+property tests, a deterministic multi-copy simulation (random delivery order,
+partitions, purges, a far-ahead clock, a long absence; it checks convergence, no
+resurrection and no redirect cycles) and a cross-language vector of digests.
+
 ### Commands
 
 Fields annotated with `(spec.command) = true` become mutation RPCs on the state service. The field type is the request message; the response is always `google.protobuf.Empty`. Use `boundary_callers` to restrict which services can invoke the command cross-namespace.

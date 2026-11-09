@@ -1049,6 +1049,45 @@ value:
 The legacy `Sanitize<T>` / `<T>Entitlement` / `Build<T>Entitlement` surface is
 deprecated in 2.6 and removed in 3.0.
 
+## Flock
+
+For every entry message of a flock state root (USER.md, flock state; tacplus#206),
+Go, Java and Rust generate the merge in the entry's package, from one plan
+(`parser/flock.go`):
+
+| Language | Where | Names |
+|---|---|---|
+| Go | `flock_helpers.go` in the type's package | `FlockMerge<T>(a, b *T) (*T, error)`, `FlockMergeEntries<T>(a, b *T, at *flock.Hlc) (survivor, loser *T, err error)`, `FlockSet<T><Path>` / `FlockAdd…` / `FlockRemove…` / `FlockPut…` (in place, `at` the write's clock time), `FlockUniqueKeys<T>`, `FlockCheckUnique<T>`, `FlockOverlap<T>`, `FlockLive<T>`, `FlockMark<T>`, `FlockAck<T>`, `FlockPurgeReady<T>`, `FlockRedirect<T>`, `FlockStubExpired<T>`, `FlockDigest<T>`, `FlockNew<T>`, `FlockWrite<T>` (a table replaced whole); `FlockClock` (`Now`, `Observe`), `FlockHlcCompare`, `FlockNewKey`, `FlockMustRebuild`, `FlockMessageTooOld`, `FlockMaxSkewMs`, `FlockRebuildAfterMs`, `FlockMaxMessageAgeMs` |
+| Java | `FlockHelpers` in the type's package | the Go names with a lower-case first letter (`flockMerge<T>`, …); writers, marks and acks take the entry's `Builder`; `flockMergeEntries<T>` returns `FlockEntries<T>` (`survivor()`, `loser()`); `(value, bool)` results are `Optional`; `FlockOverlap.QUARANTINE` / `AUTO_MERGE`; `FLOCK_MAX_SKEW_MS`, … |
+| Rust | the package's `helpers.rs` | snake case (`flock_merge_<t>`, `flock_merge_entries_<t>` returning `(survivor, loser)`, `flock_set_<t>_<path>`, …) taking `&mut` entries and `&Hlc` times; `flock_hlc_compare` returns an `Ordering`; `FLOCK_MAX_SKEW_MS`, … |
+
+The contract, the same in all three and pinned by `cross-test/flock` (property
+tests, a multi-copy simulation, and the digests of one scenario byte for byte):
+
+- `merge(a, b)` takes two copies of one entry (the same key; otherwise
+  `INVALID_ARGUMENT`) and is commutative, associative and idempotent over whole
+  entries, marks included. Two IMMUTABLE values that differ keep the smaller and
+  record the field in `flock_meta.conflicts`.
+- `merge_entries(a, b, at)` takes two different entries (`INVALID_ARGUMENT` for
+  one key, `FAILED_PRECONDITION` without creation stamps); the survivor is the
+  older by creation stamp, then key, in any order; it absorbs the loser's fields
+  and op sets; the loser comes back with a `MERGED` mark into the survivor
+  (`at` kept in the mark); neither store epoch moves, so re-applying it is
+  idempotent.
+- A writer stamps its field (LAST_WRITE), records an op (SET_*), or merges its
+  value by the field's rule (MIN, MAX); IMMUTABLE refuses a second, different
+  value (`FAILED_PRECONDITION`); every writer raises the store epoch to `at`.
+- `check_unique` refuses a local write that shares a unique element with another
+  live entry (`ALREADY_EXISTS`); `overlap` answers `AUTO_MERGE` only when both
+  entries were created with the element (the add's time is the creation stamp)
+  within the window, else `QUARANTINE`.
+- `live` refuses a marked entry (`NOT_FOUND`, naming a MERGED one's survivor);
+  `mark` takes USER or EXPIRED only; `purge_ready` needs every member's ack and
+  `FLOCK_MAX_MESSAGE_AGE_MS` since the last.
+- `digest` is the SHA-256 of the entry's protobuf encoding with its set fields
+  (which the op sets determine) cleared: equal on two copies exactly when they
+  hold the same entry, in any language.
+
 ## Tracing And Registry
 
 Generated service wrappers emit typed trace/accounting data where the surface

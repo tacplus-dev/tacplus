@@ -1,0 +1,240 @@
+= init
+> Bash cd /builds/looper/tacplus/issues/337; gh issue view 337 --repo tacplus-dev/tacplus --comments | tail -60; git fetch -q origin; git log --oneline -5 origin/main; git status --short; git diff --stat
+= task_started
+= task_notification
+< author:	tacplus-looper association:	none edited:	false status:	none -- The looper of tacplus starts this issue with its limit 4h capped at 4h by this job (https://gitlab.com/tacplus-dev/looper/-/jobs/17842068371), which ends sooner: the run stops by itself before then, its work checkpointed, and the...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/337; git diff; cat scripts/release-latest.sh scripts/release_latest_test.go; gh pr list --repo tacplus-dev/tacplus --state all --search "337" --json number,title,state,baseRefName; git log origin/looper/tacplus-337 --oneline -3 2>/dev/null; df -h /builds /tmp
+< diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml index 38f77f00..5d122bf3 100644 --- a/.github/workflows/release.yml +++ b/.github/workflows/release.yml @@ -74,4 +74,13 @@ jobs:        - name: Publish release          env:            GH_TOKEN: ${{ github.token }} -        r...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/337/scripts && go test -run 'TestReleaseLatest|TestReleaseWorkflowDecidesLatest' -v . 2>&1 | tail -15; cd ..; grep -n '^gates' -A8 justfile | head -20
+= task_started
+= task_notification
+< === RUN   TestReleaseLatest/numeric,_not_lexical,_order === RUN   TestReleaseLatest/pre-release_is_never_Latest === RUN   TestReleaseLatest/a_pre-release_does_not_outrank_a_release --- PASS: TestReleaseLatest (0.16s)     --- PASS: TestReleaseLatest/patch_on_an_older_line_is_not_Latest (0.03s)     --...
+Tests pass. Commit, run gates detached, then land.
+> Bash git add -A && git commit -q -F - <<'EOF' Release workflow: mark a release Latest only on the newest line (#337)  GitHub marks the release published last Latest unless told otherwise, so the v2.4.11 backport, published after v2.6.1, took Latest from it. The release step now asks scripts/release-lates...
+< d161f2e1 Release workflow: mark a release Latest only on the newest line (#337) 2625
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 337 --checkpoint "Fix committed (d161f2e1); just gates running locally, then land. Backport PRs #457-#463 open. Left: land, outcome comment, close." 2>&1 | tail -3
+< [2026-11-09T00:55:26Z] checkpoint of #337 (a step) pushed to looper/tacplus-337:  6 files changed, 304 insertions(+), 1 deletion(-)
+= thinking_tokens
+= thinking_tokens
+> Bash nohup /usr/local/bin/repo-looper --repo tacplus --issue 337 --land > /tmp/land-337.log 2>&1 & echo $!
+< 2812
+Meanwhile, check the backport PRs and the trace check.
+> Bash for n in 457 458 459 460 461 462 463; do gh pr view $n --repo tacplus-dev/tacplus --json number,mergeable,statusCheckRollup,body --jq '"\(.number) \(.mergeable) \([.statusCheckRollup[]?.conclusion]|unique) " + (.body|split("\n")|map(select(test("tag";"i")))|first // "")'; done; /usr/local/bin/looper...
+= task_started
+= task_notification
+< 457 MERGEABLE ["FAILURE","SUCCESS"] Backport of #337 to `release/2.0`. **Once this merges, cut the line's next free patch tag on `release/2.0` at the merge commit: `v2.0.22` today**, unless another backport on this line takes it first; then this takes the one after. 458 MERGEABLE ["FAILURE","SUCCESS...
+Backport PRs have a failing check; let me see which.
+> Bash gh pr checks 463 --repo tacplus-dev/tacplus 2>&1 | head -20; gh pr checks 457 --repo tacplus-dev/tacplus 2>&1 | grep -i fail
+< Unit tests and soundness	fail	3m1s	https://github.com/tacplus-dev/tacplus/actions/runs/42528843418/job/128878321376	 Example (Go server, TypeScript client)	pass	2m38s	https://github.com/tacplus-dev/tacplus/actions/runs/42528843418/job/128878321405	 Go cross-test gates	pass	49m38s	https://github.com/...
+> Bash gh run view 42528843418 --repo tacplus-dev/tacplus --job 128878321376 --log-failed 2>&1 | grep -iE 'fail|error|---' | head -30; gh run view 42528816793 --repo tacplus-dev/tacplus --job 128878238379 --log-failed 2>&1 | grep -iE 'fail|error|---' | head -20
+< Unit tests and soundness	UNKNOWN STEP	2026-11-08T22:25:23.8028477Z | --- | --- | --- | --- | --- | --- | --- | Unit tests and soundness	UNKNOWN STEP	2026-11-08T22:25:23.8041253Z A `·` is a build-failing gap; runtime and consumer-contract tests still prove behavior. Unit tests and soundness	UNKNOWN S...
+= thinking_tokens
+= thinking_tokens
+> Bash gh run view 42528843418 --repo tacplus-dev/tacplus --job 128878321376 --log-failed 2>&1 | grep -B2 -A8 'TestCrossTestLegsPrune' | cut -c80- | head -30; for b in release/2.6 release/2.0; do gh run list --repo tacplus-dev/tacplus --branch $b --limit 3 --json conclusion,event,displayTitle,createdAt; do...
+< com/tacplus-dev/tacplus/pkg/verification	0.006s com/tacplus-dev/tacplus/pkg/version	0.021s stCrossTestLegsPruneTheirCargoWorkspace (0.03s) st_cargo_target_test.go:91: ../cross-test/trace-carry/run.sh runs cargo but never calls prune_cargo_workspace once its leg passes ed: changed since ca0a6f261cacc...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/337; for r in origin/main origin/release/2.6 origin/release/2.0; do echo "== $r"; git grep -c prune_cargo_workspace $r -- cross-test/trace-carry/run.sh; git log -1 --format='%h %s' $r -- cross-test/trace-carry/run.sh scripts/cross_test_cargo_target_test.go; done; gh ...
+< == origin/main origin/main:cross-test/trace-carry/run.sh:1 54ceaf15 trace_id: projections copy it, every generated store path clears it (#313) == origin/release/2.6 31f69e94 Merge pull request #336 from tacplus-dev/backport/313-release-2.6 == origin/release/2.0 70341d1c Merge pull request #330 from ...
+Pre-existing on the release branches, filed as #398. Now poll gates and land.
+> Bash sleep 600; tail -3 /tmp/gates-337.log; tail -3 /tmp/land-337.log; kill -0 2625 2>/dev/null && echo gates-running; kill -0 2812 2>/dev/null && echo land-running
+< <tool_use_error>Blocked: sleep 600 followed by: tail -3 /tmp/gates-337.log tail -3 /tmp/land-337.log kill -0 2625 echo gates-running kill -0 2812 echo land-running. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a command you started, us...
+> Bash until ! kill -0 2625 2>/dev/null || ! kill -0 2812 2>/dev/null; do sleep 20; done; echo gates:; tail -3 /tmp/gates-337.log; echo land:; tail -5 /tmp/land-337.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bvtvw04ko. Output is being written to: /builds/looper/tacplus/homes/looper-337/tmp/claude-61000/-builds-looper-tacplus-issues-337/de9eaf1f-b3fb-424c-9d76-61798a845b9a/tasks/bvtvw04ko.output. You will be notified when it completes. To check interim output, use R...
+= thinking_tokens
+= thinking_tokens
+> Bash until ! kill -0 2625 2>/dev/null && ! kill -0 2812 2>/dev/null; do sleep 30; done; echo done
+= background_tasks_changed
+= task_started
+< Command running in background with ID: b91904pta. Output is being written to: /builds/looper/tacplus/homes/looper-337/tmp/claude-61000/-builds-looper-tacplus-issues-337/de9eaf1f-b3fb-424c-9d76-61798a845b9a/tasks/b91904pta.output. You will be notified when it completes. To check interim output, use R...
+> Bash until [ -s /builds/looper/tacplus/homes/looper-337/tmp/claude-61000/-builds-looper-tacplus-issues-337/de9eaf1f-b3fb-424c-9d76-61798a845b9a/tasks/bvtvw04ko.output ]; do sleep 15; done; cat /builds/looper/tacplus/homes/looper-337/tmp/claude-61000/-builds-looper-tacplus-issues-337/de9eaf1f-b3fb-424c-9d...
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bjft6vsoa). Output is being written to: /builds/looper/tacplus/homes/looper-337/tmp/claude-61000/-builds-looper-tacplus-issues-337/de9eaf1f-b3fb-424c-9d76-61798a845b9a/tasks/bjft6vsoa.output. You will be notified w...
+> Bash tail -c 600 /tmp/gates-337.log; echo; tail -5 /tmp/land-337.log
+< ication	0.025s ok  	github.com/tacplus-dev/tacplus/pkg/version	0.035s ok  	github.com/tacplus-dev/tacplus/scripts	6.385s ?   	github.com/tacplus-dev/tacplus/target/proto/spec/sys	[no test files] === test rc=0 === === current-generation === bash scripts/with-tree-lock.sh bash cross-test/current-gener...
+> Bash until ! kill -0 2625 2>/dev/null; do sleep 20; done; grep -E '=== .* rc=' /tmp/gates-337.log; tail -4 /tmp/gates-337.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: b755pbac8. Output is being written to: /builds/looper/tacplus/homes/looper-337/tmp/claude-61000/-builds-looper-tacplus-issues-337/de9eaf1f-b3fb-424c-9d76-61798a845b9a/tasks/b755pbac8.output. You will be notified when it completes. To check interim output, use R...
+The fix is committed and queued to land. I'm waiting on the full local `just gates` run (it's in the cross-test stage now) and on the land's verdict.
+> Bash until ! kill -0 2625 2>/dev/null; do sleep 20; done; grep -E '=== .* rc=' /tmp/gates-337.log; tail -4 /tmp/gates-337.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bqlccdrw9). Output is being written to: /builds/looper/tacplus/homes/looper-337/tmp/claude-61000/-builds-looper-tacplus-issues-337/de9eaf1f-b3fb-424c-9d76-61798a845b9a/tasks/bqlccdrw9.output. You will be notified w...
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; sleep 20; done; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating go requires-device fixture ==> Compiling go requires-device fixture [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time, and says on the issue...
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; sleep 20; done; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating go record-egress fixture ==> Compiling go record-egress fixture [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time, and says on the issue wha...
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; sleep 20; done; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating go record-egress HOST fixture ==> Compiling go record-egress HOST fixture [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time, and says on the...
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; sleep 20; done; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust record-egress HOST fixture ==> Compiling rust record-egress HOST fixture [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time, and says on...
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; sleep 20; done; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log; df -h /builds | tail -1
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust accounting-sink fixture ==> Compiling rust accounting-sink fixture [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time, and says on the i...
+Still waiting. Local gates are partway through the cross-test fixtures, and the land is still in the manager's queue.
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; sleep 20; done; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust owner-default fixture ==> Compiling rust owner-default fixture [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time, and says on the issue...
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; sleep 20; done; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust quorum-write fixture ==> Compiling rust quorum-write fixture [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time, and says on the issue w...
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; sleep 20; done; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust epoch-load fixture ==> Compiling rust epoch-load fixture [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; sleep 20; done; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust tenant-route fixture (harbor) ==> Compiling rust tenant-route fixture (harbor) [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time, and s...
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; sleep 20; done; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating go redo-contract fixture (stratum) ==> Compiling go redo-contract fixture (stratum) [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time, and s...
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; sleep 20; done; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust redo-contract fixture (stratum) ==> Compiling rust redo-contract fixture (stratum) [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time, a...
+Local gates are still compiling cross-test fixtures, and the land is still queued. I'll keep polling.
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; sleep 20; done; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating go tenant-record fixture (tmessaging) ==> Compiling go tenant-record fixture (tmessaging) [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time,...
+= thinking_tokens
+= thinking_tokens
+> Bash date -u +%H:%MZ; gh issue view 337 --repo tacplus-dev/tacplus --comments | tail -5
+< 03:04Z edited:	false status:	none -- The looper of tacplus starts this issue with its limit 4h capped at 3h57m by this job (https://gitlab.com/tacplus-dev/looper/-/jobs/17847777200), which ends sooner: the run stops by itself before then, its work checkpointed, and the next run resumes it. --
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 337 --checkpoint "Fix committed d161f2e1, land queued 00:55Z (no verdict at 03:04Z). Local just gates: protoc-check, soundness, test passed; current-generation still running at 03:04Z. Backport PRs #457-#463 open; their only failing check is TestCros...
+< [2026-11-09T03:05:03Z] checkpoint of #337 (a step) pushed to looper/tacplus-337:  7 files changed, 430 insertions(+), 1 deletion(-)
+> Bash git status --short | head
+< (Bash completed with no output)
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; kill -0 2812 2>/dev/null || break; sleep 20; done; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -2 /tmp/land-337.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating rust tenant-record fixture (tstratum) ==> Compiling rust tenant-record fixture (tstratum) [2026-11-09T00:55:32Z] checkpoint of #337 (land queued) pushed to looper/tacplus-337:  7 files changed, 313 insertions(+), 1 del...
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; kill -0 2812 2>/dev/null || break; sleep 20; done; date -u +%H:%MZ; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_notification
+< 03:23Z === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating java tenant-slice fixture ==> Compiling java tenant-slice fixture [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time, and says on the ...
+Still waiting on the local gates (cross-test fixtures) and the land queue. About 1h15m of run time is left.
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; kill -0 2812 2>/dev/null || break; sleep 20; done; date -u +%H:%MZ; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_notification
+< 03:32Z === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===     Removed 53M fixture tree tenantslice-owner-java ==> Generating rust tenant-slice owner fixture [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time...
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; kill -0 2812 2>/dev/null || break; sleep 20; done; date -u +%H:%MZ; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_notification
+< 03:41Z === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating java tenant-slice config owner fixture ==> Compiling java tenant-slice config owner fixture [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one a...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/337; git fetch -q origin; git log --format='%h %cI %s' -5 origin/main
+< a2aeddd6 2026-11-08T19:05:08-07:00 ROADMAP: product layer /products/<name> (#475) (Jody, 2026-11-08) 55ab0b53 2026-11-08T16:34:56Z HISTORY.md: releases (looper) 73720eca 2026-11-08T16:34:49Z HISTORY.md: #321 (looper) 54ceaf15 2026-11-08T13:22:15Z trace_id: projections copy it, every generated store ...
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; kill -0 2812 2>/dev/null || break; sleep 20; done; date -u +%H:%MZ; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_notification
+< 03:50Z === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=0 ===     PASS java/base (byte-identical) ==> java/requiresdevice: generating twice into separate work dirs [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the la...
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; kill -0 2812 2>/dev/null || break; sleep 20; done; date -u +%H:%MZ; grep -E '=== .* rc=' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_notification
+< 03:59Z === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=0 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=0 === ==> Building tacplus binary ==> Generation must refuse (spec.member_port) for go [2026-11-09T00:55:33Z] queued: the m...
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; kill -0 2812 2>/dev/null || break; sleep 20; done; date -u +%H:%MZ; grep -E '=== .* rc=' /tmp/gates-337.log | tail -4; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_notification
+< 04:08Z === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc=0 === === jwk-alg rc=0 === ==> Generating rust model ==> Building the rust leg [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time, and says on the...
+Local gates are still passing stage by stage, and the land is still queued; main hasn't taken a land since yesterday 13:22Z. Polling until shortly before the run's limit (about 04:40Z).
+> Bash for i in $(seq 1 27); do kill -0 2625 2>/dev/null || break; kill -0 2812 2>/dev/null || break; sleep 20; done; date -u +%H:%MZ; grep -E '=== .* rc=' /tmp/gates-337.log | grep -v 'rc=0'; grep -c 'rc=0' /tmp/gates-337.log; tail -2 /tmp/gates-337.log; tail -1 /tmp/land-337.log
+= task_started
+= task_notification
+< 04:11Z 16 === tacplus-script rc=0 === === OVERALL fail=0 === [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it...
+Local `just gates` passed (OVERALL fail=0, 16 gates). Checkpointing, then I'll keep waiting for the land.
+> Bash grep -E '=== .* rc=' /tmp/gates-337.log | tr '\n' ' '; echo; /usr/local/bin/repo-looper --repo tacplus --issue 337 --checkpoint "Fix committed d161f2e1, land queued 00:55Z (no verdict at 04:12Z; main has taken no land since 11-08 13:22Z). Local just gates on d161f2e1: all 16 passed, OVERALL fail=0 (...
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=0 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=0 === === memberport rc=0 === === claims-provenance rc=0 === === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc...
+> Bash for i in $(seq 1 27); do kill -0 2812 2>/dev/null || break; sleep 20; done; date -u +%H:%MZ; tail -3 /tmp/land-337.log
+= task_started
+= task_notification
+< 04:20Z [2026-11-09T00:55:32Z] checkpoint of #337 (land queued) pushed to looper/tacplus-337:  7 files changed, 313 insertions(+), 1 deletion(-) [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash for i in $(seq 1 27); do kill -0 2812 2>/dev/null || break; sleep 20; done; date -u +%H:%MZ; tail -3 /tmp/land-337.log
+= task_started
+= task_notification
+< 04:29Z [2026-11-09T00:55:32Z] checkpoint of #337 (land queued) pushed to looper/tacplus-337:  7 files changed, 313 insertions(+), 1 deletion(-) [2026-11-09T00:55:33Z] queued: the manager of tacplus merges looper/tacplus-337 after the lands queued before it, one at a time, and says on the issue what ...
+= thinking_tokens
+= thinking_tokens
+The run stops at about 04:41Z, so this is the last checkpoint.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 337 --checkpoint "Fix committed d161f2e1 (scripts/release-latest.sh + release.yml --latest=<it> + tests + VERSIONING.md); land queued 00:55Z, still no verdict at 04:30Z (main has taken no land since 11-08 13:22Z; the manager lands it after this run)....
+< [2026-11-09T04:29:32Z] checkpoint of #337 (a step) pushed to looper/tacplus-337:  8 files changed, 491 insertions(+), 2 deletions(-)
+The fix for #337 is committed and queued to land on main, but it has not merged yet, so I left the issue open. I queued it at 00:55Z and there was still no verdict at 04:30Z. Main hasn't taken any land since 2026-11-08 13:22Z, so the queue looks stuck or backed up. The manager will still land it after this run ends.
+
+**The fix (commit d161f2e1):**
+- **`scripts/release-latest.sh`** prints `true` only when a tag is the newest release of the newest MAJOR.MINOR line. It compares versions as numbers, so 2.10 counts as newer than 2.9, and it ignores pre-releases.
+- **The release workflow** (`.github/workflows/release.yml`) fetches all tags first, then publishes with `--latest=<that answer>`. A patch on an older line no longer becomes Latest just because it was published last.
+- **Tests** (`scripts/release_latest_test.go`) cover the acceptance case from the issue: a patch on an older line (v2.4.11 after v2.6.1) is not Latest, then a patch on the newest line (v2.6.2) is. They also cover tags pushed in parallel, a newer major, numeric ordering and pre-releases, and check that the workflow uses the script's answer.
+- **`docs/VERSIONING.md`** now states the rule.
+
+**Checks:** the new tests pass, and all 16 local `just gates` passed on d161f2e1 (`OVERALL fail=0`).
+
+**Release:**
+- **No tag from main.** Main has had a feature (#321) since v2.6.1, and v2.6.2–v2.6.4 already exist on release/2.6, so the patch ships only as backports.
+- **Backports:** the backport PRs #457–#463 (release/2.0 to release/2.6) are open, each naming the tag to cut after it merges (v2.0.22 through v2.6.5).
+- **Failing check on the backports:** all seven fail one test, `TestCrossTestLegsPruneTheirCargoWorkspace`, because the release branches' `cross-test/trace-carry/run.sh` never cleans up its build workspace. That failure was already on the release branches and is filed as #398; it is not caused by this change.
+
+**Trace check:** this change touches no service handlers. `looper-trace` reports 9 findings, all in cross-test client code that is already filed as #310/#311.
+
+**Left for the next run:** read the land's verdict on the issue, post the outcome comment (commit hash, gates, the gate set the land ran, #398 on the backports), then close #337. My last checkpoint says this.
+= success: The fix for #337 is committed and queued to land on main, but it has not merged yet, so I left the issue open. I queued it at 00:55Z and there was still no verdict at 04:30Z. Main hasn't taken any land since 2026-11-08 13:22Z, so the queue looks stuck or backed up. The manager will still land it after this run ends.
+
+**The fix (commit d161f2e1):**
+- **`scripts/release-latest.sh`** prints `true` only when a tag is the newest release of the newest MAJOR.MINOR line. It compares versions as numbers, so 2.10 counts as newer than 2.9, and it ignores pre-releases.
+- **The release workflow** (`.github/workflows/release.yml`) fetches all tags first, then publishes with `--latest=<that answer>`. A patch on an older line no longer becomes Latest just because it was published last.
+- **Tests** (`scripts/release_latest_test.go`) cover the acceptance case from the issue: a patch on an older line (v2.4.11 after v2.6.1) is not Latest, then a patch on the newest line (v2.6.2) is. They also cover tags pushed in parallel, a newer major, numeric ordering and pre-releases, and check that the workflow uses the script's answer.
+- **`docs/VERSIONING.md`** now states the rule.
+
+**Checks:** the new tests pass, and all 16 local `just gates` passed on d161f2e1 (`OVERALL fail=0`).
+
+**Release:**
+- **No tag from main.** Main has had a feature (#321) since v2.6.1, and v2.6.2–v2.6.4 already exist on release/2.6, so the patch ships only as backports.
+- **Backports:** the backport PRs #457–#463 (release/2.0 to release/2.6) are open, each naming the tag to cut after it merges (v2.0.22 through v2.6.5).
+- **Failing check on the backports:** all seven fail one test, `TestCrossTestLegsPruneTheirCargoWorkspace`, because the release branches' `cross-test/trace-carry/run.sh` never cleans up its build workspace. That failure was already on the release branches and is filed as #398; it is not caused by this change.
+
+**Trace check:** this change touches no service handlers. `looper-trace` reports 9 findings, all in cross-test client code that is already filed as #310/#311.
+
+**Left for the next run:** read the land's verdict on the issue, post the outcome comment (commit hash, gates, the gate set the land ran, #398 on the backports), then close #337. My last checkpoint says this.

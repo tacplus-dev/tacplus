@@ -234,7 +234,11 @@ the Inventory and Analytics service shapes. It asserts that generated output
 contains the current `sys/spec.proto` model and no legacy checked-in
 `special` fixture outputs. It then compiles the generated output with Go
 `go test`, Java Maven, and Rust `cargo check`, with warning/error output
-treated as a failure. Python and TypeScript are full-client targets; their
+treated as a failure. The same run generates and compiles the smaller fixture
+sets beside it (`cross-test/proto-*`), each for the one shape it is the only
+gate of: `cross-test/proto-statequeue`, for instance, is a state root with a
+queue and a priority queue boundary (#456), whose Go and Java state clients
+must carry the offer/consume/peek/size accessors. Python and TypeScript are full-client targets; their
 positive client-surface (C2D/C2S/W2S/REST) and service-side rejection coverage
 lives in `consumer-build`.
 

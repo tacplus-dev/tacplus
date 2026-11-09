@@ -17,6 +17,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   stored (state `Put`/`Set`, store-derived subscriptions, store wrappers, disk helpers) and leaves it on topic
   publishes, queue offers and commands, which deliver a message to a consumer that propagates it. If a queue is to
   count as storage (its items persist until taken), the consumer loses the trace; that is a decision, not a fix.
+- **State client parity for queues and commands in Rust and Java** (2026-11-09, #456): #456 gave the Java
+  `StateClient` the queue accessors Go has (`offerTo<F>`, `consumeFrom<F>`, `peek<F>`, `size<F>` for a `(spec.queue)`
+  and a `(spec.priority_queue)`). The Rust state client (`pkg/templates/rust/types/statewrapper.rs.tmpl`) still has
+  none: it compiles, but a Rust service reaches its queues only through the raw tonic stub. And the Java generator
+  collects `(spec.command)` boundaries (`javaCommandBoundary`) but its template renders none, where Go has one method per
+  command. `cross-test/proto-statequeue` is where the Rust queue leg would be asserted.
 - **Kani harnesses beyond integer bounds** (2026-11-06, #211): the generated Rust harnesses now prove only that
   `validate()` refuses each integer/enum bound, and skip a message whose `validate()` reaches the regex crate (Kani
   0.68 panics compiling it), a nested message, a map field (prost's `HashMap` default makes a syscall Kani does not

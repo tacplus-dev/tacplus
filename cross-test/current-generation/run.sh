@@ -14,6 +14,7 @@ HEALTHONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-healthonly"
 ZERORPC_PROTO_SRC="$ROOT_DIR/cross-test/proto-zerorpc"
 C2SONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-c2sonly"
 REQUIRESDEVICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-requiresdevice"
+STATEQUEUE_PROTO_SRC="$ROOT_DIR/cross-test/proto-statequeue"
 # testdata/, not a plain directory: the go tool ignores directories named
 # testdata, and this tree is Go source written against the GENERATED module
 # (gitlab.com/example/dummy/vault/...), which `go vet ./...` in this repo cannot
@@ -184,6 +185,19 @@ write_requiresdevice_config() {
 language: "$language"
 pkg: "com.gitlab.example.dummy.vault"
 src: "$REQUIRESDEVICE_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+}
+
+write_statequeue_config() {
+  local dir="$1"
+  local language="$2"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.helper"
+src: "$STATEQUEUE_PROTO_SRC"
 output-dir: "tacplus"
 EOF
 }
@@ -1787,6 +1801,51 @@ install_ownerdefault_selftest() {
 #   - the broker's S2S client not being auto-injected at all.
 # The ungated sibling rpc (GetSecret) is here for the same reason: a gate spliced
 # onto every unary method instead of the declared one also compiles.
+# assert_statequeue_output checks the state-queue fixture (#456): the state
+# client of a state root with a (spec.queue) and a (spec.priority_queue)
+# boundary has the queue accessors (offer, consume, peek, size) in Go and Java,
+# and the Java one none of a singleton's Get/Watch, whose RPCs the state service
+# does not declare. Compiling catches a call to a missing RPC; this catches the
+# accessors going missing, which compiles. Rust's state client has no queue
+# accessors yet (PROPOSALS.md); its leg only compiles.
+assert_statequeue_output() {
+  local output="$1"
+  local language="$2"
+  local client="" want=()
+
+  case "$language" in
+    go)
+      client="$(find "$output" -type f -path '*/s2sm/state/services/helper_state/state.go' -print -quit)"
+      want=(
+        "stateStub.OfferToTasks(" "stateStub.ConsumeFromTasks(" "stateStub.PeekTasks(" "stateStub.SizeTasks("
+        "stateStub.OfferToAlerts(" "stateStub.ConsumeFromAlerts(" "stateStub.PeekAlerts(" "stateStub.SizeAlerts("
+      )
+      ;;
+    java)
+      client="$(find "$output" -type f -path '*/internal/state/services/helper/helperstate/StateClient.java' -print -quit)"
+      want=(
+        "stateStub.offerToTasks(" "stateStub.consumeFromTasks(" "stateStub.peekTasks(" "stateStub.sizeTasks("
+        "stateStub.offerToAlerts(" "stateStub.consumeFromAlerts(" "stateStub.peekAlerts(" "stateStub.sizeAlerts("
+      )
+      ;;
+    rust)
+      return 0
+      ;;
+    *)
+      die "state-queue fixture: unsupported language: $language"
+      ;;
+  esac
+
+  [[ -n "$client" ]] || die "state-queue fixture ($language): generated HelperState state client not found under $output"
+  local needle
+  for needle in "${want[@]}"; do
+    grep -qF "$needle" "$client" || die "state-queue fixture ($language): $client does not call $needle"
+  done
+  if [[ "$language" == "java" ]] && grep -qE '(get|watch)(Tasks|Alerts)\(' "$client"; then
+    die "state-queue fixture (java): $client treats a queue as a singleton (get/watch of Tasks or Alerts)"
+  fi
+}
+
 assert_requiresdevice_output() {
   local output="$1"
   local language="$2"
@@ -2731,6 +2790,32 @@ if [[ -d "$REQUIRESDEVICE_PROTO_SRC" ]]; then
     echo "==> Compiling $language requires-device fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/vault"
     echo "    PASS $language requires-device"
+    prune_fixture "$dir" "$output_root"
+  done
+fi
+
+# state-queue fixture (#456): the only standing gate that generates a state
+# root with a (spec.queue) and a (spec.priority_queue) boundary, and compiles
+# it. The Java StateClient took both for singletons and called Get/Watch RPCs
+# the state service does not declare, so the model did not compile.
+if [[ -d "$STATEQUEUE_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    dir="$WORK_ROOT/statequeue-$language"
+    log="$WORK_ROOT/statequeue-$language.log"
+    rm -rf "$dir"
+    write_statequeue_config "$dir" "$language"
+
+    echo "==> Generating $language state-queue fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$STATEQUEUE_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language state-queue generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_statequeue_output "$output_root" "$language"
+    echo "==> Compiling $language state-queue fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/helper"
+    echo "    PASS $language state-queue"
     prune_fixture "$dir" "$output_root"
   done
 fi

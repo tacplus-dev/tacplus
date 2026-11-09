@@ -40,6 +40,7 @@ Release lines with branches: 2.0 through 2.4.
 - trace_id in 2.7: field 200 on every sys wire message, additive traced helper forms (#327). Agent, at Jody's request, 2026-11-06.
 -  (#266). Agent, at Jody's request, 2026-11-06.
 -  (#257). Agent, at Jody's request, 2026-11-06.
+- Security floor: a `generated` recipe, so tacplus's security checks scan its generated output (the kitchensink) once, at the source (#376; looper#108). Agent, at Jody's request, 2026-11-08 (hub triage under Jody's delegation).
 
 ## Later
 - Generated S2S clients to a peer service in another cluster or deployment (#204): parked (Jody, 2026-11-06). Cross-deployment work is a future item and needs a deeper huddle with Jody before any design or build. (Was: redo site-to-site, redo#1 option A, 2026-10-28; flock gossip.)

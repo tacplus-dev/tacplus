@@ -4,6 +4,13 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Java state client topics: read which RPCs the state service declares** (2026-11-09, #454): the Go state client now
+  calls only the topic RPCs `proto.StateTopicRPCSurface` says the state service declares. The Java one
+  (`pkg/internal/java/types/statewrapper_gen.go`, the topic case) classifies a topic before its private check and calls
+  both `publishTo<F>` and `subscribeTo<F>` unconditionally, so a private topic, or an event-C2S state service (a
+  record/event topic with a `c2s` surface, or an exported root) that omits one of them, would not compile. Unverified
+  by a build: no fixture declares those shapes. Read the same surface there and add the shape to the
+  eventbus-backpressure fixture (or #196's kitchensink).
 - **trace_id in 2.7: field 200 on every sys wire message, additive traced helper forms** (2026-11-06, #313 → #327):
   the hub's split of #313. Every request-building generated helper (state clients' `Fetch`/`Delete`/`Query`, record
   readers, record-plane and kernel state helpers) gets a form that takes `trace_id`, beside today's, and every sys

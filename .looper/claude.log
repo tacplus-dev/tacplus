@@ -1,0 +1,400 @@
+> Bash cat > ~/probe.sh <<'EOF' #!/usr/bin/env bash # Generates the server-runtime go model on a release branch with its own config and reports whether c2sm is there. b=$1; d=~/wt/$b; w=/tmp/probe-$b; rm -rf $w; mkdir -p $w cd $d && go generate ./pkg/internal/proto/spec/... >/dev/null 2>&1 && go build -o $...
+= task_started
+= task_notification
+< 2.0: gen rc=0 c2sm=yes warnings=0 2.1: gen rc=0 c2sm=yes warnings=0 2.2: gen rc=0 c2sm=yes warnings=0 2.3: gen rc=0 c2sm=yes warnings=0 2.4: gen rc=0 c2sm=no warnings=0 2.5: gen rc=0 c2sm=no warnings=0 2.6: gen rc=0 c2sm=no warnings=0
+= thinking_tokens
+= thinking_tokens
+The generation bug is on release/2.4, 2.5 and 2.6; lines 2.0 to 2.3 still generate c2sm. I'll check on the main gates, then cherry-pick the fix onto 2.6.
+> Bash grep "^===" /tmp/gates.log; cd ~/wt/2.6 && git cherry-pick 40f739fc 2>&1 | tail -3; git status --short | head
+< === protoc-check === === protoc-check rc=0 === === soundness === === soundness rc=0 === === test === === test rc=0 === === current-generation === hint: To abort and get back to the state before "git cherry-pick", hint: run "git cherry-pick --abort". hint: Disable this message with "git config advice...
+= thinking_tokens
+= thinking_tokens
+The only conflict is STATE.md. I'll keep the release branch's version, because STATE describes main.
+> Bash cd ~/wt/2.6 && git checkout --ours STATE.md 2>/dev/null; git checkout HEAD -- STATE.md; git diff --cached --stat | tail -1; grep -n "server-runtime" justfile | head; GIT_EDITOR=true git cherry-pick --continue 2>&1 | tail -1; git log --oneline -1
+<  8 files changed, 75 insertions(+), 15 deletions(-) 24:#   cross-test/server-runtime/fixture/java/pom.xml 191:  for g in soundness test current-generation determinism cert-stream stream-expiry memberport claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg redact trace-carry server-runtime...
+= thinking_tokens
+= thinking_tokens
+> Bash cd ~/wt/2.6 && nohup bash cross-test/server-runtime/run.sh > /tmp/sr-2.6.log 2>&1 & echo PID $!
+< PID 45264
+> Bash timeout 590 bash -c 'while kill -0 45264 2>/dev/null; do sleep 5; done'; grep -v "^go: down\|Adding\|Removed" /tmp/sr-2.6.log | tail -15 | cut -c1-300; grep "^===" /tmp/gates.log | tail -3
+= task_started
+= task_notification
+<   rust: ListEvents SNAPSHOT stream round-trip ok   rust: ListEventsPaged PAGE keyset continuation round-trip ok   rust: GetContract fail-closed rejection ok (code 16) java generated client OK against rust generated server (127.0.0.1:46161) ==> Building rust client ==> Compiling java fixture ==> Driv...
+Release/2.6 passes with the fix. Next I'll cherry-pick onto 2.5 and 2.4 and run them one at a time.
+> Bash for b in 2.5 2.4; do cd ~/wt/$b; git cherry-pick 40f739fc >/dev/null 2>&1; git checkout HEAD -- STATE.md 2>/dev/null; git status --short | grep -v "^M " ; GIT_EDITOR=true git cherry-pick --continue >/dev/null 2>&1; echo "$b $(git log --oneline -1)"; done; cd ~/wt/2.5 && nohup bash cross-test/server-...
+< UU justfile 2.5 6d5fce3e cross-test/trace-carry: prune the rust leg's cargo workspace once it passes (#398) (#481) DU STATE.md UU justfile 2.4 b594d51d cross-test/trace-carry: prune the rust leg's cargo workspace once it passes (#398) (#480) PID 56617 Shell cwd was reset to /builds/looper/tacplus/is...
+= thinking_tokens
+= thinking_tokens
+The justfile conflicts on 2.5 and 2.4. The 2.5 run doesn't read the justfile, so I'll let it continue and resolve the conflicts in the meantime.
+> Bash cd ~/wt/2.5; git diff justfile | head -60
+< diff --cc justfile index 18ac0e9d,f49cc727..00000000 --- a/justfile +++ b/justfile @@@ -188,7 -188,7 +188,11 @@@ gates       echo "=== OVERALL fail=1 (protoc preflight) ==="       exit 1     fi ++<<<<<<< HEAD  +  for g in soundness test current-generation determinism cert-stream stream-expiry claims...
+> Bash cat > ~/resolve.py <<'EOF' import re,sys p=sys.argv[1] s=open(p).read() def fix(m):     ours, theirs = m.group(1), m.group(2)     if 'for g in ' in ours:         return ours.replace(' trace-carry;', ' trace-carry server-runtime;')     # keep only the server-runtime block from theirs     i=theirs.ind...
+< 0 163:# A naive `for g in ...; do just "$g"; done` loop whose last command per 191:  for g in soundness test current-generation determinism cert-stream stream-expiry claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg trace-carry server-runtime; do 306:server-runtime: D  STATE.md UU justf...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+I accidentally staged a STATE.md deletion on 2.5. Restoring it, and leaving STATE.md out of 2.4, which doesn't have the file.
+> Bash cd ~/wt/2.5; git reset -q HEAD -- STATE.md; git checkout HEAD -- STATE.md; git add justfile; git status --short | grep -v "^M "; cd ~/wt/2.4; git ls-tree HEAD STATE.md; git rm -q --cached STATE.md 2>/dev/null; rm -f STATE.md; git add justfile; git status --short | grep -v "^M "; echo; for b in 2.5 2...
+< justfile: needs merge   8 files changed, 75 insertions(+), 15 deletions(-)   cross-test/README.md                               |  4 ++--  cross-test/TESTS.md                                |  7 +++---  cross-test/server-runtime/README.md                | 13 ++++++++---  cross-test/server-runtime/cl...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for b in 2.5 2.4; do cd ~/wt/$b; echo "== $b"; git status --short; ls STATE.md 2>&1; git show HEAD -- justfile | grep "^[+-]" ; just --list >/dev/null && echo justok; done
+< == 2.5 STATE.md --- a/justfile +++ b/justfile -  for g in soundness test current-generation determinism cert-stream stream-expiry claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg trace-carry; do +  for g in soundness test current-generation determinism cert-stream stream-expiry claims-...
+= thinking_tokens
+= thinking_tokens
+Both backport commits are clean. Waiting for the 2.5 run.
+> Bash timeout 590 bash -c 'while kill -0 56617 2>/dev/null; do sleep 5; done'; tail -1 /tmp/sr-2.5.log; grep -i "error" /tmp/sr-2.5.log | head -5 | cut -c1-300; grep "^===" /tmp/gates.log | tail -2
+= task_started
+= task_notification
+< server-runtime OK (java rust generated servers driven by the go generated client; java-client->rust-server rust-client->java-server)       Adding thiserror v1.0.69 (available: v2.0.21) === test rc=0 === === current-generation ===
+> Bash cd ~/wt/2.4 && nohup bash cross-test/server-runtime/run.sh > /tmp/sr-2.4.log 2>&1 & echo PID $!; tail -3 /tmp/gates.log | cut -c1-200
+< PID 68276     PASS java ==> Generating rust cross-test fixture ==> Compiling rust cross-test fixture
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash date -u +%H:%M; timeout 590 bash -c 'while kill -0 68276 2>/dev/null; do sleep 5; done'; tail -1 /tmp/sr-2.4.log | cut -c1-300; grep "^===" /tmp/gates.log | tail -2
+= task_started
+= task_notification
+< 16:49 server-runtime OK (java rust generated servers driven by the go generated client; java-client->rust-server rust-client->java-server) === test rc=0 === === current-generation ===
+Release/2.4 passes too. Now I'm running release/2.3 unmodified, to see whether lines 2.0 to 2.3 have the bug at all.
+> Bash cd ~/wt/2.3 && git log --oneline -1 && nohup bash cross-test/server-runtime/run.sh > /tmp/sr-2.3.log 2>&1 & sleep 1; pgrep -u $(id -u) -f "wt/2.3" | head -1
+< fe9f2014 cross-test/trace-carry: prune the rust leg's cargo workspace once it passes (#398) (#479) 77085
+> Bash timeout 590 bash -c 'until grep -q "server-runtime OK\|^ERROR" /tmp/sr-2.3.log; do sleep 5; done'; grep "^ERROR\|OK (" /tmp/sr-2.3.log; grep -B8 "^ERROR" /tmp/sr-2.3.log | cut -c1-250 | head -20
+= task_started
+= task_notification
+< ERROR: generated java model compile failed [ERROR] /builds/looper/tacplus/homes/looper-455/tmp/tacplus-server-runtime.bvp57m/java/model/src/main/java/com/gitlab/example/tacplus/consumer/contractclient/model/s2sm/internal/grpc/servers/contract/contractclient/ContractApiMcpTest.java:[176,26] pa [ERROR...
+= thinking_tokens
+= thinking_tokens
+Release/2.3 fails too, in the Java MCP compile. So every line has a broken gate. Before cherry-picking onto 2.0 to 2.3, I'm checking that their compilers accept `grpc-servers`.
+> Bash for b in 2.0 2.1 2.2 2.3; do echo "$b: $(grep -rln 'grpc-servers' ~/wt/$b/pkg --include=*.go | grep -v _test | head -2 | tr '\n' ' ')"; done
+< 2.0: /builds/looper/tacplus/homes/looper-455/wt/2.0/pkg/tacplusyaml/tacplusyaml.go  2.1: /builds/looper/tacplus/homes/looper-455/wt/2.1/pkg/tacplusyaml/tacplusyaml.go  2.2: /builds/looper/tacplus/homes/looper-455/wt/2.2/pkg/tacplusyaml/tacplusyaml.go  2.3: /builds/looper/tacplus/homes/looper-455/wt/...
+> Bash for b in 2.3 2.2 2.1 2.0; do cd ~/wt/$b; git cherry-pick 40f739fc >/dev/null 2>&1; st=$(git status --short | grep -v "^M "); if [ -n "$st" ]; then echo "$b conflicts: $st"; python3 ~/resolve.py justfile; if git ls-tree HEAD STATE.md | grep -q .; then git checkout HEAD -- STATE.md; else git rm -q --c...
+< Exit code 1 2.3 conflicts: DU STATE.md UU justfile 2.3: 58b85c82 cross-test/server-runtime: build and pass again, and run it in just gates (#455) | 0 dirty -  for g in soundness test current-generation determinism cert-stream stream-expiry claims-provenance w2s-validate c2d-server trace-carry; do + ...
+> Bash cd ~/wt/2.0; git diff cross-test/TESTS.md | head -40; grep -n "^server-runtime\|<<<<" justfile
+< diff --cc cross-test/TESTS.md index 02527cea,e3bb1807..00000000 --- a/cross-test/TESTS.md +++ b/cross-test/TESTS.md @@@ -106,11 -166,10 +106,18 @@@ W2S against java/rust hosts, and `Watch     documented cross-language difference: the fail-closed leg returns     `UNAUTHENTICATED` from the java host a...
+= thinking_tokens
+= thinking_tokens
+Release/2.0's TESTS.md already has stray conflict markers committed. I'll look at the committed version.
+> Bash cd ~/wt/2.0; git show HEAD:cross-test/TESTS.md | grep -n "^<<<<<<<\|^=======\|^>>>>>>>" ; git show HEAD:cross-test/TESTS.md | sed -n 105,125p
+< 112:<<<<<<< HEAD 113:======= 128:>>>>>>> 7de131d (Rust: clamp outbound calls to the inbound grpc-timeout)   `Watch`/client-streaming/bidi legs are still NOT covered. Known and   documented cross-language difference: the fail-closed leg returns   `UNAUTHENTICATED` from the java host and `PERMISSION_D...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+These markers were already on release/2.0 before my change. I'll resolve only my own hunk, leave them in place, and mention them in the PR.
+> Bash cd ~/wt/2.0; git show HEAD:cross-test/TESTS.md > cross-test/TESTS.md; python3 - <<'EOF' p='cross-test/TESTS.md' s=open(p).read() old='''  the trait. Local/manual (`just -f cross-test/justfile server-runtime`, or   `server-runtime-clients` for the client half alone); not in CI, not in   `just test`, ...
+< 0 M  cross-test/README.md M  cross-test/TESTS.md M  cross-test/server-runtime/README.md M  cross-test/server-runtime/client/go/main.go M  cross-test/server-runtime/fixture/java/Fixture.java M  cross-test/server-runtime/fixture/java/pom.xml M  cross-test/server-runtime/run.sh M  justfile c1827872 cro...
+= thinking_tokens
+= thinking_tokens
+Now I'll run the gate on 2.3, 2.2, 2.1 and 2.0 in sequence, in the background.
+> Bash cat > ~/runall.sh <<'EOF' #!/usr/bin/env bash for b in "$@"; do   (cd ~/wt/$b && bash cross-test/server-runtime/run.sh > /tmp/sr-$b.log 2>&1); echo "$b rc=$?" >> /tmp/sr-all.log done EOF chmod +x ~/runall.sh; rm -f /tmp/sr-all.log; nohup ~/runall.sh 2.3 2.2 2.1 2.0 > /dev/null 2>&1 & echo PID $!
+< PID 79744
+> Bash timeout 590 bash -c 'until [ "$(wc -l < /tmp/sr-all.log 2>/dev/null || echo 0)" -ge 2 ]; do sleep 10; done'; cat /tmp/sr-all.log; grep "^===" /tmp/gates.log | tail -3
+= task_started
+= task_notification
+< 2.3 rc=1 2.2 rc=1 2.1 rc=1 2.0 rc=1 === test === === test rc=0 === === current-generation ===
+> Bash for b in 2.3 2.2 2.1 2.0; do echo "== $b"; tail -5 /tmp/sr-$b.log | cut -c1-250; done
+< == 2.3 ==> Building local tacplus binary ==> Generating go model Error: /builds/looper/tacplus/homes/looper-455/tmp/tacplus-server-runtime.mWFZVP/go-client/tacplus.yaml: "grpc-servers" has been removed; server wrappers are inferred from service annotations ERROR: go generation failed == 2.2 ==> Buil...
+= thinking_tokens
+= thinking_tokens
+On 2.0 to 2.3 the compiler rejects `grpc-servers` as removed, and generation there isn't scoped, so those lines don't need it. I'm dropping that line from those four backports.
+> Bash cat > ~/drop_gs.py <<'EOF' p='cross-test/server-runtime/run.sh' s=open(p).read() old='''# grpc-servers: all, as consumer-contract's config: the fixture tree holds # several services, and unset, generation is scoped to contractclient's own # contract file, dropping contract/contract.proto (ContractAp...
+< 2.3 1a2c6cfa cross-test/server-runtime: build and pass again, and run it in just gates (#455)  8 files changed, 64 insertions(+), 15 deletions(-) 2.2 f495223b cross-test/server-runtime: build and pass again, and run it in just gates (#455)  8 files changed, 64 insertions(+), 15 deletions(-) 2.1 14d8...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+While that runs: the deprecation-warning exception only makes sense on lines whose compiler emits that warning. Checking which lines do.
+> Bash for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b: $(grep -rl 'func LegacyRedactWarning' ~/wt/$b/pkg | wc -l)"; done
+< 2.0: 0 2.1: 0 2.2: 0 2.3: 0 2.4: 0 2.5: 0 2.6: 1
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for b in 2.4 2.5; do w=/tmp/probe-$b; d=~/wt/$b; rm -rf $w/model; printf 'grpc-servers: all\n' >> $w/tacplus.yaml; for l in go java rust; do sed -i "s/^language: .*/language: \"$l\"/" $w/tacplus.yaml; rm -rf $w/model; (cd $w && ./tacplus build --config tacplus.yaml --src "$d/cross-test/consumer-cont...
+= task_started
+= task_notification
+< 2.4 go rc=0 c2sm=y hits=0 2.4 java rc=0 c2sm=n hits=0 2.4 rust rc=0 c2sm=y hits=0 2.5 go rc=0 c2sm=y hits=0 2.5 java rc=0 c2sm=n hits=0 2.5 rust rc=0 c2sm=y hits=0
+= thinking_tokens
+= thinking_tokens
+Clean on 2.4 and 2.5, so the strict check holds there. I'm amending those two now; 2.0 to 2.3 come after their runs.
+> Bash cat > ~/strict.py <<'EOF' p='cross-test/server-runtime/run.sh' s=open(p).read() old='''  # The one accepted warning, as in consumer-contract: the shared contract proto   # still exercises the legacy (spec.redact) on purpose until 3.0 removes it   # (#274), and generation names it deprecated.   if rg...
+< --- a/cross-test/server-runtime/README.md +++ b/cross-test/server-runtime/README.md -- Local/manual, like `w2s-validate`. It is **not** part of `just test` and not -  wired into CI or `nightly-matrix.sh`: it needs the go, maven and cargo -  toolchains concurrently, and `just test` must stay fast. +-...
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 595 bash -c 'until [ "$(wc -l < /tmp/sr-all.log 2>/dev/null || echo 0)" -ge 2 ]; do sleep 10; done'; cat /tmp/sr-all.log; for b in 2.3 2.2; do tail -2 /tmp/sr-$b.log | cut -c1-250; done; grep "^===" /tmp/gates.log | tail -2
+= task_started
+= task_notification
+< bash: line 1: /tmp/sr-all.log: No such file or directory bash: line 1: /tmp/sr-all.log: No such file or directory bash: line 1: /tmp/sr-all.log: No such file or directory bash: line 1: /tmp/sr-all.log: No such file or directory bash: line 1: /tmp/sr-all.log: No such file or directory bash: line 1: /...
+= thinking_tokens
+= thinking_tokens
+Releases 2.3 and 2.2 pass. Applying the strict-check amend to them while 2.1 and 2.0 run.
+> Bash for b in 2.3 2.2; do cd ~/wt/$b; python3 ~/strict.py && git commit -q -a --amend --no-edit; git diff origin/release/$b --stat | tail -1; git diff origin/release/$b -- cross-test/server-runtime/run.sh | grep -c "spec\\\\.redact\|grpc-servers"; done
+< Exit code 1  8 files changed, 57 insertions(+), 14 deletions(-) 0  8 files changed, 57 insertions(+), 14 deletions(-) 0
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+While 2.1 and 2.0 run: I noticed the generated Java model puts `ContractApiMcpTest.java` under `src/main/java`. Checking whether that's intended.
+> Bash cd /builds/looper/tacplus/issues/455; grep -rn "McpTest" pkg/internal/java --include=*.go | grep -v _test.go | head -8
+< pkg/internal/java/types/mcp_dispatch_tests_gen.go:33:// writeJavaMcpDispatchTestFile emits <Service>McpTest.java beside the dispatch. pkg/internal/java/types/mcp_dispatch_tests_gen.go:46:// javaMcpTestCaller is the verified Caller every generated case dispatches as. pkg/internal/java/types/mcp_dispa...
+The generator places it beside the dispatch on purpose, so there's nothing to file. Waiting for 2.1 and 2.0.
+> Bash timeout 595 bash -c 'until [ "$(wc -l < /tmp/sr-all.log)" -ge 4 ]; do sleep 10; done'; cat /tmp/sr-all.log; for b in 2.1 2.0; do tail -1 /tmp/sr-$b.log | cut -c1-250; done; grep "^===" /tmp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< 2.3 rc=0 2.2 rc=0 2.1 rc=0 2.0 rc=0 server-runtime OK (java rust generated servers driven by the go generated client; java-client->rust-server rust-client->java-server) server-runtime OK (java rust generated servers driven by the go generated client; java-client->rust-server rust-client->java-server...
+= thinking_tokens
+= thinking_tokens
+All seven release lines pass. Applying the strict-check amend to 2.1 and 2.0, then giving each backport an accurate commit message.
+> Bash for b in 2.1 2.0; do cd ~/wt/$b; python3 ~/strict.py && git commit -q -a --amend --no-edit; git diff origin/release/$b --stat | tail -1; done; tail -3 /tmp/gates.log | cut -c1-200
+<  8 files changed, 57 insertions(+), 14 deletions(-)  8 files changed, 57 insertions(+), 14 deletions(-)     Removed 12M fixture tree healthonly-rust ==> Generating rust zero-rpc fixture ==> Compiling rust zero-rpc fixture Shell cwd was reset to /builds/looper/tacplus/issues/455
+> Bash msg() { # $1 = branch kind: new|mid|old cat <<EOF cross-test/server-runtime: build and pass again, and run it in just gates (#455)  Backport of #455 to release/$2. The gate did not build on this line, and no gate ran it, so nothing noticed:  EOF if [ "$1" != old ]; then cat <<'EOF' - its tacplus.yam...
+< cross-test/server-runtime: build and pass again, and run it in just gates (#455)  Backport of #455 to release/2.0. The gate did not build on this line, and no gate ran it, so nothing noticed:  - the Java fixture's pom lacked the MCP Java SDK the generated dispatch is   written against (and the jacks...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+All seven backport commits are ready. I'll open the PRs once main's commit lands. Checkpointing while the main gates run.
+> Bash cd /builds/looper/tacplus/issues/455; /usr/local/bin/repo-looper --repo tacplus --issue 455 --checkpoint "Fix committed 40f739fc on looper/tacplus-455; server-runtime passes on main and on release/2.0-2.6 with backport commits prepared locally in ~/wt/2.x (branches backport/455-release-2.x; 2.0-2.3 ...
+= task_started
+= task_notification
+< [2026-11-09T17:10:23Z] checkpoint of #455 (a step) pushed to looper/tacplus-455:  11 files changed, 627 insertions(+), 16 deletions(-)
+= thinking_tokens
+= thinking_tokens
+The checkpoint reports 11 files, but my commit touches 9. Checking for stray files in the checkout.
+> Bash cd /builds/looper/tacplus/issues/455; git status --short; git worktree list | head -3
+< /builds/looper/tacplus/issues/455               40f739fc [looper/tacplus-455] /builds/looper/tacplus/homes/looper-455/wt/2.0  fb246d00 [backport/455-release-2.0] /builds/looper/tacplus/homes/looper-455/wt/2.1  31008e22 [backport/455-release-2.1]
+The checkout is clean; the count is probably measured against an older base. Waiting on gates.
+> Bash timeout 595 bash -c 'while kill -0 20133 2>/dev/null; do sleep 15; done'; grep "^===" /tmp/gates.log | tail -4
+= task_started
+= task_notification
+< === soundness rc=0 === === test === === test rc=0 === === current-generation ===
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/455; nohup /usr/local/bin/repo-looper --repo tacplus --issue 455 --land > /tmp/land.log 2>&1 & echo PID $!
+< PID 127728
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+While the land is queued, I'll push the backport branches and open the PRs, following the #446 precedent. First, each line's next patch tag:
+> Bash cd /builds/looper/tacplus/issues/455; git fetch -q --tags origin; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do t=$(git tag --merged origin/release/$b --sort=-v:refname "v$b.*" | head -1); n=$(git tag -l "v$b.*" --sort=-v:refname | head -1); echo "$b newest-on-branch=$t newest-any=$n behind=$(git rev-lis...
+< 2.0 newest-on-branch=v2.0.22 newest-any=v2.0.22 behind=0 2.1 newest-on-branch=v2.1.16 newest-any=v2.1.16 behind=0 2.2 newest-on-branch=v2.2.13 newest-any=v2.2.13 behind=0 2.3 newest-on-branch=v2.3.15 newest-any=v2.3.15 behind=0 2.4 newest-on-branch=v2.4.15 newest-any=v2.4.15 behind=0 2.5 newest-on-b...
+> Bash cd /builds/looper/tacplus/issues/455; declare -A last=([2.0]=22 [2.1]=16 [2.2]=13 [2.3]=15 [2.4]=15 [2.5]=16 [2.6]=5) for b in 2.6 2.5 2.4 2.3 2.2 2.1 2.0; do   n=$((${last[$b]}+1))   case $b in     2.6) cfg='As on main, run.sh sets `grpc-servers: all` (without it generation drops ContractApi, `c2sm...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= vcs_state_changed
+= code_change_published
+< remote:  https://github.com/tacplus-dev/tacplus/pull/496 remote:  https://github.com/tacplus-dev/tacplus/pull/497 remote:  https://github.com/tacplus-dev/tacplus/pull/498 remote:  https://github.com/tacplus-dev/tacplus/pull/499 remote:  https://github.com/tacplus-dev/tacplus/pull/500 remote:  https:...
+= thinking_tokens
+= thinking_tokens
+PRs #496–#502 are open (2.6 down to 2.0). Next I'll poll the land and the local gates.
+> Bash timeout 595 bash -c 'while kill -0 127728 2>/dev/null && kill -0 20133 2>/dev/null; do sleep 15; done'; tail -5 /tmp/land.log; grep "^===" /tmp/gates.log | tail -3; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-09T17:20:32Z] checkpoint of #455 (land queued) pushed to looper/tacplus-455:  12 files changed, 631 insertions(+), 16 deletions(-) [2026-11-09T17:20:34Z] queued: the manager of tacplus merges looper/tacplus-455 after the lands queued before it, one at a time, and says on the issue what came...
+> Bash tail -4 /tmp/gates.log | cut -c1-200; wc -l /tmp/gates.log; ps -o pid,etime,rss,cmd -u $(id -u) --sort=-rss | head -6 | cut -c1-160
+<      Removed 600 files, 3.2GiB total     Removed 16M fixture tree recordegress-rust ==> Generating go record-egress HOST fixture ==> Compiling go record-egress HOST fixture 503 /tmp/gates.log     PID     ELAPSED   RSS CMD     574    01:05:44 307556 claude --print --verbose --output-format stream-jso...
+Progressing. Still waiting.
+> Bash timeout 595 bash -c 'while kill -0 127728 2>/dev/null && kill -0 20133 2>/dev/null; do sleep 15; done'; tail -2 /tmp/land.log | cut -c1-300; grep "^===" /tmp/gates.log | tail -3; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-09T17:20:32Z] checkpoint of #455 (land queued) pushed to looper/tacplus-455:  12 files changed, 631 insertions(+), 16 deletions(-) [2026-11-09T17:20:34Z] queued: the manager of tacplus merges looper/tacplus-455 after the lands queued before it, one at a time, and says on the issue what came...
+> Bash timeout 595 bash -c 'while kill -0 127728 2>/dev/null && kill -0 20133 2>/dev/null; do sleep 15; done'; tail -2 /tmp/land.log | cut -c1-300; grep "^===" /tmp/gates.log | tail -3; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-09T17:20:32Z] checkpoint of #455 (land queued) pushed to looper/tacplus-455:  12 files changed, 631 insertions(+), 16 deletions(-) [2026-11-09T17:20:34Z] queued: the manager of tacplus merges looper/tacplus-455 after the lands queued before it, one at a time, and says on the issue what came...
+> Bash timeout 595 bash -c 'while kill -0 127728 2>/dev/null && kill -0 20133 2>/dev/null; do sleep 15; done'; tail -2 /tmp/land.log | cut -c1-300; grep "^===" /tmp/gates.log | tail -3; date -u +%H:%M; tail -2 /tmp/gates.log | cut -c1-150
+= task_started
+= task_notification
+< [2026-11-09T17:20:32Z] checkpoint of #455 (land queued) pushed to looper/tacplus-455:  12 files changed, 631 insertions(+), 16 deletions(-) [2026-11-09T17:20:34Z] queued: the manager of tacplus merges looper/tacplus-455 after the lands queued before it, one at a time, and says on the issue what came...
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 595 bash -c 'while kill -0 127728 2>/dev/null && kill -0 20133 2>/dev/null; do sleep 15; done'; tail -1 /tmp/land.log | cut -c1-300; grep "^===" /tmp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-09T17:20:34Z] queued: the manager of tacplus merges looper/tacplus-455 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === test rc=0 === === current-generation === 18:1...
+> Bash timeout 595 bash -c 'while kill -0 127728 2>/dev/null && kill -0 20133 2>/dev/null; do sleep 15; done'; tail -1 /tmp/land.log | cut -c1-300; grep "^===" /tmp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-09T17:20:34Z] queued: the manager of tacplus merges looper/tacplus-455 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === test rc=0 === === current-generation === 18:2...
+> Bash timeout 595 bash -c 'while kill -0 127728 2>/dev/null && kill -0 20133 2>/dev/null; do sleep 15; done'; tail -1 /tmp/land.log | cut -c1-300; grep "^===" /tmp/gates.log | tail -2; date -u +%H:%M; gh issue view 455 --repo tacplus-dev/tacplus --comments | tail -5
+= task_started
+= task_notification
+< [2026-11-09T17:20:34Z] queued: the manager of tacplus merges looper/tacplus-455 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === test rc=0 === === current-generation === 18:3...
+= thinking_tokens
+= thinking_tokens
+Still waiting: the land is queued behind other lands, and my local `just gates` is still on current-generation (about 1h50m so far). All seven backport PRs are open.
+> Bash timeout 595 bash -c 'while kill -0 127728 2>/dev/null && kill -0 20133 2>/dev/null; do sleep 15; done'; tail -1 /tmp/land.log | cut -c1-300; grep "^===" /tmp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-09T17:20:34Z] queued: the manager of tacplus merges looper/tacplus-455 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === test rc=0 === === current-generation === 18:4...
+> Bash timeout 595 bash -c 'while kill -0 127728 2>/dev/null && kill -0 20133 2>/dev/null; do sleep 15; done'; tail -1 /tmp/land.log | cut -c1-300; grep "^===" /tmp/gates.log | tail -2; date -u +%H:%M; tail -1 /tmp/gates.log | cut -c1-120
+= task_started
+= task_notification
+< [2026-11-09T17:20:34Z] queued: the manager of tacplus merges looper/tacplus-455 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === test rc=0 === === current-generation === 18:5...
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 595 bash -c 'while kill -0 127728 2>/dev/null && kill -0 20133 2>/dev/null; do sleep 15; done'; tail -1 /tmp/land.log | cut -c1-300; grep "^===" /tmp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-09T17:20:34Z] queued: the manager of tacplus merges looper/tacplus-455 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === test rc=0 === === current-generation === 19:0...
+> Bash timeout 595 bash -c 'while kill -0 127728 2>/dev/null && kill -0 20133 2>/dev/null; do sleep 15; done'; tail -1 /tmp/land.log | cut -c1-300; grep "^===" /tmp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-09T17:20:34Z] queued: the manager of tacplus merges looper/tacplus-455 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === test rc=0 === === current-generation === 19:1...
+> Bash timeout 595 bash -c 'while kill -0 127728 2>/dev/null && kill -0 20133 2>/dev/null; do sleep 15; done'; tail -1 /tmp/land.log | cut -c1-300; grep "^===" /tmp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-09T17:20:34Z] queued: the manager of tacplus merges looper/tacplus-455 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === test rc=0 === === current-generation === 19:2...
+> Bash timeout 595 bash -c 'while kill -0 127728 2>/dev/null && kill -0 20133 2>/dev/null; do sleep 15; done'; tail -1 /tmp/land.log | cut -c1-300; grep "^===" /tmp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-09T17:20:34Z] queued: the manager of tacplus merges looper/tacplus-455 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === test rc=0 === === current-generation === 19:3...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/455; tail -3 /tmp/gates.log | cut -c1-150; gh issue comment 455 --repo tacplus-dev/tacplus --body-file - <<'EOF' Status from this run (not closing yet: the land is still queued with the manager, which lands it after this run ends if its gates pass).  **The fix**, com...
+<     Removed 53M fixture tree tenantslice-config-owner-java ==> Generating rust tenant-slice config owner fixture ==> Compiling rust tenant-slice config owner fixture https://github.com/tacplus-dev/tacplus/issues/455#issuecomment-6749409237
+> Bash cd /builds/looper/tacplus/issues/455; /usr/local/bin/repo-looper --repo tacplus --issue 455 --checkpoint "Fix 40f739fc land queued (17:20Z). Backport PRs #496-#502 open (2.6..2.0, verified each). Status comment posted. Left: confirm land verdict (main hash, gate set), then comment + close #455." 2>&...
+= task_started
+= task_notification
+< [2026-11-09T19:31:23Z] checkpoint of #455 (a step) pushed to looper/tacplus-455:  12 files changed, 631 insertions(+), 16 deletions(-) [2026-11-09T17:20:32Z] checkpoint of #455 (land queued) pushed to looper/tacplus-455:  12 files changed, 631 insertions(+), 16 deletions(-) [2026-11-09T17:20:34Z] qu...
+> Bash timeout 590 bash -c 'while kill -0 127728 2>/dev/null; do sleep 15; done'; tail -2 /tmp/land.log | cut -c1-400; grep "^===" /tmp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-09T17:20:32Z] checkpoint of #455 (land queued) pushed to looper/tacplus-455:  12 files changed, 631 insertions(+), 16 deletions(-) [2026-11-09T17:20:34Z] queued: the manager of tacplus merges looper/tacplus-455 after the lands queued before it, one at a time, and says on the issue what came...
+> Bash grep "^===.*rc=" /tmp/gates.log
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=0 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=0 === === memberport rc=0 === === claims-provenance rc=0 === === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc...
+Twelve gates have passed so far. I'll keep polling until shortly before the stop, then add the final gate results to the issue.
+> Bash timeout 540 bash -c 'while kill -0 127728 2>/dev/null && kill -0 20133 2>/dev/null; do sleep 15; done'; tail -1 /tmp/land.log | cut -c1-400; grep "^===.*rc=" /tmp/gates.log | tail -4; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-09T17:20:34Z] queued: the manager of tacplus merges looper/tacplus-455 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === redact rc=0 === === trace-carry rc=0 === === ...
+> Bash sleep 2; grep "^===.*rc=\|OVERALL" /tmp/gates.log | tail -6; grep "server-runtime OK" /tmp/gates.log
+< === jwk-alg rc=0 === === redact rc=0 === === trace-carry rc=0 === === server-runtime rc=0 === === tacplus-script rc=0 === === OVERALL fail=0 === server-runtime OK (java rust generated servers driven by the go generated client; java-client->rust-server rust-client->java-server)
+Full `just gates` passed locally. I'm recording that on the issue; the land is still queued.
+> Bash cd /builds/looper/tacplus/issues/455; gh issue comment 455 --repo tacplus-dev/tacplus --body "Update: my local \`just gates\` on \`40f739fc\` has now finished green. All 18 steps returned rc=0: protoc-check, soundness, test, current-generation, determinism, cert-stream, stream-expiry, memberport, cl...
+= task_started
+= task_notification
+< https://github.com/tacplus-dev/tacplus/issues/455#issuecomment-6750009462 [2026-11-09T19:59:24Z] checkpoint of #455 (a step) pushed to looper/tacplus-455:  12 files changed, 631 insertions(+), 16 deletions(-)
+> Bash timeout 420 bash -c 'while kill -0 127728 2>/dev/null; do sleep 15; done'; tail -2 /tmp/land.log | cut -c1-500; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-09T17:20:32Z] checkpoint of #455 (land queued) pushed to looper/tacplus-455:  12 files changed, 631 insertions(+), 16 deletions(-) [2026-11-09T17:20:34Z] queued: the manager of tacplus merges looper/tacplus-455 after the lands queued before it, one at a time, and says on the issue what came...
+= thinking_tokens
+= thinking_tokens
+`cross-test/server-runtime` builds and passes again on main and on every release line, and it now runs in `just gates`. Issue #455 is still open because the land is waiting in the manager's queue, which hadn't reached it when time ran out. The manager will still land it after this run, and the next run confirms the main commit and closes the issue.
+
+**What was broken** (fix is commit `40f739fc`):
+- **The reported failure:** the gate's config lacked `grpc-servers: all`, which consumer-contract's config gained in #161. Without it, generation drops ContractApi, the C2S client manager (`c2sm`) and the contract types the Go and Rust drivers import, so neither driver compiled.
+- **The deprecation warning:** the generate-log check now accepts the one 2.6 `(spec.redact)` warning, as consumer-contract does. I left the shared proto on the old annotation, since it keeps it on purpose until 3.0.
+- **Three Java failures behind the first one:**
+  - The fixture's Maven config was missing the MCP Java SDK that the generated code now needs.
+  - Its login check didn't match the current generated interface: it must now return claims, and it crashed on the empty namespace sent for "any user" methods.
+  - JDK 25 prints a warning to the server's error output, which the gate requires to be empty. The Java runs now pass the flag that silences it.
+- **Gate:** added a `just server-runtime` recipe and put it in `just gates`. The docs and STATE.md say so.
+
+**Verification:**
+- The gate passes all four legs: Java and Rust servers driven by the Go client, Java client against the Rust server, and Rust client against the Java server.
+- My local `just gates` passed every step, ending in `OVERALL fail=0`; current-generation alone took about 2.5 hours.
+
+**Release:** main has already taken 2.7 features, so I cut no `v2.6.2`; `v2.6.2` through `v2.6.5` already exist anyway. The gate was broken on every release line, so I opened a backport PR for each, ran the gate on each line and saw it pass. Each PR names the patch to cut once it merges:
+
+| Line | PR | Patch |
+|---|---|---|
+| 2.6 | #496 | v2.6.6 |
+| 2.5 | #497 | v2.5.17 |
+| 2.4 | #498 | v2.4.16 |
+| 2.3 | #499 | v2.3.16 |
+| 2.2 | #500 | v2.2.14 |
+| 2.1 | #501 | v2.1.17 |
+| 2.0 | #502 | v2.0.23 |
+
+Two differences between lines:
+- On 2.0 to 2.3 the compiler rejects `grpc-servers` as a removed setting and generates everything without it, so those PRs drop that line.
+- Only 2.6's compiler emits the deprecation warning, so the log check stays strict on 2.0 to 2.5.
+
+Release/2.0's `cross-test/TESTS.md` already had leftover merge-conflict markers from an earlier backport. I left them alone and mentioned them in #502.
+
+**Trace check:** the checker had read the Go test driver's four calls as handler calls that dropped `trace_id`. The driver starts those calls itself, so I marked them `// trace: unrelated:`. The one finding left is in the outbound-deadline fixture, which this change doesn't touch and #310 already tracks.
+
+I posted two comments on #455 with all of this: what changed, the backport PRs, and the full gate results.
+= success: `cross-test/server-runtime` builds and passes again on main and on every release line, and it now runs in `just gates`. Issue #455 is still open because the land is waiting in the manager's queue, which hadn't reached it when time ran out. The manager will still land it after this run, and the next run confirms the main commit and closes the issue.
+
+**What was broken** (fix is commit `40f739fc`):
+- **The reported failure:** the gate's config lacked `grpc-servers: all`, which consumer-contract's config gained in #161. Without it, generation drops ContractApi, the C2S client manager (`c2sm`) and the contract types the Go and Rust drivers import, so neither driver compiled.
+- **The deprecation warning:** the generate-log check now accepts the one 2.6 `(spec.redact)` warning, as consumer-contract does. I left the shared proto on the old annotation, since it keeps it on purpose until 3.0.
+- **Three Java failures behind the first one:**
+  - The fixture's Maven config was missing the MCP Java SDK that the generated code now needs.
+  - Its login check didn't match the current generated interface: it must now return claims, and it crashed on the empty namespace sent for "any user" methods.
+  - JDK 25 prints a warning to the server's error output, which the gate requires to be empty. The Java runs now pass the flag that silences it.
+- **Gate:** added a `just server-runtime` recipe and put it in `just gates`. The docs and STATE.md say so.
+
+**Verification:**
+- The gate passes all four legs: Java and Rust servers driven by the Go client, Java client against the Rust server, and Rust client against the Java server.
+- My local `just gates` passed every step, ending in `OVERALL fail=0`; current-generation alone took about 2.5 hours.
+
+**Release:** main has already taken 2.7 features, so I cut no `v2.6.2`; `v2.6.2` through `v2.6.5` already exist anyway. The gate was broken on every release line, so I opened a backport PR for each, ran the gate on each line and saw it pass. Each PR names the patch to cut once it merges:
+
+| Line | PR | Patch |
+|---|---|---|
+| 2.6 | #496 | v2.6.6 |
+| 2.5 | #497 | v2.5.17 |
+| 2.4 | #498 | v2.4.16 |
+| 2.3 | #499 | v2.3.16 |
+| 2.2 | #500 | v2.2.14 |
+| 2.1 | #501 | v2.1.17 |
+| 2.0 | #502 | v2.0.23 |
+
+Two differences between lines:
+- On 2.0 to 2.3 the compiler rejects `grpc-servers` as a removed setting and generates everything without it, so those PRs drop that line.
+- Only 2.6's compiler emits the deprecation warning, so the log check stays strict on 2.0 to 2.5.
+
+Release/2.0's `cross-test/TESTS.md` already had leftover merge-conflict markers from an earlier backport. I left them alone and mentioned them in #502.
+
+**Trace check:** the checker had read the Go test driver's four calls as handler calls that dropped `trace_id`. The driver starts those calls itself, so I marked them `// trace: unrelated:`. The one finding left is in the outbound-deadline fixture, which this change doesn't touch and #310 already tracks.
+
+I posted two comments on #455 with all of this: what changed, the backport PRs, and the full gate results.

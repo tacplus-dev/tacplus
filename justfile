@@ -188,7 +188,7 @@ gates:
     echo "=== OVERALL fail=1 (protoc preflight) ==="
     exit 1
   fi
-  for g in soundness test current-generation determinism cert-stream stream-expiry memberport claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg redact trace-carry tacplus-script; do
+  for g in soundness test current-generation determinism cert-stream stream-expiry memberport claims-provenance accounting-identity w2s-validate c2d-server zero-rpc-s2s jwk-alg redact trace-carry tacplus-script; do
     echo "=== $g ==="
     just "$g"
     rc=$?

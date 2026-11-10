@@ -159,14 +159,49 @@ func rustRecordCallerNs() string {
 `
 }
 
+// rustRecordRowTraceClear renders the clear of the injected trace_id off every
+// row a write surface request carries (#313): item, and ReplaceIfUnchanged's
+// expected_item, so a row is stored without the trace of the call that wrote
+// it, and a compare value carrying one still matches the stored row. base is
+// the mutable request (or &mut case message); reqType is its Rust type path,
+// which names the enum of a row field that is a oneof case. Empty for a record
+// type without the injected trace_id (rowTrace false) and for a key-addressed
+// request. The request's own trace_id is the call's and stays.
+func rustRecordRowTraceClear(base, reqType, reqProtoType string, e *parser.RecordEntry, rowTrace func(string) bool, indent string) string {
+	if len(e.RowFields) == 0 || rowTrace == nil || !rowTrace(e.Record) {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s// A stored row never keeps a trace (#313).\n", indent)
+	for i, f := range e.RowFields {
+		pattern, expr := "Some(__r)", base+"."+rustRecordField(f)+".as_mut()"
+		if i < len(e.RowOneofs) && e.RowOneofs[i] != "" {
+			pattern = fmt.Sprintf("Some(%s::%s(__r))", rustOneofEnumPath(reqType, reqProtoType, e.RowOneofs[i]),
+				toProstTypeName(strutil.ToCamelCase(f)))
+			expr = base + "." + rustRecordField(e.RowOneofs[i]) + ".as_mut()"
+		}
+		fmt.Fprintf(&b, `%[1]sif let %[2]s = %[3]s {
+%[1]s    __r.trace_id.clear();
+%[1]s}
+`, indent, pattern, expr)
+	}
+	return b.String()
+}
+
 // rustRecordEntryPre renders the pre-handler half of the guard for a write
 // surface RPC addressing one record type: its tenant pin, then — on a write —
-// refuse below the floor and stamp the floor when unset. The request binding
-// is `req`; a write also binds __record_required, the level the post half
-// holds the handler's ack to (the handler consumes `req`).
-func rustRecordEntryPre(method *parser.MethodInfo) string {
+// refuse below the floor and stamp the floor when unset, then clear the trace
+// off the rows it carries. The request binding is `req`, of Rust type reqType;
+// a write also binds __record_required, the level the post half holds the
+// handler's ack to (the handler consumes `req`). rowTrace reports whether a
+// record type carries the injected trace_id.
+func rustRecordEntryPre(method *parser.MethodInfo, reqType string, rowTrace func(string) bool) string {
 	e := method.RecordEntry
-	if e == nil || (len(e.NamespacePath) == 0 && e.Durability == spec.Durability_DURABILITY_UNSPECIFIED) {
+	if e == nil {
+		return ""
+	}
+	traceClear := rustRecordRowTraceClear("req", reqType, simpleTypeName(method.FullInputType), e, rowTrace, "        ")
+	if len(e.NamespacePath) == 0 && e.Durability == spec.Durability_DURABILITY_UNSPECIFIED && traceClear == "" {
 		return ""
 	}
 	var b strings.Builder
@@ -190,6 +225,9 @@ func rustRecordEntryPre(method *parser.MethodInfo) string {
         }
         let __record_required = req.durability;
 `, int32(e.Durability), method.Name, rustRecordDurabilityName(e.Durability))
+	}
+	if traceClear != "" {
+		b.WriteString("\n" + traceClear)
 	}
 	b.WriteString("        let req = req;\n")
 	return b.String()
@@ -248,8 +286,9 @@ func rustRecordKeyExpr(op parser.RecordEntry) string {
 // rustRecordApplyPre renders Apply's pre-handler guard: per op, the case, its
 // authorization, its tenant, its floor, and its place in the canonical lock
 // order; then the Apply's effective durability. Binds __record_apply_ops and
-// __record_required for the post half.
-func rustRecordApplyPre(method *parser.MethodInfo, svc *parser.ServiceInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, skipAuth bool) string {
+// __record_required for the post half. Each op's rows have their trace
+// cleared, as on its single-type RPC.
+func rustRecordApplyPre(method *parser.MethodInfo, svc *parser.ServiceInfo, servicePackage, parentDir string, crossPkgTypes map[string]string, skipAuth bool, rowTrace func(string) bool) string {
 	ops := method.RecordApplyOps
 	if len(ops) == 0 {
 		return ""
@@ -279,13 +318,15 @@ func rustRecordApplyPre(method *parser.MethodInfo, svc *parser.ServiceInfo, serv
 		if len(op.NamespacePath) > 0 {
 			hasTenant = true
 		}
+		caseType := resolveOneRustTypeQualified(simpleTypeName(op.CaseType), op.CaseType, servicePackage, crossPkgTypes)
 		fmt.Fprintf(&cases, `                Some(%[1]s::%[2]s(__c)) => {
-%[3]s%[4]s%[8]s                    (__RecordLockKey { rec: %[5]q, %[6]s }, %[7]d, __c.durability)
+%[3]s%[4]s%[8]s%[9]s                    (__RecordLockKey { rec: %[5]q, %[6]s }, %[7]d, __c.durability)
                 }
 `, enumPath, toProstTypeName(strutil.ToCamelCase(op.CaseField)), auth,
 			rustRecordTenantPin("__c", op.NamespacePath, "Apply ("+op.CaseField+")", "                    "),
 			op.Record, rustRecordKeyExpr(op), int32(op.Durability),
-			rustRecordRoutePin("__c", op.NamespacePath, route, "Apply ("+op.CaseField+")", "                    "))
+			rustRecordRoutePin("__c", op.NamespacePath, route, "Apply ("+op.CaseField+")", "                    "),
+			rustRecordRowTraceClear("__c", caseType, simpleTypeName(op.CaseType), &op, rowTrace, "                    "))
 	}
 	callerNs := ""
 	if hasTenant {

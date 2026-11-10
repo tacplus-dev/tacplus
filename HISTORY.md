@@ -75,3 +75,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-08 looper release v2.4.13 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.4.13)
 - 2026-11-08 looper release v2.5.14 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.5.14)
 - 2026-11-08 looper release v2.6.3 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.6.3)
+- 2026-11-08 looper issue Generated Rust Kani harnesses do not verify: tacplus verify fails on every generated crate (#211)

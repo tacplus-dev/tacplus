@@ -32,7 +32,8 @@ type handlerTemplateData struct {
 
 // handlerTimeseriesEntry is a timeseries projection in the handler.
 type handlerTimeseriesEntry struct {
-	TypeName string // e.g., "SensorTimeseries"
+	TypeName     string // e.g., "SensorTimeseries"
+	CarriesTrace bool   // the row copies the source's trace_id, cleared before insert
 }
 
 // generateEventHandlers generates store-agnostic event handlers for every
@@ -56,7 +57,7 @@ func generateEventHandlers(allFiles []model.ProtoFile, typesOutputDir string) er
 			HasNoop:         g.SourceHasNoop(),
 		}
 		for _, p := range g.Projections {
-			data.TimeseriesProjections = append(data.TimeseriesProjections, handlerTimeseriesEntry{TypeName: p.Message.Name})
+			data.TimeseriesProjections = append(data.TimeseriesProjections, handlerTimeseriesEntry{TypeName: p.Message.Name, CarriesTrace: p.CarriesTrace})
 		}
 
 		if err := writeEventHandlerFile(pf, data, typesOutputDir); err != nil {

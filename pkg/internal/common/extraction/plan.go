@@ -48,6 +48,11 @@ type Projection struct {
 	// Variants are the oneof members read, in first-use order. A projection
 	// with any is conditional: it is extracted only when one of them is set.
 	Variants []Variant
+	// CarriesTrace is set when the source and the projection both carry the
+	// injected trace_id: Fields then ends with it, so the projection copies
+	// its source's trace (#313), and a store path clears it before it writes
+	// the row.
+	CarriesTrace bool
 }
 
 // Group is every projection one package draws from one source message.
@@ -194,7 +199,26 @@ func planProjection(allFiles []model.ProtoFile, msg model.Message, pf model.Prot
 		}
 		proj.Variants[i].Fields = append(proj.Variants[i].Fields, field)
 	}
+	if src, ok := traceField(sourceMsg); ok {
+		if dst, ok := traceField(msg); ok {
+			if _, mapped := dst.Annotations["projection_source"]; !mapped {
+				proj.Fields = append(proj.Fields, Field{Projection: dst, SourceName: src.Name, Source: src, Resolved: true})
+			}
+			proj.CarriesTrace = true
+		}
+	}
 	return proj
+}
+
+// traceField returns msg's injected trace_id; one at another number is the
+// author's own and is not a trace.
+func traceField(msg model.Message) (model.Field, bool) {
+	for _, f := range msg.Fields {
+		if proto.IsTraceField(f.Name, f.Number) && !proto.IsNoopField(f.Name, f.Number) {
+			return f, true
+		}
+	}
+	return model.Field{}, false
 }
 
 func findField(msg model.Message, name string) (model.Field, bool) {

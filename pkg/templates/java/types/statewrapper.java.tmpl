@@ -549,7 +549,12 @@ public class StateClient implements AutoCloseable {
         {{$.OuterClassName}}.{{.FieldPascal}}PutRequest req =
                 {{$.OuterClassName}}.{{.FieldPascal}}PutRequest.newBuilder()
                         .setKey(key)
+{{- if .ClearTrace}}
+                        // A stored value never keeps a trace (#313).
+                        .setValue(value.toBuilder().clearTraceId().build())
+{{- else}}
                         .setValue(value)
+{{- end}}
                         .build();
         stateStub.put{{.FieldPascal}}(req);
     }

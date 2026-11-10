@@ -29,6 +29,13 @@ pub fn save_{{.StoreName}}(
     msg: &{{.TypePath}},
     opts: &diskstore::SnapshotOpts,
 ) -> diskstore::Result<()> {
+{{- if .ClearTrace}}
+    // A stored value never keeps a trace (#313). Clone so the caller's message
+    // keeps its trace_id.
+    let mut untraced = msg.clone();
+    untraced.trace_id.clear();
+    let msg = &untraced;
+{{- end}}
     let bytes = {{.ToJsonPath}}(msg).map_err(|e| diskstore::DiskStoreError::codec(e))?;
     let path = diskstore::store_path(base, ns, "{{.StoreName}}", ".snapshot");
     diskstore::write_snapshot(&path, &bytes, opts)
@@ -59,6 +66,13 @@ pub fn open_{{.StoreName}}_log(
 
 /// Build a redo record for a {{.StoreName}} upsert (UC2).
 pub fn record_{{.StoreName}}(msg: &{{.TypePath}}) -> diskstore::Result<diskstore::Record> {
+{{- if .ClearTrace}}
+    // A stored value never keeps a trace (#313). Clone so the caller's message
+    // keeps its trace_id.
+    let mut untraced = msg.clone();
+    untraced.trace_id.clear();
+    let msg = &untraced;
+{{- end}}
     let bytes = {{.ToJsonPath}}(msg).map_err(|e| diskstore::DiskStoreError::codec(e))?;
     let payload: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|e| diskstore::DiskStoreError::codec(e.to_string()))?;

@@ -185,6 +185,9 @@ func Generate(config *tactype.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to inject trace fields: %w", err)
 	}
+	// Storage paths read the skipped set to decide which values carry the
+	// injected trace_id they must clear before persisting (#313).
+	config.SkippedTraceTypes = skippedTraceTypes
 	if err := proto.SwapEmptyInputs(protoDir); err != nil {
 		return fmt.Errorf("failed to swap empty inputs to TraceRequest: %w", err)
 	}

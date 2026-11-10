@@ -18,6 +18,7 @@ import (
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/eventbus"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
+	"github.com/tacplus-dev/tacplus/pkg/internal/proto"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
@@ -167,6 +168,12 @@ func collectJavaSubscriptions(config *tactype.Config, protoDir string) ([]tactyp
 			SourceIsRecord:  res.IsRecord,
 
 			SourceStoreEpochField: res.StoreEpochField,
+
+			// A store-derived subscription is the store's write path: the
+			// dispatch clears the source's injected trace_id before the store
+			// sees it (#313). A declared one keeps the trace to propagate.
+			StoreIngest:        sd.Origin == "store_derived",
+			SourceCarriesTrace: proto.CarriesInjectedTrace(p, res.TypeFqn, config.SkippedTraceTypes),
 		}
 		if err := boundaries.ApplyRoutingEnvelope(p, config.SelfPackage, &entry); err != nil {
 			return nil, err

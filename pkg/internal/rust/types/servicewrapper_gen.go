@@ -1299,6 +1299,11 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 	// the handler is skipped and a default response is returned. If noop=false
 	// (default), auth and handler run normally — trace is just observability.
 	inputHasTrace := rustTypeHasTraceFields(method.FullInputType, servicePackage, parentDir, crossPkgTypes, skippedTraceTypes)
+	// rowTrace: does a record type carry the injected trace_id the write
+	// surface clears off a stored row (#313)?
+	rowTrace := func(record string) bool {
+		return rustTypeHasTraceFields(record, servicePackage, parentDir, crossPkgTypes, skippedTraceTypes)
+	}
 
 	// Build trace-aware blocks for unary methods
 	authBlock := authLine
@@ -1346,6 +1351,18 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
                 return Ok(tonic::Response::new(<%s>::default()));
             }
         }`, traceRpcRequest, outputType)
+		// A (spec.service_store) <T>StoreService's Put stores its request as the
+		// row (#313): the trace comes off it after the request trace event has
+		// read it, just before the handler; the trace events after the handler
+		// already carry trace_id_saved.
+		if svc.SynthesizedKind == parser.SynthesizedKindStore && method.Name == "Put" && !handlerEmpty {
+			traceAppend += `
+        // A stored row never keeps a trace (#313); trace_id_saved keeps the
+        // call's for its trace events.
+        let mut req = req;
+        req.trace_id.clear();
+`
+		}
 
 		// Publish response trace after handler returns.
 		traceCopy = fmt.Sprintf(`
@@ -1522,7 +1539,7 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 			// Watch<T>Changes (#163): the tenant pin of the record write surface,
 			// after request validation and ahead of the egress preamble, over the
 			// request the handler is then handed.
-			if recordPin := rustRecordEntryPre(method); recordPin != "" {
+			if recordPin := rustRecordEntryPre(method, inputType, rowTrace); recordPin != "" {
 				if serverStreamReqExpr != "req" {
 					serverStreamInputValidation += "\n        let req = request.into_inner();\n"
 					serverStreamReqExpr = "req"
@@ -1865,8 +1882,8 @@ func generateRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo,
 		// and Apply's per-op guards run after the request is validated and the
 		// existing pins, before the handler; their post halves run first on the
 		// response, ahead of the sanitize and response validation below.
-		validationBlock += rustRecordEntryPre(method) +
-			rustRecordApplyPre(method, svc, servicePackage, parentDir, crossPkgTypes, rustCallerUnverified(svc, method))
+		validationBlock += rustRecordEntryPre(method, inputType, rowTrace) +
+			rustRecordApplyPre(method, svc, servicePackage, parentDir, crossPkgTypes, rustCallerUnverified(svc, method), rowTrace)
 		authBlock += rustRecordApplyMetadata(method, rustCallerUnverified(svc, method))
 	}
 	responseValidationBlock := rustServerResponseValidationBlock("resp", method.FullOutputType)

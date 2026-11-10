@@ -242,6 +242,15 @@ func TestRecordWriteSurfaceEmitted(t *testing.T) {
 	if got := entry("WatchXidRowChanges"); got.Durability != spec.Durability_DURABILITY_UNSPECIFIED || strings.Join(got.NamespacePath, ".") != "tenant" {
 		t.Errorf("WatchXidRowChanges stamp = %+v", got)
 	}
+	// The fields carrying a whole row (#313: the wrapper clears their trace).
+	for name, want := range map[string]string{
+		"PutXidRow": "item", "InsertIfAbsentXidRow": "item", "ReplaceIfUnchangedXidRow": "item,expected_item",
+		"DeleteXidRow": "", "GetXidRow": "", "WatchXidRowChanges": "",
+	} {
+		if got := strings.Join(entry(name).RowFields, ","); got != want {
+			t.Errorf("%s row fields = %q, want %q", name, got, want)
+		}
+	}
 	if methods["CreateXidRowQuery"].RecordEntry != nil || methods["Apply"].RecordEntry != nil {
 		t.Error("only the single-type write surface RPCs carry (spec.record_entry)")
 	}
@@ -262,6 +271,12 @@ func TestRecordWriteSurfaceEmitted(t *testing.T) {
 	del := byCase["delete_xid_row"]
 	if strings.Join(del.KeyPath, ".") != "xid" || del.KeyKind != "string" || strings.Join(del.NamespacePath, ".") != "tenant" {
 		t.Errorf("delete_xid_row keys by the request's own key field, got %+v", del)
+	}
+	if r := byCase["replace_if_unchanged_xid_row"]; strings.Join(r.RowFields, ",") != "item,expected_item" || strings.Join(r.RowOneofs, ",") != ",expected" {
+		t.Errorf("replace_if_unchanged_xid_row row fields = %q in oneofs %q", r.RowFields, r.RowOneofs)
+	}
+	if put.RowFields == nil || del.RowFields != nil {
+		t.Errorf("put_xid_row carries its row in item, delete_xid_row none: %v / %v", put.RowFields, del.RowFields)
 	}
 	ins := byCase["insert_if_absent_link_row"]
 	if ins.RPC != "InsertIfAbsentLinkRow" || ins.KeyKind != "int64" || ins.Durability != spec.Durability_DURABILITY_LOCAL {

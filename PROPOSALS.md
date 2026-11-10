@@ -11,6 +11,13 @@ the looper then marks it `promoted` or `declined` here with the date.
   stay full); `cmd/sitegen/**` and `site/**` to `just docs` plus `just site`; `.github/workflows/**` to a workflow
   lint. Also for `just docs`: it checks relative links but not their anchors (GitHub's heading slugs) nor external
   URLs, and does not build the site (`site/docs/*.md` link to site paths; `just site` checks them, needing a venv).
+- **Product layer: a product's owner tenant reads across tenants' custodian data** (2026-11-10, #475; option B of
+  roadmap/PRODUCTS_LAYER.md section 5, which Jody chose as the follow-up to A on 2026-11-09): `fleet.yaml` names, per
+  product, the tenant that owns it (`products: [{name: ledger, owner_tenant: <tid>}]`); an rpc flagged
+  `RPC_FLAG_ACROSS_TENANTS` on a product service admits only **users** of that tenant holding an entitlement to it
+  (C2S, run-time policy within build-time entitlements), its `caller_tid` binding is lifted on that rpc only, and
+  every call is audited with the owner user's identity. No service principal ever reads across tenants. Why: a
+  product owner's billing view over per-tenant usage. Needs its own design and a ROADMAP.md line; after #475.
 - **Images on Google Artifact Registry through WIF, ghcr.io deprecated from 2.6** (2026-11-07, #223; parked by
   the hub 2026-11-07): publish `base`, `build` and the services' release images to the public
   `us-docker.pkg.dev/jody1-328023/tacplus`, pushed by the GitLab publish job with a short-lived GCP token from its

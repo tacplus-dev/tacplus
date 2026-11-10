@@ -2104,6 +2104,11 @@ impl ServiceManager {
                         let h = h.clone();
                         let sm = dispatch_sm.clone();
                         Box::pin(async move {
+{{- if .ClearStoredTrace}}
+                            // A stored value never keeps a trace (#313).
+                            let mut event = event;
+                            event.trace_id = String::new();
+{{- end}}
                             h.{{.HandlerMethodName}}(event.clone(), meta).await?;
                             {{.DispatchFn}}(&event{{range .Inserts}}, sm.{{.FieldName}}.as_ref(){{end}}).await
                         })
@@ -2112,7 +2117,16 @@ impl ServiceManager {
 {{- else}}
                     std::sync::Arc::new(move |event, meta| {
                         let h = h.clone();
+{{- if .ClearStoredTrace}}
+                        Box::pin(async move {
+                            // A stored value never keeps a trace (#313).
+                            let mut event = event;
+                            event.trace_id = String::new();
+                            h.{{.HandlerMethodName}}(event, meta).await
+                        })
+{{- else}}
                         Box::pin(async move { h.{{.HandlerMethodName}}(event, meta).await })
+{{- end}}
                             as std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>>
                     })
 {{- end}}

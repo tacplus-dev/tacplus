@@ -165,3 +165,49 @@ func TestDispatchedRefusesAProjectionOutsideTheSourcePackage(t *testing.T) {
 		t.Fatalf("Dispatched error = %v, want the foreign projection named", err)
 	}
 }
+
+// Every projection copies its source's injected trace_id (#313): the planner
+// adds it as one more top-level field, so each language's extraction copies it
+// like any other. Both sides must carry the injected field (trace_id = 200); a
+// trace_id at another number is the author's own and is left alone.
+func TestPlanCopiesTheInjectedTraceID(t *testing.T) {
+	trace := model.Field{Name: "trace_id", Type: "string", Number: 200}
+	from := map[string]model.AnnotationValue{"timeseries_table_source": {StringValue: "events.Event"}}
+	files := []model.ProtoFile{{
+		Package: "events",
+		RelPath: "events/events.proto",
+		Messages: []model.Message{
+			{Name: "Event", Fields: []model.Field{{Name: "id", Type: "string", Number: 1}, trace}},
+			{Name: "Row", Annotations: from, Fields: []model.Field{
+				{Name: "id", Type: "string", Number: 1, Annotations: source("id")},
+				trace,
+			}},
+			{Name: "Untraced", Annotations: from, Fields: []model.Field{
+				{Name: "id", Type: "string", Number: 1, Annotations: source("id")},
+				{Name: "trace_id", Type: "string", Number: 7},
+			}},
+			{Name: "Own", Fields: []model.Field{{Name: "trace_id", Type: "string", Number: 3}}},
+			{Name: "OwnRow", Annotations: map[string]model.AnnotationValue{"timeseries_table_source": {StringValue: "events.Own"}}, Fields: []model.Field{trace}},
+		},
+	}}
+	groups, err := Plan(files)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("want the events.Event and events.Own groups, got %d", len(groups))
+	}
+	row, untraced := groups[0].Projections[0], groups[0].Projections[1]
+	if !row.CarriesTrace || len(row.Fields) != 2 {
+		t.Fatalf("Row: carries trace %v, fields %+v; want id then trace_id", row.CarriesTrace, row.Fields)
+	}
+	if f := row.Fields[1]; f.SourceName != "trace_id" || f.Projection.Number != 200 || !f.Resolved || f.Source.Number != 200 {
+		t.Fatalf("Row's trace field = %+v, want the source's trace_id = 200", f)
+	}
+	if untraced.CarriesTrace || len(untraced.Fields) != 1 {
+		t.Fatalf("Untraced has no injected trace_id: carries trace %v, fields %+v", untraced.CarriesTrace, untraced.Fields)
+	}
+	if own := groups[1].Projections[0]; own.CarriesTrace || len(own.Fields) != 0 {
+		t.Fatalf("a source whose trace_id is its own has none to copy: %+v", own)
+	}
+}

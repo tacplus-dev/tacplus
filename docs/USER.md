@@ -291,6 +291,18 @@ records them. Three shapes exist:
   tacplus registry register NAME --kind service --contract <proto repo URL> --visibility public --proto-dir .
   ```
 
+  A service that declares a tenant- or project-scope `(spec.config_slice)` also
+  registers its field in the generated `TenantConfig` / `ProjectConfig`: those are
+  wire numbers too, read by every kernel that holds tenant configs, so the authority
+  decides them once like ids (global from 1, private from 1024):
+
+  ```bash
+  tacplus registry register NAME --tenant-slice --proto-dir .    # --project-slice likewise
+  ```
+
+  Given with `--contract` for a new service, the id and the field are registered
+  together.
+
 - **A lock** is a per-proto-repo `registry.yaml` that names its authorities in order:
 
   ```yaml
@@ -305,8 +317,9 @@ records them. Three shapes exist:
   `tacplus registry --proto-dir .` unions the authorities (a name or an id in two of
   them is an error, never a precedence call), syncs the lock for every service
   declared in the tree, and refuses to allocate or renumber. A declared service in
-  no authority is an error naming the registration step. Builds read only the lock,
-  so generation is reproducible offline.
+  no authority is an error naming the registration step, and so is, at build time,
+  a declared config slice whose field no authority has registered (a build never
+  assigns one). Builds read only the lock, so generation is reproducible offline.
 
 - **A legacy per-repo registry** has neither `scope:` nor `registries:` and keeps the
   original allocation (1-99 with an optional `id_min` floor), unchanged.

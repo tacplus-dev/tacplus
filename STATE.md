@@ -23,6 +23,10 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-09 by lo
   The fetch layer authenticates `https://github.com` clones (`src`, `depends`, the private registry) with `GH_TOKEN`
   (else `GITHUB_TOKEN`) and no other host; `CI_JOB_TOKEN` still goes only to `CI_SERVER_HOST` (#191; released as
   v2.4.2 and v2.5.1).
+  A `(spec.config_slice)`'s `TenantConfig` / `ProjectConfig` field is registered in an authority like an id
+  (`tacplus registry register NAME --tenant-slice|--project-slice`; global from 1, private from 1024; a union refuses
+  a field in two registries) and synced into locks; a build whose registry is a lock refuses a slice with no
+  registered field instead of assigning max+1, and a legacy registry assigns in file order (#352; v2.6.2).
   The generated Rust chassis signs and verifies RSA and ECDSA with aws-lc-rs: the `rsa` crate (RUSTSEC-2023-0071,
   Marvin) and the elliptic-curve 0.13 stack (crypto-bigint 0.5, RUSTSEC-2026-0387) are gone from the generated
   lockfile, which current-generation checks (#186; backported to release/2.0 through release/2.5 by pull request, as

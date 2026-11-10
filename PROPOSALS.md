@@ -460,6 +460,14 @@ the looper then marks it `promoted` or `declined` here with the date.
   .NET 10.0 current, which reads as "newest LTS". Writing that down beside the pins (JDK and .NET the newest LTS,
   Maven the newest non-rc release, Docker the newest major, Rust stable via `1`) would let the scan file a missed
   move as a `bug` instead of leaving it to judgment.
+- **`tacplus registry` checks declared config slices against their registered fields** (2026-11-07, #352): since
+  #352 a build whose registry is a lock refuses a `(spec.config_slice)` with no registered `TenantConfig` /
+  `ProjectConfig` field, but the lock sync (`tacplus registry --proto-dir .`) scans only service and vservice
+  declarations, so it reports a missing slice registration only at build time. Scanning the tree's own slices
+  (`configSliceOwner`, today in `pkg/internal/proto`, out of `cmd/`'s reach) in the sync would name it with the
+  service ids. A legacy per-repo registry's `tacplus registry` likewise never records slice fields: the build still
+  assigns them (now in file order), into whichever registry.yaml the build reads (a merged or fetched build's is a
+  temporary copy).
 
 ## Promoted / declined
 - **Member port onto gRPC with make-before-break session rotation (Java)** (2026-11-06, #321): promoted 2026-11-05,

@@ -20,6 +20,8 @@ var (
 	registerKind       string
 	registerContract   string
 	registerVisibility string
+	registerTenant     bool
+	registerProject    bool
 )
 
 var rootCmd = &cobra.Command{
@@ -47,7 +49,14 @@ whose registry.yaml declares "scope: global" or "scope: private") and allocate
 it the next id in that scope's range: global 101-1023, private 1024-2047. The
 legacy range 1-99 is frozen. --contract is the home of NAME's proto; it may be
 any repo, public or not. Commit the change and merge it; consumers then sync
-their locks with "tacplus registry".`,
+their locks with "tacplus registry".
+
+--tenant-slice / --project-slice register NAME's field in the generated
+TenantConfig / ProjectConfig, which a service that declares a tenant- or
+project-scope (spec.config_slice) needs: a build never assigns one. For a
+service already registered, give only the slice flag(s); for a new one, give
+--contract too and the id and the field(s) are registered together. Global
+fields start at 1, private ones at 1024.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runRegister,
 }
@@ -57,7 +66,8 @@ func init() {
 	registerCmd.Flags().StringVar(&registerKind, "kind", "service", "service | vservice")
 	registerCmd.Flags().StringVar(&registerContract, "contract", "", "git URL of the repo that holds NAME's proto (required)")
 	registerCmd.Flags().StringVar(&registerVisibility, "visibility", registry.VisibilityPrivate, "public | private: a note on who the contract is for")
-	_ = registerCmd.MarkFlagRequired("contract")
+	registerCmd.Flags().BoolVar(&registerTenant, "tenant-slice", false, "register NAME's TenantConfig field (its tenant-scope config_slice)")
+	registerCmd.Flags().BoolVar(&registerProject, "project-slice", false, "register NAME's ProjectConfig field (its project-scope config_slice)")
 	rootCmd.AddCommand(registerCmd)
 }
 
@@ -66,14 +76,40 @@ func runRegister(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("loading registry: %w", err)
 	}
-	id, err := reg.Register(registerKind, args[0], registerContract, registerVisibility)
-	if err != nil {
-		return err
+	name := args[0]
+	var slices []string
+	if registerTenant {
+		slices = append(slices, registry.SliceTenant)
+	}
+	if registerProject {
+		slices = append(slices, registry.SliceProject)
+	}
+	if len(slices) > 0 && registerKind != "service" {
+		return fmt.Errorf("register: a config slice belongs to a service, not a %s", registerKind)
+	}
+	// A slice of a service already here needs no contract: only its field is
+	// new. Anything else registers NAME itself first.
+	var lines []string
+	if _, known := reg.ServiceEntry(name); len(slices) == 0 || !known {
+		id, err := reg.Register(registerKind, name, registerContract, registerVisibility)
+		if err != nil {
+			return err
+		}
+		lines = append(lines, fmt.Sprintf("%s %s = %d", registerKind, name, id))
+	}
+	for _, kind := range slices {
+		field, err := reg.RegisterSlice(name, kind)
+		if err != nil {
+			return err
+		}
+		lines = append(lines, fmt.Sprintf("%s %s_slice_field = %d", name, kind, field))
 	}
 	if err := reg.Save(); err != nil {
 		return fmt.Errorf("saving registry: %w", err)
 	}
-	fmt.Printf("%s %s = %d\n", registerKind, args[0], id)
+	for _, l := range lines {
+		fmt.Println(l)
+	}
 	return nil
 }
 

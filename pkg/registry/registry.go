@@ -266,7 +266,9 @@ func (r *Registry) VServiceFieldID(name string) (int32, error) {
 }
 
 // AssignTenantSliceField ensures serviceName has a tenant_slice_field.
-// ServiceID must have been called for this name first.
+// ServiceID must have been called for this name first. A lock never assigns
+// one: the field is a TenantConfig wire number its authority registers, and
+// max+1 over whatever a build loaded is not stable across builds.
 func (r *Registry) AssignTenantSliceField(name string) (int32, error) {
 	e, ok := r.byName[name]
 	if !ok {
@@ -274,6 +276,9 @@ func (r *Registry) AssignTenantSliceField(name string) (int32, error) {
 	}
 	if e.TenantSliceField != 0 {
 		return e.TenantSliceField, nil
+	}
+	if r.IsLock() {
+		return 0, r.sliceNotInLock(SliceTenant, name)
 	}
 	e.TenantSliceField = r.nextTenantSliceField()
 	r.dirty = true
@@ -297,7 +302,8 @@ func (r *Registry) TenantSlices() []*ServiceEntry {
 }
 
 // AssignProjectSliceField ensures serviceName has a project_slice_field.
-// ServiceID must have been called for this name first.
+// ServiceID must have been called for this name first. A lock never assigns
+// one, as for AssignTenantSliceField.
 func (r *Registry) AssignProjectSliceField(name string) (int32, error) {
 	e, ok := r.byName[name]
 	if !ok {
@@ -305,6 +311,9 @@ func (r *Registry) AssignProjectSliceField(name string) (int32, error) {
 	}
 	if e.ProjectSliceField != 0 {
 		return e.ProjectSliceField, nil
+	}
+	if r.IsLock() {
+		return 0, r.sliceNotInLock(SliceProject, name)
 	}
 	e.ProjectSliceField = r.nextProjectSliceField()
 	r.dirty = true

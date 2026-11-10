@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"runtime"
 
 	"google.golang.org/grpc/codes"
@@ -45,7 +46,26 @@ func (e *Error) GRPCStatus() *status.Status {
 	if e == nil {
 		return nil
 	}
-	return status.New(codes.Code(e.Code), e.Message)
+	return status.New(e.grpcCode(), e.Message)
+}
+
+// grpcCode returns the gRPC code e carries. A gRPC code is never negative: a
+// negative wire value (no constructor here makes one) is Unknown, not wrapped
+// around into a large unsigned code.
+func (e *Error) grpcCode() codes.Code {
+	if e.Code < 0 {
+		return codes.Unknown
+	}
+	return codes.Code(e.Code)
+}
+
+// wireCode returns the int32 wire value of a gRPC code. The gRPC codes are
+// 0..16; one past int32 (none is) would be Unknown, not wrapped negative.
+func wireCode(code codes.Code) int32 {
+	if code > math.MaxInt32 {
+		return int32(codes.Unknown)
+	}
+	return int32(code)
 }
 
 // Unwrap implements the error unwrapping interface
@@ -149,11 +169,11 @@ func newError(code codes.Code, err error, format string, a ...any) error {
 		var existingErr *Error
 		if errors.As(err, &existingErr) {
 			// If the error is already wrapped and has the same code, don't double-wrap
-			if codes.Code(existingErr.Code) == code {
+			if existingErr.grpcCode() == code {
 				// If there's additional context in format, append it
 				if format != "" {
 					return withCaller(2, &Error{
-						Code:    int32(code),
+						Code:    wireCode(code),
 						Message: fmt.Sprintf("%s: %s", fmt.Sprintf(format, a...), existingErr.Error()),
 					})
 				}
@@ -165,7 +185,7 @@ func newError(code codes.Code, err error, format string, a ...any) error {
 	}
 
 	return withCaller(2, &Error{
-		Code:    int32(code),
+		Code:    wireCode(code),
 		Message: getMessage(err, format, a...),
 	})
 }
@@ -306,7 +326,7 @@ func NewErrDataLoss(format string, a ...any) error {
 func IsErrMissingInvalidData(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code) == codes.InvalidArgument
+		return e.grpcCode() == codes.InvalidArgument
 	}
 	return false
 }
@@ -315,7 +335,7 @@ func IsErrMissingInvalidData(err error) bool {
 func IsErrNotFound(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code) == codes.NotFound
+		return e.grpcCode() == codes.NotFound
 	}
 	return false
 }
@@ -324,7 +344,7 @@ func IsErrNotFound(err error) bool {
 func IsErrExpired(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code) == codes.DeadlineExceeded
+		return e.grpcCode() == codes.DeadlineExceeded
 	}
 	return false
 }
@@ -333,7 +353,7 @@ func IsErrExpired(err error) bool {
 func IsErrUnauthorized(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code) == codes.Unauthenticated
+		return e.grpcCode() == codes.Unauthenticated
 	}
 	return false
 }
@@ -342,7 +362,7 @@ func IsErrUnauthorized(err error) bool {
 func IsErrGeneral(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code) == codes.Internal
+		return e.grpcCode() == codes.Internal
 	}
 	return false
 }
@@ -351,7 +371,7 @@ func IsErrGeneral(err error) bool {
 func IsErrCancelled(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code) == codes.Canceled
+		return e.grpcCode() == codes.Canceled
 	}
 	return false
 }
@@ -360,7 +380,7 @@ func IsErrCancelled(err error) bool {
 func IsErrUnknown(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code) == codes.Unknown
+		return e.grpcCode() == codes.Unknown
 	}
 	return false
 }
@@ -369,7 +389,7 @@ func IsErrUnknown(err error) bool {
 func IsErrPermissionDenied(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code) == codes.PermissionDenied
+		return e.grpcCode() == codes.PermissionDenied
 	}
 	return false
 }
@@ -378,7 +398,7 @@ func IsErrPermissionDenied(err error) bool {
 func IsErrAlreadyExists(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code) == codes.AlreadyExists
+		return e.grpcCode() == codes.AlreadyExists
 	}
 	return false
 }
@@ -387,7 +407,7 @@ func IsErrAlreadyExists(err error) bool {
 func IsErrResourceExhausted(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code) == codes.ResourceExhausted
+		return e.grpcCode() == codes.ResourceExhausted
 	}
 	return false
 }
@@ -396,7 +416,7 @@ func IsErrResourceExhausted(err error) bool {
 func IsErrFailedPrecondition(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code) == codes.FailedPrecondition
+		return e.grpcCode() == codes.FailedPrecondition
 	}
 	return false
 }
@@ -405,7 +425,7 @@ func IsErrFailedPrecondition(err error) bool {
 func IsErrAborted(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code) == codes.Aborted
+		return e.grpcCode() == codes.Aborted
 	}
 	return false
 }
@@ -414,7 +434,7 @@ func IsErrAborted(err error) bool {
 func IsErrOutOfRange(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code) == codes.OutOfRange
+		return e.grpcCode() == codes.OutOfRange
 	}
 	return false
 }
@@ -423,7 +443,7 @@ func IsErrOutOfRange(err error) bool {
 func IsErrUnimplemented(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code) == codes.Unimplemented
+		return e.grpcCode() == codes.Unimplemented
 	}
 	return false
 }
@@ -432,7 +452,7 @@ func IsErrUnimplemented(err error) bool {
 func IsErrUnavailable(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code) == codes.Unavailable
+		return e.grpcCode() == codes.Unavailable
 	}
 	return false
 }
@@ -441,7 +461,7 @@ func IsErrUnavailable(err error) bool {
 func IsErrDataLoss(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code) == codes.DataLoss
+		return e.grpcCode() == codes.DataLoss
 	}
 	return false
 }
@@ -451,7 +471,7 @@ func IsErrDataLoss(err error) bool {
 func GetErrorCode(err error) codes.Code {
 	var e *Error
 	if errors.As(err, &e) {
-		return codes.Code(e.Code)
+		return e.grpcCode()
 	}
 	return codes.OK
 }

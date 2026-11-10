@@ -25,12 +25,12 @@ func writeTemp(path string, data []byte, mode os.FileMode) (string, error) {
 		return "", ErrInvalidData("path is empty")
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil { // #nosec G703 -- the store's own path, from its service's configuration, not from a request
 		return "", wrapIOError(err)
 	}
 	tmp := sibling(path, fmt.Sprintf(".tmp.%d", os.Getpid()))
 
-	f, err := os.Create(tmp)
+	f, err := os.Create(tmp) // #nosec G703 -- the store's own path, from its service's configuration, not from a request
 	if err != nil {
 		return "", wrapIOError(err)
 	}
@@ -57,7 +57,7 @@ func writeTemp(path string, data []byte, mode os.FileMode) (string, error) {
 // promote atomically moves tmp onto path (the commit point), then fsyncs the
 // parent directory so the rename is durable.
 func promote(tmp, path string) error {
-	if err := os.Rename(tmp, path); err != nil {
+	if err := os.Rename(tmp, path); err != nil { // #nosec G703 -- the store's own path, from its service's configuration, not from a request
 		return wrapIOError(err)
 	}
 	syncDir(filepath.Dir(path))
@@ -107,7 +107,7 @@ func archiveActive(path string, count uint32) error {
 			if st, serr := os.Stat(path); serr == nil {
 				mode = st.Mode()
 			}
-			if werr := os.WriteFile(bak, data, mode); werr != nil {
+			if werr := os.WriteFile(bak, data, mode); werr != nil { // #nosec G703 -- the store's own path, from its service's configuration, not from a request
 				return wrapIOError(werr)
 			}
 		}
@@ -164,7 +164,7 @@ func fileExists(path string) bool {
 // syncDir fsyncs a directory so a contained rename is durable. Errors are
 // best-effort (matches the Rust sync_dir behavior).
 func syncDir(dir string) {
-	d, err := os.Open(dir)
+	d, err := os.Open(dir) // #nosec G703 -- the store's own path, from its service's configuration, not from a request
 	if err != nil {
 		return
 	}

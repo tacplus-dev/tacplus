@@ -42,6 +42,12 @@ type Config struct {
 	// stripped). Set by language generators that need to read annotations (e.g.
 	// (spec.service_event)/(spec.topic) for EventBus publisher discovery).
 	AnnotatedProtoDir string
+	// SkippedTraceTypes is the set InjectTraceFields returned: fully-qualified
+	// messages it did NOT inject trace_id/noop into (<T>Public views, messages
+	// defining their own). Set by each language generator right after
+	// injection; storage paths read it to decide whether a value carries the
+	// injected trace_id to clear before persisting (#313).
+	SkippedTraceTypes map[string]bool
 
 	// === Protoc Configuration ===
 	ProtocPath         string // Path to protoc compiler
@@ -179,6 +185,17 @@ type SubscriptionEntry struct {
 	// the write path into the store and the dispatch is where the store's clock is
 	// stamped — see spec.proto's store_epoch comment.
 	SourceStoreEpochField string
+	// StoreIngest is true when this subscription was derived from a store's
+	// claim on the source (boundaries Origin "store_derived"): the
+	// subscription IS the store's write path, not an actor consuming a
+	// message. A declared subscription is false: its handler keeps the trace
+	// to propagate it.
+	StoreIngest bool
+	// SourceCarriesTrace is true when SourceTypeFqn carries the injected
+	// trace_id (proto.CarriesInjectedTrace). With StoreIngest it gates the
+	// dispatch clearing the event's trace_id before the store sees it: a
+	// stored value never keeps a trace (#313).
+	SourceCarriesTrace bool
 	// RoutingOnly is true when THIS service (Config.SelfPackage) is named in the
 	// source type's s2s_subscribe.routing_only_services — the OWNER-declared,
 	// additive narrowing. The generated Handler then takes the synthesized

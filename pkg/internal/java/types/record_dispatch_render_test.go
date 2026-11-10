@@ -60,6 +60,20 @@ func TestJavaRecordDispatchHandsEachProjectionItsTypedInsert(t *testing.T) {
 	if strings.Contains(b.String(), "getNoop()") {
 		t.Fatal("a source without the injected noop must not be read for it")
 	}
+	if strings.Contains(b.String(), "clearTraceId") {
+		t.Fatal("a projection without the injected trace_id has none to clear")
+	}
+
+	// A projection that copies its source's trace (#313) has it cleared
+	// before the row reaches its store.
+	data.Projections[0].CarriesTrace = true
+	b.Reset()
+	if err := tmpl.Execute(&b, data); err != nil {
+		t.Fatal(err)
+	}
+	if want := "if (row != null) {\n                // A stored row never keeps a trace (#313).\n                row = row.toBuilder().clearTraceId().build();\n                insertSensorReading.insert(row);"; !strings.Contains(b.String(), want) {
+		t.Fatalf("rendered class missing %q:\n%s", want, b.String())
+	}
 }
 
 // The ServiceManager registers one typed insert per projection, however many

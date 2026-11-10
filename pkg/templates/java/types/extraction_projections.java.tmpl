@@ -58,6 +58,10 @@ public final class {{.ClassName}} {
         if (insert{{.TypeName}} != null) {
             {{.TypeFqn}} row = {{.ExtractMethod}}(event);
             if (row != null) {
+{{- if .CarriesTrace}}
+                // A stored row never keeps a trace (#313).
+                row = row.toBuilder().clearTraceId().build();
+{{- end}}
                 insert{{.TypeName}}.insert(row);
             }
         }

@@ -18,6 +18,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   (C2S, run-time policy within build-time entitlements), its `caller_tid` binding is lifted on that rpc only, and
   every call is audited with the owner user's identity. No service principal ever reads across tenants. Why: a
   product owner's billing view over per-tenant usage. Needs its own design and a ROADMAP.md line; after #475.
+- **gosec on the generated Go in tacplus's own gates** (2026-11-08, #359): #359 cleared G402, G123, G115, G404,
+  G703 and G704 from the generated example service (fixed or `#nosec`-annotated with a reason in the templates),
+  but nothing here keeps them out: tacplus-dev/looper#108's scan sees a regression only after a release. A gate
+  (or a step of `current-generation`) that runs a pinned gosec over the generated Go of cross-test/proto and the
+  example, failing on those rules, would catch it at land. The other rules gosec reports there (G103 in protoc's
+  gencode, G104, G304, G101, G117, G301/G302) need a decision on each before they join it.
 - **Images on Google Artifact Registry through WIF, ghcr.io deprecated from 2.6** (2026-11-07, #223; parked by
   the hub 2026-11-07): publish `base`, `build` and the services' release images to the public
   `us-docker.pkg.dev/jody1-328023/tacplus`, pushed by the GitLab publish job with a short-lived GCP token from its

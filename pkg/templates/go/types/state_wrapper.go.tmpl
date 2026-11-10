@@ -305,6 +305,7 @@ func (c *{{.ClientTypeName}}) watchRetryDelay(attempt int) time.Duration {
 	}
 	jitterMax := delay / 5
 	if jitterMax > 0 {
+		// #nosec G404 -- retry jitter only spreads retries apart; it needs no unpredictability.
 		delay += time.Duration(rand.Int63n(int64(jitterMax)))
 	}
 	if delay > maxDelay {

@@ -1,0 +1,400 @@
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash kill 4724; cd /tmp/dsm; timeout 150 java -cp out com.gitlab.example.dummy.proto.model.chassis.diskstore.DiskStoreTest > run.log 2>&1; echo rc=$?; cat run.log
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_started
+= task_notification
+< rc=124 FAIL: appends must not wait on a failing upload Shell cwd was reset to /builds/looper/tacplus/issues/539
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash which fio stress-ng dd; tail -3 /tmp/cgj1.log; df -h /tmp /builds | tail -2
+< /usr/bin/dd     Removed 47M fixture tree ownerdefault-java ==> Generating java quorum-write fixture ==> Compiling java quorum-write fixture overlay         341G   32G  309G  10% / /dev/nvme0n1p1  341G   32G  309G  10% /builds
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+No fio or stress-ng here, so the load will be parallel `dd oflag=dsync` writers on the same disk. I'll also run the old test under the same load for comparison.
+> Bash cd /builds/looper/tacplus/issues/539; grep -c "{{" pkg/templates/java/chassis/diskstore/DiskStoreTest.java.tmpl; mkdir -p /tmp/dso && cp -r /tmp/ds/src /tmp/dso/ && git show HEAD:pkg/templates/java/chassis/diskstore/DiskStoreTest.java.tmpl | sed 's/{{.ChassisBase}}/com.gitlab.example.dummy.proto.mod...
+< 1 ok Shell cwd was reset to /builds/looper/tacplus/issues/539
+> Bash mkdir -p /tmp/load; pids=""; for i in 1 2 3 4 5 6 7 8; do (while :; do dd if=/dev/zero of=/tmp/load/f$i bs=4k count=2000 oflag=dsync 2>/dev/null; done) & pids="$pids $!"; done; echo $pids > /tmp/load/pids; cd /tmp/dso; for r in 1 2 3; do /usr/bin/time -f "old %es" timeout 120 java -cp out com.gitlab...
+< /bin/bash: line 1: /usr/bin/time: No such file or directory /bin/bash: line 1: /usr/bin/time: No such file or directory /bin/bash: line 1: /usr/bin/time: No such file or directory /bin/bash: line 1: /usr/bin/time: No such file or directory /bin/bash: line 1: /usr/bin/time: No such file or directory ...
+> Bash ps -o pid,ppid,cmd -u $(id -u) | grep -E "dd if|while" | grep -v grep | head
+<   12171       1 dd if=/dev/zero of=/tmp/load/f1 bs=4k count=2000 oflag=dsync   12173       1 dd if=/dev/zero of=/tmp/load/f2 bs=4k count=2000 oflag=dsync   12175       1 dd if=/dev/zero of=/tmp/load/f3 bs=4k count=2000 oflag=dsync   12177       1 dd if=/dev/zero of=/tmp/load/f4 bs=4k count=2000 ofla...
+Some orphaned `dd` processes from my own load loop are still running; stopping them by PID, then rerunning the comparison with a script that times each run.
+> Bash kill 12171 12173 12175 12177 12179 12181 12183 12186; mkdir -p /tmp/scripts; cat > /tmp/scripts/load.sh <<'EOF' #!/bin/bash # Usage: load.sh N  -- run N dsync dd writers on /tmp until killed trap 'kill $(jobs -p) 2>/dev/null; exit' TERM INT for i in $(seq 1 "$1"); do   (trap 'exit' TERM; while :; do...
+< /bin/bash: line 21: kill: (12171) - No such process /bin/bash: line 21: kill: (12173) - No such process /bin/bash: line 21: kill: (12175) - No such process /bin/bash: line 21: kill: (12177) - No such process /bin/bash: line 21: kill: (12179) - No such process /bin/bash: line 21: kill: (12181) - No s...
+> Bash ps -o pid,ppid,cmd -u $(id -u) | grep "dd if" | grep -v grep
+< (Bash completed with no output)
+> Bash mkdir -p /tmp/load; /tmp/scripts/load.sh 12 & L=$!; sleep 3; /tmp/scripts/runs.sh /tmp/dso old 3; /tmp/scripts/runs.sh /tmp/ds new 5; kill $L; wait $L 2>/dev/null; ps -o pid,cmd -u $(id -u) | grep "dd if" | grep -v grep | wc -l
+= task_started
+= task_notification
+< /tmp/scripts/runs.sh: line 8: bc: command not found old run 1 rc=0 s :: DiskStoreTest: all checks passed| /tmp/scripts/runs.sh: line 8: bc: command not found old run 2 rc=0 s :: DiskStoreTest: all checks passed| /tmp/scripts/runs.sh: line 8: bc: command not found old run 3 rc=0 s :: DiskStoreTest: a...
+= thinking_tokens
+= thinking_tokens
+Both old and new pass under this load: the NVMe disk is too fast to recreate the nightly failure. 12 `dd` processes outlived the script, so I'm stopping them by PID.
+> Bash P=$(ps -o pid=,cmd= -u $(id -u) | awk '/dd if=\/dev\/zero of=\/tmp\/load/{print $1}'); P2=$(ps -o pid=,cmd= -u $(id -u) | awk '/scripts\/load.sh/{print $1}'); echo $P $P2; kill $P2 $P 2>/dev/null; ps -o pid,cmd -u $(id -u) | grep -E "dd if|load.sh" | grep -v grep; tail -3 /tmp/cgj1.log
+< 13427 13429 13430 13431 13432 13433 13434 13435 13436 13437 13438 13440 12413 12414 12415 12417 12419 12420 12421 12423 12424 12425 12427 12430   12413 /bin/bash /tmp/scripts/load.sh 12   12414 /bin/bash /tmp/scripts/load.sh 12   12415 /bin/bash /tmp/scripts/load.sh 12   12417 /bin/bash /tmp/scripts...
+> Bash timeout 60 bash -c 'while ps -o cmd= -u $(id -u) | grep -qE "^dd if|load.sh"; do sleep 2; done'; ps -o pid,cmd -u $(id -u) | grep -E "dd if|load.sh" | grep -v grep | wc -l
+= task_started
+= task_notification
+< 0
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Load processes are gone. For the full-leg load run I'll swap in a single-process Python fsync loop (one PID, simple to stop). Checkpointing first:
+> Bash cat > /tmp/scripts/fsyncload.py <<'EOF' # Usage: python3 -I fsyncload.py DIR THREADS -- fsync-heavy writers until killed import os, sys, threading d, n = sys.argv[1], int(sys.argv[2]) os.makedirs(d, exist_ok=True) def w(i):     buf = os.urandom(4096)     while True:         fd = os.open(os.path.join...
+< remote:  [2026-11-11T11:35:20Z] checkpoint of #539 (a step) pushed to looper/tacplus-539:  3 files changed, 339 insertions(+), 6 deletions(-)
+The checkpoint says 3 files changed with 339 insertions, but I edited one template. Checking what else it picked up:
+> Bash cd /builds/looper/tacplus/issues/539; git status --short | head; git log --oneline -1 origin/looper/tacplus-539; git show --stat origin/looper/tacplus-539 | tail -5
+<  M pkg/templates/java/chassis/diskstore/DiskStoreTest.java.tmpl 529496bf looper: work in progress on #539 (a step)   .looper/claude.log                                 | 150 ++++++++++++++++++  .looper/prompt.md                                  | 167 +++++++++++++++++++++  .../java/chassis/diskstore...
+That's just the looper's own run files. Waiting for the first `current-generation-java` run to finish:
+> Bash until ! kill -0 832 2>/dev/null; do sleep 15; done; tail -5 /tmp/cgj1.log; grep -n "DiskStore\|FAIL" /tmp/cgj1.log | head
+= background_tasks_changed
+= task_started
+< Command running in background with ID: btplunzf1. Output is being written to: /builds/looper/tacplus/homes/looper-539/tmp/claude-61000/-builds-looper-tacplus-issues-539/e8ddda87-6f52-47be-8389-bb16a934b4a6/tasks/btplunzf1.output. You will be notified when it completes. To check interim output, use R...
+While that runs, I'm preparing the backports: cherry-picking the template change onto each release branch to check it applies cleanly.
+> Bash cd /builds/looper/tacplus/issues/539; git diff > /tmp/fix.patch; for b in 2.1 2.2 2.3 2.4 2.5 2.6; do git show origin/release/$b:pkg/templates/java/chassis/diskstore/DiskStoreTest.java.tmpl > /tmp/rel.tmpl; git show HEAD:pkg/templates/java/chassis/diskstore/DiskStoreTest.java.tmpl | diff -q - /tmp/r...
+< 2.1 differs: 265 2.2 differs: 261 2.3 differs: 261 2.4 differs: 57 2.5 differs: 57 2.6 identical
+> Bash cd /tmp; for b in 2.1 2.2 2.3 2.4 2.5 2.6; do rm -rf /tmp/bp-$b; git -C /builds/looper/tacplus/issues/539 show origin/release/$b:pkg/templates/java/chassis/diskstore/DiskStoreTest.java.tmpl > /tmp/bp-$b.tmpl; (mkdir -p /tmp/bpchk/$b/pkg/templates/java/chassis/diskstore && cp /tmp/bp-$b.tmpl /tmp/bpc...
+< 2.1 applies 2.2 applies 2.3 applies 2.4 applies 2.5 applies 2.6 applies 477:    private static void testAppendsDoNotWaitForUploads() throws Exception { 478-        Path dir = Files.createTempDirectory("ds-noblock-"); 479-        try { 480-            Path base = dir.resolve("data"); 481-            ...
+= thinking_tokens
+= thinking_tokens
+The patch applies cleanly to release/2.1 through 2.6. Waiting on the Java leg now.
+> Bash until ! kill -0 832 2>/dev/null; do sleep 15; done; tail -3 /tmp/cgj1.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b693r8ipi). Output is being written to: /builds/looper/tacplus/homes/looper-539/tmp/claude-61000/-builds-looper-tacplus-issues-539/e8ddda87-6f52-47be-8389-bb16a934b4a6/tasks/b693r8ipi.output. You will be notified w...
+> Bash tail -2 /tmp/cgj1.log
+<     Removed 53M fixture tree tenantslice-config-owner-java ==> Current cross-test generation and compile passed
+The Java leg passed clean. Now the same leg again, with 8 fsync-heavy writer threads running on the same disk (`/builds`, which holds the work dir) and `/tmp`:
+> Bash cd /builds/looper/tacplus/issues/539; nohup python3 -I /tmp/scripts/fsyncload.py /builds/looper/tacplus/homes/looper-539/load 4 > /tmp/load1.log 2>&1 & echo L1=$!; nohup python3 -I /tmp/scripts/fsyncload.py /tmp/load 4 > /tmp/load2.log 2>&1 & echo L2=$!; nohup just current-generation-java > /tmp/cgj...
+< L1=23498 L2=23499 J=23500
+> Bash python3 -I -c " import os,time fd=os.open('/tmp/lat',os.O_WRONLY|os.O_CREAT); t=time.time() for _ in range(100): os.write(fd,b'x'*100); os.fsync(fd) print('100 fsyncs: %.2fs'%(time.time()-t))"; rm -f /tmp/lat
+< 100 fsyncs: 0.90s
+= thinking_tokens
+= task_updated
+= task_notification
+= background_tasks_changed
+= thinking_tokens
+Under this load 100 fsyncs take about 0.9s, far from the ~20s the nightly runner hit, so this disk can't reproduce the original failure. I'll say so in the report. Committing meanwhile:
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash cd /builds/looper/tacplus/issues/539; git add pkg/templates/java/chassis/diskstore/DiskStoreTest.java.tmpl; git commit -q -F - <<'EOF' Java DiskStore self-test: appends-do-not-wait checks blocking, not fsync throughput (#539)  testAppendsDoNotWaitForUploads ran 100 fsync'd appends and required them ...
+< fa71c8aa Java DiskStore self-test: appends-do-not-wait checks blocking, not fsync throughput (#539)
+= thinking_tokens
+= thinking_tokens
+Committed as `fa71c8aa`. Checkpointing, then queueing the land while the loaded run continues:
+> Bash cd /builds/looper/tacplus/issues/539; /usr/local/bin/repo-looper --repo tacplus --issue 539 --checkpoint "fa71c8aa committed (test fix); current-generation-java passed clean; loaded run in progress; landing now. Left: land verdict, just gates, backports release/2.1..2.6 (patch applies cleanly; no ma...
+= task_started
+= task_notification
+< [2026-11-11T11:46:12Z] checkpoint of #539 (a step) pushed to looper/tacplus-539:  3 files changed, 383 insertions(+), 6 deletions(-) LAND=23878
+Meanwhile, the backport branches: one per release line, each a `cherry-pick -x` of `fa71c8aa`.
+> Bash mkdir -p /tmp/bpwt; cd /builds/looper/tacplus/issues/539; for b in 2.1 2.2 2.3 2.4 2.5 2.6; do git worktree add -q /tmp/bpwt/$b -b backport/539-release-$b origin/release/$b 2>&1 | tail -1; (cd /tmp/bpwt/$b && git cherry-pick -x fa71c8aa >/dev/null 2>&1 && echo "$b ok $(git log --oneline -1)" || echo...
+= task_started
+= task_notification
+< 2.1 ok 89eaa0c7 Java DiskStore self-test: appends-do-not-wait checks blocking, not fsync throughput (#539) 2.2 ok 468727cb Java DiskStore self-test: appends-do-not-wait checks blocking, not fsync throughput (#539) 2.3 ok df02c5b4 Java DiskStore self-test: appends-do-not-wait checks blocking, not fsy...
+= thinking_tokens
+= thinking_tokens
+Each backport needs to be checked against its own line's RedoLog/shipper. I'll render that line's diskstore templates and run the self-test standalone:
+> Bash for b in 2.1 2.2 2.3 2.4 2.5 2.6; do d=/tmp/bpbuild/$b; rm -rf $d; mkdir -p $d/src; for f in /tmp/bpwt/$b/pkg/templates/java/chassis/diskstore/*.java.tmpl; do n=$(basename $f .tmpl); [[ $n == GcsArchiveSink.java ]] && continue; sed 's/{{.ChassisBase}}/com.example.chassis/' $f > $d/src/$n; done; left...
+= task_started
+= task_notification
+< 2.1 (tmpl-left=0): DiskStoreTest: all checks passed 2.2 (tmpl-left=0): DiskStoreTest: all checks passed 2.3 (tmpl-left=0): DiskStoreTest: all checks passed 2.4 (tmpl-left=0): DiskStoreTest: all checks passed 2.5 (tmpl-left=0): DiskStoreTest: all checks passed 2.6 (tmpl-left=0): DiskStoreTest: all ch...
+= thinking_tokens
+= thinking_tokens
+The self-test passes on all six lines (under the fsync load, which is still running). Checking the land and the loaded Java leg:
+> Bash tail -3 /tmp/land.log; tail -2 /tmp/cgj2.log; kill -0 23500 && echo J-running
+< [2026-11-11T11:46:15Z] checkpoint of #539 (land queued) pushed to looper/tacplus-539:  4 files changed, 390 insertions(+), 6 deletions(-) [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came o...
+> Bash until ! kill -0 23500 2>/dev/null; do sleep 20; done; tail -3 /tmp/cgj2.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bruwtf85b. Output is being written to: /builds/looper/tacplus/homes/looper-539/tmp/claude-61000/-builds-looper-tacplus-issues-539/e8ddda87-6f52-47be-8389-bb16a934b4a6/tasks/bruwtf85b.output. You will be notified when it completes. To check interim output, use R...
+= thinking_tokens
+= thinking_tokens
+No handlers are touched, so the trace rule (13) doesn't apply. Pushing the six backport branches now; I'll open their PRs once main has the fix.
+> Bash for b in 2.1 2.2 2.3 2.4 2.5 2.6; do (cd /tmp/bpwt/$b && git push -q origin backport/539-release-$b 2>&1 | grep -v "^remote:" | tail -2; echo "$b pushed"); done
+= task_started
+= task_notification
+= vcs_state_changed
+< 2.1 pushed 2.2 pushed 2.3 pushed 2.4 pushed 2.5 pushed 2.6 pushed
+> Bash until ! kill -0 23500 2>/dev/null; do sleep 20; done; tail -3 /tmp/cgj2.log; tail -2 /tmp/land.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< 11:55:35.553 [grpc-default-worker-ELG-3-3] DEBUG io.grpc.netty.shaded.io.grpc.netty.NettyServerHandler -- [id: 0xd63931a5, L:/127.0.0.1:33123 - R:/127.0.0.1:52728] INBOUND GO_AWAY: lastStreamId=0 errorCode=0 length=0 bytes= 1 Authorizer behavior check(s) FAILED error: recipe `current-generation-java...
+The loaded run failed, but in a different self-test: `AuthorizerBehaviorTest`, not DiskStore. Looking at which check:
+> Bash grep -n "FAIL\|passed\|Exception" /tmp/cgj2.log | grep -v DEBUG | head -20
+< 24:All SPIFFE vectors passed. 25:All X509 SPIFFE verifier checks passed. 160:FAIL: JWK watch made 1 attempts in 2.5s against a rolling authority, want 2..4 (backoff 0.5s doubling) 176:1 Authorizer behavior check(s) FAILED
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/539; gh issue list --repo tacplus-dev/tacplus --state all --search "JWK watch attempts" --limit 10; gh issue list --repo tacplus-dev/tacplus --state open --search "AuthorizerBehaviorTest" --limit 10; nohup just current-generation-java > /tmp/cgj3.log 2>&1 & echo J3=$...
+< 475	OPEN	Product layer: /products/<name> between /system and the tenants (design first)	approved, feature, priority:high, looper:landing	2026-11-10T08:22:25Z J3=31123
+> Bash cd /builds/looper/tacplus/issues/539; grep -rn "JWK watch made" pkg/templates/java | head -3; gh issue list --repo tacplus-dev/tacplus --state all --search "JWK watch" --limit 10; gh issue list --repo tacplus-dev/tacplus --state open --label bug --limit 30
+< pkg/templates/java/chassis/grpcserver/AuthorizerBehaviorTest.java.tmpl:611:                System.err.println("FAIL: JWK watch made " + failing 265	OPEN	Event trace, revisited: trace sessions bound to their owner, propagation generated (not handler code), typed events on an ephemeral event-bus topic...
+= thinking_tokens
+= thinking_tokens
+Not filed yet. Reading the check and both roadmaps (rule 11) before I file it:
+> Bash cd /builds/looper/tacplus/issues/539; sed -n 570,620p pkg/templates/java/chassis/grpcserver/AuthorizerBehaviorTest.java.tmpl; grep -in "flak\|timing\|load" ROADMAP.md | head; gh api repos/tacplus-dev/roadmap/contents/ROADMAP.md -H 'Accept: application/vnd.github.raw' | grep -in "flak\|timing" | head
+<     // fails UNAVAILABLE) re-subscribes on the Backoff schedule (0.5s, 1s, 2s, ...),     // not in a hot loop; it keeps retrying until the authority serves again, and     // stop() ends it.     private static void checkRemoteJwkSourceBackoff(JwkOuterClass.Jwk jwk) throws Exception {         AtomicIn...
+= thinking_tokens
+= thinking_tokens
+Filing it as a separate bug:
+> Bash cd /builds/looper/tacplus/issues/539; gh issue create --repo tacplus-dev/tacplus --label bug --title "Java AuthorizerBehaviorTest checkRemoteJwkSourceBackoff fails on a loaded runner: wants 2..4 JWK watch attempts in a fixed 2.5s sleep" --body-file - <<'EOF' Found while verifying #539 (2026-11-11), ...
+< https://github.com/tacplus-dev/tacplus/issues/540
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Filed as #540. Waiting on the third Java leg (load still running) to see whether it reaches DiskStoreTest this time:
+> Bash until ! kill -0 31123 2>/dev/null; do sleep 20; done; grep -n "FAIL\|checks passed\|Exception in" /tmp/cgj3.log | grep -v DEBUG | head; tail -1 /tmp/cgj3.log; tail -1 /tmp/land.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bvvtgt6bv. Output is being written to: /builds/looper/tacplus/homes/looper-539/tmp/claude-61000/-builds-looper-tacplus-issues-539/e8ddda87-6f52-47be-8389-bb16a934b4a6/tasks/bvvtgt6bv.output. You will be notified when it completes. To check interim output, use R...
+> Bash until ! kill -0 31123 2>/dev/null; do sleep 20; done; echo done
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bitx0tjfm). Output is being written to: /builds/looper/tacplus/homes/looper-539/tmp/claude-61000/-builds-looper-tacplus-issues-539/e8ddda87-6f52-47be-8389-bb16a934b4a6/tasks/bitx0tjfm.output. You will be notified w...
+> Bash grep -n "FAIL\|checks passed" /tmp/cgj3.log | grep -v DEBUG | head; tail -1 /tmp/cgj3.log; tail -1 /tmp/land.log
+< ==> Generating java record-egress HOST fixture [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/539; f=$(find target/cross-test/current-generation -name java-generated-selftests.log 2>/dev/null | head -1); echo $f; grep -E "passed|FAIL" $f | grep -v DEBUG
+< target/cross-test/current-generation/java/java-generated-selftests.log All SPIFFE vectors passed. All X509 SPIFFE verifier checks passed. AuthorizerBehaviorTest: all checks passed CollectionRuntimeTest: all checks passed All approval canonicalization vectors passed. ConfigDefaultsTest: all assertion...
+Under load, DiskStoreTest now passes inside the full leg. Waiting for the rest of the leg and for the land verdict:
+> Bash until ! kill -0 31123 2>/dev/null; do sleep 20; done; tail -1 /tmp/cgj3.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b4lttpzhu). Output is being written to: /builds/looper/tacplus/homes/looper-539/tmp/claude-61000/-builds-looper-tacplus-issues-539/e8ddda87-6f52-47be-8389-bb16a934b4a6/tasks/b4lttpzhu.output. You will be notified w...
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'until ! kill -0 31123 2>/dev/null; do sleep 20; done'; tail -1 /tmp/cgj3.log; tail -1 /tmp/land.log
+= task_started
+= task_notification
+< ==> Compiling java tenant-route fixture (harbor) [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+> Bash timeout 590 bash -c 'until ! kill -0 31123 2>/dev/null; do sleep 20; done'; tail -1 /tmp/cgj3.log; tail -1 /tmp/land.log
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_started
+= task_notification
+< ==> Compiling java redo-contract fixture (stratum) [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you...
+> Bash timeout 590 bash -c 'until ! kill -0 31123 2>/dev/null; do sleep 20; done'; tail -1 /tmp/cgj3.log; tail -1 /tmp/land.log
+= task_started
+= task_notification
+< ==> Compiling java tenant-record fixture (tmessaging) [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after ...
+> Bash timeout 590 bash -c 'until ! kill -0 31123 2>/dev/null; do sleep 20; done'; tail -1 /tmp/cgj3.log; tail -1 /tmp/land.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< error: recipe `current-generation-java` failed on line 101 with exit code 1 [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it...
+The third loaded leg also failed, later on. Finding where:
+> Bash grep -n "FAIL\|ERROR\|Tests run:.*Fail\|BUILD FAILURE\|Exception" /tmp/cgj3.log | grep -v DEBUG | head -20; tail -30 /tmp/cgj3.log | grep -v DEBUG | tail -15
+< 191:FAIL: JWK watch made 0 attempts in 2.5s against a rolling authority, want 2..4 (backoff 0.5s doubling) 210:1 Authorizer behavior check(s) FAILED FAIL: JWK watch made 0 attempts in 2.5s against a rolling authority, want 2..4 (backoff 0.5s doubling) 1 Authorizer behavior check(s) FAILED error: rec...
+= thinking_tokens
+= thinking_tokens
+Same #540 flake again, in a later fixture's Authorizer self-test. My fsync load could also break the land's gates if they run on this machine, so I'm stopping it now:
+> Bash kill 23498 23499; sleep 1; ps -o pid,cmd -u $(id -u) | grep fsyncload | grep -v grep; rm -rf /tmp/load /builds/looper/tacplus/homes/looper-539/load; cd /builds/looper/tacplus/issues/539; for f in $(find target/cross-test/current-generation -name '*selftests*.log' 2>/dev/null); do echo "$f: $(grep -c...
+< target/cross-test/current-generation/java/java-generated-selftests.log: 1 target/cross-test/current-generation/java/java-generated-selftests-classpath.log: 0 target/cross-test/current-generation/tenantslice-java/java-generated-selftests.log: 0 target/cross-test/current-generation/tenantslice-java/ja...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/539; gh issue comment 540 --repo tacplus-dev/tacplus --body "Seen a second time on the same tree under the same fsync load (2026-11-11, a later \`just current-generation-java\` run), in the tenantslice-java fixture's self-tests this time: \`FAIL: JWK watch made 0 att...
+< https://github.com/tacplus-dev/tacplus/issues/540#issuecomment-6796254168
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Updated #540. Now starting the full `just gates` on this branch in the background, about 2h15m before my limit:
+> Bash cd /builds/looper/tacplus/issues/539; date -u +%H:%M; nohup just gates > /tmp/gates.log 2>&1 & echo G=$!
+< 12:49 G=51233
+> Bash cd /builds/looper/tacplus/issues/539; /usr/local/bin/repo-looper --repo tacplus --issue 539 --checkpoint "fa71c8aa queued to land (since 11:46Z). current-generation-java passed unloaded; under fsync load DiskStoreTest passed but the leg failed on a separate flake, filed as #540. Backport branches ba...
+< [2026-11-11T12:49:21Z] checkpoint of #539 (a step) pushed to looper/tacplus-539:  4 files changed, 532 insertions(+), 6 deletions(-)
+= thinking_tokens
+= thinking_tokens
+Drafting the backport PR bodies meanwhile, with the next unused patch tag on each line:
+> Bash cd /builds/looper/tacplus/issues/539; git fetch -q --tags origin; for b in 2.1 2.2 2.3 2.4 2.5 2.6; do t=$(git tag -l "v$b.*" --sort=-v:refname | head -1); echo "$b newest=$t next=v$b.$(( ${t##*.} + 1 ))"; done
+< 2.1 newest=v2.1.20 next=v2.1.21 2.2 newest=v2.2.17 next=v2.2.18 2.3 newest=v2.3.19 next=v2.3.20 2.4 newest=v2.4.19 next=v2.4.20 2.5 newest=v2.5.20 next=v2.5.21 2.6 newest=v2.6.9 next=v2.6.10
+> Bash timeout 590 bash -c 'until grep -qiE "verdict|landed|merged|refused|fail" <(tail -3 /tmp/land.log) || ! kill -0 23878 2>/dev/null; do sleep 20; done'; tail -4 /tmp/land.log; grep "rc=" /tmp/gates.log | tail -3
+< [2026-11-11T11:46:15Z] checkpoint of #539 (land queued) pushed to looper/tacplus-539:  4 files changed, 390 insertions(+), 6 deletions(-) [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came o...
+> Bash timeout 590 bash -c 'while kill -0 23878 2>/dev/null; do sleep 20; done'; tail -2 /tmp/land.log; grep "rc=" /tmp/gates.log | tail -3
+= task_started
+= task_notification
+< [2026-11-11T11:46:15Z] checkpoint of #539 (land queued) pushed to looper/tacplus-539:  4 files changed, 390 insertions(+), 6 deletions(-) [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came o...
+> Bash timeout 590 bash -c 'while kill -0 23878 2>/dev/null; do sleep 20; done'; tail -2 /tmp/land.log; grep "rc=" /tmp/gates.log | tail -3
+= task_started
+= task_notification
+< [2026-11-11T11:46:15Z] checkpoint of #539 (land queued) pushed to looper/tacplus-539:  4 files changed, 390 insertions(+), 6 deletions(-) [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came o...
+> Bash timeout 590 bash -c 'while kill -0 23878 2>/dev/null; do sleep 20; done'; tail -2 /tmp/land.log; grep "rc=" /tmp/gates.log | tail -3; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-11T11:46:15Z] checkpoint of #539 (land queued) pushed to looper/tacplus-539:  4 files changed, 390 insertions(+), 6 deletions(-) [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came o...
+= thinking_tokens
+= thinking_tokens
+The land is still queued (90 min). Rather than wait, I'll open the six backport PRs now; they're independent of main and each one is verified on its own line.
+> Bash cd /builds/looper/tacplus/issues/539; for pair in 2.1:v2.1.21 2.2:v2.2.18 2.3:v2.3.20 2.4:v2.4.20 2.5:v2.5.21 2.6:v2.6.10; do b=${pair%%:*}; t=${pair##*:}; newest=$(git tag -l "v$b.*" --sort=-v:refname | head -1); gh pr create --repo tacplus-dev/tacplus --base release/$b --head backport/539-release-...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/541 https://github.com/tacplus-dev/tacplus/pull/542 https://github.com/tacplus-dev/tacplus/pull/543 https://github.com/tacplus-dev/tacplus/pull/544 https://github.com/tacplus-dev/tacplus/pull/545 https://github.com/tacplus-dev/tacplus/pull/546
+> Bash cd /builds/looper/tacplus/issues/539; /usr/local/bin/repo-looper --repo tacplus --issue 539 --checkpoint "fa71c8aa queued to land (since 11:46Z, no verdict yet). Backport PRs open: #541-#546 (release/2.1..2.6). Follow-up bug #540 filed (Authorizer JWK backoff flake under load). just gates running si...
+= task_started
+= task_notification
+< [2026-11-11T13:19:48Z] checkpoint of #539 (a step) pushed to looper/tacplus-539:  4 files changed, 566 insertions(+), 6 deletions(-) [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came of it;...
+> Bash timeout 590 bash -c 'while kill -0 23878 2>/dev/null; do sleep 20; done'; tail -1 /tmp/land.log; grep "rc=" /tmp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === soundness rc=0 === === test rc=0 === 13:38
+> Bash timeout 590 bash -c 'while kill -0 23878 2>/dev/null; do sleep 20; done'; tail -1 /tmp/land.log; grep "rc=" /tmp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === soundness rc=0 === === test rc=0 === 13:47
+> Bash timeout 590 bash -c 'while kill -0 23878 2>/dev/null; do sleep 20; done'; tail -1 /tmp/land.log; grep "rc=" /tmp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === soundness rc=0 === === test rc=0 === 13:57
+> Bash timeout 590 bash -c 'while kill -0 23878 2>/dev/null; do sleep 20; done'; tail -1 /tmp/land.log; grep "rc=" /tmp/gates.log | tail -2; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === soundness rc=0 === === test rc=0 === 14:07
+Still waiting: the land has been queued since 11:46Z with no verdict, and `just gates` is in its `current-generation` leg. I have until about 15:10Z, so I'll keep polling both.
+> Bash timeout 590 bash -c 'while kill -0 23878 2>/dev/null; do sleep 20; done'; tail -1 /tmp/land.log; grep "rc=" /tmp/gates.log | tail -2; date -u +%H:%M; gh issue view 539 --repo tacplus-dev/tacplus --comments | tail -5
+= task_started
+= task_notification
+< [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === soundness rc=0 === === test rc=0 === 14:17 ed...
+> Bash timeout 590 bash -c 'while kill -0 23878 2>/dev/null; do sleep 20; done'; tail -1 /tmp/land.log; grep "rc=" /tmp/gates.log | tail -2; grep -E "DiskStore|FAIL" /tmp/gates.log | grep -v DEBUG | head -5; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === soundness rc=0 === === test rc=0 === 14:27
+> Bash timeout 590 bash -c 'while kill -0 23878 2>/dev/null; do sleep 20; done'; tail -1 /tmp/land.log; grep "rc=" /tmp/gates.log | tail -2; grep -E "FAIL" /tmp/gates.log | grep -v DEBUG | head -5; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === soundness rc=0 === === test rc=0 === 14:37
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'while kill -0 23878 2>/dev/null; do sleep 20; done'; tail -1 /tmp/land.log; grep "rc=" /tmp/gates.log | tail -2; grep -E "FAIL" /tmp/gates.log | grep -v DEBUG | head -5; date -u +%H:%M
+= task_started
+= task_notification
+< [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. === soundness rc=0 === === test rc=0 === 14:47
+About 20 minutes left and still no verdict. Checking how far `just gates` got before I wrap up:
+> Bash cd /builds/looper/tacplus/issues/539; tail -2 /tmp/gates.log | cut -c1-200; f=target/cross-test/current-generation/java/java-generated-selftests.log; [ -f $f ] && grep -E "DiskStoreTest|FAIL" $f | grep -v DEBUG
+< ==> Generating java redo-contract fixture (redo) ==> Compiling java redo-contract fixture (redo) DiskStoreTest: all checks passed
+= thinking_tokens
+= thinking_tokens
+Inside `just gates`, the Java leg's `DiskStoreTest: all checks passed`. The gate run won't finish in time and I can't end with it running, so I'm stopping its process tree by PID:
+> Bash tree() { echo $1; for c in $(ps -o pid= --ppid $1); do tree $c; done; }; P=$(tree 51233); kill $P 2>/dev/null; sleep 3; for p in $P; do kill -0 $p 2>/dev/null && echo alive $p; done; echo stopped
+= task_started
+= task_notification
+< stopped
+> Bash cd /builds/looper/tacplus/issues/539; tail -1 /tmp/land.log; docker ps --format '{{.ID}} {{.Names}}' 2>/dev/null | head; for b in 2.1 2.2 2.3 2.4 2.5 2.6; do git worktree remove --force /tmp/bpwt/$b; done; git status --short | head
+< [2026-11-11T11:46:17Z] queued: the manager of tacplus merges looper/tacplus-539 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+> Bash cd /builds/looper/tacplus/issues/539; /usr/local/bin/repo-looper --repo tacplus --issue 539 --checkpoint "Fix fa71c8aa (test-only, DiskStoreTest.java.tmpl) queued to land since 11:46Z; no verdict by 14:52Z, the manager lands it after this run. Verified: just current-generation-java rc=0 unloaded; by...
+< [2026-11-11T14:47:39Z] checkpoint of #539 (a step) pushed to looper/tacplus-539:  4 files changed, 593 insertions(+), 6 deletions(-) ok
+= thinking_tokens
+= thinking_tokens
+#539 is not closed. The fix is queued to land on main but had no verdict when my time ran out (queued at 11:46Z, still waiting at 14:52Z). The manager will land it after this run, and the next run will post the outcome comment and close the issue.
+
+**The fix (`fa71c8aa`, test only):** it changes `pkg/templates/java/chassis/diskstore/DiskStoreTest.java.tmpl`.
+- `testAppendsDoNotWaitForUploads` now does 5 appends with a 60s deadline instead of 100 within 20s. An append that waits on the shipper waits until the sink recovers, which never happens while every upload fails, so the test still catches blocking but no longer measures how fast the disk can fsync.
+- Two new checks: the upload is still failing when the appends finish (so the check isn't empty), and no append threw.
+- The cleanup at the end stops the writer and lets the sink succeed before closing the log, so a failure prints one FAIL line and no `NullPointerException`.
+
+**Verification**
+- **Clean run:** `just current-generation-java` ended `==> Current cross-test generation and compile passed`.
+- **By-hand check:** I made `RedoLog.append` wait for `shipper.pending() == 0`. The test then printed only `FAIL: appends must not wait on a failing upload`, with no NPE.
+- **Under disk load:** neither `fio` nor `stress-ng` is installed, so I used parallel writers that sync every write to the same disk. DiskStoreTest passed every time: 5 runs on its own, once inside the full Java leg, and on each release line. This disk is fast, though: 100 fsyncs took 0.9s under load, so the old test also passed. The nightly failure was not reproduced here.
+- **Full Java leg under load:** it failed both times, but in a different self-test, `AuthorizerBehaviorTest`: `JWK watch made 1 attempts in 2.5s ... want 2..4`, then `0 attempts` on the second run. That check counts attempts in a fixed 2.5s from startup, and a slow start eats that time. I filed it as #540; it isn't part of this fix.
+- **`just gates`:** not finished. I stopped it at 14:50Z for time, so there is no `OVERALL` line. Before that, `protoc-check`, `soundness` and `test` ended `rc=0`, and `DiskStoreTest: all checks passed` in its `current-generation` leg. The land's own gate run will give the verdict.
+
+**Release:** main has taken features since v2.6.1 (#321), so main gets no `v2.6.2` tag. The fix goes to the release branches instead. Each PR is a cherry-pick of `fa71c8aa` and names the tag to cut once it merges:
+
+| Line | PR | Tag to cut |
+|---|---|---|
+| release/2.1 | #541 | v2.1.21 |
+| release/2.2 | #542 | v2.2.18 |
+| release/2.3 | #543 | v2.3.20 |
+| release/2.4 | #544 | v2.4.20 |
+| release/2.5 | #545 | v2.5.21 |
+| release/2.6 | #546 | v2.6.10 |
+
+release/2.0 doesn't have this test. No service handlers were touched, so the trace rule doesn't apply. My last checkpoint on `looper/tacplus-539` records all of this for the next run.
+= success: #539 is not closed. The fix is queued to land on main but had no verdict when my time ran out (queued at 11:46Z, still waiting at 14:52Z). The manager will land it after this run, and the next run will post the outcome comment and close the issue.
+
+**The fix (`fa71c8aa`, test only):** it changes `pkg/templates/java/chassis/diskstore/DiskStoreTest.java.tmpl`.
+- `testAppendsDoNotWaitForUploads` now does 5 appends with a 60s deadline instead of 100 within 20s. An append that waits on the shipper waits until the sink recovers, which never happens while every upload fails, so the test still catches blocking but no longer measures how fast the disk can fsync.
+- Two new checks: the upload is still failing when the appends finish (so the check isn't empty), and no append threw.
+- The cleanup at the end stops the writer and lets the sink succeed before closing the log, so a failure prints one FAIL line and no `NullPointerException`.
+
+**Verification**
+- **Clean run:** `just current-generation-java` ended `==> Current cross-test generation and compile passed`.
+- **By-hand check:** I made `RedoLog.append` wait for `shipper.pending() == 0`. The test then printed only `FAIL: appends must not wait on a failing upload`, with no NPE.
+- **Under disk load:** neither `fio` nor `stress-ng` is installed, so I used parallel writers that sync every write to the same disk. DiskStoreTest passed every time: 5 runs on its own, once inside the full Java leg, and on each release line. This disk is fast, though: 100 fsyncs took 0.9s under load, so the old test also passed. The nightly failure was not reproduced here.
+- **Full Java leg under load:** it failed both times, but in a different self-test, `AuthorizerBehaviorTest`: `JWK watch made 1 attempts in 2.5s ... want 2..4`, then `0 attempts` on the second run. That check counts attempts in a fixed 2.5s from startup, and a slow start eats that time. I filed it as #540; it isn't part of this fix.
+- **`just gates`:** not finished. I stopped it at 14:50Z for time, so there is no `OVERALL` line. Before that, `protoc-check`, `soundness` and `test` ended `rc=0`, and `DiskStoreTest: all checks passed` in its `current-generation` leg. The land's own gate run will give the verdict.
+
+**Release:** main has taken features since v2.6.1 (#321), so main gets no `v2.6.2` tag. The fix goes to the release branches instead. Each PR is a cherry-pick of `fa71c8aa` and names the tag to cut once it merges:
+
+| Line | PR | Tag to cut |
+|---|---|---|
+| release/2.1 | #541 | v2.1.21 |
+| release/2.2 | #542 | v2.2.18 |
+| release/2.3 | #543 | v2.3.20 |
+| release/2.4 | #544 | v2.4.20 |
+| release/2.5 | #545 | v2.5.21 |
+| release/2.6 | #546 | v2.6.10 |
+
+release/2.0 doesn't have this test. No service handlers were touched, so the trace rule doesn't apply. My last checkpoint on `looper/tacplus-539` records all of this for the next run.

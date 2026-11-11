@@ -36,8 +36,11 @@ LABEL org.opencontainers.image.title="tacplus base" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus"
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # Swift's documented runtime dependencies (Debian 12 list, trixie names),
-# .NET's (libicu), and the common build basics.
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+# .NET's (libicu), and the common build basics. APT_REFRESH is unique to each
+# images.yml run, so the registry cache never hands back an older run's
+# upgrade (#369; build.Dockerfile says why).
+ARG APT_REFRESH=
+RUN : "${APT_REFRESH}" && apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     bash binutils build-essential ca-certificates cmake curl file git gnupg jq \
     libc6-dev libcurl4-openssl-dev libedit2 libgcc-14-dev libicu76 libncurses-dev \
     libpython3-dev libsqlite3-0 libssl-dev libstdc++-14-dev libxml2-dev libz3-dev \

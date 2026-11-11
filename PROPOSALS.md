@@ -221,8 +221,8 @@ the looper then marks it `promoted` or `declined` here with the date.
 - **cargo audit of a generated sample, nightly** (2026-10-29, #186): current-generation now refuses the two crates of
   #186 by name in the generated lockfile, but a new advisory on any other crate the chassis locks is found only by
   each service's own scan. A nightly `cargo audit` of a generated sample (cargo-audit in the build image, the
-  advisory database fetched at run time) would find it first. It also reports four unmaintained crates today
-  (`rustls-pemfile`, `backoff`, `instant`, `unsafe-libyaml`) worth replacing. GitHub-only advisories (no RUSTSEC id,
+  advisory database fetched at run time) would find it first. It also reported four unmaintained crates: #319
+  dropped `backoff` and `instant`, #308 replaced `rustls-pemfile`; `unsafe-libyaml` is left. GitHub-only advisories (no RUSTSEC id,
   like #215's block-buffer) need OSV, not cargo-audit.
 - **Refuse a W2S `tokio-tungstenite` pin below 0.30** (2026-10-30, #215): the generated W2S client takes
   `tokio-tungstenite` from the consumer's dependencies.yaml, and 0.28 locks sha1 0.10, so digest 0.10 and

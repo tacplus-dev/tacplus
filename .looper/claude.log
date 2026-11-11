@@ -1,0 +1,168 @@
+= init
+= api_retry
+> Bash git status | head -40 && git log --oneline -3 && grep -n '^<<<<<<<\|^=======\|^>>>>>>>' PROPOSALS.md STATE.md
+< On branch looper/tacplus-257 Your branch is up to date with 'origin/main'.  Changes not staged for commit:   (use "git add/rm <file>..." to update what will be committed)   (use "git restore <file>..." to discard changes in working directory) 	modified:   PROPOSALS.md 	modified:   STATE.md 	modified...
+> Bash sed -n 1,45p PROPOSALS.md; echo ----; sed -n 50,70p STATE.md
+< # Proposals: tacplus  Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones into ROADMAP.md (via an agent); the looper then marks it `promoted` or `declined` here with the date.  ## Open <<<<<<< HEAD - **OpenJML in the arm64 build image** (2026-11-07, #257): `images/build....
+Keep both sides in each.
+> Bash python3 - <<'EOF' import re for f in ["PROPOSALS.md","STATE.md"]:     s=open(f).read()     s=re.sub(r'^<<<<<<< HEAD\n(.*?)^=======\n(.*?)^>>>>>>> origin/main\n', lambda m: m.group(1)+m.group(2), s, flags=re.S|re.M)     open(f,"w").write(s) EOF sed -n 56,66p STATE.md; grep -c '^<<<<<<<\|^>>>>>>>' PRO...
+<   2.6 gets none); `build:X.Y` per line, rebuilt on every release as an immutable `build:X.Y.Z`, carries Kani and   cargo-fuzz too, and its `tacplus` is `images/tacplus.sh`, which runs exactly the pinned binary, checked against   `checksums.txt`, and refuses a repository with no pin or a pin of anoth...
+> Bash python3 - <<'EOF' f="STATE.md"; s=open(f).read() s=s.replace("runs on amd64 only (PROPOSALS.md).\n  skipped.\n","runs on amd64 only (PROPOSALS.md).\n",1) open(f,"w").write(s) EOF git diff --stat | tail -1; git fetch -q origin; git log --oneline HEAD..origin/main | head
+<  18 files changed, 291 insertions(+), 541 deletions(-)
+Main hasn't moved since. Quick local verification before landing.
+> Bash go build ./... && go vet ./pkg/verification/ ./pkg/internal/java/... ./cmd/verify/ && go test ./pkg/verification/ ./pkg/internal/java/... ./cmd/verify/ 2>&1 | tail -15; grep -n '^gates\|^soundness\|^test\b\|^protoc-check' justfile
+< go: downloading github.com/spf13/cobra v1.10.2 go: downloading go.uber.org/zap v1.27.1 go: downloading google.golang.org/protobuf v1.36.11 go: downloading gopkg.in/yaml.v3 v3.0.1 go: downloading golang.org/x/tools v0.49.0 go: downloading github.com/BurntSushi/toml v1.6.0 go: downloading golang.org/x...
+> Bash sed -n 40,70p justfile; sed -n 165,205p justfile; df -h . /tmp | tail -2
+<   {{lock}} go build -trimpath -ldflags="-s -w" -o bin/tacplus .  install: generate   #!/usr/bin/env bash   set -euo pipefail   tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")   sha=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")   # Local build: mark the commit as a lo...
+= thinking_tokens
+= thinking_tokens
+The code is the same as the previously verified f8e00158; only the two docs conflicted. I'll still run `just test` on the merged tree.
+> Bash nohup just test > /tmp/t257-test.log 2>&1 & echo $!
+< 1131
+> Bash sleep 400; tail -5 /tmp/t257-test.log; kill -0 1131 && echo running
+= task_started
+= commands_changed
+= task_notification
+< Exit code 1 ok  	github.com/tacplus-dev/tacplus/pkg/tacplusyaml	0.059s ok  	github.com/tacplus-dev/tacplus/pkg/verification	9.779s ok  	github.com/tacplus-dev/tacplus/pkg/version	0.250s ok  	github.com/tacplus-dev/tacplus/scripts	9.891s ?   	github.com/tacplus-dev/tacplus/target/proto/spec/sys	[no t...
+> Bash grep -E '^(FAIL|---|ok|panic)' /tmp/t257-test.log | grep -v '^ok' | head; grep -c '^ok' /tmp/t257-test.log
+< 58
+`just test` passes (soundness included, 58 packages ok, no FAIL). Commit, checkpoint, land.
+> Bash git add -A && git status --short | head -30 && git commit -q -F - <<'EOF' Java verification: OpenJML ESC over the generated JML specs, JBMC retired (#257)  JBMC 6.6.0 cannot model the protobuf runtime or the stream/charset calls the generated validators make, so `tacplus verify` on Java never proved...
+= task_started
+= task_notification
+< M  PROPOSALS.md M  STATE.md M  cmd/verify/cmd.go M  docs/DEVELOPMENT.md M  docs/USER.md M  justfile M  pkg/internal/java/types/envvar.go A  pkg/internal/java/types/openjml_typecheck_test.go M  pkg/internal/java/types/validation.go M  pkg/internal/java/types/validation_constraints.go M  pkg/internal/...
+> Bash nohup /usr/local/bin/repo-looper --repo tacplus --issue 257 --land > /tmp/t257-land.log 2>&1 & echo $!
+< 16947
+> Bash sleep 540; tail -5 /tmp/t257-land.log; kill -0 16947 2>/dev/null && echo running
+= task_started
+= task_notification
+< [2026-11-11T02:14:23Z] checkpoint of #257 (land queued) pushed to looper/tacplus-257:  25 files changed, 1722 insertions(+), 541 deletions(-) [2026-11-11T02:14:36Z] queued: the manager of tacplus merges looper/tacplus-257 after the lands queued before it, one at a time, and says on the issue what ca...
+Meanwhile, check PR #360's state.
+> Bash gh pr view 360 --repo tacplus-dev/tacplus --json state,mergeable,title,baseRefName | head; 
+< {"baseRefName":"release/2.6","mergeable":"UNKNOWN","state":"OPEN","title":"[release/2.6] Java formal verification: OpenJML ESC over the validators' JML specs (#257)"}
+> Bash sleep 590; tail -3 /tmp/t257-land.log; kill -0 16947 2>/dev/null && echo running
+= task_started
+= task_notification
+< [2026-11-11T02:14:23Z] checkpoint of #257 (land queued) pushed to looper/tacplus-257:  25 files changed, 1722 insertions(+), 541 deletions(-) [2026-11-11T02:14:36Z] queued: the manager of tacplus merges looper/tacplus-257 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash sleep 595; tail -3 /tmp/t257-land.log; kill -0 16947 2>/dev/null && echo running
+= task_started
+= task_notification
+< [2026-11-11T02:14:23Z] checkpoint of #257 (land queued) pushed to looper/tacplus-257:  25 files changed, 1722 insertions(+), 541 deletions(-) [2026-11-11T02:14:36Z] queued: the manager of tacplus merges looper/tacplus-257 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash sleep 595; tail -3 /tmp/t257-land.log; kill -0 16947 2>/dev/null && echo running
+= task_started
+= task_notification
+< [2026-11-11T02:14:23Z] checkpoint of #257 (land queued) pushed to looper/tacplus-257:  25 files changed, 1722 insertions(+), 541 deletions(-) [2026-11-11T02:14:36Z] queued: the manager of tacplus merges looper/tacplus-257 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash sleep 595; tail -3 /tmp/t257-land.log; kill -0 16947 2>/dev/null && echo running; git fetch -q origin; git log --oneline -3 origin/main
+= task_started
+= task_notification
+< [2026-11-11T02:14:23Z] checkpoint of #257 (land queued) pushed to looper/tacplus-257:  25 files changed, 1722 insertions(+), 541 deletions(-) [2026-11-11T02:14:36Z] queued: the manager of tacplus merges looper/tacplus-257 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash sleep 595; tail -3 /tmp/t257-land.log; kill -0 16947 2>/dev/null && echo running
+= task_started
+= task_notification
+< [2026-11-11T02:14:23Z] checkpoint of #257 (land queued) pushed to looper/tacplus-257:  25 files changed, 1722 insertions(+), 541 deletions(-) [2026-11-11T02:14:36Z] queued: the manager of tacplus merges looper/tacplus-257 after the lands queued before it, one at a time, and says on the issue what ca...
+Still queued (~1h in); polling.
+> Bash sleep 595; tail -3 /tmp/t257-land.log; kill -0 16947 2>/dev/null && echo running
+= task_started
+= task_notification
+< [2026-11-11T02:14:23Z] checkpoint of #257 (land queued) pushed to looper/tacplus-257:  25 files changed, 1722 insertions(+), 541 deletions(-) [2026-11-11T02:14:36Z] queued: the manager of tacplus merges looper/tacplus-257 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash sleep 595; tail -3 /tmp/t257-land.log; kill -0 16947 2>/dev/null && echo running
+= task_started
+= task_notification
+< [2026-11-11T02:14:23Z] checkpoint of #257 (land queued) pushed to looper/tacplus-257:  25 files changed, 1722 insertions(+), 541 deletions(-) [2026-11-11T02:14:36Z] queued: the manager of tacplus merges looper/tacplus-257 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash sleep 595; tail -3 /tmp/t257-land.log; kill -0 16947 2>/dev/null && echo running
+= task_started
+= task_notification
+< [2026-11-11T02:14:23Z] checkpoint of #257 (land queued) pushed to looper/tacplus-257:  25 files changed, 1722 insertions(+), 541 deletions(-) [2026-11-11T02:14:36Z] queued: the manager of tacplus merges looper/tacplus-257 after the lands queued before it, one at a time, and says on the issue what ca...
+> Bash sleep 595; tail -3 /tmp/t257-land.log; kill -0 16947 2>/dev/null && echo running; git fetch -q origin; git log --oneline -3 origin/main
+= task_started
+= task_notification
+< jq: error (at <stdin>:5): object ({"message":...) and string ("<!-- loope...) cannot have their containment checked jq: error (at <stdin>:5): object ({"message":...) and string ("<!-- loope...) cannot have their containment checked jq: error (at <stdin>:5): object ({"message":...) and string ("<!-- ...
+The land waiter's GitHub polling is erroring (likely an API rate limit); checking the issue directly.
+> Bash grep -c jq /tmp/t257-land.log; gh api rate_limit --jq .resources.core 2>&1; gh issue view 257 --repo tacplus-dev/tacplus --comments --json comments --jq '.comments[-2:][] | .author.login + ": " + .body[0:600]' 2>&1
+< Exit code 1 14 {"limit":5600,"remaining":0,"reset":1794369493,"used":5600} specify only one of --comments or --json  Display the title, body, and other information about an issue.  When `--comments` is used, terminal output includes the issue details and comments. When output is piped or redirected,...
+> Bash date -u; date -u -d @1794369493
+< Wed Nov 11 03:52:57 UTC 2026 Wed Nov 11 03:58:13 UTC 2026
+Rate limit resets in ~5 minutes; the waiter keeps polling.
+> Bash sleep 590; tail -2 /tmp/t257-land.log | cut -c1-300; kill -0 16947 2>/dev/null && echo running; git fetch -q origin; git log --oneline -2 origin/main
+= task_started
+= task_notification
+< jq: error (at <stdin>:5): object ({"message":...) and string ("<!-- loope...) cannot have their containment checked jq: error (at <stdin>:5): object ({"message":...) and string ("<!-- loope...) cannot have their containment checked running 4646aab9 HISTORY.md: releases (looper) e0a36b26 TypeScript c...
+> Bash gh api rate_limit --jq .resources.core; gh api 'repos/tacplus-dev/tacplus/issues/257/comments?per_page=100' --jq '.[-3:][] | .user.login + " " + .created_at + ": " + .body[0:400]'
+< {"limit":5600,"remaining":4980,"reset":1794373095,"used":620} tacplus-looper[bot] 2026-11-08T21:16:53Z: The run ended before finishing (exit 0). Its commits are queued with the manager of tacplus, which merges them after the run and gives its verdict here. Its work in progress is on [`looper/tacplus...
+= thinking_tokens
+= thinking_tokens
+No verdict yet; the API recovered. Updating the checkpoint, then continuing to wait.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 257 --checkpoint "Land of 8fc3115e queued since 02:14Z (verdict pending). Conflicts in PROPOSALS.md/STATE.md resolved (both kept); just test rc=0 locally. No tag from main (features since v2.6.1); backport PR #360 names v2.6.5. LEFT: on landed verdic...
+= task_started
+= task_notification
+< [2026-11-11T04:03:00Z] checkpoint of #257 (a step) pushed to looper/tacplus-257:  25 files changed, 1782 insertions(+), 541 deletions(-) jq: error (at <stdin>:5): object ({"message":...) and string ("<!-- loope...) cannot have their containment checked running
+> Bash sleep 595; wc -l < /tmp/t257-land.log; tail -1 /tmp/t257-land.log | cut -c1-300; kill -0 16947 && echo running; git fetch -q origin; git log --oneline -1 origin/main
+= task_started
+= task_notification
+< 27 jq: error (at <stdin>:5): object ({"message":...) and string ("<!-- loope...) cannot have their containment checked running 4646aab9 HISTORY.md: releases (looper)
+> Bash sleep 595; wc -l < /tmp/t257-land.log; tail -1 /tmp/t257-land.log | cut -c1-300; kill -0 16947 && echo running; git fetch -q origin; git log --oneline -1 origin/main
+= task_started
+= task_notification
+< 27 jq: error (at <stdin>:5): object ({"message":...) and string ("<!-- loope...) cannot have their containment checked running 4646aab9 HISTORY.md: releases (looper)
+> Bash sleep 595; wc -l < /tmp/t257-land.log; tail -1 /tmp/t257-land.log | cut -c1-300; kill -0 16947 && echo running; git fetch -q origin; git log --oneline -1 origin/main
+= task_started
+= task_notification
+< 27 jq: error (at <stdin>:5): object ({"message":...) and string ("<!-- loope...) cannot have their containment checked running 4646aab9 HISTORY.md: releases (looper)
+> Bash sleep 595; wc -l < /tmp/t257-land.log; tail -1 /tmp/t257-land.log | cut -c1-300; kill -0 16947 && echo running; git fetch -q origin; git log --oneline -1 origin/main; date -u
+= task_started
+= task_notification
+< 43 jq: error (at <stdin>:5): object ({"message":...) and string ("<!-- loope...) cannot have their containment checked running 4646aab9 HISTORY.md: releases (looper) Wed Nov 11 04:52:10 UTC 2026
+> Bash sleep 595; wc -l < /tmp/t257-land.log; kill -0 16947 && echo running; git fetch -q origin; git log --oneline -1 origin/main; gh api 'repos/tacplus-dev/tacplus/issues/257/comments?per_page=100' --jq '.[-1] | .user.login + " " + .created_at' 2>&1 | head -2
+= task_started
+= task_notification
+< 55 running 4646aab9 HISTORY.md: releases (looper) tacplus-looper[bot] 2026-11-11T02:02:03Z
+Still queued (main unchanged since 02:14Z, so other lands ahead of it are holding the queue). Polling.
+> Bash sleep 595; kill -0 16947 && echo running; git fetch -q origin; git log --oneline -1 origin/main; gh api 'repos/tacplus-dev/tacplus/issues/257/comments?per_page=100' --jq '.[-1] | .user.login + " " + .created_at' 2>&1 | head -2
+= task_started
+= task_notification
+< running 4646aab9 HISTORY.md: releases (looper) tacplus-looper[bot] 2026-11-11T02:02:03Z
+> Bash sleep 595; kill -0 16947 && echo running; git fetch -q origin; git log --oneline -1 origin/main; gh api 'repos/tacplus-dev/tacplus/issues/257/comments?per_page=100' --jq '.[-1] | .user.login + " " + .created_at' 2>&1 | head -2; date -u
+= task_started
+= task_notification
+< running 4646aab9 HISTORY.md: releases (looper) tacplus-looper[bot] 2026-11-11T02:02:03Z Wed Nov 11 05:22:08 UTC 2026
+= thinking_tokens
+= thinking_tokens
+About 28 minutes remain and the verdict hasn't come. I'll post a progress comment and checkpoint so the next run can finish the issue.
+> Bash gh issue comment 257 --repo tacplus-dev/tacplus --body-file - <<'EOF' Progress: the land is queued again (since 02:14Z), not merged yet.  - **Conflict resolved.** The manager's last send-back conflicted only in `PROPOSALS.md`, against #223's parked proposal. Earlier, `STATE.md` had also conflicted, ...
+= task_started
+= task_notification
+< https://github.com/tacplus-dev/tacplus/issues/257#issuecomment-6787814790 [2026-11-11T05:22:18Z] checkpoint of #257 (a step) pushed to looper/tacplus-257:  25 files changed, 1818 insertions(+), 541 deletions(-)
+> Bash sleep 580; kill -0 16947 && echo running; git fetch -q origin; git log --oneline -1 origin/main; gh api 'repos/tacplus-dev/tacplus/issues/257/comments?per_page=100' --jq '.[-1] | .user.login + " " + .created_at' 2>&1 | head -2
+= task_started
+= task_notification
+< running 4646aab9 HISTORY.md: releases (looper) tacplus-looper[bot] 2026-11-11T05:22:16Z
+> Bash sleep 540; kill -0 16947 && echo running; git fetch -q origin; git log --oneline -1 origin/main; gh api 'repos/tacplus-dev/tacplus/issues/257/comments?per_page=100' --jq '.[-1] | .user.login + " " + .created_at' 2>&1 | head -2; date -u
+= task_started
+= task_notification
+< running 4646aab9 HISTORY.md: releases (looper) tacplus-looper[bot] 2026-11-11T05:22:16Z Wed Nov 11 05:41:05 UTC 2026
+Issue #257 isn't closed yet: the fix (`8fc3115e`) is waiting in the manager's merge queue (queued at 02:14Z) and has no verdict, and the run is nearly out of time. main hasn't moved since it was queued. The manager still merges it after this run ends, and the next run finishes the issue.
+
+**What this run did**
+- **Conflicts:** the merge with main conflicted in `PROPOSALS.md` (#223's parked image proposal) and `STATE.md` (#307's `registry.json` line). I kept both sides in each and removed a line that came out duplicated in `STATE.md`. The code is unchanged from `f8e00158`, which the previous run verified.
+- **Commit:** that work is now one commit on looper/tacplus-257, `8fc3115e` (Java `tacplus verify` runs OpenJML ESC over the generated JML specs; JBMC is retired for Java).
+- **Local gates:** `just test` passed on the merged tree (it includes generate and soundness; 58 packages ok, none failed). I didn't run the other gates locally; the land runs the full set.
+- **Issue:** I posted a progress comment on #257 and saved a checkpoint with what is left.
+
+**Release:** main has taken features since v2.6.1, so no patch is tagged from main. The patch goes out as the release/2.6 backport, PR #360, which is still open and names `v2.6.5` as the tag to cut once it merges.
+
+**Left for the next run:** once the merge succeeds, post the outcome comment (commits, gates, the gate set the land ran; #197 is already closed and JBMC is retired for Java), then close #257. If the land fails, fix it per the verdict and land again.
+
+Twice while waiting, the land command's polling hit the GitHub API rate limit and logged `jq` errors. It kept running, and I checked the issue directly for the verdict instead.
+= success: Issue #257 isn't closed yet: the fix (`8fc3115e`) is waiting in the manager's merge queue (queued at 02:14Z) and has no verdict, and the run is nearly out of time. main hasn't moved since it was queued. The manager still merges it after this run ends, and the next run finishes the issue.
+
+**What this run did**
+- **Conflicts:** the merge with main conflicted in `PROPOSALS.md` (#223's parked image proposal) and `STATE.md` (#307's `registry.json` line). I kept both sides in each and removed a line that came out duplicated in `STATE.md`. The code is unchanged from `f8e00158`, which the previous run verified.
+- **Commit:** that work is now one commit on looper/tacplus-257, `8fc3115e` (Java `tacplus verify` runs OpenJML ESC over the generated JML specs; JBMC is retired for Java).
+- **Local gates:** `just test` passed on the merged tree (it includes generate and soundness; 58 packages ok, none failed). I didn't run the other gates locally; the land runs the full set.
+- **Issue:** I posted a progress comment on #257 and saved a checkpoint with what is left.
+
+**Release:** main has taken features since v2.6.1, so no patch is tagged from main. The patch goes out as the release/2.6 backport, PR #360, which is still open and names `v2.6.5` as the tag to cut once it merges.
+
+**Left for the next run:** once the merge succeeds, post the outcome comment (commits, gates, the gate set the land ran; #197 is already closed and JBMC is retired for Java), then close #257. If the land fails, fix it per the verdict and land again.
+
+Twice while waiting, the land command's polling hit the GitHub API rate limit and logged `jq` errors. It kept running, and I checked the issue directly for the verdict instead.

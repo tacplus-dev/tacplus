@@ -95,8 +95,6 @@ func toolDisplayName(tool string) string {
 	switch tool {
 	case "kani":
 		return "Bounded Model Checking"
-	case "jbmc":
-		return "Bounded Model Checking"
 	case "openjml":
 		return "Extended Static Checking"
 	default:

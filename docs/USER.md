@@ -420,7 +420,7 @@ parsing.
 | `assert_numeric` | Complex numeric constraints (in, not_in, multiple_of) |
 | `assert_float` | Float constraints with epsilon tolerance; a field with any of `gt`/`ge`/`lt`/`le` refuses NaN |
 | `assert_sql` | Valid SQL statement of permitted type (SELECT, etc.), rejects injection patterns |
-| `assert_invariant` | Formal invariant (assumed by every `#[kani::proof]` harness of the message via `kani::assume()` in Rust, a JBMC harness via `CProver.assume()` in Java) |
+| `assert_invariant` | Formal invariant (assumed by every `#[kani::proof]` harness of the message via `kani::assume()` in Rust; a comment beside the Java validator's JML specs) |
 | `assert_min_size` | Minimum byte length (string/bytes) or element count (repeated/map) |
 
 ### gRPC Client Dependency Annotations
@@ -671,12 +671,28 @@ string token = 1 [(spec.assert_invariant) = "self.ttl > 0 && self.ttl <= 86400"]
 
 `validate()` checks it with `debug_assert!`, and every Rust harness of the
 message assumes it (`kani::assume(msg.ttl > 0 && ...)`, `self.` read as the
-harness's `msg.`); in Java it is a JBMC harness that constrains it with
-`CProver.assume(...)`. The `tacplus verify` command runs these proofs (Rust or
+harness's `msg.`). The `tacplus verify` command runs these proofs (Rust or
 Java only).
 
+**Java: OpenJML ESC.** Each generated strict validator (`validate<Type>` and
+`validate<Type>Depth` in `Helpers`) carries JML specs: one `//@ ensures` per
+bound the validator enforces (`assert_gt`/`ge`/`lt`/`le`, `assert_net_port`,
+`assert_numeric`, `assert_enum_defined`, `assert_required` on a string,
+`assert_max_size` on bytes, repeated and map fields), in the comparison it
+makes (a `uint32`/`uint64` is
+ordered as unsigned). In Java `tacplus verify` runs OpenJML's extended static
+checker over them: it proves that a validator returning normally accepted only
+values within every declared bound, for every value the message's getters can
+return. ESC does not read protobuf-java: `tacplus verify` writes spec stubs
+(`target/openjml-specs`) that model each message as immutable, its getters
+pure, each returning a fixed, arbitrary value. Run it in the Maven module that
+compiles the generated code: it compiles the module and takes its classpath.
+A string's byte bound has no spec (the validator measures `String.getBytes`,
+which no pure expression states); the fuzzers cover it. The build image's
+OpenJML is x86-64 only, so Java verification runs on an amd64 host.
+
 **Where verification runs.** Formal verification is not part of tacplus's
-gates: a land never runs Kani or JBMC. tacplus's build pipeline runs it with
+gates: a land never runs Kani or OpenJML. tacplus's build pipeline runs it with
 `just verify`, in the build image of the line:
 
 - on every release tag, so no release ships unverified;

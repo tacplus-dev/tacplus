@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// Formal verification (Kani, JBMC) is not a gate (tacplus#275): it runs in
+// Formal verification (Kani, OpenJML) is not a gate (tacplus#275): it runs in
 // `just verify`, which the build pipeline runs on every release tag and nightly
 // when something it depends on changed. Nothing `just gates` reaches may run it.
 
@@ -23,7 +23,7 @@ var (
 	scriptRef    = regexp.MustCompile(`[A-Za-z0-9_./-]+\.sh\b`)
 	// What runs a verifier: the verifiers themselves, `tacplus verify` (a
 	// built binary or the launcher), and the verify recipe and its script.
-	verifierRun = regexp.MustCompile(`cargo kani|\bjbmc\b|tacplus"? verify\b|TACPLUS_BIN"? verify\b|scripts/verify\.sh|\bjust verify\b`)
+	verifierRun = regexp.MustCompile(`cargo kani|\bjbmc\b|\bopenjml\b|tacplus"? verify\b|TACPLUS_BIN"? verify\b|scripts/verify\.sh|\bjust verify\b`)
 )
 
 // justRecipes reads the justfile's recipes: name -> header dependencies and body.
@@ -165,6 +165,7 @@ func TestVerifyChanged(t *testing.T) {
 		{"the base image", []string{"images/base.Dockerfile"}, "run"},
 		{"the verify script", []string{"scripts/verify.sh"}, "run"},
 		{"the change detection", []string{"scripts/verify-changed.sh"}, "run"},
+		{"the Java fixture's pom", []string{"cross-test/lib/java-compile.sh"}, "run"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -225,15 +226,18 @@ func TestVerifyChangedRunsWhenInDoubt(t *testing.T) {
 }
 
 // fakeTacplus is a tacplus stand-in for verify.sh: `build` records the config
-// it generated from, and `verify` writes a verification report, or fails as
-// FAKE_VERIFY_FAIL (a language) says, or writes none for FAKE_VERIFY_NONE.
+// it generated from (Java into a src/main/java tree, as the generator does), and
+// `verify` writes a verification report, or fails as FAKE_VERIFY_FAIL (a
+// language) says, or writes none for FAKE_VERIFY_NONE. Java's verify fails
+// without the compile pom verify.sh writes (ESC runs in the Maven module).
 const fakeTacplus = `#!/usr/bin/env bash
 set -euo pipefail
 lang="$(sed -n 's/^language: *"\{0,1\}\([a-z]*\)"\{0,1\}$/\1/p' tacplus.yaml)"
 echo "$1 $lang $PWD" >>"$FAKE_LOG"
 case "$1" in
-  build) mkdir -p tacplus ;;
+  build) mkdir -p tacplus; [[ "$lang" == java ]] && mkdir -p tacplus/gen/src/main/java; true ;;
   verify)
+    if [[ "$lang" == java && ! -f pom.xml ]]; then echo "no pom.xml" >&2; exit 1; fi
     [[ "${FAKE_VERIFY_NONE:-}" == "$lang" ]] && exit 0
     if [[ "${FAKE_VERIFY_FAIL:-}" == "$lang" ]]; then
       printf '# Formal Verification Report\n### harness_%s\n**Status:** FAILED\ncounterexample\n' "$lang" >verification-report.md

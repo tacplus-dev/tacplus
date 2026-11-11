@@ -1,0 +1,1 @@
+- 2026-11-11 looper issue outbound-deadline fixture: mid forwards the trace_id to leaf but no test asserts it arrives; the gate has no just recipe (#310)

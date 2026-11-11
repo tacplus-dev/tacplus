@@ -431,7 +431,7 @@ run_java_generated_self_tests() {
     package_name="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$source_file")"
     [[ -n "$package_name" ]] || die "could not determine Java package for $source_file"
     class_name="$package_name.$(basename "$source_file" .java)"
-    SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$class_name" >>"$test_log" 2>&1 || {
+    SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$class_name" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -445,7 +445,7 @@ run_java_generated_self_tests() {
   sc_test="$(find "$output/src/main/java" -type f -path '*/chassis/serviceconnection/ServiceConnectionTest.java' -print -quit)"
   if [[ -n "$sc_test" ]]; then
     sc_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$sc_test").$(basename "$sc_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$sc_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$sc_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -456,7 +456,7 @@ run_java_generated_self_tests() {
   rh_test="$(find "$output/src/main/java" -type f -path '*/chassis/httpclient/TypedClientRetryAfterTest.java' -print -quit)"
   [[ -n "$rh_test" ]] || die "java: TypedClientRetryAfterTest not generated under $output"
   rh_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$rh_test").$(basename "$rh_test" .java)"
-  "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$rh_class" >>"$test_log" 2>&1 || {
+  "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$rh_class" >>"$test_log" 2>&1 || {
     dump_step_log "$test_log"
     return 1
   }
@@ -469,7 +469,7 @@ run_java_generated_self_tests() {
   uls_test="$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/UserAndListedServiceTest.java' -print -quit)"
   if [[ -n "$uls_test" ]]; then
     uls_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$uls_test").$(basename "$uls_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$uls_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$uls_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -481,7 +481,7 @@ run_java_generated_self_tests() {
   od_test="$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/OwnerDefaultTest.java' -print -quit)"
   if [[ -n "$od_test" ]]; then
     od_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$od_test").$(basename "$od_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$od_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$od_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -494,7 +494,7 @@ run_java_generated_self_tests() {
   id_test="$(find "$output/src/main/java" -type f -name 'ServiceManagerIdentityErrorTest.java' -print -quit)"
   if [[ -n "$id_test" ]]; then
     id_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$id_test").$(basename "$id_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$id_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$id_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -507,7 +507,7 @@ run_java_generated_self_tests() {
   el_test="$(find "$output/src/main/java" -type f -name 'EpochLoadTest.java' -print -quit)"
   if [[ -n "$el_test" ]]; then
     el_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$el_test").$(basename "$el_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$el_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$el_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -520,7 +520,7 @@ run_java_generated_self_tests() {
   ex_test="$(find "$output/src/main/java" -type f -path '*/types/common2/user/ExtractionTest.java' -print -quit)"
   if [[ -n "$ex_test" ]]; then
     ex_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$ex_test").$(basename "$ex_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$ex_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$ex_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -534,7 +534,7 @@ run_java_generated_self_tests() {
     bp_test="$(find "$output/src/main/java" -type f -name "$bp_name.java" -print -quit)"
     if [[ -n "$bp_test" ]]; then
       bp_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$bp_test").$bp_name"
-      "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$bp_class" >>"$test_log" 2>&1 || {
+      "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$bp_class" >>"$test_log" 2>&1 || {
         dump_step_log "$test_log"
         return 1
       }
@@ -790,6 +790,33 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 EOF
+}
+
+# compile_go_output_except vets and tests generated Go output like
+# compile_current_output, leaving out one package and every package that imports
+# it. Only the event-bus backpressure fixture uses it on this line: its AgentState
+# state client does not compile here until #454 is backported (#495).
+compile_go_output_except() {
+  local output="$1"
+  local base="$2"
+  local go_module="$3"
+  local excluded="$4"
+  local log_dir pkgs
+  log_dir="$(dirname "$base")"
+
+  write_go_compile_mod "$log_dir/go.mod" "$go_module"
+  (cd "$log_dir" && go mod tidy) >"$log_dir/go-test.log" 2>&1 || {
+    dump_step_log "$log_dir/go-test.log"
+    return 1
+  }
+  pkgs="$(cd "$log_dir" && go list -e -f '{{.ImportPath}} {{join .Deps " "}}' ./... \
+    | awk -v ex="$excluded" '{ for (i = 1; i <= NF; i++) if ($i ~ ("/" ex "$")) next; print $1 }')"
+  [[ -n "$pkgs" ]] || die "no Go packages left to compile under $output"
+  (cd "$log_dir" && go vet $pkgs && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" go test $pkgs) >>"$log_dir/go-test.log" 2>&1 || {
+    dump_step_log "$log_dir/go-test.log"
+    return 1
+  }
+  assert_clean_log "$log_dir/go-test.log"
 }
 
 
@@ -2332,12 +2359,13 @@ fi
 
 # event-bus backpressure fixture: the ONLY place a store-hosted state's topic
 # iterator (the generated AgentState StateClient) and a client-streaming W2S
-# WebSocket listener are compiled and driven by a standing gate. Java only: both
-# self-tests pin Java runtime code, and no other language emits these surfaces
-# with the same defect.
+# WebSocket listener are compiled and driven by a standing gate. Java drives
+# both: its self-tests pin Java runtime code. Go compiles the rest of the output
+# (#495: grpcconfig is a virtual service here, so service_im once emitted a
+# duplicate case); its AgentState state client waits for #454's backport.
 if [[ -d "$EVENTBUS_BACKPRESSURE_PROTO_SRC" ]]; then
   for language in "${languages[@]}"; do
-    [[ "$language" == java ]] || continue
+    [[ "$language" == java || "$language" == go ]] || continue
     dir="$WORK_ROOT/eventbus-backpressure-$language"
     log="$WORK_ROOT/eventbus-backpressure-$language.log"
     rm -rf "$dir"
@@ -2350,9 +2378,13 @@ if [[ -d "$EVENTBUS_BACKPRESSURE_PROTO_SRC" ]]; then
     fi
     output_root="$(resolve_output_root "$dir/tacplus")"
     assert_spiffe_soundness "$dir/tacplus"
-    install_backpressure_selftests "$output_root"
     echo "==> Compiling $language event-bus backpressure fixture"
-    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor"
+    if [[ "$language" == go ]]; then
+      compile_go_output_except "$output_root" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor" "s2sm/state/services/agent_state"
+    else
+      install_backpressure_selftests "$output_root"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor"
+    fi
     echo "    PASS $language event-bus backpressure"
     prune_fixture "$dir" "$output_root"
   done

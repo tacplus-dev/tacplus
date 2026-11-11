@@ -29,7 +29,10 @@ LABEL org.opencontainers.image.title="tacplus base" \
       org.opencontainers.image.description="OS and language runtimes (Go, JDK, Maven, Node, Rust, Python) for tacplus builds" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus"
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+# APT_REFRESH is unique to each images.yml run, so the registry cache never
+# hands back an older run's upgrade (#369; build.Dockerfile says why).
+ARG APT_REFRESH=
+RUN : "${APT_REFRESH}" && apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     bash ca-certificates curl file git jq libssl-dev pkg-config python3 unzip \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=go /usr/local/go /usr/local/go

@@ -1,0 +1,400 @@
+> Bash until ! kill -0 12613 2>/dev/null; do sleep 10; done; tail -3 /tmp/cgj2.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< ==> Compiling java tenant-slice config owner fixture     PASS java tenant-slice config owner tree guard: the working tree at /builds/looper/tacplus/issues/540 changed while this gate ran; its verdict is about a different tree. Re-run it.
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n "FAIL\|AssertionError\|PASS java\b\|passed" /tmp/cgj2.log | head -20; ls /tmp/cg540 | head
+< 4:    PASS java 7:    PASS java requires-device 10:    PASS java record-egress 13:    PASS java record-egress host 16:    PASS java event-bus backpressure 19:    PASS java accounting sink 22:    PASS java owner-default 25:    PASS java quorum-write 28:    PASS java epoch-load 31:    PASS java tenant...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /tmp/cg540; ls java; find . -name "java-generated-selftests.classpath" | head; find java -path '*grpcserver/AuthorizerBehaviorTest.java' ; find . -maxdepth 3 -name pom.xml | head -3
+< java-compile java-generated-selftests-classpath.log java-generated-selftests.classpath java-generated-selftests.log maven-compile.log tacplus tacplus.yaml ./java/java-generated-selftests.classpath ./eventbus-backpressure-java/java-generated-selftests.classpath ./recordegress-host-java/java-generated...
+> Bash cat > /tmp/run-abt.sh <<'EOF' #!/usr/bin/env bash # Runs the kept build's AuthorizerBehaviorTest once; prints its FAIL lines and exit code. J=/tmp/cg540/java cp="$J/java-compile/target/classes:$(cat $J/java-generated-selftests.classpath)" java --sun-misc-unsafe-memory-access=allow --enable-native-ac...
+= task_started
+= task_notification
+< AuthorizerBehaviorTest: all checks passed rc=0  real	0m7.959s user	0m5.055s sys	0m0.491s
+= thinking_tokens
+= thinking_tokens
+> Bash grep -c threeAttempts /tmp/cg540/java/tacplus/model/src/main/java/com/gitlab/example/dummy/proto/model/chassis/grpcserver/AuthorizerBehaviorTest.java; nohup /tmp/load540.sh > /dev/null 2>&1 & echo LOADPID=$!; sleep 3; uptime; for i in $(seq 1 10); do /tmp/run-abt.sh | tr '\n' ' '; echo; done; uptime
+= task_started
+= task_notification
+< 3 LOADPID=31378  13:10:41 up 11:19,  0 users,  load average: 4.20, 5.80, 10.72 AuthorizerBehaviorTest: all checks passed rc=0  AuthorizerBehaviorTest: all checks passed rc=0  AuthorizerBehaviorTest: all checks passed rc=0  AuthorizerBehaviorTest: all checks passed rc=0  AuthorizerBehaviorTest: all c...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Passes 10/10 at load average ~22 on 8 cores. Now the controls: the old check under the same load, and the new check against a no-backoff mutant.
+> Bash set -e; J=/tmp/cg540/java; G=$J/tacplus/model/src/main/java/com/gitlab/example/dummy/proto/model/chassis/grpcserver; mkdir -p /tmp/ctl540/old-src /tmp/ctl540/old-out /tmp/ctl540/hot-src /tmp/ctl540/hot-out cd /builds/looper/tacplus/issues/540 cp $G/AuthorizerBehaviorTest.java /tmp/ctl540/old-src/; g...
+< 1 out of 3 hunks FAILED -- saving rejects to file AuthorizerBehaviorTest.java.rej 1 /tmp/cg540/java/tacplus/model/src/main/java/com/gitlab/example/dummy/proto/model/chassis/grpcserver/Authorizer.java /tmp/cg540/java/tacplus/model/src/main/java/com/gitlab/example/dummy/proto/model/chassis/grpcserver/...
+= thinking_tokens
+= thinking_tokens
+> Bash head -12 /tmp/ctl540/old-src/AuthorizerBehaviorTest.java.rej; grep -c threeAttempts /tmp/ctl540/old-src/AuthorizerBehaviorTest.java; rm /tmp/ctl540/old-src/*.rej /tmp/ctl540/old-src/*.orig 2>/dev/null; true
+< --- AuthorizerBehaviorTest.java +++ AuthorizerBehaviorTest.java @@ -569,23 +568,16 @@ public class AuthorizerBehaviorTest {      // The remote JWK watch against a key authority that is rolling (every Watch      // fails UNAVAILABLE) re-subscribes on the Backoff schedule (0.5s, 1s, 2s, ...),      // ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash J=/tmp/cg540/java; CP="$J/java-compile/target/classes:$(cat $J/java-generated-selftests.classpath)"; G=$J/tacplus/model/src/main/java/com/gitlab/example/dummy/proto/model/chassis/grpcserver javac -nowarn -d /tmp/ctl540/old-out -cp "$CP" /tmp/ctl540/old-src/AuthorizerBehaviorTest.java 2>&1 | tail -3;...
+= task_started
+= task_notification
+<   symbol:   class CopyOnWriteArrayList   location: class AuthorizerBehaviorTest 1 error old-compiled=0 142:            rewatch.schedule(() -> watch(stub, sink), 0, TimeUnit.MILLISECONDS); Authorizer$1.class Authorizer$2$1.class Authorizer$2$2.class Authorizer$2.class Authorizer$3$1.class Authorizer$...
+= thinking_tokens
+= thinking_tokens
+> Bash J=/tmp/cg540/java; CP="$J/java-compile/target/classes:$(cat $J/java-generated-selftests.classpath)"; sed -i '/attemptNanos\|threeAttempts/d' /tmp/ctl540/old-src/AuthorizerBehaviorTest.java; sed -n '/private static void checkRemoteJwkSourceBackoff/,/Thread.sleep(2_500)/p' /tmp/ctl540/old-src/Authoriz...
+= task_started
+= task_notification
+< 2:        AtomicInteger watches = new AtomicInteger(); 9:                    watches.incrementAndGet(); 36:            Thread.sleep(2_500); --- hot-loop mutant, new test: FAIL: JWK watch retried 78ms then 21ms after a failed attempt against a rolling authority, want at least 500ms then 1000ms (backo...
+Mutant caught. Now the old check under the same load (to show the flake reproduces), 10 runs:
+> Bash for i in $(seq 1 10); do /tmp/run-abt-cp.sh /tmp/ctl540/old-out | tr '\n' ' '; echo; done; uptime
+= task_started
+= task_notification
+< AuthorizerBehaviorTest: all checks passed rc=0  AuthorizerBehaviorTest: all checks passed rc=0  AuthorizerBehaviorTest: all checks passed rc=0  AuthorizerBehaviorTest: all checks passed rc=0  AuthorizerBehaviorTest: all checks passed rc=0  AuthorizerBehaviorTest: all checks passed rc=0  AuthorizerBe...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The old check doesn't reproduce at this load on this runner, so I'll simulate the slow start directly: a mutant that delays only the first watch by 3s.
+> Bash G=/tmp/cg540/java/tacplus/model/src/main/java/com/gitlab/example/dummy/proto/model/chassis/grpcserver; sed -n 105,200p $G/Authorizer.java | grep -n "public void start\|watch(stub\|void watch" 
+< 22:    public void start(Authorizer.JwkSink sink) { 38:            rewatch.schedule(() -> watch(stub, sink), Backoff.jitter(delay).toMillis(), TimeUnit.MILLISECONDS); 48:    private void watch(JwkVerifyingKeysViewServiceGrpc.JwkVerifyingKeysViewServiceStub stub, 64:                        scheduleRe...
+> Bash G=/tmp/cg540/java/tacplus/model/src/main/java/com/gitlab/example/dummy/proto/model/chassis/grpcserver; sed -n 126,135p $G/Authorizer.java
+<     public void start(Authorizer.JwkSink sink) {         active = true;         watch(JwkVerifyingKeysViewServiceGrpc.newStub(channel), sink);     }      @Override     public void stop() {         active = false;         rewatch.shutdownNow();     }
+> Bash J=/tmp/cg540/java; CP="$J/java-compile/target/classes:$(cat $J/java-generated-selftests.classpath)"; G=$J/tacplus/model/src/main/java/com/gitlab/example/dummy/proto/model/chassis/grpcserver; mkdir -p /tmp/ctl540/slow-src /tmp/ctl540/slow-out /tmp/ctl540/slowold-out; cp $G/Authorizer.java /tmp/ctl540...
+= task_started
+= task_notification
+< --- slow start (first watch 2s late), new test: AuthorizerBehaviorTest: all checks passed rc=0 --- slow start, old test: FAIL: JWK watch made 0 attempts in 2.5s against a rolling authority, want 2..4 (backoff 0.5s doubling) 1 Authorizer behavior check(s) FAILED rc=1 --- hot loop, old test: FAIL: JWK...
+= thinking_tokens
+= thinking_tokens
+All four controls behave as intended. Stopping the load and launching the land.
+> Bash kill 31378; sleep 2; kill -0 31378 2>/dev/null && echo still || echo stopped; ls /tmp/load540; uptime; cd /builds/looper/tacplus/issues/540; git status --short; git fetch -q origin; git log --oneline HEAD..origin/main | head
+< stopped  13:17:27 up 11:26,  0 users,  load average: 21.80, 19.22, 15.46
+> Bash ps -o pid,cmd --ppid 31378 2>/dev/null | head; pgrep -u $(id -u) -f "dd if=/dev/zero of=/tmp/load540" | head; pgrep -u $(id -u) -fa "load540" | head
+<     PID CMD 37922 37922 /bin/bash -c source /builds/looper/tacplus/homes/looper-540/.claude/shell-snapshots/snapshot-bash-1794399423126-cd5vss.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \builtin unalias -- 'unsetenv'; \builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || tru...
+= thinking_tokens
+= thinking_tokens
+Load processes are gone. Running the trace check (rule 13), then landing.
+> Bash cd /builds/looper/tacplus/issues/540; /usr/local/bin/looper-trace check 2>&1 | tail -15
+= task_started
+= task_notification
+<   causal cross-test/server-runtime/client/go/main.go:89 ListEvents: DROPS the inbound trace_id handler cross-test/server-runtime/client/go/main.go:112 checkPage (inbound: api)   causal cross-test/server-runtime/client/go/main.go:114 ListEventsPaged: DROPS the inbound trace_id handler cross-test/serv...
+= thinking_tokens
+= thinking_tokens
+Findings are all in `cross-test/server-runtime/client/go/main.go`, already filed as #311; my change touches only the fixture's leaf `watch` handler (no outgoing calls). Landing:
+> Bash cd /builds/looper/tacplus/issues/540; /usr/local/bin/repo-looper --repo tacplus --issue 540 --checkpoint "Fix 58ae0c2c verified: unloaded+loaded (load avg ~22/8 cores, 10/10 pass), hot-loop mutant fails new check, slow-start mutant passes new/fails old. Landing now. Backport branches cherry-picked i...
+< [2026-11-11T13:17:43Z] checkpoint of #540 (a step) pushed to looper/tacplus-540:  3 files changed, 435 insertions(+), 7 deletions(-) LANDPID=38076
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+While the land queues, I'll verify the backports on the oldest (2.0) and newest (2.6) lines.
+> Bash cd /tmp/bp540-2.0 && nohup just current-generation-java > /tmp/bp20.log 2>&1 & echo $!
+< 38246
+> Bash until ! kill -0 38246 2>/dev/null; do sleep 15; done; tail -3 /tmp/bp20.log; grep -n "Authorizer behavior\|AuthorizerBehaviorTest: all\|^FAIL" /tmp/bp20.log | head
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bjh6clttw. Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/bjh6clttw.output. You will be notified when it completes. To check interim output, use R...
+> Bash sleep 60; cat /tmp/land540.log | tail -5
+< <tool_use_error>Blocked: sleep 60 followed by: cat /tmp/land540.log tail -5. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain shorter sleeps to work around this block.</tool_...
+> Bash tail -5 /tmp/land540.log
+< [2026-11-11T13:17:45Z] checkpoint of #540 (land queued) pushed to looper/tacplus-540:  4 files changed, 440 insertions(+), 7 deletions(-) [2026-11-11T13:17:47Z] queued: the manager of tacplus merges looper/tacplus-540 after the lands queued before it, one at a time, and says on the issue what came o...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/540; git fetch -q origin looper/tacplus-540; git diff --stat origin/main FETCH_HEAD; git log --oneline origin/main..FETCH_HEAD
+<  .looper/claude.log                                 | 269 +++++++++++++++++++++  .looper/land                                       |   4 +  .looper/prompt.md                                  | 143 +++++++++++  .../grpcserver/AuthorizerBehaviorTest.java.tmpl    |  31 ++-  4 files changed, 440 insert...
+The branch carries the looper's own `.looper/` bookkeeping besides my commit, which is its normal mechanism. Waiting for the 2.0 backport leg and the land verdict.
+> Bash until ! kill -0 38246 2>/dev/null || grep -q "verdict\|merged\|landed\|not merged" /tmp/land540.log; do sleep 15; done; tail -2 /tmp/bp20.log; tail -3 /tmp/land540.log
+< ==> Building local tacplus binary ==> Generating java cross-test fixture [2026-11-11T13:17:45Z] checkpoint of #540 (land queued) pushed to looper/tacplus-540:  4 files changed, 440 insertions(+), 7 deletions(-) [2026-11-11T13:17:47Z] queued: the manager of tacplus merges looper/tacplus-540 after the...
+= thinking_tokens
+= thinking_tokens
+> Bash until ! kill -0 38246 2>/dev/null || ! kill -0 38076 2>/dev/null; do sleep 15; done; tail -2 /tmp/bp20.log; tail -3 /tmp/land540.log
+= task_started
+= background_tasks_changed
+= task_updated
+= task_updated
+= task_notification
+= background_tasks_changed
+<     Removed 44M fixture tree tenantslice-java ==> Current cross-test generation and compile passed [2026-11-11T13:17:45Z] checkpoint of #540 (land queued) pushed to looper/tacplus-540:  4 files changed, 440 insertions(+), 7 deletions(-) [2026-11-11T13:17:47Z] queued: the manager of tacplus merges lo...
+release/2.0 backport: `Current cross-test generation and compile passed`. Now release/2.6.
+> Bash grep -c "AuthorizerBehaviorTest: all checks passed" /tmp/bp20.log; cd /tmp/bp540-2.6 && nohup just current-generation-java > /tmp/bp26.log 2>&1 & echo $!
+< 0 47601
+= task_updated
+= task_notification
+= background_tasks_changed
+= thinking_tokens
+= thinking_tokens
+> Bash cat > /tmp/bp-body.sh <<'EOF' #!/usr/bin/env bash # Prints the backport PR body for release/$1, latest tag $2, next tag $3, tests line $4. cat <<BODY Backport of #540 to release/$1. It is a bug fix (a flaky gate; Jody's triage on #540, 2026-11-11, approved it), and this line has the bug: its \`check...
+< ok
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/540; declare -A nxt=([2.0]=v2.0.28 [2.1]=v2.1.21 [2.2]=v2.2.18 [2.3]=v2.3.20 [2.4]=v2.4.20 [2.5]=v2.5.21); declare -A cur=([2.0]=v2.0.27 [2.1]=v2.1.20 [2.2]=v2.2.17 [2.3]=v2.3.19 [2.4]=v2.4.19 [2.5]=v2.5.20) for b in 2.0 2.1 2.2 2.3 2.4 2.5; do   if [ $b = 2.0 ]; the...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= vcs_state_changed
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/547 https://github.com/tacplus-dev/tacplus/pull/548 https://github.com/tacplus-dev/tacplus/pull/549 https://github.com/tacplus-dev/tacplus/pull/550 https://github.com/tacplus-dev/tacplus/pull/551 https://github.com/tacplus-dev/tacplus/pull/552
+= thinking_tokens
+= thinking_tokens
+Six backport PRs open (#547–#552). Waiting on the 2.6 leg and the land.
+> Bash until ! kill -0 47601 2>/dev/null; do sleep 15; done; tail -2 /tmp/bp26.log; tail -2 /tmp/land540.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bnaxr5595. Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/bnaxr5595.output. You will be notified when it completes. To check interim output, use R...
+> Bash cd /builds/looper/tacplus/issues/540; /usr/local/bin/repo-looper --repo tacplus --issue 540 --checkpoint "Fix 58ae0c2c verified, land queued 13:17Z. Backport PRs #547-#552 (2.0-2.5) open; 2.0 leg passed. 2.6 backport branch in /tmp/bp540-2.6, its java leg running; PR not yet opened. Left: 2.6 PR, la...
+< [2026-11-11T13:28:58Z] checkpoint of #540 (a step) pushed to looper/tacplus-540:  4 files changed, 503 insertions(+), 7 deletions(-)
+> Bash until ! kill -0 47601 2>/dev/null; do sleep 15; done; tail -2 /tmp/bp26.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bbwvgmsu6). Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/bbwvgmsu6.output. You will be notified w...
+I'll wait for the background notification of the 2.6 leg.
+> Bash until ! kill -0 47601 2>/dev/null; do sleep 15; done; tail -2 /tmp/bp26.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+= task_updated
+= task_notification
+= background_tasks_changed
+<     Removed 53M fixture tree tenantslice-config-owner-java ==> Current cross-test generation and compile passed
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash cd /builds/looper/tacplus/issues/540; t='- `just current-generation-java` on this branch: `==> Current cross-test generation and compile passed`. - On main, the same change: the check passed 10/10 with 8 CPU spinners and 8 fsync writers running (load average ~22 on 8 cores); against a mutant with no...
+= task_started
+= task_notification
+= vcs_state_changed
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/553 [2026-11-11T13:17:45Z] checkpoint of #540 (land queued) pushed to looper/tacplus-540:  4 files changed, 440 insertions(+), 7 deletions(-) [2026-11-11T13:17:47Z] queued: the manager of tacplus merges looper/tacplus-540 after the lands queued before it, ...
+= thinking_tokens
+= thinking_tokens
+All seven backport PRs open (#547–#553). Posting a progress comment, then waiting on the land verdict.
+> Bash cd /builds/looper/tacplus/issues/540; cat > /tmp/progress540.md <<'EOF' Progress (looper run, 2026-11-11). The land is queued with the manager (since 13:17Z) and its verdict is still to come.  **Fix:** commit 58ae0c2c on looper/tacplus-540. It changes the test only, in `pkg/templates/java/chassis/gr...
+= task_started
+= task_notification
+< https://github.com/tacplus-dev/tacplus/issues/540#issuecomment-6797591590 [2026-11-11T13:49:35Z] checkpoint of #540 (a step) pushed to looper/tacplus-540:  4 files changed, 534 insertions(+), 7 deletions(-)
+> Bash until ! kill -0 38076 2>/dev/null; do sleep 30; done; tail -15 /tmp/land540.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bn2sdxr3e. Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/bn2sdxr3e.output. You will be notified when it completes. To check interim output, use R...
+Meanwhile, cleaning up my backport worktrees (branches are pushed) and temp build trees.
+> Bash cd /builds/looper/tacplus/issues/540; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do git worktree remove --force /tmp/bp540-$b; done; git worktree list; rm -rf /tmp/cg540 /tmp/ctl540 /tmp/load540; git status --short
+= task_started
+= task_notification
+< /builds/looper/tacplus/issues/540  58ae0c2c [looper/tacplus-540]
+> Bash until ! kill -0 38076 2>/dev/null; do sleep 30; done; tail -15 /tmp/land540.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b7nxebqvl). Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/b7nxebqvl.output. You will be notified w...
+I'll wait for the land notification (bn2sdxr3e).
+> Bash until ! kill -0 38076 2>/dev/null; do sleep 30; done; tail -15 /tmp/land540.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b70ohq0oe). Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/b70ohq0oe.output. You will be notified w...
+= thinking_tokens
+= thinking_tokens
+> Bash until ! kill -0 38076 2>/dev/null; do sleep 30; done; tail -15 /tmp/land540.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b20ay451s). Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/b20ay451s.output. You will be notified w...
+> Bash date -u +%H:%M; tail -3 /tmp/land540.log; gh issue view 540 --repo tacplus-dev/tacplus --comments | grep -A3 "tacplus-manager" | tail -5
+< 14:20 [2026-11-11T13:17:45Z] checkpoint of #540 (land queued) pushed to looper/tacplus-540:  4 files changed, 440 insertions(+), 7 deletions(-) [2026-11-11T13:17:47Z] queued: the manager of tacplus merges looper/tacplus-540 after the lands queued before it, one at a time, and says on the issue what ...
+Still queued at 14:20Z; I have until ~16:06Z. Continuing to wait.
+> Bash until ! kill -0 38076 2>/dev/null; do sleep 30; done; tail -15 /tmp/land540.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b6f7at2as). Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/b6f7at2as.output. You will be notified w...
+> Bash until ! kill -0 38076 2>/dev/null; do sleep 30; done; tail -15 /tmp/land540.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bgdghc7i8). Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/bgdghc7i8.output. You will be notified w...
+> Bash until ! kill -0 38076 2>/dev/null; do sleep 30; done; tail -15 /tmp/land540.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b87o5ef8e). Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/b87o5ef8e.output. You will be notified w...
+> Bash date -u +%H:%M; tail -2 /tmp/land540.log | cut -c1-200
+< 14:50 [2026-11-11T13:17:45Z] checkpoint of #540 (land queued) pushed to looper/tacplus-540:  4 files changed, 440 insertions(+), 7 deletions(-) [2026-11-11T13:17:47Z] queued: the manager of tacplus merges looper/tacplus-540 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash until ! kill -0 38076 2>/dev/null; do sleep 30; done; tail -15 /tmp/land540.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b99a3ko43). Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/b99a3ko43.output. You will be notified w...
+> Bash until ! kill -0 38076 2>/dev/null; do sleep 30; done; tail -15 /tmp/land540.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bunbqnv93). Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/bunbqnv93.output. You will be notified w...
+Still waiting for the manager's land verdict (queued since 13:17Z); the fix, verification and all seven backport PRs are done.
+> Bash until ! kill -0 38076 2>/dev/null; do sleep 30; done; tail -15 /tmp/land540.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b66h60vcg). Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/b66h60vcg.output. You will be notified w...
+> Bash date -u +%H:%M; tail -1 /tmp/land540.log | cut -c1-120
+< 15:20 [2026-11-11T13:17:47Z] queued: the manager of tacplus merges looper/tacplus-540 after the lands queued before it, one at
+> Bash until ! kill -0 38076 2>/dev/null; do sleep 30; done; tail -15 /tmp/land540.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bzotsbtyx). Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/bzotsbtyx.output. You will be notified w...
+> Bash until ! kill -0 38076 2>/dev/null; do sleep 30; done; tail -15 /tmp/land540.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b6xm00pey). Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/b6xm00pey.output. You will be notified w...
+> Bash date -u +%H:%M; tail -1 /tmp/land540.log | cut -c1-80
+< 15:40 [2026-11-11T13:17:47Z] queued: the manager of tacplus merges looper/tacplus-540
+> Bash cd /builds/looper/tacplus/issues/540; /usr/local/bin/repo-looper --repo tacplus --issue 540 --checkpoint "DONE: fix 58ae0c2c (test-only, AuthorizerBehaviorTest gap lower bounds from first attempt), verified unloaded/loaded/hot-loop/slow-start (see progress comment on #540); land queued 13:17Z, no ve...
+= task_started
+= task_notification
+< [2026-11-11T15:40:36Z] checkpoint of #540 (a step) pushed to looper/tacplus-540:  4 files changed, 571 insertions(+), 7 deletions(-)
+Checkpointed. One last wait for the verdict before my time limit.
+> Bash until ! kill -0 38076 2>/dev/null; do sleep 30; done; tail -15 /tmp/land540.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bgn8qgeoy). Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/bgn8qgeoy.output. You will be notified w...
+> Bash date -u +%H:%M; tail -1 /tmp/land540.log | cut -c1-80
+< 15:50 [2026-11-11T13:17:47Z] queued: the manager of tacplus merges looper/tacplus-540
+> Bash end=$(( $(date +%s) + 720 )); until ! kill -0 38076 2>/dev/null || [ $(date +%s) -ge $end ]; do sleep 20; done; date -u +%H:%M; tail -5 /tmp/land540.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: beqjt0aue). Output is being written to: /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/beqjt0aue.output. You will be notified w...
+> Bash date -u +%H:%M; tail -1 /tmp/land540.log | cut -c1-80
+< 16:00 [2026-11-11T13:17:47Z] queued: the manager of tacplus merges looper/tacplus-540
+The fix for #540 is committed and queued to land, but the issue is still open. The land has been queued with the manager since 13:17Z and had no verdict by 16:00Z, when my time ran out. The manager lands it after this run and posts its verdict on the issue, and the next run posts the final comment and closes it.
+
+**What changed** (commit `58ae0c2c`, test only, in `AuthorizerBehaviorTest.java.tmpl`): the check no longer counts JWK watch attempts in a fixed 2.5s after start. It waits up to 30s for three attempts and records when each arrives. It then asserts the gaps are at least 0.5s and then 1s, the backoff schedule's minimums. A slow start only delays the attempts and a slow runner only widens the gaps, so neither can fail it. A source that retries without backoff still does.
+
+**Verification:**
+- **No load, `just current-generation-java`:** the Authorizer check passed. That run then failed later in `AccountingSinkDurableTest` ("none were dropped"), which is #341's bug and its fix is already queued. A second run of the same leg passed every Java fixture, including the accounting sink. Its last line was a tree-guard notice, only because I committed while it ran.
+- **Under CPU and disk load** (8 CPU spinners and 8 synced disk writers, load average about 22 on 8 cores): passed 10 out of 10 runs.
+- **No-backoff mutant** (retry delay patched to 0, checked by hand): the new check fails with "retried 78ms then 21ms …, want at least 500ms then 1000ms".
+- **Slow start:** with the first watch started 2s late, the new check passes and the old one fails ("made 0 attempts in 2.5s").
+- **Old check not reproduced:** under the same load the old check passed 10 out of 10, so the original flake did not happen here on its own. The 2s delay stood in for the slow start.
+- **Not run:** `just gates`. The land runs it, and its verdict will name the gate set.
+
+**Patch:** main has taken features since v2.6.1, so main gets no `v2.6.2` tag. Instead there are backport PRs, each naming the next patch tag to cut once it merges:
+
+| PR | Branch | Tag |
+|---|---|---|
+| #547 | release/2.0 | v2.0.28 |
+| #548 | release/2.1 | v2.1.21 |
+| #549 | release/2.2 | v2.2.18 |
+| #550 | release/2.3 | v2.3.20 |
+| #551 | release/2.4 | v2.4.20 |
+| #552 | release/2.5 | v2.5.21 |
+| #553 | release/2.6 | v2.6.10 |
+
+`just current-generation-java` passed on the 2.0 and 2.6 backports. The other five are the same change applied cleanly and were not run.
+
+**Trace check (rule 13):** the only handler I touched is the test's fake JWK service, which makes no outgoing calls. `looper-trace check` reports 8 findings, all in `cross-test/server-runtime/client/go/main.go`, which this change does not touch; they are already filed as #311.
+
+The progress comment on #540 has the details.
+= success: The fix for #540 is committed and queued to land, but the issue is still open. The land has been queued with the manager since 13:17Z and had no verdict by 16:00Z, when my time ran out. The manager lands it after this run and posts its verdict on the issue, and the next run posts the final comment and closes it.
+
+**What changed** (commit `58ae0c2c`, test only, in `AuthorizerBehaviorTest.java.tmpl`): the check no longer counts JWK watch attempts in a fixed 2.5s after start. It waits up to 30s for three attempts and records when each arrives. It then asserts the gaps are at least 0.5s and then 1s, the backoff schedule's minimums. A slow start only delays the attempts and a slow runner only widens the gaps, so neither can fail it. A source that retries without backoff still does.
+
+**Verification:**
+- **No load, `just current-generation-java`:** the Authorizer check passed. That run then failed later in `AccountingSinkDurableTest` ("none were dropped"), which is #341's bug and its fix is already queued. A second run of the same leg passed every Java fixture, including the accounting sink. Its last line was a tree-guard notice, only because I committed while it ran.
+- **Under CPU and disk load** (8 CPU spinners and 8 synced disk writers, load average about 22 on 8 cores): passed 10 out of 10 runs.
+- **No-backoff mutant** (retry delay patched to 0, checked by hand): the new check fails with "retried 78ms then 21ms …, want at least 500ms then 1000ms".
+- **Slow start:** with the first watch started 2s late, the new check passes and the old one fails ("made 0 attempts in 2.5s").
+- **Old check not reproduced:** under the same load the old check passed 10 out of 10, so the original flake did not happen here on its own. The 2s delay stood in for the slow start.
+- **Not run:** `just gates`. The land runs it, and its verdict will name the gate set.
+
+**Patch:** main has taken features since v2.6.1, so main gets no `v2.6.2` tag. Instead there are backport PRs, each naming the next patch tag to cut once it merges:
+
+| PR | Branch | Tag |
+|---|---|---|
+| #547 | release/2.0 | v2.0.28 |
+| #548 | release/2.1 | v2.1.21 |
+| #549 | release/2.2 | v2.2.18 |
+| #550 | release/2.3 | v2.3.20 |
+| #551 | release/2.4 | v2.4.20 |
+| #552 | release/2.5 | v2.5.21 |
+| #553 | release/2.6 | v2.6.10 |
+
+`just current-generation-java` passed on the 2.0 and 2.6 backports. The other five are the same change applied cleanly and were not run.
+
+**Trace check (rule 13):** the only handler I touched is the test's fake JWK service, which makes no outgoing calls. `looper-trace check` reports 8 findings, all in `cross-test/server-runtime/client/go/main.go`, which this change does not touch; they are already filed as #311.
+
+The progress comment on #540 has the details.
+= task_updated
+= task_notification
+= background_tasks_changed
+= init
+> Bash date -u +%H:%M; cat /builds/looper/tacplus/homes/looper-540/tmp/claude-61000/-builds-looper-tacplus-issues-540/7f32e6a8-a448-4b3e-b2ac-1128d73c2ef7/tasks/beqjt0aue.output | cut -c1-300
+< 16:02 16:02 [2026-11-11T13:17:45Z] checkpoint of #540 (land queued) pushed to looper/tacplus-540:  4 files changed, 440 insertions(+), 7 deletions(-) [2026-11-11T13:17:47Z] queued: the manager of tacplus merges looper/tacplus-540 after the lands queued before it, one at a time, and says on the issue...
+That notice was only my own 12-minute wait timing out. As of 16:02Z there is still no land verdict: the fix (`58ae0c2c`) has been queued with the manager since 13:17Z.
+
+I've left #540 open. The manager will land the fix after this run and post its verdict on the issue. The last checkpoint says what the next run has left to do:
+1. Read that verdict.
+2. Post the final comment with the commit hash on main and the gate set the land ran.
+3. Close the issue.
+
+The seven backport PRs (#547–#553, release/2.0 through 2.6) are open and the progress comment is posted.
+= success: That notice was only my own 12-minute wait timing out. As of 16:02Z there is still no land verdict: the fix (`58ae0c2c`) has been queued with the manager since 13:17Z.
+
+I've left #540 open. The manager will land the fix after this run and post its verdict on the issue. The last checkpoint says what the next run has left to do:
+1. Read that verdict.
+2. Post the final comment with the commit hash on main and the gate set the land ran.
+3. Close the issue.
+
+The seven backport PRs (#547–#553, release/2.0 through 2.6) are open and the progress comment is posted.

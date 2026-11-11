@@ -445,7 +445,7 @@ run_java_generated_self_tests() {
     package_name="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$source_file")"
     [[ -n "$package_name" ]] || die "could not determine Java package for $source_file"
     class_name="$package_name.$(basename "$source_file" .java)"
-    SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$class_name" >>"$test_log" 2>&1 || {
+    SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$class_name" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -459,7 +459,7 @@ run_java_generated_self_tests() {
   sc_test="$(find "$output/src/main/java" -type f -path '*/chassis/serviceconnection/ServiceConnectionTest.java' -print -quit)"
   if [[ -n "$sc_test" ]]; then
     sc_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$sc_test").$(basename "$sc_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$sc_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$sc_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -470,7 +470,7 @@ run_java_generated_self_tests() {
   rh_test="$(find "$output/src/main/java" -type f -path '*/chassis/httpclient/TypedClientRetryAfterTest.java' -print -quit)"
   [[ -n "$rh_test" ]] || die "java: TypedClientRetryAfterTest not generated under $output"
   rh_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$rh_test").$(basename "$rh_test" .java)"
-  "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$rh_class" >>"$test_log" 2>&1 || {
+  "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$rh_class" >>"$test_log" 2>&1 || {
     dump_step_log "$test_log"
     return 1
   }
@@ -483,7 +483,7 @@ run_java_generated_self_tests() {
   uls_test="$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/UserAndListedServiceTest.java' -print -quit)"
   if [[ -n "$uls_test" ]]; then
     uls_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$uls_test").$(basename "$uls_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$uls_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$uls_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -495,7 +495,7 @@ run_java_generated_self_tests() {
   od_test="$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/OwnerDefaultTest.java' -print -quit)"
   if [[ -n "$od_test" ]]; then
     od_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$od_test").$(basename "$od_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$od_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$od_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -508,7 +508,7 @@ run_java_generated_self_tests() {
   id_test="$(find "$output/src/main/java" -type f -name 'ServiceManagerIdentityErrorTest.java' -print -quit)"
   if [[ -n "$id_test" ]]; then
     id_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$id_test").$(basename "$id_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$id_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$id_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -521,7 +521,7 @@ run_java_generated_self_tests() {
   el_test="$(find "$output/src/main/java" -type f -name 'EpochLoadTest.java' -print -quit)"
   if [[ -n "$el_test" ]]; then
     el_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$el_test").$(basename "$el_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$el_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$el_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -534,7 +534,7 @@ run_java_generated_self_tests() {
   ex_test="$(find "$output/src/main/java" -type f -path '*/types/common2/user/ExtractionTest.java' -print -quit)"
   if [[ -n "$ex_test" ]]; then
     ex_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$ex_test").$(basename "$ex_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$ex_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$ex_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
@@ -549,7 +549,7 @@ run_java_generated_self_tests() {
     bp_test="$(find "$output/src/main/java" -type f -name "$bp_name.java" -print -quit)"
     if [[ -n "$bp_test" ]]; then
       bp_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$bp_test").$bp_name"
-      "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$cp" "$bp_class" >>"$test_log" 2>&1 || {
+      "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$bp_class" >>"$test_log" 2>&1 || {
         dump_step_log "$test_log"
         return 1
       }

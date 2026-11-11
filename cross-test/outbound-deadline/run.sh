@@ -8,7 +8,9 @@
 # chain of the REAL generated ContractApi servers and clients (root -> mid ->
 # leaf, one process on loopback). The fixture checks the wire budget leaf
 # receives and how long leaf's handler lives relative to the root's deadline.
-# See fixture/rust/main.rs for the two facts and what each one proves.
+# leaf also records the trace_id it receives, which must be the root's.
+# The chain is a Rust test (looper-trace reads it as the test of mid's handler);
+# see fixture/rust/lib.rs for the three facts and what each one proves.
 #
 # Standalone, like server-runtime: it needs the go and cargo toolchains, so it
 # is NOT part of `just test`.
@@ -54,7 +56,7 @@ echo "==> Generating rust model"
 
 CRATE_DIR="$MODEL_DIR/outbound-deadline"
 mkdir -p "$CRATE_DIR/src"
-cp "$GATE_DIR/fixture/rust/main.rs" "$CRATE_DIR/src/main.rs"
+cp "$GATE_DIR/fixture/rust/lib.rs" "$CRATE_DIR/src/lib.rs"
 cat > "$CRATE_DIR/Cargo.toml" <<EOF
 [package]
 name = "outbound-deadline-rust"
@@ -71,7 +73,7 @@ tonic = "0.14.0"
 EOF
 
 echo "==> Building rust outbound-deadline fixture"
-(cd "$CRATE_DIR" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo build --quiet) >"$MODEL_DIR/build.log" 2>&1 || {
+(cd "$CRATE_DIR" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo test --lib --no-run --quiet) >"$MODEL_DIR/build.log" 2>&1 || {
   cat "$MODEL_DIR/build.log" >&2
   die "rust outbound-deadline build failed"
 }
@@ -81,5 +83,6 @@ if [[ -s "$MODEL_DIR/build.log" ]]; then
 fi
 
 echo "==> Running three-hop chain"
-"$CROSS_TEST_CARGO_TARGET/debug/outbound-deadline-rust"
+(cd "$CRATE_DIR" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo test --lib --quiet -- --nocapture) \
+  || die "rust outbound-deadline chain failed"
 prune_cargo_workspace "$CRATE_DIR" "$MODEL_DIR/model"

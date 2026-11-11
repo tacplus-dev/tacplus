@@ -43,7 +43,7 @@ output rejects the build loudly instead of emitting a partial server.
 
 [^validation]: Server languages validate inbound and outbound at every service boundary; client languages validate a request before sending it. Swift and C# currently emit no client-side request validation and no default request deadline.
 [^w2s]: W2S carries unary calls over HTTP/REST, server streaming over SSE, and client and bidi streaming over WebSockets. Swift carries unary and server-streaming methods; C# carries unary methods only. A method the target cannot carry is emitted as a compile-time-unavailable stub, so a mixed service still compiles and no declared method disappears.
-[^verify]: Rust harnesses are Kani proofs, Java harnesses are JBMC proofs; `tacplus verify` runs them.
+[^verify]: Rust harnesses are Kani proofs; Java validators carry JML specs that OpenJML ESC proves. `tacplus verify` runs both.
 
 Which clients a build emits is decided by the proto, not by `tacplus.yaml`:
 a `grpc_c2s_client` dependency produces a C2S client, a `grpc_w2s_client`

@@ -106,15 +106,15 @@ func writeJavaNumericConstraintChecks(b *strings.Builder, fieldName, valueExpr, 
 		writeJavaConstraintThrow(b, fieldName, indexExpr, fmt.Sprintf("must not equal %d", *constraint.Ne), valueExpr)
 		b.WriteString("}\n")
 	}
+	// in/not_in compare against each value in turn, a disjunction OpenJML ESC
+	// reads (#257); it cannot see through a stream over a lambda.
 	if len(constraint.In) > 0 {
-		values := javaLongArrayLiteral(constraint.In)
-		fmt.Fprintf(b, "if (!java.util.Arrays.stream(%s).anyMatch(candidate -> val == candidate)) {\n", values)
+		fmt.Fprintf(b, "if (!(%s)) {\n", javaLongAnyEqual(valueExpr, constraint.In))
 		writeJavaConstraintThrow(b, fieldName, indexExpr, "must be one of "+javaLongMessageList(constraint.In), valueExpr)
 		b.WriteString("}\n")
 	}
 	if len(constraint.NotIn) > 0 {
-		values := javaLongArrayLiteral(constraint.NotIn)
-		fmt.Fprintf(b, "if (java.util.Arrays.stream(%s).anyMatch(candidate -> val == candidate)) {\n", values)
+		fmt.Fprintf(b, "if (%s) {\n", javaLongAnyEqual(valueExpr, constraint.NotIn))
 		writeJavaConstraintThrow(b, fieldName, indexExpr, "must not be one of "+javaLongMessageList(constraint.NotIn), valueExpr)
 		b.WriteString("}\n")
 	}
@@ -227,14 +227,6 @@ func writeJavaValidationThrow(b *strings.Builder, message string, args ...string
 
 func javaLongLiteral(value int64) string {
 	return fmt.Sprintf("%dL", value)
-}
-
-func javaLongArrayLiteral(values []int64) string {
-	parts := make([]string, 0, len(values))
-	for _, value := range values {
-		parts = append(parts, javaLongLiteral(value))
-	}
-	return "new long[] {" + strings.Join(parts, ", ") + "}"
 }
 
 func javaLongMessageList(values []int64) string {
@@ -365,4 +357,13 @@ func writeJavaRequiredIfEq(b *strings.Builder, msg model.Message, field model.Fi
 	fmt.Fprintf(b, "if (%s && %s) {\n", condExpr, javaRequiredZeroCheck(field, javaFieldName, getterName))
 	writeJavaValidationThrow(b, fmt.Sprintf("field %s is required when %s is %s", javaFieldName, condFieldName, condValue))
 	b.WriteString("}\n")
+}
+
+// javaLongAnyEqual is the condition that valueExpr, a long, equals one of values.
+func javaLongAnyEqual(valueExpr string, values []int64) string {
+	terms := make([]string, len(values))
+	for i, v := range values {
+		terms[i] = valueExpr + " == " + javaLongLiteral(v)
+	}
+	return strings.Join(terms, " || ")
 }

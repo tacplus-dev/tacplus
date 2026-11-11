@@ -102,6 +102,12 @@ FROM ${BASE_IMAGE}
 LABEL org.opencontainers.image.title="tacplus build" \
       org.opencontainers.image.description="tacplus base plus protoc and its plugins, just, the docker CLI and gcloud" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus"
+# Every images.yml run upgrades the OS packages here, as docs/VERSIONING.md
+# says a release's build does: APT_REFRESH is unique to the run and part of
+# this layer's cache key, so the registry cache never hands back an older
+# run's (#369: v2.6.2's arm64 image was v2.6.1's).
+ARG APT_REFRESH=
+RUN : "${APT_REFRESH}" && apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 COPY --from=fetch /opt/protoc/bin/protoc /opt/protoc/bin/protoc-gen-grpc-java /usr/local/bin/
 COPY --from=fetch /opt/protoc/include /usr/local/include
 COPY --from=fetch /opt/just/just /usr/local/bin/just

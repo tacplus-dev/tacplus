@@ -49,7 +49,9 @@ install: generate
   {{lock}} go install -trimpath -ldflags="$ldflags" .
   echo "Installed: tacplus ${tag}"
 
-test: soundness
+# generate first: the compiler imports the generated spec descriptors under the
+# git-ignored target/, which a fresh checkout (CI, the nightly gates) lacks.
+test: generate soundness
   {{lock}} go test ./...
 
 # Model/template soundness gate. Runs as part of `test`.
@@ -238,6 +240,13 @@ subscriber-clean-close:
 # endpoint must be shed for a fast one after a ping, as the Go and Rust chassis do.
 endpoint-latency:
   {{lock}} bash cross-test/endpoint-latency/run.sh
+
+# Three-hop chain of generated Rust ContractApi servers and clients (issue #38):
+# leaf receives no more than the root's budget, its handler stops at the root's
+# deadline, and it receives the root's trace_id through mid (#310). Not in
+# `gates` yet (PROPOSALS.md).
+outbound-deadline: generate
+  {{lock}} bash cross-test/outbound-deadline/run.sh
 
 # Fault-injection coverage of the generated unary client retry path (issue #57):
 # retries are jittered, capped by a retry budget, and never start past the

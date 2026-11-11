@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 /**
@@ -474,6 +475,9 @@ public class DiskStoreTest {
     }
 
     // Appends never wait on the shipper: they complete while every upload is failing.
+    // A blocked append would wait until the sink recovers, which it never does here,
+    // so a few appends and a deadline far above their fsync time separate the two
+    // without measuring disk throughput (#539).
     private static void testAppendsDoNotWaitForUploads() throws Exception {
         Path dir = Files.createTempDirectory("ds-noblock-");
         try {
@@ -483,23 +487,35 @@ public class DiskStoreTest {
             RedoLog log = RedoLog.open(base, "/drpepper", "verifying_keys", 0, Codec.NONE);
             ArchiveShipper shipper = new ArchiveShipper(sink, "", "node-a", "verifying_keys", Codec.NONE, 1);
             log.attachShipper(shipper);
+            AtomicBoolean stop = new AtomicBoolean();
+            AtomicReference<Throwable> thrown = new AtomicReference<>();
+            Thread writer = new Thread(() -> {
+                try {
+                    for (int i = 0; i < 5 && !stop.get(); i++) {
+                        log.append(RedoLog.Record.upsert("k" + i, "{\"v\":" + i + "}"));
+                    }
+                } catch (Throwable t) {
+                    thrown.set(t);
+                }
+            });
             try {
                 log.append(RedoLog.Record.upsert("seed", "{\"v\":0}"));
                 log.roll(RedoLog.dedupFile(log.activePath()));
                 check(awaitFailures(shipper, 1), "the seeded segment's upload should be failing");
 
-                Thread writer = new Thread(() -> {
-                    for (int i = 0; i < 100; i++) {
-                        log.append(RedoLog.Record.upsert("k" + i, "{\"v\":" + i + "}"));
-                    }
-                });
                 writer.start();
-                writer.join(20_000L);
+                writer.join(60_000L);
                 check(!writer.isAlive(), "appends must not wait on a failing upload");
+                check(thrown.get() == null, "appends while an upload fails must not throw: " + thrown.get());
+                check(shipper.pending() > 0, "the upload must still be failing when the appends finish");
 
                 sink.failPuts.set(0);
                 check(awaitDrained(shipper), "the queue should drain once the sink recovers");
             } finally {
+                // Stop and release the writer before closing the log under it.
+                stop.set(true);
+                sink.failPuts.set(0);
+                writer.join(60_000L);
                 log.close();
                 shipper.close();
             }

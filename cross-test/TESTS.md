@@ -109,8 +109,6 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   the trait. Local/manual (`just -f cross-test/justfile server-runtime`, or
   `server-runtime-clients` for the client half alone); not in CI, not in
   `just test`, not in the nightly matrix.
-<<<<<<< HEAD
-=======
 - `keepalive-rust` (`cross-test/keepalive-rust/run.sh`): keepalive regression
   for the generated RUST server (issue #29). The Rust server applies no HTTP/2
   permit policy, unlike Go and Java. A generated Rust C2S client pings every
@@ -122,10 +120,11 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
 - `outbound-deadline` (`cross-test/outbound-deadline/run.sh`): outbound deadline
   regression for the generated RUST server (issue #38). A three-hop chain of
   generated servers and clients (root 5 s -> mid -> leaf) on loopback. The leaf
-  must receive a `grpc-timeout` no larger than the root's budget, and its
-  handler must stop by the root's deadline. Local/manual (`just -f
-  cross-test/justfile outbound-deadline-rust`); cargo-bound, so not in `just test`.
->>>>>>> 7de131d (Rust: clamp outbound calls to the inbound grpc-timeout)
+  must receive a `grpc-timeout` no larger than the root's budget, its
+  handler must stop by the root's deadline, and it must receive the root's
+  `trace_id` through mid (#310). The chain is one Rust test, run with `cargo
+  test`. `just outbound-deadline` (or `just -f cross-test/justfile
+  outbound-deadline-rust`); cargo-bound, so not in `just test` or `gates`.
 - `wire-corpus` (`cross-test/wire-corpus/run.sh`): cross-language
   SERIALIZATION-EQUIVALENCE gate. One `CorpusRecord` message is encoded ONCE by
   go, deterministically, into checked-in golden bytes

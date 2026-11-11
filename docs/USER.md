@@ -2068,6 +2068,17 @@ Client-only targets do not have a supported service runtime library surface.
 Accepted builds should use only the generated C2D/C2S/W2S client helpers, the
 `client_im` identity manager, and any client-side primitives they import.
 
+**The generated Python package needs Python 3.10 or later.** Its runtime
+libraries import `cryptography`, `httpx`, `requests` and `urllib3`, so the
+generated `pyproject.toml` declares them as root dependencies at the floors
+`dependencies.yaml` sets, and `requires-python = ">=3.10"`. Set
+`cryptography: '>=50.0.0'`, `requests: '>=2.33.0'` and `urllib3: '>=2.8.0'`
+or higher, as `example/proto/dependencies.yaml` does: older floors admit
+releases with known advisories, which a lockfile or another constraint holding
+the package back would install. Those releases do not install on 3.8 or 3.9
+(#264). A regeneration over an existing `pyproject.toml` raises
+`requires-python` and these floors in place.
+
 ---
 
 ## Service Lifecycle

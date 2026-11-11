@@ -1,0 +1,400 @@
+= thinking_tokens
+= thinking_tokens
+Release lines 2.0–2.5 also build a tacplus image from `tacplus.Dockerfile`. I'll check how it is built:
+> Bash cd $HOME/bp/2.5 && grep -n -E '^FROM|apt-get|smoke' images/tacplus.Dockerfile; grep -n -E 'TARGETARCH|SHELL' images/base.Dockerfile | head; for b in 2.0 2.1 2.2 2.3 2.4; do echo "$b: $(git -C $HOME/bp/2.5 diff --stat origin/release/2.5 origin/release/$b -- images/ docs/VERSIONING.md scripts/images-p...
+< 11:FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS tacplus 22:RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip \ 36:FROM ${BUILD_IMAGE} AS tools 38:FROM debian:trixie-slim 46:RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The tacplus image starts from `debian:trixie-slim` with its own short list, so it never had OpenEXR; the check stays on base and build. Resolving 2.5:
+> Bash cd $HOME/bp/2.5 && python3 -I - <<'EOF' import re def resolve(path, fn):     s=open(path).read()     pat=re.compile(r'<<<<<<< HEAD\n(.*?)=======\n(.*?)>>>>>>> [^\n]*\n', re.S)     s=pat.sub(lambda m: fn(m.group(1), m.group(2)), s)     assert '<<<<<<<' not in s and '>>>>>>>' not in s     open(path,'w...
+< diff --git a/docs/VERSIONING.md b/docs/VERSIONING.md index a4e20d69..d16c07e9 100644 --- a/docs/VERSIONING.md +++ b/docs/VERSIONING.md @@ -103,6 +103,14 @@ tacplus images as `tacplus-smoke` and runs inside every pushed image. `.github/w  linux/amd64 and linux/arm64 on every push to `main` and every ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Resolved. Running 2.5's scripts tests:
+> Bash cd $HOME/bp/2.5 && git add -A && GIT_EDITOR=true git cherry-pick --continue >/dev/null && git log --oneline -1 && go test ./scripts/ 2>&1 | tail -5; bash -n images/smoke.sh && echo syntax-ok
+= task_started
+= task_notification
+< e36709a5 images: declare each image's Debian packages; drop buildpack-deps (OpenEXR) (#554) ok  	github.com/tacplus-dev/tacplus/scripts	9.106s syntax-ok Shell cwd was reset to /builds/looper/tacplus/issues/554
+= thinking_tokens
+= thinking_tokens
+2.5 passes. 2.1–2.4 differ from 2.5 by only a few lines, so I'll apply the same resolution to each:
+> Bash mkdir -p $HOME/tools && cat > $HOME/tools/resolve.py <<'EOF' import re, sys def resolve(path, fn):     s=open(path).read()     if '<<<<<<<' not in s: return     pat=re.compile(r'<<<<<<< HEAD\n(.*?)=======\n(.*?)>>>>>>> [^\n]*\n', re.S)     s=pat.sub(lambda m: fn(m.group(1), m.group(2)), s)     asser...
+< Exit code 1 error: path 'STATE.md' does not have our version error: path 'STATE.md' does not have our version error: path 'STATE.md' does not have our version error: path 'STATE.md' does not have our version
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/bp/2.4 && git status --short | head; git ls-tree origin/release/2.4 STATE.md
+< DU STATE.md UU docs/VERSIONING.md UU images/base.Dockerfile A  images/base.packages M  images/build.Dockerfile A  images/build.packages A  images/packages-check.sh UU images/smoke.sh M  scripts/images-plan.sh A  scripts/images_packages_test.go Shell cwd was reset to /builds/looper/tacplus/issues/554
+Those branches have no STATE.md, so I'll leave it out (`git rm`):
+> Bash for b in 2.4 2.3 2.2 2.1; do cd $HOME/bp/$b && { git ls-tree -r --name-only HEAD | grep -qx STATE.md && git checkout -q --ours STATE.md || git rm -q STATE.md; } && python3 -I $HOME/tools/resolve.py && git add -A && GIT_EDITOR=true git cherry-pick --continue >/dev/null && echo "$b: $(git log --onelin...
+= task_started
+= task_notification
+< 2.4: 428e3ac6 images: declare each image's Debian packages; drop buildpack-deps (OpenEXR) (#554) 0 ok  	github.com/tacplus-dev/tacplus/scripts	2.087s 2.3: a26bcd89 images: declare each image's Debian packages; drop buildpack-deps (OpenEXR) (#554) 0 ok  	github.com/tacplus-dev/tacplus/scripts	1.442s ...
+= thinking_tokens
+= thinking_tokens
+All pass. Each branch's declared lists must still match the packages that branch installed before, so I'll compare them:
+> Bash for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do for f in base build; do old=$(git show origin/release/$b:images/$f.Dockerfile | sed ':a;/\\$/{N;s/\\\n/ /;ba}' | grep -E '^RUN .*apt-get upgrade' | grep -o -E 'no-install-recommends .*' | sed 's/no-install-recommends//; s/&&.*//' | tr ' ' '\n' | grep . | sort...
+< 2.0 base: DIFF old=[bash ca-certificates curl file git jq libssl-dev pkg-config python3 unzip ] 2.0 build: DIFF old=[] 2.1 base: same 2.1 build: same 2.2 base: same 2.2 build: same 2.3 base: same 2.3 build: same 2.4 base: same 2.4 build: same 2.5 base: same 2.5 build: same 2.6 base: same 2.6 build: ...
+2.1–2.6 match. 2.0's images are different, so I'll read them:
+> Bash git show origin/release/2.0:images/base.Dockerfile | sed -n 1,200p; echo =====; git show origin/release/2.0:images/build.Dockerfile | sed -n '/^FROM \${BASE_IMAGE}/,$p'; git show origin/release/2.0:images/build.Dockerfile | grep -n '^FROM'
+< # tacplus base image: the OS and the language runtimes every generated service # builds with. Rebuilt on a schedule or when a runtime pin changes; nothing # tacplus-specific lives here, so it is the layer that is pulled once and # kept. See docs/VERSIONING.md, Images. # # Pins, in one place. The Go ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+2.0's base declared only ten packages and took gcc, make and the rest from `buildpack-deps`. I'll check which of the dropped tools 2.0's tree actually uses:
+> Bash cd $HOME/bp/2.0 && for w in '\bpatch\b' '\bps\b' 'pkill|pgrep' '\bxz\b' '\bgpg\b' '(^|[ ;&|(])make( |$)' '\bgcc\b|\bcc\b' 'g\+\+' 'python3 -m (venv|pip)|pip3? install' '\bwget\b' '\bperl\b' '\bdig\b|nslookup' '\bip (addr|route|link)' '\brg\b' '\bbzip2\b|\bbunzip2\b' '\bssh\b' '\bopenssl\b' '\bsqlite...
+< \bpatch\b: 6 \bps\b: 3 pkill|pgrep: 2 \bxz\b: 1 \bgpg\b: 0 (^|[ ;&|(])make( |$): 3 \bgcc\b|\bcc\b: 0 g\+\+: 1 python3 -m (venv|pip)|pip3? install: 4 \bwget\b: 0 \bperl\b: 7 \bdig\b|nslookup: 0 \bip (addr|route|link): 0 \brg\b: 59 \bbzip2\b|\bbunzip2\b: 0 \bssh\b: 0 \bopenssl\b: 0 \bsqlite3\b: 0 \bzs...
+> Bash cd $HOME/bp/2.0 && git grep -n -E -- '\bpatch\b|\bps\b|pkill|pgrep|\bxz\b|(^|[ ;&|(])make( |$)|g\+\+|python3 -m (venv|pip)|pip3? install|\bperl\b|\bless\b' -- '*.sh' '*.yml' justfile 'scripts/**' | grep -v -E '^\S+:[0-9]+:\s*#' | cut -c1-200
+< .github/workflows/nightly-fixes.yml:101:            5. Backport: for every branch release/MAJOR.MINOR whose .0 tag is less than twelve months old, .github/workflows/nightly-fixes.yml:104:               whose body starts with `Backport of #<main PR> for #${{ needs.pick.outputs.issue }}`. A patch cros...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/bp/2.0 && git status --short; git diff images/build.Dockerfile images/smoke.sh | head -80
+< DU STATE.md UU docs/VERSIONING.md UU images/base.Dockerfile A  images/base.packages UU images/build.Dockerfile A  images/build.packages A  images/packages-check.sh UU images/smoke.sh M  scripts/images-plan.sh A  scripts/images_packages_test.go M  scripts/images_plan_test.go diff --cc images/build.Do...
+> Bash cd $HOME/bp/2.0 && git diff images/smoke.sh docs/VERSIONING.md | head -120; git diff images/base.Dockerfile | head -40
+< diff --cc docs/VERSIONING.md index 0a020783,9b98b0a2..00000000 --- a/docs/VERSIONING.md +++ b/docs/VERSIONING.md @@@ -72,23 -109,36 +72,48 @@@ take every Debian security fix (`apt-ge   patch. The weekly run on `main` dispatches `images.yml` on each supported   `release/X.Y` (a minor released within ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+2.0's `smoke.sh` runs in the tacplus image, so it keeps its own; the check runs as the last build step of base and build. Resolving 2.0 by hand:
+> Bash cd $HOME/bp/2.0 && git rm -q STATE.md && git checkout -q --ours images/smoke.sh && python3 -I - <<'EOF' import re pat=re.compile(r'<<<<<<< HEAD\n(.*?)=======\n(.*?)>>>>>>> [^\n]*\n', re.S) def show(path):     s=open(path).read()     for i,m in enumerate(pat.finditer(s)):         print('==',path,i,'\...
+< == images/base.Dockerfile 0  --OURS-- FROM rust:${RUST_VERSION}-trixie --THEIRS-- # rust's slim image, not rust:X-trixie: that one is buildpack-deps, whose # ImageMagick -dev packages brought in OpenEXR (CVE-2026-42216/-42217) and # some two hundred other packages nothing here uses (#554). FROM rust...
+> Bash cd $HOME/bp/2.0 && python3 -I - <<'EOF' import re pat=re.compile(r'<<<<<<< HEAD\n(.*?)=======\n(.*?)>>>>>>> [^\n]*\n', re.S) def resolve(path, fns):     s=open(path).read()     it=iter(fns)     s=pat.sub(lambda m: next(it)(m.group(1), m.group(2)), s)     assert '<<<<<<<' not in s and '>>>>>>>' not i...
+< diff --git a/images/base.Dockerfile b/images/base.Dockerfile index 54e5e7fc..934f8883 100644 --- a/images/base.Dockerfile +++ b/images/base.Dockerfile @@ -20,7 +20,10 @@ FROM eclipse-temurin:${JDK_VERSION}-jdk-noble AS jdk  FROM maven:${MAVEN_VERSION}-eclipse-temurin-25 AS maven  FROM node:${NODE_VE...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+In 2.0's build image the cherry-pick replaced that line's own #369 comment with main's wording. I'll restore 2.0's comment:
+> Bash cd $HOME/bp/2.0 && python3 -I - <<'EOF' p='images/build.Dockerfile' s=open(p).read() new='''# A value unique to each images.yml run (#369): it is part of this layer's # cache key, so every run upgrades the OS packages. Without it the registry # cache hands back the last run's layer, with its package...
+< bc2c16b5 images: declare each image's Debian packages; drop buildpack-deps (OpenEXR) (#554) ok  	github.com/tacplus-dev/tacplus/scripts	0.913s     (cherry picked from commit dfba380b02f0334322b54cc960ff6f2c32dc3a38)   docs/VERSIONING.md              |   8 ++  images/base.Dockerfile          |  20 ++...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+All seven backport branches are ready. Checking on the gates:
+> Bash grep -E '^=== ' /tmp/gates-554.log; tail -3 /tmp/gates-554.log | cut -c1-200
+< === protoc-check === === protoc-check rc=0 === === soundness === === soundness rc=0 === === test === === test rc=0 === === current-generation === ==> Building local tacplus binary ==> Generating go cross-test fixture ==> Compiling go cross-test fixture
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+`soundness` and `test` passed; `current-generation` is running. The manager re-runs the gates before it merges anything, so I'll checkpoint and queue the land now:
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 554 --checkpoint "DONE: fix dfba380b; local gates protoc-check/soundness/test green, rest running; backport commits prepared in ~/bp/2.x worktrees (branches backport/554-release-2.x, not pushed). LEFT: land verdict; push backport branches + PRs (tags...
+< [2026-11-11T16:57:51Z] checkpoint of #554 (a step) pushed to looper/tacplus-554:  13 files changed, 894 insertions(+), 12 deletions(-) landpid=27997
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The land is queued. Meanwhile I'll push the backport branches and open the PRs. Each line's next free patch tag:
+> Bash git fetch -q --tags origin && for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b $(git tag -l "v$b.*" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"; done; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do git -C $HOME/bp/$b push -q origin backport/554-release-$b 2>&1 | grep -v -E '^remote:|^$' ;...
+= task_started
+= task_notification
+= vcs_state_changed
+< 2.0 v2.0.27 2.1 v2.1.20 2.2 v2.2.17 2.3 v2.3.19 2.4 v2.4.19 2.5 v2.5.20 2.6 v2.6.9 pushed
+> Bash declare -A next=([2.0]=v2.0.28 [2.1]=v2.1.21 [2.2]=v2.2.18 [2.3]=v2.3.20 [2.4]=v2.4.20 [2.5]=v2.5.21 [2.6]=v2.6.10); for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do sha=$(git -C $HOME/bp/$b rev-parse --short=8 HEAD); case $b in  2.6) how="cherry-picked cleanly" ;;  2.0) how="hand-ported: this line's base d...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/555 https://github.com/tacplus-dev/tacplus/pull/556 https://github.com/tacplus-dev/tacplus/pull/557 https://github.com/tacplus-dev/tacplus/pull/558 https://github.com/tacplus-dev/tacplus/pull/559 https://github.com/tacplus-dev/tacplus/pull/560 https://gith...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+PRs #555–#561 are open as drafts. Now the trace check (rule 13) and a look at PROPOSALS.md for related entries:
+> Bash /usr/local/bin/looper-trace check 2>&1 | tail -8; grep -n -i -E 'image.*(pull request|PR)|build.*images/' PROPOSALS.md | head
+= task_started
+= task_notification
+< FINDING untested cross-test/server-runtime/client/go/main.go:73: checkUnary makes causal downstream calls (GetPublicContract) but no test asserts that its trace_id arrives on them FINDING dropped-trace cross-test/server-runtime/client/go/main.go:89: checkServerStream's call ListEvents is caused by t...
+> Bash /usr/local/bin/looper-trace check 2>&1 | grep FINDING | cut -d: -f1-2 | sort | uniq -c; gh issue view 311 --repo tacplus-dev/tacplus --json state,title -q '.state+" "+.title'
+= task_started
+= task_notification
+<       1 FINDING dropped-trace cross-test/server-runtime/client/go/main.go:114       1 FINDING dropped-trace cross-test/server-runtime/client/go/main.go:138       1 FINDING dropped-trace cross-test/server-runtime/client/go/main.go:74       1 FINDING dropped-trace cross-test/server-runtime/client/go/m...
+All eight findings are in the server-runtime Go driver, already filed as #311 (open), and my change touches no handler. Polling the gates and the land:
+> Bash sleep 240; grep -E '^=== ' /tmp/gates-554.log | tail -4; tail -3 /tmp/land-554.log
+< <tool_use_error>Blocked: sleep 240 followed by: grep -E '^=== ' /tmp/gates-554.log tail -4 tail -3 /tmp/land-554.log. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain shorter...
+> Bash until grep -q 'OVERALL' /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 20; done; grep -E '^=== ' /tmp/gates-554.log | tail -6; tail -5 /tmp/land-554.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bwaywm3z2. Output is being written to: /builds/looper/tacplus/homes/looper-554/tmp/claude-61000/-builds-looper-tacplus-issues-554/fd448feb-1663-460f-8f67-987ca9d1e371/tasks/bwaywm3z2.output. You will be notified when it completes. To check interim output, use R...
+The wait runs in the background until the gates finish or the land returns.
+> Bash sleep 1; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -2 /tmp/land-554.log
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:54Z] checkpoint of #554 (land queued) pushed to looper/tacplus-554:  14 files changed, 898 insertions(+), 12 deletions(-) [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued...
+= thinking_tokens
+= thinking_tokens
+Ending my reply would end the run, so I'll wait in the foreground:
+> Bash timeout 580 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300; tail -2 /tmp/gates-554.log | cut -c1-200
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+Still running. Meanwhile, the backport PRs' CI:
+> Bash for p in 555 556 557 558 559 560 561; do echo "$p: $(gh pr checks $p --repo tacplus-dev/tacplus 2>&1 | awk -F'\t' '{print $2}' | sort | uniq -c | tr '\n' ' ')"; done
+= task_started
+= task_notification
+< 555:       5 pass  556:       5 pass  557:       4 pass       1 pending  558:       4 pass       1 pending  559:       4 pass       1 pending  560:       5 pass       1 pending  561:       5 pass       1 pending
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300; tail -1 /tmp/gates-554.log | cut -c1-150
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300; for p in 555 556 557 558 559 560 561; do echo -n "$p: $(gh pr checks $p --repo tacplus-dev/tacplus ...
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+All seven backport PRs are green. The local gates are still on `current-generation`; still waiting:
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300; tail -1 /tmp/gates-554.log | cut -c1-150
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300; tail -1 /tmp/gates-554.log | cut -c1-150; date -u
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+= thinking_tokens
+= thinking_tokens
+Two hours in. `current-generation` is slow and the land is still queued, so I'll checkpoint the current state:
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 554 --checkpoint "DONE: fix dfba380b queued to land; local gates protoc-check/soundness/test green (current-generation still running at 18:58Z); draft backport PRs #555(2.0 v2.0.28) #556(2.1 v2.1.21) #557(2.2 v2.2.18) #558(2.3 v2.3.20) #559(2.4 v2.4....
+< [2026-11-11T18:57:56Z] checkpoint of #554 (a step) pushed to looper/tacplus-554:  14 files changed, 898 insertions(+), 12 deletions(-)
+= thinking_tokens
+= thinking_tokens
+The checkpoint reported 14 files changed; my commit has 9. I'll check whether gate output leaked into the checkout:
+> Bash git status --short | head; git diff --stat origin/main...HEAD | tail -1; git log --oneline origin/main..HEAD
+<  11 files changed, 371 insertions(+), 12 deletions(-) dfba380b images: declare each image's Debian packages; drop buildpack-deps (OpenEXR) (#554)
+The tree is clean; the checkpoint's count is measured against something other than main. Waiting on:
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+That background watcher hit its time limit; it was only a watcher, and I'm still waiting in the foreground.
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300; gh issue view 554 --repo tacplus-dev/tacplus --comments | grep -c manager
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300; tail -1 /tmp/gates-554.log | cut -c1-150
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it af...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== ' /tmp/gates-554.log | tail -3; tail -1 /tmp/land-554.log | cut -c1-300; date -u
+= task_started
+= task_notification
+< === current-generation === === current-generation rc=0 === === determinism === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first,...
+= thinking_tokens
+= thinking_tokens
+`current-generation` passed and `determinism` is running. About 50 minutes are left before the stop; I'll keep waiting until around 20:25, then write up.
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== .* rc=' /tmp/gates-554.log | tail -4; tail -1 /tmp/land-554.log | cut -c1-300
+= task_started
+= task_notification
+< === current-generation rc=0 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=0 === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict...
+> Bash timeout 590 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 15; done'; grep -E '^=== .* rc=|OVERALL' /tmp/gates-554.log | tail -6; tail -1 /tmp/land-554.log | cut -c1-300; date -u
+= task_started
+= task_notification
+< === memberport rc=0 === === claims-provenance rc=0 === === w2s-validate rc=1 === === c2d-server rc=0 === === zero-rpc-s2s rc=0 === === jwk-alg rc=0 === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the iss...
+`w2s-validate` failed (rc=1). My change touches only images/ and scripts/, but I'll check what failed:
+> Bash sed -n '/^=== w2s-validate ===/,/^=== w2s-validate rc/p' /tmp/gates-554.log | grep -v -E '^\s*$' | tail -30 | cut -c1-250
+< running 9 tests test s2sm::rest_browser_form_test::rust_rest_browser_routes_carry_the_annotation ... ok test s2sm::rest_browser_form_test::rust_rest_browser_json_route_answers_json ... ok test s2sm::rest_browser_form_test::rust_rest_browser_form_body_refuses_a_repeated_field ... ok test s2sm::rest_b...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n -B3 -A3 'AddrInUse\|127.0.0.1:\|bind(' cross-test/w2s-validate/testdata/*rest_browser_form_test.rs 2>/dev/null | head -20; ls cross-test/w2s-validate/testdata/ | head
+< 69-} 70- 71-async fn start_backend() -> (FixtureDispatcher, RecordingSignin) { 72:    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback port"); 73-    let addr: SocketAddr = listener.local_addr().expect("resolve loopback port"); 74-    drop(listener); 75- RestDispatchSe...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue list --repo tacplus-dev/tacplus --state open --search "AddrInUse OR rest_browser_form OR \"w2s-validate\" flake" --json number,title | head -c 1500; echo; grep -n -i -E 'flak|port race|w2s-validate' ROADMAP.md PROPOSALS.md | head; gh api repos/tacplus-dev/roadmap/contents/ROADMAP.md -H 'Acc...
+< [{"number":531,"title":"cert-stream Rust fixture: reserve_local_addr races between parallel tests (port TOCTOU)"},{"number":359,"title":"Generated Go chassis TLS: InsecureSkipVerify (G402) and VerifyPeerCertificate with session resumption, no VerifyConnection (G123)"},{"number":465,"title":"Gates re...
+= thinking_tokens
+= thinking_tokens
+#531 is the same port race in the cert-stream fixture. I'll file this w2s-validate instance as a `bug` that links to it:
+> Bash gh issue create --repo tacplus-dev/tacplus --label bug --title "w2s-validate Rust fixture: start_backend races between parallel tests (port TOCTOU), the gate flakes with AddrInUse" --body "Found while working #554 (2026-11-11). \`just gates\` on main at b390c0c5 + #554 (which touches only images/ an...
+< https://github.com/tacplus-dev/tacplus/issues/562
+> Bash timeout 400 bash -c 'until grep -q OVERALL /tmp/gates-554.log || ! kill -0 27997 2>/dev/null; do sleep 10; done'; grep -E '^=== .* rc=|OVERALL' /tmp/gates-554.log | tail -5; tail -1 /tmp/land-554.log | cut -c1-300; date -u
+= task_started
+= task_notification
+< === jwk-alg rc=0 === === redact rc=0 === === trace-carry rc=0 === === tacplus-script rc=0 === === OVERALL fail=1 === [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its...
+= thinking_tokens
+= thinking_tokens
+The gates finished: every gate passed except `w2s-validate`. I'll re-run it alone in the background while I write the progress comment:
+> Bash nohup just w2s-validate > /tmp/w2s-554.log 2>&1 & echo pid=$!
+< pid=197821
+> Bash gh issue comment 554 --repo tacplus-dev/tacplus --body "Progress (looper run, 2026-11-11). The land is queued with the manager and has no verdict yet; the next run finishes this issue.  **Cause.** \`images/base.Dockerfile\` started from \`rust:X-trixie\`, which is \`buildpack-deps:trixie\`. That ima...
+= task_started
+= task_notification
+< https://github.com/tacplus-dev/tacplus/issues/554#issuecomment-6806149681 [2026-11-11T20:10:26Z] checkpoint of #554 (a step) pushed to looper/tacplus-554:  14 files changed, 898 insertions(+), 12 deletions(-)
+> Bash timeout 590 bash -c 'while kill -0 197821 2>/dev/null && kill -0 27997 2>/dev/null; do sleep 10; done'; tail -3 /tmp/w2s-554.log | cut -c1-200; kill -0 197821 2>/dev/null && echo w2s-running; tail -2 /tmp/land-554.log | cut -c1-400; date -u
+= task_started
+= task_notification
+< io.grpc.netty.shaded.io.netty.channel.unix.Errors$NativeIoException: writevAddresses(..) failed with error(-104): Connection reset by peer RestDispatchSelfTest: OK (11 checks) ==> w2s-validate check PASSED (java) [2026-11-11T16:57:54Z] checkpoint of #554 (land queued) pushed to looper/tacplus-554:  ...
+> Bash grep -E 'check (PASSED|FAILED)|test result' /tmp/w2s-554.log | cut -c1-200; wait 197821 2>/dev/null; tail -1 /tmp/w2s-554.log
+< test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.06s test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s ==> w2s-validate check PASSED (rust) ==> w2s-validate check PASSED (go) ==> w2s-validate check PASSED (java) ==>...
+The solo `w2s-validate` re-run passed: rust 9/9, go and java passed. Adding that to the issue:
+> Bash gh issue comment 554 --repo tacplus-dev/tacplus --body "\`just w2s-validate\` re-run alone on the same tree: passed. Last lines: \`test result: ok. 9 passed; 0 failed\`, \`==> w2s-validate check PASSED (rust)\`, \`(go)\`, \`(java)\`. So every gate of \`just gates\` is green on this change; the first...
+= task_started
+= task_notification
+< https://github.com/tacplus-dev/tacplus/issues/554#issuecomment-6806183099 [2026-11-11T20:12:02Z] checkpoint of #554 (a step) pushed to looper/tacplus-554:  14 files changed, 898 insertions(+), 12 deletions(-)
+> Bash timeout 590 bash -c 'while kill -0 27997 2>/dev/null; do sleep 10; done'; tail -2 /tmp/land-554.log | cut -c1-500; date -u
+= task_started
+= task_notification
+< [2026-11-11T16:57:54Z] checkpoint of #554 (land queued) pushed to looper/tacplus-554:  14 files changed, 898 insertions(+), 12 deletions(-) [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came...
+> Bash timeout 540 bash -c 'while kill -0 27997 2>/dev/null; do sleep 10; done'; tail -1 /tmp/land-554.log | cut -c1-500; date -u
+= task_started
+= task_notification
+< [2026-11-11T16:57:55Z] queued: the manager of tacplus merges looper/tacplus-554 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. Wed Nov 11 20:30:57 UTC 2026
+= thinking_tokens
+= thinking_tokens
+The fix is written, tested and queued to land on main, but it hadn't merged by the end of my time, so #554 stays open and the next run finishes it.
+
+**Cause.** `images/base.Dockerfile` started from `rust:X-trixie`. That image is `buildpack-deps:trixie`, which installs `imagemagick`, `libmagickcore-dev` and `libmagickwand-dev`. Those pull in `libopenexr-dev` and `libopenexr-3-1-30` 3.1.13-2, plus about two hundred other packages nothing here uses (X11, cairo, mysql, svn, hg, …).
+
+**What changed (branch commit `dfba380b`, queued with the manager):**
+- **Ask 1:** the base image now starts from `rust:X-slim-trixie`, so OpenEXR is dropped, not excepted.
+- **Ask 2:**
+  - Each image installs its apt packages from a declared list, `images/base.packages` and `images/build.packages`.
+  - A new check, `images/packages-check.sh` (shipped as `tacplus-packages-check`), is the last step of each image's build and runs again in `tacplus-smoke`. It fails if an installed package is not declared, part of Debian's base system, or a dependency of those. It also fails if a declared package is missing.
+  - `scripts/images-plan.sh` now rebuilds an image when its list or the check changes.
+  - New tests: `TestImagesPackagesCheck`, `TestImagesInstallTheirDeclaredPackages` and three `TestImagesPlan` cases. All fail without the change.
+  - This run's own container is the published build image. Against its real package database the check names exactly the `buildpack-deps` packages, OpenEXR among them. Once `buildpack-deps`' own lists are added as declared, it passes on all 494 packages.
+- **Ask 3:** no patch was cut from main: main has taken features since v2.6.1, and `v2.6.2` already exists on `release/2.6`. Instead there are seven draft backport PRs, all with green CI. Each names the tag to cut once it merges:
+
+| PR | Branch | Tag |
+|---|---|---|
+| #555 | `release/2.0` | `v2.0.28` |
+| #556 | `release/2.1` | `v2.1.21` |
+| #557 | `release/2.2` | `v2.2.18` |
+| #558 | `release/2.3` | `v2.3.20` |
+| #559 | `release/2.4` | `v2.4.20` |
+| #560 | `release/2.5` | `v2.5.21` |
+| #561 | `release/2.6` | `v2.6.10` |
+
+  2.0 needed more than the others. Its base used to take the C toolchain from `buildpack-deps`, so its list adds `build-essential`, `procps`, `xz-utils` and `zlib1g-dev`.
+
+**Gates.** All 16 gates in `just gates` passed except `w2s-validate`, which failed on the first run. Two Rust tests got the same port (`AddrInUse`) because the fixture picks a free port, releases it, then binds it again later. Run alone on the same tree it passed. I filed the race as #562; it is the same bug as #531.
+
+**Not verified:** no image was actually built, because Docker wasn't reachable in this run. The new images first build in the GitHub Actions images workflow: on main once this lands, and on each release line once its PR merges and the tag is cut. If a gate turns out to need a package `buildpack-deps` used to provide, that build or its smoke test fails there, and the package goes into the image's list.
+
+**Trace (rule 13):** no handler is touched. `looper-trace check` reports only the findings already filed as #311.
+
+**Left for the next run:** read the manager's verdict (and land again if it failed), put main's commit hash in the PR bodies and mark them ready, post the outcome comment, and close #554. Progress comments and a checkpoint are already on the issue and branch.
+= success: The fix is written, tested and queued to land on main, but it hadn't merged by the end of my time, so #554 stays open and the next run finishes it.
+
+**Cause.** `images/base.Dockerfile` started from `rust:X-trixie`. That image is `buildpack-deps:trixie`, which installs `imagemagick`, `libmagickcore-dev` and `libmagickwand-dev`. Those pull in `libopenexr-dev` and `libopenexr-3-1-30` 3.1.13-2, plus about two hundred other packages nothing here uses (X11, cairo, mysql, svn, hg, …).
+
+**What changed (branch commit `dfba380b`, queued with the manager):**
+- **Ask 1:** the base image now starts from `rust:X-slim-trixie`, so OpenEXR is dropped, not excepted.
+- **Ask 2:**
+  - Each image installs its apt packages from a declared list, `images/base.packages` and `images/build.packages`.
+  - A new check, `images/packages-check.sh` (shipped as `tacplus-packages-check`), is the last step of each image's build and runs again in `tacplus-smoke`. It fails if an installed package is not declared, part of Debian's base system, or a dependency of those. It also fails if a declared package is missing.
+  - `scripts/images-plan.sh` now rebuilds an image when its list or the check changes.
+  - New tests: `TestImagesPackagesCheck`, `TestImagesInstallTheirDeclaredPackages` and three `TestImagesPlan` cases. All fail without the change.
+  - This run's own container is the published build image. Against its real package database the check names exactly the `buildpack-deps` packages, OpenEXR among them. Once `buildpack-deps`' own lists are added as declared, it passes on all 494 packages.
+- **Ask 3:** no patch was cut from main: main has taken features since v2.6.1, and `v2.6.2` already exists on `release/2.6`. Instead there are seven draft backport PRs, all with green CI. Each names the tag to cut once it merges:
+
+| PR | Branch | Tag |
+|---|---|---|
+| #555 | `release/2.0` | `v2.0.28` |
+| #556 | `release/2.1` | `v2.1.21` |
+| #557 | `release/2.2` | `v2.2.18` |
+| #558 | `release/2.3` | `v2.3.20` |
+| #559 | `release/2.4` | `v2.4.20` |
+| #560 | `release/2.5` | `v2.5.21` |
+| #561 | `release/2.6` | `v2.6.10` |
+
+  2.0 needed more than the others. Its base used to take the C toolchain from `buildpack-deps`, so its list adds `build-essential`, `procps`, `xz-utils` and `zlib1g-dev`.
+
+**Gates.** All 16 gates in `just gates` passed except `w2s-validate`, which failed on the first run. Two Rust tests got the same port (`AddrInUse`) because the fixture picks a free port, releases it, then binds it again later. Run alone on the same tree it passed. I filed the race as #562; it is the same bug as #531.
+
+**Not verified:** no image was actually built, because Docker wasn't reachable in this run. The new images first build in the GitHub Actions images workflow: on main once this lands, and on each release line once its PR merges and the tag is cut. If a gate turns out to need a package `buildpack-deps` used to provide, that build or its smoke test fails there, and the package goes into the image's list.
+
+**Trace (rule 13):** no handler is touched. `looper-trace check` reports only the findings already filed as #311.
+
+**Left for the next run:** read the manager's verdict (and land again if it failed), put main's commit hash in the PR bodies and mark them ready, post the outcome comment, and close #554. Progress comments and a checkpoint are already on the issue and branch.

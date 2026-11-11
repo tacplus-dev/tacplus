@@ -15,7 +15,7 @@
 {{- end}}
   "license": "PROPRIETARY",
   "dependencies": {
-    "@grpc/grpc-js": "^1.9.0"{{if .HasClientTokenExchanger}},
+    "@grpc/grpc-js": "^1.14.5"{{if .HasClientTokenExchanger}},
     "@bufbuild/protobuf": "{{.BufbuildProtobuf}}",
     "{{.TokenRequestPackage}}": "*"
 {{- end}}

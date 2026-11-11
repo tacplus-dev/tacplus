@@ -746,6 +746,10 @@ for name, ver in re.findall(r'\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"
         bad.append(f"block-buffer {ver} (GHSA-qwgh-2vcv-g2f7)")
     elif name == "rustls" "-pemfile":
         bad.append(f"{name} {ver} (RUSTSEC-2025-0134)")
+    elif name == "backoff":
+        bad.append(f"backoff {ver} (unmaintained, RUSTSEC-2025-0012)")
+    elif name == "instant":
+        bad.append(f"instant {ver} (unmaintained, RUSTSEC-2024-0384)")
 for b in bad:
     print(f"advised crate in the generated lock: {b}", file=sys.stderr)
 sys.exit(1 if bad else 0)

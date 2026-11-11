@@ -788,6 +788,33 @@ require (
 EOF
 }
 
+# compile_go_output_except vets and tests generated Go output like
+# compile_current_output, leaving out one package and every package that imports
+# it. Only the event-bus backpressure fixture uses it on this line: its AgentState
+# state client does not compile here until #454 is backported (#495).
+compile_go_output_except() {
+  local output="$1"
+  local base="$2"
+  local go_module="$3"
+  local excluded="$4"
+  local log_dir pkgs
+  log_dir="$(dirname "$base")"
+
+  write_go_compile_mod "$log_dir/go.mod" "$go_module"
+  (cd "$log_dir" && go mod tidy) >"$log_dir/go-test.log" 2>&1 || {
+    dump_step_log "$log_dir/go-test.log"
+    return 1
+  }
+  pkgs="$(cd "$log_dir" && go list -e -f '{{.ImportPath}} {{join .Deps " "}}' ./... \
+    | awk -v ex="$excluded" '{ for (i = 1; i <= NF; i++) if ($i ~ ("/" ex "$")) next; print $1 }')"
+  [[ -n "$pkgs" ]] || die "no Go packages left to compile under $output"
+  (cd "$log_dir" && go vet $pkgs && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" go test $pkgs) >>"$log_dir/go-test.log" 2>&1 || {
+    dump_step_log "$log_dir/go-test.log"
+    return 1
+  }
+  assert_clean_log "$log_dir/go-test.log"
+}
+
 
 compile_current_output() {
   local output="$1"
@@ -2328,12 +2355,13 @@ fi
 
 # event-bus backpressure fixture: the ONLY place a store-hosted state's topic
 # iterator (the generated AgentState StateClient) and a client-streaming W2S
-# WebSocket listener are compiled and driven by a standing gate. Java only: both
-# self-tests pin Java runtime code, and no other language emits these surfaces
-# with the same defect.
+# WebSocket listener are compiled and driven by a standing gate. Java drives
+# both: its self-tests pin Java runtime code. Go compiles the rest of the output
+# (#495: grpcconfig is a virtual service here, so service_im once emitted a
+# duplicate case); its AgentState state client waits for #454's backport.
 if [[ -d "$EVENTBUS_BACKPRESSURE_PROTO_SRC" ]]; then
   for language in "${languages[@]}"; do
-    [[ "$language" == java ]] || continue
+    [[ "$language" == java || "$language" == go ]] || continue
     dir="$WORK_ROOT/eventbus-backpressure-$language"
     log="$WORK_ROOT/eventbus-backpressure-$language.log"
     rm -rf "$dir"
@@ -2346,9 +2374,13 @@ if [[ -d "$EVENTBUS_BACKPRESSURE_PROTO_SRC" ]]; then
     fi
     output_root="$(resolve_output_root "$dir/tacplus")"
     assert_spiffe_soundness "$dir/tacplus"
-    install_backpressure_selftests "$output_root"
     echo "==> Compiling $language event-bus backpressure fixture"
-    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor"
+    if [[ "$language" == go ]]; then
+      compile_go_output_except "$output_root" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor" "s2sm/state/services/agent_state"
+    else
+      install_backpressure_selftests "$output_root"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor"
+    fi
     echo "    PASS $language event-bus backpressure"
     prune_fixture "$dir" "$output_root"
   done

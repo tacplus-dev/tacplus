@@ -1,0 +1,1 @@
+- 2026-11-11 looper issue Generated Rust httpclient declares an unused backoff 0.4 crate, which locks two unmaintained crates (RUSTSEC-2025-0012, RUSTSEC-2024-0384) (#319)

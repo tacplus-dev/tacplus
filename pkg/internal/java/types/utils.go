@@ -755,11 +755,16 @@ func generateValidators(outputDir string, config *tactype.Config) error {
 	b.WriteString("        }\n")
 	b.WriteString("    }\n")
 
+	writeJavaSignInValidators(&b)
+
 	b.WriteString("}\n")
 
 	outputPath := filepath.Join(srcDir, "Validation.java")
 	if err := os.WriteFile(outputPath, []byte(b.String()), 0644); err != nil {
 		return fmt.Errorf("failed to write Validation.java: %w", err)
+	}
+	if err := writePublicSuffixList(srcDir, javaPackage); err != nil {
+		return err
 	}
 
 	zap.L().Info("Generated Validation.java into shared source tree")

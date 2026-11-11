@@ -15,6 +15,7 @@ import (
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/collection"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
 // tsRequiredZeroCheck returns the TypeScript expression that tests whether a field
@@ -592,6 +593,18 @@ export function %s(m: %s | undefined, depth = 0): void {
 				if err := writeTsEnumDefinedValidation(b, msg, field, fieldName); err != nil {
 					return err
 				}
+
+			case "assert_registrable_domain", "assert_not_address":
+				if err := parser.CheckSignInAssert(msg.Name, field, annotationName, annotationValue); err != nil {
+					return err
+				}
+				writeTsSignInStringAssert(b, field, fieldName, annotationName)
+
+			case "assert_enum_not_in":
+				if err := parser.CheckSignInAssert(msg.Name, field, annotationName, annotationValue); err != nil {
+					return err
+				}
+				writeTsEnumNotInValidation(b, field, fieldName, annotationValue.IntSliceValue)
 
 			case "assert_numeric":
 				if err := writeTsNumericConstraintValidation(b, msg, field, fieldName, annotationValue.NumericConstraint); err != nil {

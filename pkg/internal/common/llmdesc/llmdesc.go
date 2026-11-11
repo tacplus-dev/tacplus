@@ -306,6 +306,18 @@ func ExtractFieldConstraints(field model.Field) (required bool, defaultVal any, 
 				if ann.BoolValue {
 					constraints = append(constraints, "must be a valid hostname or IP address")
 				}
+			case "assert_registrable_domain":
+				if ann.BoolValue {
+					constraints = append(constraints, "must be a registrable domain name, never a public suffix")
+				}
+			case "assert_not_address":
+				if ann.BoolValue {
+					constraints = append(constraints, "must not be address-shaped (no '@')")
+				}
+			case "assert_enum_not_in":
+				if len(ann.IntSliceValue) > 0 {
+					constraints = append(constraints, fmt.Sprintf("must not be any of the enum values %v", ann.IntSliceValue))
+				}
 			case "assert_ipaddr_type":
 				constraints = append(constraints, "must be an IP address of type: "+ann.EnumValue)
 			case "assert_duration":
@@ -412,10 +424,19 @@ func ExtractFieldConstraintInfos(field model.Field) []ConstraintDescriptor {
 			"assert_semver",
 			"assert_host",
 			"assert_enum_defined",
+			"assert_registrable_domain",
+			"assert_not_address",
 		} {
 			if ann, ok := field.Annotations[name]; ok && ann.BoolValue {
 				constraints = append(constraints, boolConstraintInfo(name, "field", true))
 			}
+		}
+		if ann, ok := field.Annotations["assert_enum_not_in"]; ok && len(ann.IntSliceValue) > 0 {
+			refused := make([]int64, len(ann.IntSliceValue))
+			for i, v := range ann.IntSliceValue {
+				refused[i] = int64(v)
+			}
+			constraints = append(constraints, intListConstraintInfo("assert_enum_not_in", "not_in", refused))
 		}
 		for _, name := range []string{"assert_ipaddr_type", "assert_duration", "assert_file_path", "assert_enc_type", "assert_sql"} {
 			if ann, ok := field.Annotations[name]; ok && ann.EnumValue != "" {

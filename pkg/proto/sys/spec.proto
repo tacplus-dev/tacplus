@@ -1947,6 +1947,34 @@ extend google.protobuf.FieldOptions {
   // (32 KB) default the generated validators already enforce.
   uint32 assert_element_max_size = 60090;
 
+  // assert_registrable_domain: the string is a domain name someone can
+  // register, never a public suffix (tacplus#224). It must be ASCII (an IDN in
+  // its xn-- form), at most 253 bytes with no trailing dot, of at least two
+  // labels of 1-63 letters, digits and hyphens, none starting or ending with a
+  // hyphen; matching is case-insensitive. It is refused when the Public Suffix
+  // List (publicsuffix.org, its ICANN and private sections, wildcards and
+  // exceptions; a snapshot embedded in tacplus, the same table in every
+  // language) makes it a public suffix: "com", "co.uk", "github.io" are refused,
+  // "example.co.uk" is not. An empty value is not checked: pair it with
+  // assert_required. Valid on string fields, singular or repeated.
+  // Example: string name = 1 [(spec.assert_registrable_domain) = true];
+  bool assert_registrable_domain = 60098;
+
+  // assert_not_address: the string is an opaque identifier, never
+  // address-shaped: a value containing '@' (an email address, a UPN) is
+  // refused (tacplus#224: a subject an IdP may reassign). An empty value is
+  // not checked. Valid on string fields, singular or repeated.
+  // Example: string subject = 3 [(spec.assert_not_address) = true];
+  bool assert_not_address = 60099;
+
+  // assert_enum_not_in: enum values, by number, the field refuses. For a value
+  // an enum names so that a document using it is refused with a clear error
+  // rather than misread (tacplus#224: a SAML IdP, which tacplus does not
+  // support). Valid on enum fields, singular or repeated; 0 may not be listed
+  // (use assert_enum_defined).
+  // Example: IdpProtocol protocol = 1 [(spec.assert_enum_not_in) = 2];
+  repeated int32 assert_enum_not_in = 60100;
+
   // SQL statement validation: a syntactic sanity check, NOT an injection defense.
   // Checks that a string looks like a single statement of the permitted type: it rejects a
   // few obvious tokens (semicolons, -- and /* comments, backslash escapes) and verifies the

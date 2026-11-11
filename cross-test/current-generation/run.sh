@@ -857,6 +857,16 @@ run_rust_spiffe_self_tests() {
     assert_clean_log "$log_dir/rust-json-key-test.log"
   fi
 
+  # The main fixture's sign-in config self-test (#224), copied in by
+  # install_signin_selftest.
+  if [[ -f "$output/tests/signin_validate_test.rs" ]]; then
+    (cd "$output" && cargo test --test signin_validate_test) >"$log_dir/rust-signin-test.log" 2>&1 || {
+        dump_step_log "$log_dir/rust-signin-test.log"
+        return 1
+      }
+    assert_clean_log "$log_dir/rust-signin-test.log"
+  fi
+
   # The record-egress HOST fixture's record write surface self-test (#163),
   # copied in by install_record_write_guard_selftest.
   if [[ -f "$output/tests/record_write_guard_test.rs" ]]; then
@@ -1459,6 +1469,27 @@ install_json_key_selftest() {
   [[ -f "$output/Cargo.toml" ]] || die "main fixture (rust): generated crate not found under $output"
   mkdir -p "$output/tests"
   cp "$SELFTESTS_SRC/rust/json_key_test.rs" "$output/tests/"
+}
+
+# install_signin_selftest drops the sign-in config self-test (tacplus#224) into
+# the main fixture's generated sys/signin package: `go test ./...` (go) and
+# `cargo test --test signin_validate_test` (rust) run it.
+install_signin_selftest() {
+  local output="$1"
+  local language="$2"
+  local pkg=""
+  case "$language" in
+    go)
+      pkg="$(find "$output" -type f -path '*/types/sys/signin/signin.pb.go' -print -quit)"
+      [[ -n "$pkg" ]] || die "main fixture (go): generated sys/signin package not found under $output"
+      cp "$SELFTESTS_SRC/go/signin_validate_test.go" "$(dirname "$pkg")/"
+      ;;
+    rust)
+      [[ -f "$output/Cargo.toml" ]] || die "main fixture (rust): generated crate not found under $output"
+      mkdir -p "$output/tests"
+      cp "$SELFTESTS_SRC/rust/signin_validate_test.rs" "$output/tests/"
+      ;;
+  esac
 }
 
 # install_backpressure_selftests copies the two Java backpressure self-tests into
@@ -2327,6 +2358,7 @@ for language in "${languages[@]}"; do
   assert_extraction_output "$output_root" "$language"
   install_extraction_selftest "$output_root" "$language"
   install_json_key_selftest "$output_root" "$language"
+  install_signin_selftest "$output_root" "$language"
   echo "==> Compiling $language cross-test fixture"
   compile_current_output "$output_root" "$language" "$dir/tacplus"
   echo "    PASS $language"

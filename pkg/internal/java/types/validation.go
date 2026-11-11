@@ -9,6 +9,7 @@ import (
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/collection"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
@@ -500,6 +501,34 @@ func writeValidateMethods(b *strings.Builder, msg model.Message, outerClassName 
 					return fmt.Errorf("assert_enc_type annotation on field %s.%s must be an enum value", msg.Name, javaFieldName)
 				}
 				writeEncTypeValidation(b, javaFieldName, getterName, annotationValue.EnumValue, field.IsRepeated)
+
+			case "assert_registrable_domain", "assert_not_address":
+				if err := parser.CheckSignInAssert(msg.Name, field, annotationName, annotationValue); err != nil {
+					return err
+				}
+				fn := "validateRegistrableDomain"
+				if annotationName == "assert_not_address" {
+					fn = "validateNotAddress"
+				}
+				fmt.Fprintf(b, "// Validate %s (%s)\n", javaFieldName, annotationName)
+				if field.IsRepeated {
+					fmt.Fprintf(b, "for (int i = 0; i < msg.%sList().size(); i++) {\n", getterName)
+					fmt.Fprintf(b, "String val = msg.%sList().get(i);\n", getterName)
+					b.WriteString("if (!val.isEmpty()) {\n")
+					fmt.Fprintf(b, "Validation.%s(val, \"%s[\" + i + \"]\");\n", fn, javaFieldName)
+					b.WriteString("}\n")
+					b.WriteString("}\n")
+				} else {
+					fmt.Fprintf(b, "if (!msg.%s().isEmpty()) {\n", getterName)
+					fmt.Fprintf(b, "Validation.%s(msg.%s(), \"%s\");\n", fn, getterName, javaFieldName)
+					b.WriteString("}\n")
+				}
+
+			case "assert_enum_not_in":
+				if err := parser.CheckSignInAssert(msg.Name, field, annotationName, annotationValue); err != nil {
+					return err
+				}
+				writeJavaEnumNotIn(b, field, javaFieldName, getterName, annotationValue.IntSliceValue)
 
 			case "assert_enum_defined":
 				if err := writeJavaEnumDefinedValidation(b, msg, field, javaFieldName, getterName); err != nil {

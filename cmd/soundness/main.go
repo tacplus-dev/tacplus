@@ -1934,12 +1934,15 @@ func renderStoreVendorSoundness(root string) int {
 // storeVendorGuardSelf are the gate's own source files, skipped by path because
 // they necessarily contain the forbidden list (main.go), seed forbidden tokens
 // to test the gate (main_test.go), or are cross-test fixtures that deliberately
-// exercise vendor-typed schemas (database.proto).
+// exercise vendor-typed schemas (database.proto). The vendored Public Suffix List
+// (#224) is third-party data, unmodified: it names companies' domains
+// (snowflake.app), not a store tacplus couples to.
 var storeVendorGuardSelf = map[string]bool{
-	filepath.ToSlash(filepath.Join("cmd", "soundness", "main.go")):                         true,
-	filepath.ToSlash(filepath.Join("cmd", "soundness", "main_test.go")):                    true,
-	filepath.ToSlash(filepath.Join("cross-test", "proto", "libraries2", "database.proto")): true,
-	filepath.ToSlash(filepath.Join("cross-test", "proto", "libraries2", "cache.proto")):    true,
+	filepath.ToSlash(filepath.Join("pkg", "internal", "common", "publicsuffix", "public_suffix_list.dat")): true,
+	filepath.ToSlash(filepath.Join("cmd", "soundness", "main.go")):                                         true,
+	filepath.ToSlash(filepath.Join("cmd", "soundness", "main_test.go")):                                    true,
+	filepath.ToSlash(filepath.Join("cross-test", "proto", "libraries2", "database.proto")):                 true,
+	filepath.ToSlash(filepath.Join("cross-test", "proto", "libraries2", "cache.proto")):                    true,
 }
 
 func storeVendorViolations(root string) ([]storeVendorViolation, error) {

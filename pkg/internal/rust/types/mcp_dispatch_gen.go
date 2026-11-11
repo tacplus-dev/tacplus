@@ -407,7 +407,7 @@ func (es *rustEgressSanitizer) mcpRequiredScalarArgs(fullType, servicePkg string
 		}
 		switch mcpScalarJSONType(f.Type) {
 		case "string":
-			v := "mcp-test-" + f.Name
+			v := parser.McpTestString(*f)
 			out = append(out, rustMcpScalarArg{Field: f.Name, JSON: rustQuote(v), Debug: rustQuote(v)})
 		case "integer":
 			out = append(out, rustMcpScalarArg{Field: f.Name, JSON: "1", Debug: "1"})
@@ -423,8 +423,9 @@ func (es *rustEgressSanitizer) mcpRequiredScalarArgs(fullType, servicePkg string
 }
 
 // mcpDefinedEnumValue returns the first declared non-zero value of an enum
-// field's type: the value an assert_enum_defined field must carry to pass
-// validation. The second result is false when the enum declares no such value.
+// field's type not listed in its assert_enum_not_in: the value an
+// assert_enum_defined field must carry to pass validation. The second result
+// is false when the enum declares no such value.
 func (es *rustEgressSanitizer) mcpDefinedEnumValue(f *model.Field, msgPkg string) (model.EnumValue, bool) {
 	pkg := f.TypePackage
 	if pkg == "" {
@@ -435,7 +436,7 @@ func (es *rustEgressSanitizer) mcpDefinedEnumValue(f *model.Field, msgPkg string
 		return model.EnumValue{}, false
 	}
 	for _, v := range en.Values {
-		if v.Number != 0 {
+		if v.Number != 0 && !parser.EnumNotInRefuses(*f, int32(v.Number)) {
 			return v, true
 		}
 	}

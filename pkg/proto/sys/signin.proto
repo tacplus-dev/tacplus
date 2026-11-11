@@ -1,0 +1,224 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+// Package signin is the sign-in configuration (tacplus#224), declared here so
+// it is generated, typed and validated in every language rather than written
+// by hand: the providers a sign-in page offers, a tenant's authorized OIDC IdP
+// and its registered domains, how people join the tenant, the durations of
+// the flow, and the deployment's account model.
+//
+// The accepted design is tacplus-dev/roadmap
+// items/login-flow-design-2026-10-29.md with
+// decisions/login-flow-panel-2026-10-29/SYNTHESIS.md, which takes precedence.
+// tacplus declares the types and their validation only; the token authority
+// (kernel) holds a tenant's Tenant in its tenant config slice and enforces
+// the flow. Generated validation refuses a public suffix registered as a
+// domain, a SAML IdP and an address-shaped subject.
+
+syntax = "proto3";
+
+package signin;
+
+import "sys/spec.proto";
+
+// The design's durations, in seconds.
+option (spec.int_const) = {name: "DEFAULT_MERGE_REDIRECT_SECONDS" value: 2592000};      // 30 days
+option (spec.int_const) = {name: "DEFAULT_REGISTRATION_GRACE_SECONDS" value: 2592000};  // 30 days
+
+// Provider is a choice a sign-in page offers. We never ask for an email or a
+// username: the IdP does that.
+enum Provider {
+  PROVIDER_UNSPECIFIED = 0;
+  PROVIDER_APPLE = 1;
+  PROVIDER_GOOGLE = 2;
+  PROVIDER_MICROSOFT = 3;
+  // CUSTOM: the person types a company domain, looked up in our records: a
+  // tenant that has verified it, and the OIDC IdP that tenant authorized.
+  // There is no discovery and no ad-hoc sign-in.
+  PROVIDER_CUSTOM = 4;
+}
+
+// AccountModel is the deployment-level switch for the personal/company
+// account split (Jody, 2026-10-29: "not everyone would want this").
+enum AccountModel {
+  ACCOUNT_MODEL_UNSPECIFIED = 0;
+  // PERSONAL_AND_COMPANY: the whole design applies: personal links on the
+  // XID, company tenants holding their own mappings, the "link your personal
+  // account" prompt, Scotty's personal side, suspension on domain
+  // registration.
+  ACCOUNT_MODEL_PERSONAL_AND_COMPANY = 1;
+  // SINGLE: one account type, no personal links and no link prompt, e.g. a
+  // single-organization deployment where every account is the
+  // organization's. Its exact shape is still to be designed (SYNTHESIS.md,
+  // last note).
+  ACCOUNT_MODEL_SINGLE = 2;
+}
+
+// Deployment is the deployment-level sign-in configuration.
+message Deployment {
+  AccountModel account_model = 1 [(spec.assert_enum_defined) = true];
+}
+
+// IdpProtocol is how an IdP proves a sign-in. OIDC only: SAML was
+// discontinued on purpose, and a configuration naming it is refused.
+enum IdpProtocol {
+  IDP_PROTOCOL_UNSPECIFIED = 0;
+  IDP_PROTOCOL_OIDC = 1;
+  // SAML is refused by validation (assert_enum_not_in); it is named so that
+  // a configuration asking for it fails with a clear error.
+  IDP_PROTOCOL_SAML = 2;
+}
+
+// OidcIdp is a tenant's authorized OIDC IdP. One (issuer, idp_tenant)
+// belongs to one tenant.
+message OidcIdp {
+  IdpProtocol protocol = 1 [
+    (spec.assert_enum_defined) = true,
+    (spec.assert_enum_not_in) = 2
+  ];
+
+  // issuer is the OIDC issuer identifier, an https URL; the IdP's tokens carry
+  // it as iss.
+  string issuer = 2 [
+    (spec.assert_required) = true,
+    (spec.assert_url) = URL_SCHEME_HTTPS,
+    (spec.assert_max_size) = 2048
+  ];
+
+  // client_id is the client registered at the IdP for this tenant.
+  string client_id = 3 [
+    (spec.assert_required) = true,
+    (spec.assert_max_size) = 512
+  ];
+
+  // multi_tenant marks an IdP that serves many organizations under one
+  // issuer (Microsoft Entra, Google Workspace): idp_tenant then names
+  // exactly which one this tenant authorized.
+  bool multi_tenant = 4;
+
+  // idp_tenant is the exact tenant id (Entra tid) or customer (Workspace) of
+  // a multi-tenant IdP. A proof from any other is refused.
+  string idp_tenant = 5 [
+    (spec.required_if_true) = "multi_tenant",
+    (spec.assert_max_size) = 256
+  ];
+
+  // subject_claim is the claim the tenant maps from: one the IdP never
+  // reassigns to another person ("sub"; Microsoft is keyed by tid and oid).
+  string subject_claim = 6 [
+    (spec.assert_required) = true,
+    (spec.assert_max_size) = 64
+  ];
+
+  // subject_non_reassignable is the tenant's declaration that subject_claim
+  // is never reassigned at its IdP; a configuration without it is refused.
+  bool subject_non_reassignable = 7 [(spec.assert_required) = true];
+}
+
+// Subject is a person at an IdP: the key of a tenant's mapping and of a
+// personal link. Never an email address: an address-shaped subject is
+// refused, since an IdP may reassign one.
+message Subject {
+  string issuer = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_url) = URL_SCHEME_HTTPS,
+    (spec.assert_max_size) = 2048
+  ];
+  // idp_tenant: the IdP tenant (Entra tid) when the issuer is multi-tenant.
+  string idp_tenant = 2 [(spec.assert_max_size) = 256];
+  string subject = 3 [
+    (spec.assert_required) = true,
+    (spec.assert_not_address) = true,
+    (spec.assert_max_size) = 256
+  ];
+}
+
+// DomainState is where a registered domain's DNS verification stands.
+enum DomainState {
+  DOMAIN_STATE_UNSPECIFIED = 0;
+  // PENDING: registered, ownership not yet proven; not enforced.
+  DOMAIN_STATE_PENDING = 1;
+  // VERIFIED: DNS-verified ownership, checked again periodically.
+  DOMAIN_STATE_VERIFIED = 2;
+  // LAPSED: an authoritative answer says the record is gone. The admin is
+  // told; after dns_lapse_grace_seconds it is unregistered. A failed lookup
+  // changes nothing.
+  DOMAIN_STATE_LAPSED = 3;
+}
+
+// Domain is a tenant's registered domain.
+message Domain {
+  // name is the registered domain, never a public suffix.
+  string name = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_registrable_domain) = true,
+    (spec.assert_max_size) = 253
+  ];
+  // include_subdomains covers every name under it too, matched by suffix at
+  // the registered label.
+  bool include_subdomains = 2;
+  DomainState state = 3 [(spec.assert_enum_defined) = true];
+  // verified_at: unix seconds of the last successful verification; 0 never.
+  int64 verified_at = 4 [(spec.assert_ge) = 0];
+  // lapsed_at: unix seconds the domain lapsed; 0 unless LAPSED.
+  int64 lapsed_at = 5 [(spec.assert_ge) = 0];
+}
+
+// JoinMode is how a person who signs in through a tenant's IdP for the first
+// time becomes a member. Guests (Entra B2B and the like) always need admin
+// approval, whatever the mode.
+enum JoinMode {
+  JOIN_MODE_UNSPECIFIED = 0;
+  // AUTOMATIC: the tenant creates the mapping, and so membership.
+  JOIN_MODE_AUTOMATIC = 1;
+  // ADMIN_APPROVAL: an admin approves each new member.
+  JOIN_MODE_ADMIN_APPROVAL = 2;
+}
+
+// Tenant is a tenant's sign-in configuration: it goes with the tenant.
+message Tenant {
+  // providers are the choices the tenant's sign-in page offers.
+  repeated Provider providers = 1 [
+    (spec.assert_required) = true,
+    (spec.assert_max_size) = 4
+  ];
+
+  // idp is the tenant's authorized OIDC IdP; a tenant without a company IdP
+  // (the people tenant) has none.
+  OidcIdp idp = 2;
+
+  // domains are the tenant's registered domains.
+  repeated Domain domains = 3 [(spec.assert_max_size) = 64];
+
+  JoinMode join_mode = 4 [(spec.assert_enum_defined) = true];
+
+  // merge_redirect_seconds: how long a merged XID redirects to the live one.
+  // After it, a mapping to an XID kernel does not know fails closed.
+  int64 merge_redirect_seconds = 5 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.default_const) = "DEFAULT_MERGE_REDIRECT_SECONDS"
+  ];
+
+  // registration_grace_seconds: after the tenant registers a domain, how long
+  // a suspended personal link from it may still sign in to the page that
+  // links a fresh personal account; after it, recovery needs a human review.
+  int64 registration_grace_seconds = 6 [
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE,
+    (spec.default_const) = "DEFAULT_REGISTRATION_GRACE_SECONDS"
+  ];
+
+  // max_proof_age_seconds: the oldest IdP authentication (its auth_time) a
+  // company token is minted from; older, the person signs in at the IdP
+  // again.
+  int64 max_proof_age_seconds = 7 [
+    (spec.assert_required) = true,
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE
+  ];
+
+  // dns_lapse_grace_seconds: how long a LAPSED domain stays registered before
+  // it is unregistered.
+  int64 dns_lapse_grace_seconds = 8 [
+    (spec.assert_required) = true,
+    (spec.assert_duration) = DURATION_TYPE_POSITIVE
+  ];
+}

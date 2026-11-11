@@ -10,6 +10,7 @@ import (
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/collection"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/tmplutil"
 	"github.com/tacplus-dev/tacplus/templates"
@@ -31,6 +32,10 @@ type validatorUsage struct {
 	needsUrl        bool
 	needsFilePath   bool
 	needsEncType    bool
+	// (spec.assert_registrable_domain) / (spec.assert_not_address), tacplus#224:
+	// emitted by writeRustSignInHelpers, not the helpers template.
+	needsRegistrableDomain bool
+	needsNotAddress        bool
 }
 
 // rustValidationTemplateData holds data for the validation template.
@@ -111,6 +116,10 @@ func writeValidation(b *strings.Builder, pf model.ProtoFile) {
 	if err := generateHelperValidators(b, usage); err != nil {
 		fmt.Fprintf(b, "// ERROR generating helper validators: %s\n", err)
 	}
+	if usage.needsRegistrableDomain || usage.needsNotAddress {
+		b.WriteString("\n")
+		writeRustSignInHelpers(b, usage.needsRegistrableDomain, usage.needsNotAddress)
+	}
 }
 
 // trackValidatorUsage analyzes a message to determine which helpers are needed
@@ -153,6 +162,16 @@ func trackValidatorUsage(msg model.Message, usage *validatorUsage) {
 				usage.needsFilePath = true
 			case "assert_enc_type":
 				usage.needsEncType = true
+			case "assert_registrable_domain":
+				// Only a set, string-typed annotation emits a call (the rest are
+				// generation errors), so only then is the helper used.
+				if annotationValue.BoolValue && field.Type == "string" && !field.IsMap {
+					usage.needsRegistrableDomain = true
+				}
+			case "assert_not_address":
+				if annotationValue.BoolValue && field.Type == "string" && !field.IsMap {
+					usage.needsNotAddress = true
+				}
 			}
 		}
 	}
@@ -478,7 +497,7 @@ func writeRustOneofScalarMaxSize(b *strings.Builder, msg model.Message, field mo
 }
 
 // generateFieldValidation generates validation code for a single field's annotations
-func generateFieldValidation(b *strings.Builder, field model.Field, msg model.Message, _enums []model.Enum, atRest bool) error {
+func generateFieldValidation(b *strings.Builder, field model.Field, msg model.Message, enums []model.Enum, atRest bool) error {
 	rustFieldName := escapeRustKeyword(strutil.ToSnakeCase(field.Name))
 
 	for _, annotationName := range model.SortedAnnotationNames(field.Annotations) {
@@ -718,6 +737,22 @@ func generateFieldValidation(b *strings.Builder, field model.Field, msg model.Me
 				generateRustStringHelperValidation(b, rustFieldName, "assert_enc_type", annotationValue.EnumValue, field.IsRepeated, "validate_enc_type", "encryption validation failed")
 			}
 
+		case "assert_registrable_domain", "assert_not_address":
+			if err := parser.CheckSignInAssert(msg.Name, field, annotationName, annotationValue); err != nil {
+				return err
+			}
+			helper, what := "validate_registrable_domain", "must be a registrable domain name"
+			if annotationName == "assert_not_address" {
+				helper, what = "validate_not_address", "must not be address-shaped"
+			}
+			generateRustSignInStringValidation(b, field, rustFieldName, annotationName, helper, what)
+
+		case "assert_enum_not_in":
+			if err := parser.CheckSignInAssert(msg.Name, field, annotationName, annotationValue); err != nil {
+				return err
+			}
+			generateRustEnumNotInValidation(b, field, rustFieldName, annotationValue.IntSliceValue, enums)
+
 		case "assert_enum_defined":
 			if err := generateRustEnumDefinedValidation(b, msg, field, rustFieldName); err != nil {
 				return err
@@ -864,6 +899,73 @@ func generateFieldValidation(b *strings.Builder, field model.Field, msg model.Me
 	}
 
 	return nil
+}
+
+// generateRustSignInStringValidation emits the field check of
+// (spec.assert_registrable_domain) or (spec.assert_not_address) (tacplus#224):
+// an empty value is skipped, any other goes through the helper, whose refusal
+// text is kept in the error.
+func generateRustSignInStringValidation(b *strings.Builder, field model.Field, fieldName, annotationName, helper, what string) {
+	fmt.Fprintf(b, "// Validate %s (%s)\n", fieldName, annotationName)
+	switch {
+	case field.IsRepeated:
+		fmt.Fprintf(b, "for (i, val) in self.%s.iter().enumerate() {\n", fieldName)
+		b.WriteString("if !val.is_empty() {\n")
+		fmt.Fprintf(b, "%s(val).map_err(|e| format!(\"field %s[{}] %s: {}\", i, e))?;\n", helper, fieldName, what)
+		b.WriteString("}\n}\n")
+	case field.IsOptional:
+		fmt.Fprintf(b, "if let Some(ref val) = self.%s {\n", fieldName)
+		b.WriteString("if !val.is_empty() {\n")
+		fmt.Fprintf(b, "%s(val).map_err(|e| format!(\"field %s %s: {}\", e))?;\n", helper, fieldName, what)
+		b.WriteString("}\n}\n")
+	default:
+		fmt.Fprintf(b, "if !self.%s.is_empty() {\n", fieldName)
+		fmt.Fprintf(b, "%s(&self.%s).map_err(|e| format!(\"field %s %s: {}\", e))?;\n", helper, fieldName, fieldName, what)
+		b.WriteString("}\n")
+	}
+}
+
+// generateRustEnumNotInValidation emits the checks of (spec.assert_enum_not_in)
+// (tacplus#224): prost stores an enum as i32, compared with each listed number.
+// The refusal names the value as Go's String() does, by its proto name when the
+// enum is declared in this file, else by its number.
+func generateRustEnumNotInValidation(b *strings.Builder, field model.Field, fieldName string, refused []int32, enums []model.Enum) {
+	for _, n := range refused {
+		name := rustEnumValueName(field.Type, n, enums)
+		fmt.Fprintf(b, "// Validate %s (assert_enum_not_in %d)\n", fieldName, n)
+		switch {
+		case field.IsRepeated:
+			fmt.Fprintf(b, "for (i, val) in self.%s.iter().enumerate() {\n", fieldName)
+			fmt.Fprintf(b, "if *val == %d {\n", n)
+			fmt.Fprintf(b, "return Err(format!(\"field %s[{}] must not be %s\", i));\n", fieldName, name)
+			b.WriteString("}\n}\n")
+		case field.IsOptional:
+			fmt.Fprintf(b, "if self.%s == Some(%d) {\n", fieldName, n)
+			fmt.Fprintf(b, "return Err(\"field %s must not be %s\".to_string());\n", fieldName, name)
+			b.WriteString("}\n")
+		default:
+			fmt.Fprintf(b, "if self.%s == %d {\n", fieldName, n)
+			fmt.Fprintf(b, "return Err(\"field %s must not be %s\".to_string());\n", fieldName, name)
+			b.WriteString("}\n")
+		}
+	}
+}
+
+// rustEnumValueName returns the proto name of value n of the enum typeName
+// among enums, or n itself when the enum is not among them.
+func rustEnumValueName(typeName string, n int32, enums []model.Enum) string {
+	short := typeName[strings.LastIndex(typeName, ".")+1:]
+	for _, e := range enums {
+		if e.Name != typeName && e.Name != short {
+			continue
+		}
+		for _, v := range e.Values {
+			if int32(v.Number) == n {
+				return v.Name
+			}
+		}
+	}
+	return fmt.Sprint(n)
 }
 
 func generateRustEnumDefinedValidation(b *strings.Builder, msg model.Message, field model.Field, fieldName string) error {

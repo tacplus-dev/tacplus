@@ -542,6 +542,17 @@ so Go, Rust and Java cannot drift:
   `pkg/internal/<lang>/types/`. `cross-test/redact` checks all three against one
   hand-built fixture.
 
+### Registrable domains (spec.assert_registrable_domain)
+
+`pkg/internal/common/publicsuffix` is the one source (tacplus#224): the Public
+Suffix List snapshot (`public_suffix_list.dat`, unmodified, MPL-2.0; download
+it over the file to move it), its rules in ASCII (`Rules()`, IDN labels in
+their `xn--` form), the reference check (`CheckRegistrable`) and the vectors
+(`Vectors`, `AddressVectors`) every emitter's executable test runs through its
+toolchain. Every language embeds exactly `Rules()` and refuses with the same
+texts ("not a domain name", "a public suffix"). The generation-time shape
+check of the three sign-in asserts is `parser.CheckSignInAssert`.
+
 ### Data entitlement (spec.redact) — legacy
 
 Deprecated in 2.6, removed in 3.0 (`parser.LegacyRedactWarning` warns at

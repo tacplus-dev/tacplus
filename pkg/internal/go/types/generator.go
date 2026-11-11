@@ -1951,6 +1951,7 @@ func copyStaticPackages(config *tactype.Config, outputDir string) error {
 		"utils.go.tmpl":           UtilsGoTmpl(),
 		"validation.go.tmpl":      ValidationGoTmpl(),
 		"validation_test.go.tmpl": ValidationTestGoTmpl(),
+		"publicsuffix.go.tmpl":    PublicSuffixGo(),
 	}
 
 	for filename, content := range utilsTemplates {

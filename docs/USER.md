@@ -24,7 +24,8 @@ Reference for developers using tacplus to build services — writing proto files
 16. [Generated Libraries](#generated-libraries)
 17. [Service Lifecycle](#service-lifecycle)
 18. [Distributed Tracing](#distributed-tracing)
-19. [Well-Known Names (Conventions)](#well-known-names-conventions)
+19. [Sign-in Configuration](#sign-in-configuration)
+20. [Well-Known Names (Conventions)](#well-known-names-conventions)
 
 ---
 
@@ -422,6 +423,9 @@ parsing.
 | `assert_sql` | Valid SQL statement of permitted type (SELECT, etc.), rejects injection patterns |
 | `assert_invariant` | Formal invariant (assumed by every `#[kani::proof]` harness of the message via `kani::assume()` in Rust, a JBMC harness via `CProver.assume()` in Java) |
 | `assert_min_size` | Minimum byte length (string/bytes) or element count (repeated/map) |
+| `assert_registrable_domain` | A domain name someone can register, never a public suffix (`com`, `co.uk`, `github.io`): ASCII (an IDN in its `xn--` form), at least two labels, matched case-insensitively against the Public Suffix List snapshot tacplus embeds (one table, every language) |
+| `assert_not_address` | Not address-shaped: a value containing `@` (an email address, a UPN) is refused |
+| `assert_enum_not_in` | Enum values, by number, the field refuses (never 0: use `assert_enum_defined`), e.g. `[(spec.assert_enum_not_in) = 2]` |
 
 ### gRPC Client Dependency Annotations
 
@@ -2422,6 +2426,28 @@ on its policy service, which must be a `(spec.service_s2s)` service with exactly
 rpc; at most one service in a run may carry the annotation. A service with a
 `requires_device` rpc therefore names that service's contract in `depends`, so the broker
 is in its run; without it, generation fails and says so.
+
+## Sign-in Configuration
+
+`sys/signin.proto` (package `signin`, tacplus#224) declares the sign-in
+configuration so it is generated, typed and validated in every language
+rather than written by hand. tacplus declares the types and their validation;
+the token authority (`kernel`) holds a tenant's `signin.Tenant` in its own
+tenant config slice (a `(spec.config_slice)` message with a `signin.Tenant`
+field) and enforces the flow. The accepted design is tacplus-dev/roadmap
+`items/login-flow-design-2026-10-29.md` with
+`decisions/login-flow-panel-2026-10-29/SYNTHESIS.md`, which takes precedence.
+
+| Message | What it holds |
+|---------|---------------|
+| `Deployment` | `account_model`: the deployment-level switch. `ACCOUNT_MODEL_PERSONAL_AND_COMPANY` applies the whole design; `ACCOUNT_MODEL_SINGLE` is one account type, no personal links and no link prompt (a single-organization deployment; its exact shape is still to be designed). Required. |
+| `Tenant` | `providers` offered (`PROVIDER_APPLE`, `PROVIDER_GOOGLE`, `PROVIDER_MICROSOFT`, `PROVIDER_CUSTOM`; at least one); `idp`, the authorized `OidcIdp`; `domains`, the registered `Domain`s; `join_mode` (`JOIN_MODE_AUTOMATIC` or `JOIN_MODE_ADMIN_APPROVAL`; guests always need approval); the durations, in seconds: `merge_redirect_seconds` and `registration_grace_seconds` (defaults `DEFAULT_MERGE_REDIRECT_SECONDS` and `DEFAULT_REGISTRATION_GRACE_SECONDS`, 30 days, filled by the generated defaults), `max_proof_age_seconds` and `dns_lapse_grace_seconds` (required: the design gives them no default). |
+| `OidcIdp` | `protocol` (OIDC; `IDP_PROTOCOL_SAML` is refused), `issuer` (an https URL), `client_id`, `multi_tenant` and `idp_tenant` (the exact Entra tid or Workspace customer, required when `multi_tenant`), `subject_claim` and `subject_non_reassignable`, the tenant's declaration that the claim is never reassigned (refused when false). |
+| `Domain` | `name` (`assert_registrable_domain`: a public suffix is refused), `include_subdomains` (covered by suffix at the registered label), `state` (`DOMAIN_STATE_PENDING`, `VERIFIED`, `LAPSED`), `verified_at`, `lapsed_at` (unix seconds). |
+| `Subject` | A person at an IdP, the key of a tenant mapping or a personal link: `issuer`, `idp_tenant`, `subject` (`assert_not_address`: an address-shaped subject is refused). |
+
+No client secret is declared: a confidential client's secret is the token
+authority's to keep, never configuration.
 
 ## Well-Known Names (Conventions)
 

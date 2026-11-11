@@ -2440,6 +2440,17 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 	if proto.HasExtension(opts, spec.E_AssertHost) && proto.GetExtension(opts, spec.E_AssertHost).(bool) {
 		annotations["assert_host"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 	}
+	if proto.HasExtension(opts, spec.E_AssertRegistrableDomain) && proto.GetExtension(opts, spec.E_AssertRegistrableDomain).(bool) {
+		annotations["assert_registrable_domain"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	}
+	if proto.HasExtension(opts, spec.E_AssertNotAddress) && proto.GetExtension(opts, spec.E_AssertNotAddress).(bool) {
+		annotations["assert_not_address"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	}
+	if proto.HasExtension(opts, spec.E_AssertEnumNotIn) {
+		if vals := proto.GetExtension(opts, spec.E_AssertEnumNotIn).([]int32); len(vals) > 0 {
+			annotations["assert_enum_not_in"] = model.AnnotationValue{Type: model.AnnotationTypeIntSlice, IntSliceValue: append([]int32(nil), vals...)}
+		}
+	}
 	// Principal annotations: where the caller's principal lives on the type.
 	if proto.HasExtension(opts, spec.E_Principal) && proto.GetExtension(opts, spec.E_Principal).(bool) {
 		annotations["principal"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}

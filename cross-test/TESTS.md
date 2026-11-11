@@ -70,6 +70,13 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   jtis, each requested with the caller's own kernel token, the given aud, and
   an exp no more than 600 s out. Local/manual (`just external-token`); not yet
   in CI.
+- `uni-config` (`cross-test/uni-config/run.sh`): the uni-config gate (#262) in
+  Go, Java and Rust. The generated config loader reads the file at the fixed
+  `BOOTSTRAP_CONFIG_PATH` (a temp path in the test) unless `-c`/`--config`
+  names another, fails naming that path when there is none, and (Go, Rust) a
+  `BOOTSTRAP_CONFIG` env var moves nothing; the identity manager takes the
+  projected token file from `k8s_token_file`, not `KERNEL_K8S_TOKEN_FILE`; the
+  generated `SecretsFromFile` reads a service's Secrets file. In `just gates`.
 - `w2s-validate` (`cross-test/w2s-validate/run.sh`): W2S request (ingress)
   validation gate for Rust — generates a service whose C2S backend has an
   `assert_*` request constraint, hosts the REAL generated

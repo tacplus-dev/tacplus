@@ -9,15 +9,16 @@ use {{.CrateBasePathUnderscore}}_types::sys::grpcconfig::config_from_bytes;
 use {{.CrateBasePathUnderscore}}_types::sys::grpcconfig::config_from_env_var;
 use {{.CrateBasePathUnderscore}}_types::sys::grpcconfig::config_defaults;
 use {{.CrateBasePathUnderscore}}_types::sys::grpcconfig::config_merge;
+use {{.CrateBasePathUnderscore}}_types::sys::grpcconfig::BOOTSTRAP_CONFIG_PATH;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-
-/// Environment variable name for the config file path.
-const BOOTSTRAP_CONFIG_ENV: &str = "BOOTSTRAP_CONFIG";
+use std::io::ErrorKind;
 
 /// Loads a Config from:
-/// 1. A config file specified via -c/--config arg or BOOTSTRAP_CONFIG env var
+/// 1. The config file named by the -c/--config argument, else the platform's
+///    fixed BOOTSTRAP_CONFIG_PATH when that file exists (no environment
+///    variable moves it: tacplus#262, the uni-config)
 /// 2. Individual PROTO_SYS_GRPCCONFIG_CONFIG_* env vars
 /// 3. Merges (file takes precedence), applies defaults, validates
 pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
@@ -71,25 +72,40 @@ pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
 }
 
 fn load_config_inner() -> Result<Config, Box<dyn std::error::Error>> {
-    // Scan args for -c <path> or --config <path>
     let args: Vec<String> = env::args().collect();
-    let mut path = String::new();
+    load_config_from(&args, BOOTSTRAP_CONFIG_PATH)
+}
+
+/// The body of load_config, with its inputs explicit so a test can drive it.
+/// `args` is the process argument vector (args[0] is the program name);
+/// `default_path` is the file read when no -c/--config argument is given.
+///
+/// A -c/--config path that cannot be read is an error. Without one, a missing
+/// `default_path` means no file config, and the PROTO_SYS_GRPCCONFIG_CONFIG_*
+/// env vars (declared by the config types) must supply it instead.
+pub fn load_config_from(args: &[String], default_path: &str) -> Result<Config, Box<dyn std::error::Error>> {
+    // Scan args for -c <path> or --config <path>
+    let mut flag_path = None;
     for i in 1..args.len().saturating_sub(1) {
         if args[i] == "-c" || args[i] == "--config" {
-            path = args[i + 1].clone();
+            flag_path = Some(args[i + 1].clone());
             break;
         }
     }
 
-    // Fall back to env var
-    if path.is_empty() {
-        path = env::var(BOOTSTRAP_CONFIG_ENV).unwrap_or_default();
-    }
-
+    let data = match flag_path {
+        Some(ref path) => Some((
+            path.clone(),
+            fs::read(path).map_err(|e| format!("reading config file {}: {}", path, e))?,
+        )),
+        None => match fs::read(default_path) {
+            Ok(data) => Some((default_path.to_string(), data)),
+            Err(e) if e.kind() == ErrorKind::NotFound => None,
+            Err(e) => return Err(format!("reading config file {}: {}", default_path, e).into()),
+        },
+    };
     let mut file_cfg = None;
-    if !path.is_empty() {
-        let data = fs::read(&path)
-            .map_err(|e| format!("reading config file {}: {}", path, e))?;
+    if let Some((path, data)) = data {
         file_cfg = Some(config_from_bytes(&data)
             .map_err(|e| format!("parsing config file {}: {}", path, e))?);
     }
@@ -112,8 +128,8 @@ fn load_config_inner() -> Result<Config, Box<dyn std::error::Error>> {
         (None, Some(env_cfg)) => env_cfg,
         (None, None) => {
             return Err(format!(
-                "no config provided: use -c/--config flag or set {} env var",
-                BOOTSTRAP_CONFIG_ENV
+                "no config provided: {} does not exist and no -c/--config flag names another file",
+                default_path
             ).into());
         }
     };

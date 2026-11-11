@@ -67,17 +67,11 @@ public class IdentityManager implements AutoCloseable {
     private static final boolean HAS_TOKEN_EXCHANGER = {{if .HasTokenExchanger}}true{{else}}false{{end}};
     private static final String DEFAULT_AUDIENCE = "{{.DefaultAudience}}";
 
-    // Env var naming the projected Kubernetes token file for the token authority.
-    // Mirrors the operator's KMAKER_K8S_TOKEN_FILE precedent. When set and the file
-    // is readable, the service authenticates to the token authority with the projected token.
-    // This is the in-cluster bootstrap path; the static cred_pair (private_key)
-    // bootstrap arm has been removed.
-    private static final String K8S_TOKEN_FILE_ENV = "KERNEL_K8S_TOKEN_FILE";
-
     // Env var naming a bootstrap token file a parent workload wrote for this process
     // (WorkloadMint). Read once at startup and exchanged for a refresh + access pair;
-    // renewal then runs from the retained refresh token. Takes precedence over
-    // KERNEL_K8S_TOKEN_FILE.
+    // renewal then runs from the retained refresh token. Takes precedence over the
+    // config's k8s_token_file. The projected Kubernetes token file itself comes
+    // from config, never from the environment (tacplus#262).
     private static final String BOOTSTRAP_TOKEN_FILE_ENV = "KERNEL_BOOTSTRAP_TOKEN_FILE";
 
     // Mid-run reconnect parameters: retry indefinitely but crash if token authority is
@@ -191,8 +185,9 @@ public class IdentityManager implements AutoCloseable {
         // file is the in-cluster bootstrap path. Otherwise cloud-native identity
         // is attempted. The static cred_pair (private_key) bootstrap arm has been
         // removed; config.getPrivateKey() is no longer read.
-        String bootstrapTokenFile = System.getenv(BOOTSTRAP_TOKEN_FILE_ENV);
-        String k8sTokenFile = System.getenv(K8S_TOKEN_FILE_ENV);
+        BootstrapSources sources = bootstrapSources(config);
+        String bootstrapTokenFile = sources.bootstrapTokenFile();
+        String k8sTokenFile = sources.k8sTokenFile();
 
         if (bootstrapTokenFile != null && !bootstrapTokenFile.isEmpty()) {
             if (!HAS_TOKEN_EXCHANGER) {
@@ -234,6 +229,18 @@ public class IdentityManager implements AutoCloseable {
 
         im.startHealthMonitor();
         return im;
+    }
+
+    /**
+     * The bootstrap credential sources: the bootstrap token file a parent
+     * workload wrote for this process (KERNEL_BOOTSTRAP_TOKEN_FILE, null when
+     * unset) and the projected Kubernetes token file from the config's
+     * k8s_token_file (empty when not configured).
+     */
+    record BootstrapSources(String bootstrapTokenFile, String k8sTokenFile) {}
+
+    static BootstrapSources bootstrapSources(Config config) {
+        return new BootstrapSources(System.getenv(BOOTSTRAP_TOKEN_FILE_ENV), config.getK8STokenFile());
     }
 
     private static List<String> authorityTargets(Config config) {

@@ -4,6 +4,28 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **The environment reads left in generated code after the uni-config** (2026-11-08, #262): #262 moved the bootstrap
+  config path, the projected token file and the Secrets reader to config, and
+  `pkg/internal/common/uni_config_env_test.go` now lists every other environment read with its reason. Of those, these
+  are configuration the uni-config does not yet show (the addendum of
+  `tacplus-dev/roadmap:decisions/deterministic-deployments-2026-11-02.md` forbids downward-API env): the logger's level and
+  format overrides (`LogLevelEnvVar`/`LogFormatEnvVar`; `grpcconfig.logger` already carries both), the Go
+  `SERVICE_ADVERTISE_HOST`, the Java `POD_NAME` (a node-local consumer group) and the Rust `HOSTNAME` (an advertised
+  host). Each needs a `grpcconfig.Config` field or a derivation from config, and its test. The cloud identity
+  variables (`AWS_*`, set by the provider's identity webhook) and `KERNEL_BOOTSTRAP_TOKEN_FILE` (a parent workload's
+  handoff to its child) are not deployment config.
+- **The kernel reads its projected-token audience from its config** (2026-11-08, #262): `KERNEL_K8S_TOKEN_AUDIENCE` is read
+  by the kernel's own code (`ClusterServer.kubernetesTokenAudience`), not by any generated chassis, so #262 had nothing
+  to change for it here; the kernel moves it to `Kernel.Config` (tacplus-dev/kernel), as its own decision record of
+  2026-09-21 already proposes, and the operator renders it from the uni-config. The kernel's hand-written
+  `Bootstrap.resolveConfig` also still reads `BOOTSTRAP_CONFIG`; it moves to `BOOTSTRAP_CONFIG_PATH` with it.
+- **The operator delivers the two files at the fixed paths** (2026-11-08, #262, tacplus-dev/operator#17): a service built on
+  tacplus 2.7 reads `/etc/tacplus/bootstrap.yaml` (it ignores `BOOTSTRAP_CONFIG`, which the operator points at
+  `/data/bootstrap.yaml` or `/bootstrap/bootstrap.yaml` today), takes the projected token from
+  `k8s_token_file` in that file (not `KERNEL_K8S_TOKEN_FILE`), and reads its `Secrets` from
+  `/etc/tacplus/secrets.yaml`, one serialized message (not `PROTO_SERVICES_*_SECRETS_*` env vars). Each service
+  replaces its `SecretsFromEnvVar` call with `SecretsFromFile(SecretsPath)` when it moves to 2.7, in step with the
+  operator.
 - **Images on Google Artifact Registry through WIF, ghcr.io deprecated from 2.6** (2026-11-07, #223; parked by
   the hub 2026-11-07): publish `base`, `build` and the services' release images to the public
   `us-docker.pkg.dev/jody1-328023/tacplus`, pushed by the GitLab publish job with a short-lived GCP token from its

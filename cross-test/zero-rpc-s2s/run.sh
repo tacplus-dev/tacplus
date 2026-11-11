@@ -93,5 +93,5 @@ if [[ -s "$MODEL_DIR/build.log" ]]; then
 fi
 
 echo "==> Running the client-only host against the fake kernel and llmproxy"
-"$CROSS_TEST_CARGO_TARGET/debug/zero-rpc-s2s"
+"$CROSS_TEST_CARGO_TARGET/debug/zero-rpc-s2s" -c "$MODEL_DIR/config.json"
 prune_cargo_workspace "$CRATE_DIR" "$MODEL_DIR/model"

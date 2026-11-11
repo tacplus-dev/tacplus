@@ -17,12 +17,16 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Loads a Config from CLI flags and/or environment variables.
+ * Loads a Config from the bootstrap config file and/or the config type's own
+ * environment variables.
  *
  * <p>Priority:
  * <ol>
- *   <li>Config file specified via -c/--config arg or BOOTSTRAP_CONFIG env var</li>
- *   <li>Individual PROTO_SYS_GRPCCONFIG_CONFIG_* env vars</li>
+ *   <li>Config file named by the -c/--config arg, else the platform's fixed
+ *       {@link Helpers#BOOTSTRAP_CONFIG_PATH} when it exists. No environment
+ *       variable moves it (tacplus#262, the uni-config).</li>
+ *   <li>Individual PROTO_SYS_GRPCCONFIG_CONFIG_* env vars (declared by the
+ *       config type)</li>
  *   <li>Merges (file takes precedence), validates</li>
  * </ol>
  */
@@ -31,7 +35,8 @@ public final class GrpcConfigLoader {
     private GrpcConfigLoader() {}
 
     /**
-     * Loads and validates a Config.
+     * Loads and validates a Config, reading the bootstrap config from
+     * {@link Helpers#BOOTSTRAP_CONFIG_PATH} unless -c/--config names another file.
      *
      * @param args command-line arguments (typically from main)
      * @return validated Config
@@ -39,6 +44,16 @@ public final class GrpcConfigLoader {
      * @throws IllegalArgumentException if no config is provided or validation fails
      */
     public static Config loadConfig(String[] args) throws IOException {
+        return loadConfig(args, Helpers.BOOTSTRAP_CONFIG_PATH);
+    }
+
+    /**
+     * Loads and validates a Config with {@code defaultPath} standing in for the
+     * fixed bootstrap path, so a test can point it at a temporary file. A -c path
+     * that cannot be read is an error; a missing default path only means there
+     * is no file config.
+     */
+    static Config loadConfig(String[] args, String defaultPath) throws IOException {
         // Install credential redaction and transport logger pins BEFORE any
         // gRPC channel is created. This is the earliest shared entry point for
         // all Java services (ServiceManager-based AND hand-written like kernel),
@@ -56,12 +71,9 @@ public final class GrpcConfigLoader {
             }
         }
 
-        // Fall back to env var
-        if (path.isEmpty()) {
-            String env = System.getenv(Helpers.BOOTSTRAP_CONFIG_ENV);
-            if (env != null) {
-                path = env;
-            }
+        // Fall back to the fixed bootstrap path, read only when it exists.
+        if (path.isEmpty() && Files.exists(Path.of(defaultPath))) {
+            path = defaultPath;
         }
 
         Config fileCfg = null;
@@ -96,8 +108,8 @@ public final class GrpcConfigLoader {
             cfg = envCfg;
         } else {
             throw new IllegalArgumentException(
-                "no config provided: use -c/--config flag or set " +
-                Helpers.BOOTSTRAP_CONFIG_ENV + " env var"
+                "no config provided: " + defaultPath +
+                " does not exist and no -c/--config flag was given"
             );
         }
 

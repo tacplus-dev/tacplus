@@ -46,6 +46,12 @@ const REPLY: &str = "pong from llmproxy";
 
 type Paths = Arc<Mutex<Vec<String>>>;
 
+/// The path after -c/--config in this process's arguments.
+fn config_arg() -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    args.windows(2).find(|w| w[0] == "-c" || w[0] == "--config").map(|w| w[1].clone())
+}
+
 fn fail(msg: String) -> ! {
     println!("zero-rpc-s2s FAILED: {msg}");
     std::process::exit(1);
@@ -268,17 +274,19 @@ async fn host() {
     std::fs::create_dir_all(&dir).unwrap();
     let k8s_token = dir.join("k8s-token");
     std::fs::write(&k8s_token, "projected-token").unwrap();
-    let cfg_path = dir.join("config.json");
+    // The generated config loader reads the -c/--config argument (run.sh
+    // passes one) and no environment variable (tacplus#262), so the config is
+    // written to the path the loader will read.
+    let cfg_path = config_arg().unwrap_or_else(|| fail("run with -c <config path>".into()));
     let cfg = serde_json::json!({
         "endpoints": [{"host": kernel_addr.ip().to_string(), "port": kernel_addr.port()}],
         "listen_address": {"host": serve_addr.ip().to_string(), "port": serve_addr.port()},
         "spiffe_trust_domain": TRUST_DOMAIN,
         "trusted_cas": [{"base64": base64::engine::general_purpose::STANDARD.encode(&ca.pem)}],
         "health_probe_port": 0,
+        "k8s_token_file": k8s_token.to_string_lossy(),
     });
     std::fs::write(&cfg_path, cfg.to_string()).unwrap();
-    std::env::set_var("BOOTSTRAP_CONFIG", &cfg_path);
-    std::env::set_var("KERNEL_K8S_TOKEN_FILE", &k8s_token);
 
     // new() must return without a serving certificate: the kernel serves no
     // TlsCertService, so waiting for one fails or hangs here.

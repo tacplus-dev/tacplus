@@ -2111,6 +2111,27 @@ peers, each over the SPIFFE verifier narrowed to that peer. A zero-rpc build wit
 no s2s client edge keeps the health-only server. Covered by
 `cross-test/zero-rpc-s2s`.
 
+### Where a service's configuration comes from
+
+A deployment's uni-config is its whole configuration (tacplus-dev/operator#17),
+so the generated code reads configuration only from what the config types
+declare, delivered from it by file or by an env var the deployment rendered
+from it. Nothing else in the environment moves it.
+
+| What | Where the generated code reads it |
+|------|----------------------------------|
+| The bootstrap `grpcconfig.Config` | The file a `-c`/`--config` argument names, else the platform's fixed path `BOOTSTRAP_CONFIG_PATH`, `/etc/tacplus/bootstrap.yaml`, when it exists; merged with any `PROTO_SYS_GRPCCONFIG_CONFIG_*` env vars, the file winning. There is no `BOOTSTRAP_CONFIG` env var any more. |
+| The projected Kubernetes service-account token the identity manager exchanges | `grpcconfig.Config.k8s_token_file`. It replaces `KERNEL_K8S_TOKEN_FILE`; empty means cloud-native identity is tried instead. |
+| A service's `Secrets` message | The platform's fixed path `SECRETS_PATH`, `/etc/tacplus/secrets.yaml`, one serialized message, read with the generated file reader: `SecretsFromFile(grpcconfig.SecretsPath)` in Go, `secrets_from_file(SECRETS_PATH)` in Rust, `secretsFromFile(SECRETS_PATH)` in Java (each from its package's `Helpers`, the path from grpcconfig's). Every message has this reader beside `FromBytes`, in any format `FromBytes` accepts. Replace a `SecretsFromEnvVar(os.Environ())` call with it. |
+
+`KERNEL_BOOTSTRAP_TOKEN_FILE` stays an env var: a parent workload writes it for
+the child process it starts, so it is not deployment config. The audience of
+the projected token is the token authority's to check, in its own config; the
+generated chassis never reads it. `pkg/internal/common/uni_config_env_test.go`
+lists each environment read left in generated code and why it is not deployment
+config, and fails on a new one. `cross-test/uni-config` covers the three rows
+above in Go, Java and Rust.
+
 ---
 
 ## Distributed Tracing

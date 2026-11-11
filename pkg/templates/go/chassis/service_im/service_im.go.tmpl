@@ -57,19 +57,21 @@ const tokenRefreshBuffer = 60 * time.Second
 // defaultAudience is the default audience when no target-specific audience is available.
 const defaultAudience = "{{.ServiceAudience}}"
 
-// k8sTokenFileEnv names the env var pointing at the projected Kubernetes
-// service-account token file (audience configured via defaultAudience/AudienceMappings,
-// typically the token-exchange authority e.g. "kernel"). Mirrors the operator's
-// KMAKER_K8S_TOKEN_FILE precedent. When set and the file is readable, the service
-// authenticates to that authority with the projected token. This is the in-cluster
-// bootstrap path; the static cred_pair (private_key) bootstrap arm has been removed.
-const k8sTokenFileEnv = "KERNEL_K8S_TOKEN_FILE"
-
 // bootstrapTokenFileEnv names the env var pointing at a bootstrap token file that
 // a parent workload wrote for this process (WorkloadMint). The token is exchanged
 // once for a refresh + access pair; renewal then runs from the retained refresh
-// token, so the file is read once and removed.
+// token, so the file is read once and removed. It is a handoff from the parent
+// process, not deployment config, so it is the one bootstrap input read from the
+// environment.
 const bootstrapTokenFileEnv = "KERNEL_BOOTSTRAP_TOKEN_FILE"
+
+// bootstrapSources returns the bootstrap token file a parent workload handed
+// this process, and the projected Kubernetes service-account token file from
+// the config's k8s_token_file (the in-cluster bootstrap path). The token file
+// is config, never the environment (tacplus#262): the uni-config shows it.
+func bootstrapSources(cfg *grpcconfig_pb.Config) (bootstrapTokenFile, k8sTokenFile string) {
+	return os.Getenv(bootstrapTokenFileEnv), cfg.GetK8STokenFile()
+}
 
 // exchangeTimeout is the maximum time for a single token exchange RPC.
 const exchangeTimeout = 10 * time.Second
@@ -293,8 +295,7 @@ func New(ctx context.Context, cfg *grpcconfig_pb.Config) (*IdentityManager, erro
 	// file is the in-cluster bootstrap path. Otherwise cloud-native identity is
 	// attempted. The static cred_pair (private_key) bootstrap arm has been
 	// removed; cfg.PrivateKey is no longer read.
-	bootstrapTokenFile := os.Getenv(bootstrapTokenFileEnv)
-	k8sTokenFile := os.Getenv(k8sTokenFileEnv)
+	bootstrapTokenFile, k8sTokenFile := bootstrapSources(cfg)
 
 	// Detect auth method and perform initial token exchange.
 	if bootstrapTokenFile != "" {

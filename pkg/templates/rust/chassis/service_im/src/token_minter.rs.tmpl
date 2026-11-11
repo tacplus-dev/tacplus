@@ -40,7 +40,7 @@ struct TokenEntry {
 /// KubernetesTokenMinter performs token exchange using a projected Kubernetes
 /// service-account token instead of a CredPair-signed throwaway JWT.
 ///
-/// It is gated on a configured token-file path (env `KERNEL_K8S_TOKEN_FILE`).
+/// It is gated on a configured token-file path (config `k8s_token_file`).
 /// The projected token already carries the configured authority's audience
 /// (e.g. `kernel`), so the
 /// minter presents the file contents as the `kubernetes_token` credential on

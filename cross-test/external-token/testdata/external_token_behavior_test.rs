@@ -214,7 +214,6 @@ impl Minter for BootstrapKernel {
 #[tokio::test]
 async fn rust_bootstrap_token_is_exchanged_once_and_renewed_from_the_refresh_token() {
     let _env = IDENTITY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    std::env::remove_var("KERNEL_K8S_TOKEN_FILE");
     let dir = std::env::temp_dir().join(format!("bootstrap-token-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let bootstrap_file = dir.join("bootstrap");
@@ -265,7 +264,7 @@ async fn rust_token_for_external_mints_a_fresh_es256_token_on_every_call() {
     std::fs::create_dir_all(&dir).unwrap();
     let k8s_token_file = dir.join("token");
     std::fs::write(&k8s_token_file, "k8s.projected.token").unwrap();
-    std::env::set_var("KERNEL_K8S_TOKEN_FILE", &k8s_token_file);
+    let config = Config { k8s_token_file: k8s_token_file.to_string_lossy().into_owned(), ..Default::default() };
 
     let kernel = Arc::new(MockKernel {
         key: EcdsaKeyPair::generate(&ECDSA_P256_SHA256_FIXED_SIGNING).unwrap(),
@@ -281,7 +280,7 @@ async fn rust_token_for_external_mints_a_fresh_es256_token_on_every_call() {
     );
     let channel = connect_plain_channel(addr).await;
 
-    let identity = IdentityManager::new(channel, &Config::default())
+    let identity = IdentityManager::new(channel, &config)
         .await
         .expect("identity manager bootstraps against the mock kernel");
 

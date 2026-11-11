@@ -224,6 +224,16 @@ return Ok(msg);
 {{.TypeName}}::decode(data)
 .map_err(|e| format!("Failed to parse: unsupported format or invalid data: {}", e))
 }
+/// Reads {{.TypeName}} from a file, auto-detecting the format as
+/// {{.SnakeName}}_from_bytes does. A service reads its Secrets this way from
+/// SECRETS_PATH, never from environment variables.
+pub fn {{.SnakeName}}_from_file<P: AsRef<std::path::Path>>(path: P) -> Result<{{.TypeName}}, String> {
+let path = path.as_ref();
+let data = std::fs::read(path)
+.map_err(|e| format!("reading {}: {}", path.display(), e))?;
+{{.SnakeName}}_from_bytes(&data)
+.map_err(|e| format!("parsing {}: {}", path.display(), e))
+}
 /// Creates {{.TypeName}} from JSON bytes.
 pub fn {{.SnakeName}}_from_json(data: &[u8]) -> Result<{{.TypeName}}, String> {
 {{- if .NeedsNormalization}}

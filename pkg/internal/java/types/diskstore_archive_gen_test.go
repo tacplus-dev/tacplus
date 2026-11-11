@@ -18,7 +18,7 @@ func TestJavaGcsArchiveEnabledOnlyWhenSDKIsPinned(t *testing.T) {
 	dir := t.TempDir()
 	pinned := filepath.Join(dir, "pinned.yaml")
 	unpinned := filepath.Join(dir, "unpinned.yaml")
-	if err := os.WriteFile(pinned, []byte("lang:\n  java:\n    dependencies:\n      com.google.cloud:google-cloud-storage: 2.75.0\n"), 0o644); err != nil {
+	if err := os.WriteFile(pinned, []byte("lang:\n  java:\n    dependencies:\n      com.google.cloud:google-cloud-storage: 2.76.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(unpinned, []byte("lang:\n  java:\n    dependencies:\n      com.google.protobuf:protobuf-java: 4.36.0\n"), 0o644); err != nil {

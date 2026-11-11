@@ -70,6 +70,10 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-04 by lo
   Line rebuild (#283): the weekly Images run on main dispatches images.yml on each supported `release/X.Y`, which
   rebuilds `base:X.Y` and `build:X.Y` from that branch (apt-get upgrade) and moves nothing else; a patch tag builds
   its `build` fresh. A line takes part once its backport of #283 merges (the dispatch skips a branch without it).
+  Every Images run upgrades the OS packages (#369): the `apt-get upgrade` layer of base and build depends on
+  `APT_REFRESH`, the run's id, so the registry cache never hands back an older run's (v2.6.2's arm64 image was
+  v2.6.1's, without the zlib1g fix), and `scripts/images-check-index.sh` fails the run before any release or
+  floating tag moves unless the index holds linux/amd64 and linux/arm64, each created during the run.
   The cross-test harnesses and the example pin golang.org/x/net at v0.62.0 (GO-2026-6603/6611/6612/6617, the
   HTTP/2 server the generated Go chassis reaches, and GO-2026-6860/6866) in every go.mod they write and every
   dependencies.yaml; `scripts/go_dependency_floor_test.go` refuses a lower or missing pin (#199; backported to

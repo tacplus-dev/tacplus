@@ -157,7 +157,9 @@ the looper then marks it `promoted` or `declined` here with the date.
   nightly scan after it lands. Running `osv-scanner scan source` over the poms the gates write (osv-scanner in the
   build image) would fail on the first one, and one pom template the scripts and fixtures derive from would turn
   the next bump into one edit. The `google-cloud-storage` dependency `add_java_gcs_archive_dependency` splices in
-  for the GCS archive build is outside every scan today (it is not in any pom on disk).
+  for the GCS archive build is outside every scan today (it is not in any pom on disk): since #263
+  `TestJavaGcsArchivePomMeetsItsFloors` holds the floors already named for it (the SDK, guava -jre,
+  opentelemetry), and a new advisory on anything else it resolves is again found only by the nightly scan.
 - **govulncheck of the generated Go modules in the gates** (2026-10-30, #199): the harnesses pin the generated
   chassis's Go dependencies by hand, and `scripts/go_dependency_floor_test.go` holds only the floors already named
   (golang.org/x/net). A new advisory on any other module the chassis reaches (grpc, x/crypto, gin) is found by the

@@ -1,0 +1,1 @@
+- 2026-11-11 looper issue Generated registry.json formatting flips between patch releases (2.5.3/2.5.6/2.5.8): generated output must be byte-identical across a line (#307)

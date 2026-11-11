@@ -87,7 +87,7 @@ tacplus upgrade
 
 replaces the running binary with the **newest patch release of the line it is
 already on**: a `2.0.x` binary moves to the newest `2.0.x`, never to `2.1`.
-Under the [versioning policy](project/versioning.md) a patch is fixes only, so
+Under the [versioning policy](VERSIONING.md) a patch is fixes only, so
 this is always safe to run. When a newer line exists, `upgrade` says so on
 stderr and prints the command that moves to it; it never moves you on its own.
 
@@ -143,7 +143,7 @@ build_image: ghcr.io/tacplus-dev/tacplus/build:2.6.1@sha256:<64 hex>
 
 **Moving a pin is a commit, never something a build does:** run `tacplus pin`,
 commit `tacplus.lock`, and the next build runs the new release. A patch is
-fixes only ([versioning](project/versioning.md)), so moving a pin within its
+fixes only ([versioning](VERSIONING.md)), so moving a pin within its
 line is always safe.
 
 --8<-- "docs/snippets/install-container.md"
@@ -193,5 +193,5 @@ with them before it builds).
 
 A source build reports its version from the nearest tag with a `-local`
 commit suffix, so it is never mistaken for a release build.
-[Contributing](project/contributing.md) covers the tests and the
+[Contributing](../CONTRIBUTING.md) covers the tests and the
 cross-language gates.

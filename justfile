@@ -212,6 +212,44 @@ gates-container:
   docker run --rm -v "$PWD:/workspace" -w /workspace "$image" \
     bash -c 'git config --global --add safe.directory /workspace && just gates'
 
+# The gates of a change to documentation only: what a land of one runs instead
+# of `just gates` (gates.yaml, tacplus#266; tacplus-dev/looper README, Gates
+# scaled to the diff). Minutes, not hours:
+#   - the planning files check, as the planning-files workflow runs it, against
+#     LOOPER_GATES_BASE (the main a land is rebased on; else origin/main's
+#     merge base). PLANNING_FILES_CHECK names a local copy; else the one on
+#     PATH; else tacplus-dev/looper main's, fetched.
+#   - every relative link of every tracked Markdown document resolves
+#     (cmd/sitegen -check-links).
+#   - no secret in the history (gitleaks with .gitleaks.toml, as CI runs it).
+#   - `just test`: README.md is current with README.src.md and docs/snippets/
+#     (TestReadmeIsCurrent), docs/*.md are compiled into the compiler and its
+#     generated registry (docs/embed.go), and soundness and Go tests pin docs
+#     text. docs/embed.go and docs/AGENT.md.tmpl are code: gates.yaml runs
+#     the full gates for them.
+docs:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd {{justfile_directory()}}
+  base="${LOOPER_GATES_BASE:-$(git merge-base HEAD origin/main 2>/dev/null || true)}"
+  check="${PLANNING_FILES_CHECK:-$(command -v planning-files-check || true)}"
+  if [[ -z "$check" ]]; then
+    check="$(mktemp)"; trap 'rm -f "$check"' EXIT
+    curl -fsSL --retry 5 -o "$check" https://raw.githubusercontent.com/tacplus-dev/looper/main/planning-files-check
+  fi
+  echo "=== planning-files-check ${base:-(no base)} ==="
+  bash "$check" "$base"
+  echo "=== links ==="
+  go run ./cmd/sitegen -check-links
+  echo "=== gitleaks ==="
+  if command -v gitleaks >/dev/null; then
+    gitleaks git --no-banner --redact .
+  else
+    go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --no-banner --redact .
+  fi
+  echo "=== test ==="
+  just test
+
 # Formal verification (#275): Kani on the generated Rust and JBMC on the
 # generated Java of cross-test/proto (Go is not formally verified, by decision).
 # NOT a gate, and `just gates` must never reach it (scripts/verify_test.go): it

@@ -14,7 +14,14 @@ just install          # builds and installs the tacplus binary
 just test             # soundness gate + go test ./...
 just gates            # the full mandatory gate set (slow)
 just gates-container  # the same, inside the base image
+just docs             # the gates of a documentation-only change (minutes)
 ```
+
+A land runs the gates its diff calls for: `gates.yaml` maps paths to gate sets
+(the format is tacplus-dev/looper's README, "Gates scaled to the diff"). A change
+to Markdown or `docs/` only runs `just docs`; anything the map does not name, a
+change to `gates.yaml` itself, the nightly gates and every release run
+`just gates`.
 
 `docs/DEVELOPMENT.md` is the compiler developer guide: architecture, the model,
 code-generation patterns and the parity rules between language backends.

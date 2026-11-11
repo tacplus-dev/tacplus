@@ -4,7 +4,9 @@
 package main
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -137,6 +139,45 @@ func TestRewriteLinks(t *testing.T) {
 	}
 	if _, err := rewriteLinks("[x](MISSING.md)", "docs/USER.md", "guide/user-guide.md", pages, exists); err == nil {
 		t.Error("a link to a missing file must be an error")
+	}
+}
+
+// checkLinks reports every broken relative link of every document, not only
+// the first, and none of the links that resolve.
+func TestCheckLinks(t *testing.T) {
+	root := t.TempDir()
+	for name, doc := range map[string]string{
+		"README.md": "[ok](docs/A.md) [gone](docs/GONE.md) [dir](docs/) [w](https://example.com/x.md)\n",
+		"docs/A.md": "[up](../README.md#top) [a](#here) `[x](NOPE.md)`\n```\n[y](NOPE.md)\n```\n[ref]: MISSING.md\n",
+		"docs/B.md": "[out](../../elsewhere.md)\n",
+	} {
+		if err := os.MkdirAll(filepath.Join(root, filepath.Dir(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, name), []byte(doc), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := checkLinks(root, []string{"README.md", "docs/A.md", "docs/B.md"})
+	if err == nil {
+		t.Fatal("broken links must be an error")
+	}
+	for _, want := range []string{
+		`README.md: link "docs/GONE.md"`,
+		`docs/A.md: link "MISSING.md"`,
+		`docs/B.md: link "../../elsewhere.md" leaves the repository`,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not report %q:\n%v", want, err)
+		}
+	}
+	for _, fine := range []string{`"docs/A.md"`, `"docs/"`, "README.md#top", "NOPE.md", "example.com"} {
+		if strings.Contains(err.Error(), fine) {
+			t.Errorf("error reports a link that resolves or is not checked (%s):\n%v", fine, err)
+		}
+	}
+	if err := checkLinks(root, []string{"docs/NOT_THERE.md"}); err == nil {
+		t.Error("a file that does not exist must be an error")
 	}
 }
 

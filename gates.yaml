@@ -1,0 +1,27 @@
+# The gate map of tacplus (tacplus#266; tacplus-dev/looper README, Gates scaled
+# to the diff): the gates a land runs, chosen by the paths its diff changes. A
+# path no set names, a path under full's paths, a change to this file, the
+# nightly gates and every release run full. Each set's run is a shell command
+# at the root of the checkout, with LOOPER_GATES_BASE the main the land is
+# rebased on.
+#
+# pkg/** runs full until per-language sets (pkg/internal/<lang>/** to that
+# language's generation, compile and cross-tests) are confirmed to cover
+# everything such a path can break (PROPOSALS.md).
+full:
+  run: just gates
+  minutes: 180
+  paths: [pkg/**, proto/**, cmd/**, /justfile, /dependencies.yaml, /go.mod, /go.sum, /main.go, /docs/embed.go, /docs/*.tmpl]
+# Documentation: the planning files, links, secrets and `just test`, which
+# checks README.md against README.src.md and the docs the compiler embeds
+# (see the justfile). docs/embed.go and docs/AGENT.md.tmpl are code: full's.
+docs:
+  run: just docs
+  minutes: 5
+  paths: ["*.md", docs/**]
+# The image set. `just test` first: pkg/images and scripts test the files under
+# images/.
+images:
+  run: just test && just images && just tacplus-script
+  minutes: 30
+  paths: [images/]

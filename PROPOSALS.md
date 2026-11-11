@@ -4,6 +4,13 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Per-language gate sets, and more of the map** (2026-11-08, #266): `gates.yaml` runs the full gates (~3h) for any
+  change under `pkg/**`, `cmd/**` or `.github/`. Next: `pkg/internal/<lang>/**` and `pkg/templates/<lang>/**` to that
+  language's `current-generation-<lang>`, `determinism-<lang>` and `-<lang>` cross-tests (with `just test`), once each
+  language's recipes are confirmed to cover what such a path can break (shared templates and `pkg/internal/common`
+  stay full); `cmd/sitegen/**` and `site/**` to `just docs` plus `just site`; `.github/workflows/**` to a workflow
+  lint. Also for `just docs`: it checks relative links but not their anchors (GitHub's heading slugs) nor external
+  URLs, and does not build the site (`site/docs/*.md` link to site paths; `just site` checks them, needing a venv).
 - **Images on Google Artifact Registry through WIF, ghcr.io deprecated from 2.6** (2026-11-07, #223; parked by
   the hub 2026-11-07): publish `base`, `build` and the services' release images to the public
   `us-docker.pkg.dev/jody1-328023/tacplus`, pushed by the GitLab publish job with a short-lived GCP token from its

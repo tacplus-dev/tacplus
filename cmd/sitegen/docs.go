@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -74,13 +75,13 @@ var (
 // rewriteLinks rewrites every relative link in a Markdown document staged from
 // repository path srcPath to page path dstPage. Links inside fenced code blocks
 // and code spans are left alone. exists reports whether a repository path
-// exists and whether it is a directory.
+// exists and whether it is a directory. The error joins every broken link.
 func rewriteLinks(doc, srcPath, dstPage string, pages map[string]string, exists func(string) (bool, bool)) (string, error) {
-	var firstErr error
+	var errs []error
 	fix := func(target string) string {
 		out, err := resolveLink(target, srcPath, dstPage, pages, exists)
-		if err != nil && firstErr == nil {
-			firstErr = err
+		if err != nil {
+			errs = append(errs, err)
 		}
 		return out
 	}
@@ -109,7 +110,34 @@ func rewriteLinks(doc, srcPath, dstPage string, pages map[string]string, exists 
 			})
 		})
 	}
-	return strings.Join(lines, "\n"), firstErr
+	return strings.Join(lines, "\n"), errors.Join(errs...)
+}
+
+// checkLinks reports every relative link of the Markdown documents files
+// (repository paths under root) to a file that does not exist or that leaves
+// the repository, as staging a published document does (`just docs`).
+func checkLinks(root string, files []string) error {
+	exists := func(p string) (bool, bool) {
+		fi, err := os.Stat(filepath.Join(root, filepath.FromSlash(p)))
+		if err != nil {
+			return false, false
+		}
+		return true, fi.IsDir()
+	}
+	var errs []error
+	for _, f := range files {
+		doc, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(f)))
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if _, err := rewriteLinks(string(doc), f, f, nil, exists); err != nil {
+			for _, e := range err.(interface{ Unwrap() []error }).Unwrap() {
+				errs = append(errs, fmt.Errorf("%s: %w", f, e))
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // mapOutsideCodeSpans applies f to the parts of line that are not inside

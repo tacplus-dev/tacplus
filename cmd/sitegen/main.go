@@ -18,21 +18,34 @@
 //     docs/snippets/. It is committed, and TestReadmeIsCurrent fails when it
 //     is stale.
 //
-// Run from the repository root: go run ./cmd/sitegen [-root .] [-out site/docs]
+// With -check-links it writes nothing: it checks the relative links of every
+// tracked Markdown document instead (`just docs`). The site's own pages,
+// site/docs/, link to site paths, and `just site` checks those.
+//
+// Run from the repository root: go run ./cmd/sitegen [-root .] [-out site/docs] [-check-links]
 package main
 
 import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 func main() {
 	root := flag.String("root", ".", "repository root")
 	out := flag.String("out", "site/docs", "MkDocs docs directory to write into")
+	links := flag.Bool("check-links", false, "only check the relative links of every tracked Markdown document")
 	flag.Parse()
-	if err := run(*root, *out); err != nil {
+	var err error
+	if *links {
+		err = checkRepoLinks(*root)
+	} else {
+		err = run(*root, *out)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "sitegen:", err)
 		os.Exit(1)
 	}
@@ -64,6 +77,21 @@ func run(root, out string) error {
 		return err
 	}
 	return writeFile(filepath.Join(root, readmeOut), []byte(md))
+}
+
+// checkRepoLinks checks the links of the Markdown documents git tracks under
+// root, but for the site's pages.
+func checkRepoLinks(root string) error {
+	ls, err := exec.Command("git", "-C", root, "ls-files", "-z", "--", "*.md", ":!:site/docs/").Output()
+	if err != nil {
+		return fmt.Errorf("git ls-files: %w", err)
+	}
+	files := strings.Split(strings.TrimSuffix(string(ls), "\x00"), "\x00")
+	if err := checkLinks(root, files); err != nil {
+		return err
+	}
+	fmt.Printf("sitegen: the links of %d documents resolve\n", len(files))
+	return nil
 }
 
 func writeFile(path string, data []byte) error {

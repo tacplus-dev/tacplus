@@ -24,6 +24,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   (or a step of `current-generation`) that runs a pinned gosec over the generated Go of cross-test/proto and the
   example, failing on those rules, would catch it at land. The other rules gosec reports there (G103 in protoc's
   gencode, G104, G304, G101, G117, G301/G302) need a decision on each before they join it.
+- **Release-line Python floors that need no interpreter drop** (2026-11-08, #264): release/2.0–2.5 keep Python 3.8,
+  so their cryptography/requests/urllib3 floors stop at the newest 3.8 releases (47.0.0, 2.32.4, 2.2.3) and 13
+  advisories stay accepted in their USER.md. A floor keyed by `python_version` marker (`"urllib3>=2.8.0;
+  python_version>='3.10'"` beside the 3.8 floor) would give 3.10+ consumers on those lines the clean floors with no
+  interpreter drop; the generator writes one floor per name today. Also: the build image's venv pins
+  `cryptography>=49.0.0` (images/build.Dockerfile); PYSEC-2026-3552 now needs 50.0.0.
 - **Images on Google Artifact Registry through WIF, ghcr.io deprecated from 2.6** (2026-11-07, #223; parked by
   the hub 2026-11-07): publish `base`, `build` and the services' release images to the public
   `us-docker.pkg.dev/jody1-328023/tacplus`, pushed by the GitLab publish job with a short-lived GCP token from its

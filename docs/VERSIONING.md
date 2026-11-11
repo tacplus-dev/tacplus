@@ -92,7 +92,11 @@ and no tacplus image. So `build:X.Y` (and `base:X.Y`) may move without a new
 `X.Y.Z`; every `X.Y.Z` stays the image of that release, immutable. A dispatch
 on a release branch is always such a line rebuild. A patch tag builds its
 `build` fresh (`apt-get upgrade`), from its line's `base:X.Y`, never
-re-tagging the line's older image.
+re-tagging the line's older image. Every run upgrades the OS packages (#369): the `apt-get upgrade`
+layer depends on the run's id (`APT_REFRESH`), so the build cache cannot hand
+back an older run's layer, and a run whose `base` or `build` index lacks
+linux/amd64 or linux/arm64, or holds an image created before the run started,
+fails before its tags move (`scripts/images-check-index.sh`).
 
 The definitions are `images/base.Dockerfile`, `images/build.Dockerfile` and
 `images/tacplus.Dockerfile`; `images/smoke.sh` ships in the build and

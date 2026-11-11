@@ -6,6 +6,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio_stream::wrappers::ReceiverStream;
+use tonic::transport::server::TcpIncoming;
 use tonic::transport::{Endpoint, Server};
 use x509_cert::der::{asn1::BitString, Decode, Encode};
 use x509_cert::name::Name;
@@ -325,7 +326,7 @@ impl crate::types::sys::smbcert::smb_cert_service_server::SmbCertService for Rus
 async fn start_rust_authority(
     mode: AuthorityMode,
 ) -> (Arc<ServiceConnection>, tokio::task::JoinHandle<()>) {
-    let addr = reserve_local_addr();
+    let (incoming, addr) = bind_local_incoming();
     let authority = RustCertAuthority { mode };
     let server = tokio::spawn(async move {
         Server::builder()
@@ -339,7 +340,7 @@ async fn start_rust_authority(
                     authority,
                 ),
             )
-            .serve(addr)
+            .serve_with_incoming(incoming)
             .await
             .expect("serve rust cert authority");
     });
@@ -353,11 +354,12 @@ async fn start_rust_authority(
     (conn, server)
 }
 
-fn reserve_local_addr() -> SocketAddr {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind rust authority");
-    let addr = listener.local_addr().expect("rust authority addr");
-    drop(listener);
-    addr
+// The server keeps the listener bound here: releasing the port and binding it
+// again would race the tests running in parallel for it (#531).
+fn bind_local_incoming() -> (TcpIncoming, SocketAddr) {
+    let incoming = TcpIncoming::bind("127.0.0.1:0".parse().unwrap()).expect("bind rust authority");
+    let addr = incoming.local_addr().expect("rust authority addr");
+    (incoming, addr)
 }
 
 async fn connect_plain_channel(addr: SocketAddr) -> Channel {

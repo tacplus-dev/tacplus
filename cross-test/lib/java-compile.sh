@@ -23,13 +23,21 @@ java_home_env() {
 # cross-test/proto-quorumwrite/dependencies.yaml. A build that pins the SDK emits
 # GcsArchiveSink, which compiles only with the SDK on the classpath. The pom
 # carries it only for such a build, so no other gate downloads it.
-GCS_ARCHIVE_SDK_VERSION="2.75.0"
+# scripts/java_dependency_floor_test.go holds its floors (#263).
+GCS_ARCHIVE_SDK_VERSION="2.76.0"
+
+# The SDK still declares guava 33.6.0-jre (GHSA-xxph-c9ww-hj94) and
+# opentelemetry-api 1.62.0 (GHSA-ccrj-gw8r-854m): pinned under the pom's
+# <dependencyManagement>, as #200 pins the harness's. The SDK needs guava's
+# -jre flavour, which stands in for the -android pin grpc-java resolves.
+GCS_ARCHIVE_GUAVA_VERSION="33.7.2-jre"
+GCS_ARCHIVE_OPENTELEMETRY_VERSION="1.67.0"
 
 add_java_gcs_archive_dependency() {
   local pom="$1"
   python3 -c '
-import sys
-pom, version = sys.argv[1], sys.argv[2]
+import re, sys
+pom, version, guava, otel = sys.argv[1:5]
 text = open(pom).read()
 # The project-level </dependencies>, at two spaces: the <dependencyManagement>
 # block closes its own at four.
@@ -39,8 +47,20 @@ if text.count(end) != 1:
 dep = ("\n    <dependency>\n      <groupId>com.google.cloud</groupId>\n"
        "      <artifactId>google-cloud-storage</artifactId>\n"
        "      <version>" + version + "</version>\n    </dependency>")
-open(pom, "w").write(text.replace(end, dep + end))
-' "$pom" "$GCS_ARCHIVE_SDK_VERSION"
+text = text.replace(end, dep + end)
+guava_pin = re.compile(r"(<groupId>com\.google\.guava</groupId>\s*<artifactId>guava</artifactId>\s*<version>)[^<]+(</version>)")
+text, pins = guava_pin.subn(r"\g<1>" + guava + r"\g<2>", text)
+if pins != 1:
+    sys.exit("expected exactly one managed guava pin in " + pom)
+managed = "\n  <dependencyManagement>\n    <dependencies>\n"
+if text.count(managed) != 1:
+    sys.exit("expected exactly one <dependencyManagement> block in " + pom)
+bom = ("      <dependency>\n        <groupId>io.opentelemetry</groupId>\n"
+       "        <artifactId>opentelemetry-bom</artifactId>\n"
+       "        <version>" + otel + "</version>\n"
+       "        <type>pom</type>\n        <scope>import</scope>\n      </dependency>\n")
+open(pom, "w").write(text.replace(managed, managed + bom))
+' "$pom" "$GCS_ARCHIVE_SDK_VERSION" "$GCS_ARCHIVE_GUAVA_VERSION" "$GCS_ARCHIVE_OPENTELEMETRY_VERSION"
 }
 
 write_java_compile_pom() {

@@ -1,0 +1,1 @@
+- 2026-11-11 looper issue TypeScript chassis templates hardcode engines.node '>=18.0.0' instead of dependencies.yaml's tools.node (#318)

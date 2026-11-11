@@ -18,6 +18,12 @@ name: Images
 # build:X.Y (and the dated tag) only, never latest, main, X or an X.Y.Z, and no
 # tacplus image.
 
+# Every run upgrades the OS packages (#369): APT_REFRESH, unique to the run,
+# keeps the registry cache from handing back an older run's apt-get upgrade
+# layer, and scripts/images-check-index.sh fails the run unless each base and
+# build index it pushes holds linux/amd64 and linux/arm64, both created during
+# the run.
+
 on:
   push:
     branches: [main]
@@ -54,6 +60,7 @@ jobs:
       build_image: ${{ steps.plan.outputs.build_image }}
       line: ${{ steps.plan.outputs.line }}
       base_image: ${{ steps.plan.outputs.base_image }}
+      started: ${{ steps.plan.outputs.started }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,6 +70,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Every image this run pushes must be created after this (#369,
+          # scripts/images-check-index.sh).
+          started="$(date -u +%s)"
           plan="$(scripts/images-plan.sh "${{ github.event_name }}" "$GITHUB_REF_TYPE" "${{ github.event.inputs.rebuild }}" "$GITHUB_REF_NAME")"
           read -r base build <<<"$plan"
           # First publish: build everything when the build image does not exist yet.
@@ -89,7 +99,7 @@ jobs:
           # line's base:X.Y (refreshed weekly by the line rebuild), else base:latest.
           base_image="$NS/base:latest"
           if [[ -n $line ]] && docker manifest inspect "$NS/base:$line" >/dev/null 2>&1; then base_image="$NS/base:$line"; fi
-          { echo "base=$base"; echo "build=$build"; echo "stamp=$stamp"; echo "build_image=$image"; echo "line=$line"; echo "base_image=$base_image"; } >> "$GITHUB_OUTPUT"
+          { echo "base=$base"; echo "build=$build"; echo "stamp=$stamp"; echo "build_image=$image"; echo "line=$line"; echo "base_image=$base_image"; echo "started=$started"; } >> "$GITHUB_OUTPUT"
           echo "base=$base build=$build build_image=$image line=$line base_image=$base_image"
         env:
           DOCKER_CONFIG: /tmp/docker-anon
@@ -133,10 +143,16 @@ jobs:
           context: .
           file: images/base.Dockerfile
           platforms: linux/amd64,linux/arm64
+          # Unique to the run: every run upgrades the OS packages instead of
+          # taking an older run's upgrade from the cache (#369).
+          build-args: |
+            APT_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
           push: true
           tags: ${{ steps.tags.outputs.list }}
           cache-from: type=registry,ref=${{ env.NS }}/base:buildcache
           cache-to: type=registry,ref=${{ env.NS }}/base:buildcache,mode=max
+      - name: Both platforms built by this run
+        run: scripts/images-check-index.sh "$NS/base:${{ needs.plan.outputs.stamp }}" "${{ needs.plan.outputs.started }}"
 
   build:
     name: build (${{ matrix.arch }})
@@ -171,6 +187,7 @@ jobs:
           platforms: linux/${{ matrix.arch }}
           build-args: |
             BASE_IMAGE=${{ needs.base.result == 'success' && format('{0}/base:{1}', env.NS, needs.plan.outputs.stamp) || needs.plan.outputs.base_image }}
+            APT_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
           outputs: type=image,name=${{ env.NS }}/build,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=registry,ref=${{ env.NS }}/build:buildcache-${{ matrix.arch }}
           cache-to: type=registry,ref=${{ env.NS }}/build:buildcache-${{ matrix.arch }},mode=max
@@ -223,6 +240,11 @@ jobs:
               "${{ needs.plan.outputs.line }}") [[ "$GITHUB_REF_TYPE" == branch ]] && tags+=(-t "$NS/build:$t") ;;
             esac
           done
+          # The dated tag first, and the other tags only once its index holds
+          # both platforms, each built by this run (#369): v2.6.2 published
+          # v2.6.1's arm64 image, which the cache handed back.
+          docker buildx imagetools create -t "$NS/build:${{ needs.plan.outputs.stamp }}" "${refs[@]}"
+          "$GITHUB_WORKSPACE/scripts/images-check-index.sh" "$NS/build:${{ needs.plan.outputs.stamp }}" "${{ needs.plan.outputs.started }}"
           docker buildx imagetools create "${tags[@]}" "${refs[@]}"
           docker buildx imagetools inspect "$NS/build:${{ needs.plan.outputs.stamp }}"
 

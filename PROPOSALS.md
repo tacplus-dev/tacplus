@@ -359,6 +359,16 @@ the looper then marks it `promoted` or `declined` here with the date.
   `prototext.Format`) into a generated file: a soundness rule could refuse it under `pkg/internal`. `cross-test/determinism`
   compares two runs of one binary, which agree even with the defect; it could also run a second binary of the same
   source that differs only in a padded `-X` string, so the hash differs.
+- **Name the line every image pin follows, not only Go, Node and Swift** (2026-11-11, nightly scan): the rule
+  written beside the pins in `images/base.Dockerfile` and `images/build.Dockerfile` (#255: Go the newest release,
+  Node the newest LTS, Swift the newest release) is what the nightly scan checks drift against. `JDK_VERSION=25`,
+  `DOTNET_CHANNEL=10.0`, `MAVEN_VERSION=3.9`, `DOCKER_VERSION=29` and `RUST_VERSION=1` have no rule, so the scan
+  cannot tell drift from a choice. On 2026-11-11 the lines next to them were JDK 27 (newest feature release; 25 is
+  the newest LTS, per api.adoptium.net), .NET 11.0 (STS, released 2026-11-10; 10.0 is the newest LTS, per the
+  dotnet releases-index.json), Maven 4.0.0-rc-7 (only an rc above 3.9) and Docker 29.9.3. #255 called JDK 25 and
+  .NET 10.0 current, which reads as "newest LTS". Writing that down beside the pins (JDK and .NET the newest LTS,
+  Maven the newest non-rc release, Docker the newest major, Rust stable via `1`) would let the scan file a missed
+  move as a `bug` instead of leaving it to judgment.
 
 ## Promoted / declined
 - **Member port onto gRPC with make-before-break session rotation (Java)** (2026-11-06, #321): promoted 2026-11-05,

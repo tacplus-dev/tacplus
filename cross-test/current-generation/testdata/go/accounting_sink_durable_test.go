@@ -26,6 +26,13 @@ import (
 	accountingrecord_pb "gitlab.com/example/dummy/agentsensor/tacplus/model/types/vservices/accountingrecord"
 )
 
+// diskBound is how long the spool task may take to put records on disk and hand
+// them to the publisher. Each append is fsynced, and on a runner shared with other
+// gate runs fifty fsyncs can take longer than emitBound (#526). emitBound stays the
+// bound the RPCs are held to (emitAll); this one only keeps a wedged spool from
+// hanging the test.
+const diskBound = 30 * time.Second
+
 // durableSink opens a durable sink over dir with the given publisher queue.
 func durableSink(t *testing.T, tx chan *accountingrecord_pb.AccountingRecord, stop <-chan struct{}, dir string) *EventBusSink {
 	t.Helper()
@@ -46,7 +53,7 @@ func receiveRequestIDs(t *testing.T, sink *EventBusSink, tx <-chan *accountingre
 		case rec := <-tx:
 			got = append(got, rec.RequestId)
 			sink.Ack()
-		case <-time.After(emitBound):
+		case <-time.After(diskBound):
 			t.Fatalf("record %d of %d did not reach the publisher; got %v", i, n, got)
 		}
 	}
@@ -67,7 +74,7 @@ func expectNoMore(t *testing.T, tx <-chan *accountingrecord_pb.AccountingRecord)
 // cursor on shutdown and at intervals, so a restart must wait for it.
 func waitForCursor(t *testing.T, dir string, want int) {
 	t.Helper()
-	deadline := time.Now().Add(emitBound)
+	deadline := time.Now().Add(diskBound)
 	for {
 		raw, _ := os.ReadFile(filepath.Join(dir, "accounting-spool", "cursor"))
 		if n, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && n == want {
@@ -107,8 +114,8 @@ func TestDurableSpoolReplaysUnacknowledgedAfterRestart(t *testing.T) {
 }
 
 // TestDurableSpoolHoldsRPCWhenPublisherBlocked: nothing reads tx, so the
-// publisher is blocked. Fifty completions must all return within the bound, as
-// the memory spool guarantees, while the records go to disk.
+// publisher is blocked. Fifty completions must all return within emitBound, as
+// the memory spool guarantees, while the records go to disk, which may take longer.
 func TestDurableSpoolHoldsRPCWhenPublisherBlocked(t *testing.T) {
 	dir := t.TempDir()
 	stop := make(chan struct{})
@@ -124,7 +131,7 @@ func TestDurableSpoolHoldsRPCWhenPublisherBlocked(t *testing.T) {
 // waitForLines polls the spool log until it holds want lines.
 func waitForLines(t *testing.T, dir string, want int) {
 	t.Helper()
-	deadline := time.Now().Add(emitBound)
+	deadline := time.Now().Add(diskBound)
 	log := filepath.Join(dir, "accounting-spool", "records.log")
 	for {
 		raw, _ := os.ReadFile(log)
@@ -158,7 +165,7 @@ func TestDurableSpoolReplaysOutageInOrderAndCompacts(t *testing.T) {
 	expectNoMore(t, tx)
 
 	logPath := filepath.Join(dir, "accounting-spool", "records.log")
-	deadline := time.Now().Add(emitBound)
+	deadline := time.Now().Add(diskBound)
 	for {
 		if _, err := os.Stat(logPath); os.IsNotExist(err) {
 			break

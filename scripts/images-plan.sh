@@ -36,8 +36,9 @@ case "$event" in
       fi
     fi
     changed="$(git diff --name-only "$from" HEAD 2>/dev/null || true)"
-    grep -q '^images/base.Dockerfile$' <<<"$changed" && base=true
-    grep -q '^images/build.Dockerfile$' <<<"$changed" && build=true ;;
+    # An image's declared packages and their check are part of it (#554).
+    grep -qE '^images/(base\.Dockerfile|base\.packages|packages-check\.sh)$' <<<"$changed" && base=true
+    grep -qE '^images/(build\.Dockerfile|build\.packages)$' <<<"$changed" && build=true ;;
 esac
 [[ "$ref_type" == branch && "$ref_name" =~ ^release/[0-9]+\.[0-9]+$ ]] && base=true
 [[ $base == true ]] && build=true

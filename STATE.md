@@ -87,6 +87,10 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   `APT_REFRESH`, the run's id, so the registry cache never hands back an older run's (v2.6.2's arm64 image was
   v2.6.1's, without the zlib1g fix), and `scripts/images-check-index.sh` fails the run before any release or
   floating tag moves unless the index holds linux/amd64 and linux/arm64, each created during the run.
+  The images carry only their declared Debian packages (#554): `images/base.packages` and `images/build.packages`,
+  Debian's base system and their dependencies; `tacplus-packages-check`, the last step of each image's build and
+  part of `tacplus-smoke`, fails on any other. base starts from `rust:X-slim-trixie`, not buildpack-deps, whose
+  ImageMagick -dev packages brought OpenEXR (CVE-2026-42216/-42217, CRITICAL) into every `build:X.Y` before it.
   The cross-test harnesses and the example pin golang.org/x/net at v0.62.0 (GO-2026-6603/6611/6612/6617, the
   HTTP/2 server the generated Go chassis reaches, and GO-2026-6860/6866) in every go.mod they write and every
   dependencies.yaml; `scripts/go_dependency_floor_test.go` refuses a lower or missing pin (#199; backported to

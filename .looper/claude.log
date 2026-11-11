@@ -1,0 +1,321 @@
+= init
+> Bash cd /builds/looper/tacplus/issues/531; gh issue view 531 --repo tacplus-dev/tacplus --comments | tail -20; grep -n "reserve_local_addr\|serve_with\|TcpIncoming\|TcpListener" cross-test/cert-stream/testdata/cert_stream_behavior_test.rs | head -50; grep -rn "reserve_local_addr" --include=* . 2>/dev/nul...
+< author:	jodydadescott association:	member edited:	false status:	none -- Hub triage, 2026-11-11: approved. A flaky gate is a bug: bind to port 0 and keep the listener, instead of reserving a port and binding it again. Show it holds under parallel runs. -- author:	tacplus-looper association:	none edit...
+> Bash cd /builds/looper/tacplus/issues/531; sed -n 300,380p cross-test/cert-stream/testdata/cert_stream_behavior_test.rs; echo ----; sed -n 110,135p cross-test/external-token/testdata/external_token_behavior_test.rs; sed -n 215,300p cross-test/external-token/testdata/external_token_behavior_test.rs
+<                     .await                     .is_err()                 {                     return;                 }                 if send_smb_renew(&tx, "fixture renewal retry").await.is_err() {                     return;                 }                 let renewal_key = match recv_smb_pub...
+> Bash cd /builds/looper/tacplus/issues/531; ls cross-test/cert-stream cross-test/external-token; cat cross-test/cert-stream/*.sh 2>/dev/null | head -80; grep -n "cert-stream\|external-token\|cross" justfile | head -30
+< cross-test/cert-stream: proto run.sh testdata  cross-test/external-token: proto run.sh testdata #!/usr/bin/env bash # Behavioral cert-stream fixture for generated service-manager loops. set -euo pipefail  ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" # shellcheck source=../lib/cargo...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/531; grep -n "tonic\|tokio\|cargo\|Cargo" cross-test/cert-stream/run.sh | head -40; grep -n "tonic\|tokio" -r cross-test/external-token/ | grep -v "\.rs:" | head; grep -rn "TcpIncoming\|TcpListenerStream\|serve_with_incoming" --include=*.rs --include=*.go --include=*...
+< 6:# shellcheck source=../lib/cargo-target.sh 7:source "$ROOT_DIR/cross-test/lib/cargo-target.sh" 280:    (cd "$OUT" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo test -p certstream-model rust_) \ 282:    prune_cargo_workspace "$OUT" cross-test/external-token/proto/dependencies.yaml:90:       ...
+> Bash cd /builds/looper/tacplus/issues/531; sed -n 150,185p cross-test/stream-expiry/testdata/stream_expiry_behavior_test.rs; sed -n 2255,2270p pkg/templates/rust/types/service_manager.rs.tmpl; head -40 cross-test/cert-stream/testdata/cert_stream_behavior_test.rs | grep -n "^use"; sed -n 1,40p cross-test/...
+< async fn serve(key: &keys::ImmutableKey) -> std::net::SocketAddr {     let authorizer = Arc::new(grpcserver::authorizer::Authorizer::with_seeded_jwks(vec![jwk_for_key(key)]));     crate::s2sm::internal::grpc::servers::svc::streamexpiry::streamer_service::register_method_auth(&authorizer);      let w...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/531; ls scripts/ | head -50; grep -n "scripts" justfile | head; cat gates.yaml 2>/dev/null | head -60
+< check-registry-query-prose.sh cross_test_cargo_target_test.go fix-looper go_dependency_floor_test.go images-check-index.sh images-plan.sh images-tags.sh images_index_test.go images_plan_test.go images_smoke_test.go images_tags_test.go java_dependency_floor_test.go lint-patterns multi-vendor-fix-loop...
+I found the race in both the cert-stream fixture and the external-token fixture (same `reserve_local_addr` pattern). Next: add a guard test, then switch both fixtures to keep the listener they bind.
+> Bash cd /builds/looper/tacplus/issues/531; head -60 scripts/cross_test_cargo_target_test.go; grep -n "go test\|scripts" justfile | head -20
+< // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0  package scripts  import ( 	"os" 	"os/exec" 	"path/filepath" 	"regexp" 	"strings" 	"testing" )  // Every cross-test leg that builds generated Rust compiles the same heavy // dependency set (tonic, prost, tokio, rustls). A per-le...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/531; grep -rn -A3 'TcpListener::bind\|ServerSocket(0)\|new ServerSocket' cross-test pkg/templates --include=*.rs --include=*.java --include=*.tmpl | grep -n "drop\|close()" | head; grep -rln 'TcpListener::bind' cross-test pkg | head
+< 13:cross-test/external-token/testdata/external_token_behavior_test.rs-128-    drop(listener); 43:cross-test/w2s-validate/testdata/w2s_request_validation_test.rs-101-    drop(listener); 48:cross-test/w2s-validate/testdata/rest_browser_form_test.rs-74-    drop(listener); 58:cross-test/cert-stream/test...
+> Bash cd /builds/looper/tacplus/issues/531; for f in cross-test/w2s-validate/testdata/w2s_request_validation_test.rs cross-test/w2s-validate/testdata/rest_browser_form_test.rs cross-test/unary-retry/testdata/unary_retry_behavior_test.rs; do echo "=== $f"; grep -n "drop(listener)\|drop(probe)" $f; done; se...
+< === cross-test/w2s-validate/testdata/w2s_request_validation_test.rs 101:    drop(listener); === cross-test/w2s-validate/testdata/rest_browser_form_test.rs 74:    drop(listener); === cross-test/unary-retry/testdata/unary_retry_behavior_test.rs 35:    drop(probe); #[tonic::async_trait] impl RestDispat...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Write /builds/looper/tacplus/issues/531/scripts/cross_test_listener_test.go
+< File created successfully at: /builds/looper/tacplus/issues/531/scripts/cross_test_listener_test.go (file state is current in your context — no need to Read it back)
+> Bash cd /builds/looper/tacplus/issues/531/scripts && go test -run TestCrossTestRustFixturesKeepTheListenerTheyBind . 2>&1 | tail -10
+= task_started
+= task_notification
+< go: downloading golang.org/x/mod v0.40.0 --- FAIL: TestCrossTestRustFixturesKeepTheListenerTheyBind (0.00s)     cross_test_listener_test.go:46: ../cross-test/cert-stream/testdata/cert_stream_behavior_test.rs binds port 0 as listener and drops it, so its server binds a port another test may hold; han...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/531 && python3 - <<'EOF' import re def sub(path, old, new, count=1):     s=open(path).read()     assert s.count(old)==count, (path, old[:60], s.count(old))     s=s.replace(old,new); open(path,'w').write(s)  cs='cross-test/cert-stream/testdata/cert_stream_behavior_tes...
+< ok  	github.com/tacplus-dev/tacplus/scripts	0.016s  .../testdata/cert_stream_behavior_test.rs            | 16 +++++++++-------  .../testdata/external_token_behavior_test.rs         | 20 +++++++++++---------  .../testdata/unary_retry_behavior_test.rs            |  9 +++++----  .../w2s-validate/testda...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/531; grep -n "^[a-z0-9-]*rust\b.*:\|^unary-retry\|^w2s-validate\|^external-token" justfile | head -30; grep -n "external-token\|w2s-validate\|unary-retry" justfile | head
+< 103:current-generation-rust: 112:determinism-rust: 250:memberport-rust: 262:cert-stream-rust: 277:stream-expiry-rust: 294:unary-retry: unary-retry-go unary-retry-java unary-retry-rust 296:unary-retry-go: 299:unary-retry-java: 302:unary-retry-rust: 307:external-token: external-token-go external-token...
+The guard test now fails on main and passes with my change, which fixes five fixtures. Next I'm running the four affected Rust legs.
+> Bash cd /builds/looper/tacplus/issues/531; nohup bash -c 'for r in cert-stream-rust external-token-rust w2s-validate-rust unary-retry-rust; do echo "### $r"; just $r 2>&1 | tail -25; echo "### $r exit ${PIPESTATUS[0]}"; done' > /tmp/legs531.log 2>&1 & echo $!
+< 2600
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 531 --checkpoint "Guard test scripts/cross_test_listener_test.go + 5 Rust fixtures keep their bound listener (TcpIncoming). Left: run rust legs, parallel stress, PROPOSALS/STATE?, gates, land, tag v2.6.2." 2>&1 | tail -2
+= task_started
+= task_notification
+< remote:  [2026-11-11T05:44:33Z] checkpoint of #531 (a step) pushed to looper/tacplus-531:  8 files changed, 266 insertions(+), 28 deletions(-)
+> Monitor until ! kill -0 2600 2>/dev/null; do sleep 30; done; cat /tmp/legs531.log | grep "###\|test result\|FAIL"
+< <tool_use_error>InputValidationError: Monitor failed due to the following issue: The required parameter `description` is missing  This tool's schema was not sent to the API — it was not in the discovered-tool set derived from message history. Without the schema in your prompt, typed parameters (arra...
+> Bash for i in $(seq 1 19); do kill -0 2600 2>/dev/null || break; sleep 30; done; grep "###\|test result\|FAIL\|error" /tmp/legs531.log | head -30
+= task_started
+= task_notification
+< ### cert-stream-rust test s2sm::cert_stream_behavior_test::rust_smb_server_error_after_first_delivery_is_reconnectable ... ok test s2sm::cert_stream_behavior_test::rust_smb_server_error_before_first_delivery_is_startup_failure ... ok test s2sm::cert_stream_behavior_test::rust_tls_server_error_after_...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/531; grep -n "OUT=\|trap\|prune_cargo_workspace()" cross-test/cert-stream/run.sh cross-test/lib/cargo-target.sh
+< cross-test/cert-stream/run.sh:211:trap 'rm -rf "$WORK"' EXIT cross-test/cert-stream/run.sh:223:OUT="$WORK/tacplus/model" cross-test/lib/cargo-target.sh:36:prune_cargo_workspace() {
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/531; sed -e 's#cargo test -p certstream-model rust_)#for i in $(seq 1 50); do cargo test -q -p certstream-model rust_ -- --test-threads=48 2>\&1 | grep -E "test result|panicked" ; done)#' -e 's#"\$ROOT_DIR/cross-test/cert-stream/testdata/cert_stream_behavior_test.rs"...
+< 276:    cp "${FIXTURE:-$ROOT_DIR/cross-test/cert-stream/testdata/cert_stream_behavior_test.rs}" "$OUT/s2sm/cert_stream_behavior_test.rs" 280:    (cd "$OUT" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" for i in $(seq 1 50); do cargo test -q -p certstream-model rust_ -- --test-threads=48 2>&1 | grep...
+The stress-script edit came out wrong, so I'm fixing it and running it again.
+> Bash cd /builds/looper/tacplus/issues/531; kill 11281 2>/dev/null; sleep 1; sed -i 's#CARGO_TARGET_DIR="\$CROSS_TEST_CARGO_TARGET" for i#export CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET"; for i#' cross-test/cert-stream/stress531.sh; sed -n 280p cross-test/cert-stream/stress531.sh nohup bash -c 'echo "==...
+<     (cd "$OUT" && export CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET"; for i in $(seq 1 50); do cargo test -q -p certstream-model rust_ -- --test-threads=48 2>&1 | grep -E "test result|panicked" ; done) \ 11431
+While that runs, I'll add a PROPOSALS note? Let me check whether STATE/PROPOSALS need anything.
+> Bash cd /builds/looper/tacplus/issues/531; grep -n -i "flak\|port 0\|reserve" STATE.md PROPOSALS.md | head; git tag --list 'v2.6*' | tail -3; git log --oneline v2.6.1..origin/main | head -20; git branch -r | grep release | tail -5
+< STATE.md:22:  `JwtPayloadType` 29 is reserved (#171). PROPOSALS.md:124:  flaking on a loaded runner. PROPOSALS.md:168:  Run with `--workdir` outside `target/`, it fails on main on the reserved `JWT_PAYLOAD_TYPE_LINKED` name in PROPOSALS.md:169:  `token.pb.go`'s descriptor bytes. Excluding paths rela...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/531; git fetch -q --tags origin; git tag --sort=-v:refname | head -8; for t in v2.6.1 v2.6.8 $(git tag --sort=-v:refname | head -1); do echo "$t: $(git merge-base --is-ancestor $t origin/main && echo on-main || echo not-on-main) $(git merge-base --is-ancestor $t orig...
+< v2.6.8 v2.6.7 v2.6.6 v2.6.5 v2.6.4 v2.6.3 v2.6.2 v2.6.1 v2.6.1: on-main  v2.6.8: not-on-main on-r2.6 v2.6.8: not-on-main on-r2.6 v2.6.1-24-g4646aab9 v2.6.8 # State: tacplus  Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by looper (#313).  - **Version / line:** v2.6.2 (la...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/531; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do git rev-parse -q --verify origin/release/$b >/dev/null || continue; d=$(git log -1 --format=%cs v$b.0 2>/dev/null); last=$(git describe --tags --abbrev=0 origin/release/$b); n=0; for f in cross-test/cert-stream/testdata/c...
+< release/2.0 v2.0.0=2026-10-15 last=v2.0.26 racy_files=5 release/2.1 v2.1.0=2026-10-20 last=v2.1.19 racy_files=5 release/2.2 v2.2.0=2026-10-25 last=v2.2.16 racy_files=5 release/2.3 v2.3.0=2026-10-25 last=v2.3.18 racy_files=5 release/2.4 v2.4.0=2026-10-27 last=v2.4.18 racy_files=5 release/2.5 v2.5.0=2...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/531; git branch -r | grep release; gh pr list --repo tacplus-dev/tacplus --state all --base release/2.6 --limit 3 --json number,title,headRefName,body | head -c 2500
+<   origin/backport/190-release-2.0   origin/backport/190-release-2.1   origin/backport/190-release-2.2   origin/backport/190-release-2.3   origin/backport/190-release-2.4   origin/backport/190-release-2.5   origin/backport/199-release-2.0   origin/backport/199-release-2.1   origin/backport/199-releas...
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 19); do kill -0 11431 2>/dev/null || break; sleep 30; done; grep -c "test result: ok" /tmp/stress531.log; grep -n "===\|FAILED\|panicked" /tmp/stress531.log | head -30
+= task_started
+= task_notification
+< 50 1:=== NEW 496:=== OLD
+= thinking_tokens
+= thinking_tokens
+While the old fixture runs as a control, I'm preparing the commit (the stress script stays out of it).
+> Bash for i in $(seq 1 19); do kill -0 11431 2>/dev/null || break; sleep 30; done; kill -0 11431 2>/dev/null && echo running; sed -n '496,$p' /tmp/stress531.log | grep -c "test result: ok"; sed -n '496,$p' /tmp/stress531.log | grep -n "FAILED\|panicked" | head
+= task_started
+= task_notification
+< 50
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Neither version flaked in 50 runs at 48 threads: the race is rare on this runner. The guard test is the deterministic check. Committing and landing now.
+> Bash cd /builds/looper/tacplus/issues/531; rm cross-test/cert-stream/stress531.sh; git status --short; git add -A scripts/cross_test_listener_test.go cross-test; git commit -q -F - <<'EOF' Rust cross-test fixtures keep the listener they bind (#531)  Five Rust fixtures (cert-stream, external-token, unary-...
+<  M cross-test/cert-stream/testdata/cert_stream_behavior_test.rs  M cross-test/external-token/testdata/external_token_behavior_test.rs  M cross-test/unary-retry/testdata/unary_retry_behavior_test.rs  M cross-test/w2s-validate/testdata/rest_browser_form_test.rs  M cross-test/w2s-validate/testdata/w2s_...
+= thinking_tokens
+= thinking_tokens
+While the land is queued, I'm preparing the backports by cherry-picking onto each release branch.
+> Bash cd /builds/looper/tacplus/issues/531; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do wt=/tmp/bp531-$b; git worktree add -q -b backport/531-release-$b $wt origin/release/$b 2>&1 | tail -1; (cd $wt && git cherry-pick 0ec824b7 >/dev/null 2>&1 && echo "$b ok" || { echo "$b CONFLICT"; git status --short | head...
+= task_started
+= task_notification
+< 2.0 CONFLICT M  cross-test/cert-stream/testdata/cert_stream_behavior_test.rs UU cross-test/external-token/testdata/external_token_behavior_test.rs M  cross-test/unary-retry/testdata/unary_retry_behavior_test.rs M  cross-test/w2s-validate/testdata/rest_browser_form_test.rs M  cross-test/w2s-validate/...
+> Bash cd /tmp/bp531-2.0; git diff | head -60
+< diff --cc cross-test/external-token/testdata/external_token_behavior_test.rs index 6e315b7c,ca6b3b05..00000000 --- a/cross-test/external-token/testdata/external_token_behavior_test.rs +++ b/cross-test/external-token/testdata/external_token_behavior_test.rs @@@ -8,11 -8,10 +8,12 @@@ use aws_lc_rs::si...
+= thinking_tokens
+= thinking_tokens
+Branches 2.0–2.3 have an older external-token fixture with only one server. I'll keep their version and apply the same change to it.
+> Bash for b in 2.0 2.1 2.2 2.3; do cd /tmp/bp531-$b; f=cross-test/external-token/testdata/external_token_behavior_test.rs; git checkout --ours $f; python3 - "$f" <<'EOF' import sys p=sys.argv[1]; s=open(p).read() n=s.count("    let addr = reserve_local_addr();"); m=s.count("            .serve(addr),") ass...
+< Updated 1 path from the index cross-test/external-token/testdata/external_token_behavior_test.rs ok 1 2.0 picked Updated 1 path from the index cross-test/external-token/testdata/external_token_behavior_test.rs ok 2 2.1 picked Updated 1 path from the index cross-test/external-token/testdata/external_...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do cd /tmp/bp531-$b; echo "$b: $(grep -h 'tonic:' cross-test/*/proto/dependencies.yaml pkg/*/dependencies.yaml dependencies.yaml 2>/dev/null | sort -u | tr -d ' \n') $(grep -c TcpIncoming::bind cross-test/stream-expiry/testdata/stream_expiry_behavior_test.rs 2>/...
+< 2.0: tonic:0.14.0 1 ok  	github.com/tacplus-dev/tacplus/scripts	0.006s 2.1: tonic:0.14.0 1 ok  	github.com/tacplus-dev/tacplus/scripts	0.006s 2.2: tonic:0.14.0 1 ok  	github.com/tacplus-dev/tacplus/scripts	0.007s 2.3: tonic:0.14.0 1 ok  	github.com/tacplus-dev/tacplus/scripts	0.007s 2.4: tonic:0.14....
+= thinking_tokens
+= thinking_tokens
+All seven branches are on tonic 0.14, and the guard passes on each. Now running the four Rust legs on release/2.0 (the oldest) and release/2.6 backports.
+> Bash nohup bash -c 'for b in 2.0 2.6; do cd /tmp/bp531-$b; for r in cert-stream-rust external-token-rust w2s-validate-rust unary-retry-rust; do just $r > /tmp/bp531-$b-$r.log 2>&1; echo "$b $r exit $?"; done; done' > /tmp/bplegs531.log 2>&1 & echo $!
+< 18492
+> Bash for i in $(seq 1 19); do kill -0 18492 2>/dev/null || break; sleep 30; done; cat /tmp/bplegs531.log; tail -2 /tmp/land531.log
+= task_started
+= task_notification
+< 2.0 cert-stream-rust exit 0 2.0 external-token-rust exit 0 2.0 w2s-validate-rust exit 0 2.0 unary-retry-rust exit 0 2.6 cert-stream-rust exit 0 2.6 external-token-rust exit 0 2.6 w2s-validate-rust exit 0 2.6 unary-retry-rust exit 0 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to lo...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Both backports pass all four legs. I'm running them on release/2.3 too, since 2.1–2.3 needed a manual merge.
+> Bash nohup bash -c 'for b in 2.3; do cd /tmp/bp531-$b; for r in cert-stream-rust external-token-rust w2s-validate-rust unary-retry-rust; do just $r > /tmp/bp531-$b-$r.log 2>&1; echo "$b $r exit $?"; done; done' > /tmp/bplegs531b.log 2>&1 & echo $!; for f in /tmp/bp531-2.0-*.log; do echo "$f: $(grep 'test...
+< 32458 /tmp/bp531-2.0-cert-stream-rust.log: test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 10.05s /tmp/bp531-2.0-external-token-rust.log: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.15s /tmp/bp531-2.0-unary-retry-...
+> Bash for i in $(seq 1 19); do kill -0 32458 2>/dev/null || break; sleep 30; done; cat /tmp/bplegs531b.log; tail -3 /tmp/land531.log
+= task_started
+= task_notification
+< 2.3 cert-stream-rust exit 0 2.3 external-token-rust exit 0 2.3 w2s-validate-rust exit 0 2.3 unary-retry-rust exit 0 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of...
+= thinking_tokens
+= thinking_tokens
+Release/2.3 passes too. Pushing the backport branches and opening the pull requests while the land waits in the queue.
+> Bash cd /builds/looper/tacplus/issues/531; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do last=$(git describe --tags --abbrev=0 origin/release/$b); next="v$b.$(( ${last##*.} + 1 ))"; tested="Not run on this branch: the four Rust legs (run on release/2.0, 2.3 and 2.6, all green)."; case $b in 2.0|2.3|2.6) teste...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= vcs_state_changed
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/532 https://github.com/tacplus-dev/tacplus/pull/533 https://github.com/tacplus-dev/tacplus/pull/534 https://github.com/tacplus-dev/tacplus/pull/535 https://github.com/tacplus-dev/tacplus/pull/536 https://github.com/tacplus-dev/tacplus/pull/537 https://gith...
+> Bash cd /builds/looper/tacplus/issues/531; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do git worktree remove /tmp/bp531-$b; done; /usr/local/bin/repo-looper --repo tacplus --issue 531 --checkpoint "Land queued; backport PRs #532-#538 open. Left: land verdict, looper-trace, comment, close." 2>&1 | tail -1; /us...
+= task_started
+= task_notification
+< [2026-11-11T06:22:31Z] checkpoint of #531 (a step) pushed to looper/tacplus-531:  9 files changed, 380 insertions(+), 28 deletions(-) handler cross-test/server-runtime/client/go/main.go:112 checkPage (inbound: api)   causal cross-test/server-runtime/client/go/main.go:114 ListEventsPaged: DROPS the i...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/531; sed -n 65,95p cross-test/server-runtime/client/go/main.go; sed -n 115,135p cross-test/outbound-deadline/fixture/rust/main.rs; gh issue list --repo tacplus-dev/tacplus --state all --search "looper-trace server-runtime OR outbound-deadline trace_id" --limit 10
+< 	checkFailClosed(ctx, api, lang)  	fmt.Printf("go generated client OK against %s generated server (%s)\n", lang, addr) }  // checkUnary: auth_disabled unary. The generated remote wrapper validates the // request, dispatches to the handler, validates the response, and marshals it // back. Exact field...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; tail -5 /tmp/land531.log
+= task_started
+= task_notification
+< [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; tail -3 /tmp/land531.log
+= task_started
+= task_notification
+< [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; tail -3 /tmp/land531.log
+= task_started
+= task_notification
+< [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; tail -3 /tmp/land531.log; gh issue view 531 --repo tacplus-dev/tacplus --comments | tail -8
+= task_started
+= task_notification
+< [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue what came ...
+Still queued behind other lands, about 1h20m into a 4h limit. Polling continues.
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; date -u +%T; tail -2 /tmp/land531.log
+= task_started
+= task_notification
+< 07:10:34 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue w...
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; date -u +%T; tail -2 /tmp/land531.log
+= task_started
+= task_notification
+< 07:20:07 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue w...
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; date -u +%T; tail -2 /tmp/land531.log
+= task_started
+= task_notification
+< 07:29:39 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue w...
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; date -u +%T; tail -2 /tmp/land531.log
+= task_started
+= task_notification
+< 07:39:12 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue w...
+= thinking_tokens
+= thinking_tokens
+> Bash go vet ./scripts/ && go test ./scripts/ 2>&1 | tail -3
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/scripts	1.685s
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; date -u +%T; tail -2 /tmp/land531.log
+= task_started
+= task_notification
+< 07:48:54 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue w...
+Still waiting for the land verdict (queued since 06:09). The fix, guard test and seven backport PRs are done.
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; date -u +%T; tail -2 /tmp/land531.log
+= task_started
+= task_notification
+< 07:58:29 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue w...
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; date -u +%T; tail -2 /tmp/land531.log
+= task_started
+= task_notification
+< 08:08:02 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue w...
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; date -u +%T; tail -2 /tmp/land531.log
+= task_started
+= task_notification
+< 08:17:35 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue w...
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; date -u +%T; tail -2 /tmp/land531.log
+= task_started
+= task_notification
+< 08:27:08 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue w...
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; date -u +%T; tail -2 /tmp/land531.log
+= task_started
+= task_notification
+< 08:36:42 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue w...
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; date -u +%T; tail -2 /tmp/land531.log
+= task_started
+= task_notification
+< 08:46:14 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue w...
+Still queued, about 45 minutes before my stop. I'll keep polling until roughly 09:15, then checkpoint so the next run can finish.
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; date -u +%T; tail -2 /tmp/land531.log
+= task_started
+= task_notification
+< 08:55:50 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue w...
+> Bash for i in $(seq 1 19); do kill -0 17536 2>/dev/null || break; sleep 30; done; date -u +%T; tail -2 /tmp/land531.log
+= task_started
+= task_notification
+< 09:05:26 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue w...
+> Bash for i in $(seq 1 16); do kill -0 17536 2>/dev/null || break; sleep 30; done; date -u +%T; tail -2 /tmp/land531.log
+= task_started
+= task_notification
+< 09:13:28 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue w...
+The land is still queued, and my run stops at about 09:33. I'm posting a progress comment and a checkpoint so the next run can finish.
+> Bash cd /builds/looper/tacplus/issues/531; gh issue comment 531 --repo tacplus-dev/tacplus --body "Progress (looper run, 2026-11-11). The land is queued; the time limit runs out before its verdict.  **Fix**, commit 0ec824b7 on looper/tacplus-531, queued with the manager since 06:09Z: five Rust cross-test...
+= task_started
+= task_notification
+< https://github.com/tacplus-dev/tacplus/issues/531#issuecomment-6791893693 [2026-11-11T09:13:44Z] checkpoint of #531 (a step) pushed to looper/tacplus-531:  9 files changed, 486 insertions(+), 28 deletions(-)
+> Bash for i in $(seq 1 14); do kill -0 17536 2>/dev/null || break; sleep 30; done; date -u +%T; tail -3 /tmp/land531.log
+= task_started
+= task_notification
+< 09:20:47 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue w...
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 13); do kill -0 17536 2>/dev/null || break; sleep 30; done; date -u +%T; tail -2 /tmp/land531.log
+= task_started
+= task_notification
+< 09:27:20 [2026-11-11T06:09:34Z] checkpoint of #531 (land queued) pushed to looper/tacplus-531:  9 files changed, 326 insertions(+), 28 deletions(-) [2026-11-11T06:09:36Z] queued: the manager of tacplus merges looper/tacplus-531 after the lands queued before it, one at a time, and says on the issue w...
+The fix for #531 is committed (0ec824b7) and queued to land on main, but the land hadn't run yet when my time ran out, so #531 is still open. The manager lands the commit after this run, and the next run posts the final comment and closes the issue.
+
+**What was wrong:** the issue named the cert-stream fixture, but five Rust test fixtures had the same race: cert-stream, external-token, unary-retry, and the two w2s-validate tests. Each one bound port 0, read the port number, released it, and then had its server bind that port again. Another test running in parallel could take the port in between.
+
+**What changed:**
+- Each of the five fixtures now keeps the listener it bound (`TcpIncoming` on `127.0.0.1:0`) and hands it to `serve_with_incoming`, the way the stream-expiry fixture already does.
+- A new test, `scripts/cross_test_listener_test.go`, fails on any cross-test Rust file that binds port 0 and then drops the listener. It failed on main for all five files and passes with the fix.
+
+**Verification:**
+- `just cert-stream-rust`, `external-token-rust`, `w2s-validate-rust` and `unary-retry-rust` all pass, and so does `go test ./scripts/`.
+- Running under parallel load (the issue's "show it holds" ask): the cert-stream Rust suite passed 50 out of 50 runs at 48 threads.
+- The old fixture also passed 50 out of 50, so the race is too rare on this runner to reproduce. The new guard test is the reliable check, not the stress run.
+- I did not run `just gates` locally; the land runs the gates.
+
+**Patch release:** main has taken features since v2.6.1, so per the release rule I tagged nothing on main, including the `v2.6.2` the run instructions named. I opened backport pull requests #532–#538 for release/2.0 through 2.6. Each names the tag to cut once it merges (v2.0.27 … v2.6.9). The guard test passes on all seven branches. I ran the four Rust test suites only on the 2.0, 2.3 and 2.6 backports, and they pass there.
+
+**Trace check:** the handlers I changed are test servers that make no outgoing calls. `looper-trace check` reports failures only in files this change doesn't touch, and those are already filed as #310 and #311.
+
+I posted a progress comment on #531 with these details and checkpointed the branch.
+= success: The fix for #531 is committed (0ec824b7) and queued to land on main, but the land hadn't run yet when my time ran out, so #531 is still open. The manager lands the commit after this run, and the next run posts the final comment and closes the issue.
+
+**What was wrong:** the issue named the cert-stream fixture, but five Rust test fixtures had the same race: cert-stream, external-token, unary-retry, and the two w2s-validate tests. Each one bound port 0, read the port number, released it, and then had its server bind that port again. Another test running in parallel could take the port in between.
+
+**What changed:**
+- Each of the five fixtures now keeps the listener it bound (`TcpIncoming` on `127.0.0.1:0`) and hands it to `serve_with_incoming`, the way the stream-expiry fixture already does.
+- A new test, `scripts/cross_test_listener_test.go`, fails on any cross-test Rust file that binds port 0 and then drops the listener. It failed on main for all five files and passes with the fix.
+
+**Verification:**
+- `just cert-stream-rust`, `external-token-rust`, `w2s-validate-rust` and `unary-retry-rust` all pass, and so does `go test ./scripts/`.
+- Running under parallel load (the issue's "show it holds" ask): the cert-stream Rust suite passed 50 out of 50 runs at 48 threads.
+- The old fixture also passed 50 out of 50, so the race is too rare on this runner to reproduce. The new guard test is the reliable check, not the stress run.
+- I did not run `just gates` locally; the land runs the gates.
+
+**Patch release:** main has taken features since v2.6.1, so per the release rule I tagged nothing on main, including the `v2.6.2` the run instructions named. I opened backport pull requests #532–#538 for release/2.0 through 2.6. Each names the tag to cut once it merges (v2.0.27 … v2.6.9). The guard test passes on all seven branches. I ran the four Rust test suites only on the 2.0, 2.3 and 2.6 backports, and they pass there.
+
+**Trace check:** the handlers I changed are test servers that make no outgoing calls. `looper-trace check` reports failures only in files this change doesn't touch, and those are already filed as #310 and #311.
+
+I posted a progress comment on #531 with these details and checkpointed the branch.

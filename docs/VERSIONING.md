@@ -89,6 +89,14 @@ tacplus image. `.github/workflows/images.yml` builds and pushes them for
 linux/amd64 and linux/arm64 on every push to `main` and every release tag,
 rebuilding `base` and `build` only when their file changed (or weekly for
 `base`, or on demand). `just images` builds the set natively for one machine.
+Their Debian packages are `images/base.packages` and `images/build.packages`
+(#554): `base` and `build` carry those, Debian's base system (Essential,
+Priority required or important) and what they depend on, nothing else.
+`images/packages-check.sh`, shipped as `tacplus-packages-check`, is the last
+step of each one's build and fails it on any other package (OpenEXR, with
+CRITICAL CVEs, came in through `buildpack-deps`, which `rust:X-trixie` is
+built on; `base` now starts from `rust:X-slim-trixie`). A package an image
+needs goes into its list, never in through the image it starts from.
 The first release tag is `v2.0.0`: the public tacplus-dev/tacplus line is a
 new major over the private v1.2.x line it was forked from (new module path,
 regenerated consumers).

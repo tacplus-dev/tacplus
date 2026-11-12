@@ -102,12 +102,19 @@ FROM ${BASE_IMAGE}
 LABEL org.opencontainers.image.title="tacplus build" \
       org.opencontainers.image.description="tacplus base plus protoc and its plugins, just, the docker CLI and gcloud" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus"
+# The Debian packages it adds are images/build.packages (#554); both lists are
+# copied, as the base it starts from may predate this file's.
+COPY images/base.packages /usr/local/share/tacplus/packages/base
+COPY images/build.packages /usr/local/share/tacplus/packages/build
+COPY images/packages-check.sh /usr/local/bin/tacplus-packages-check
 # Every images.yml run upgrades the OS packages here, as docs/VERSIONING.md
 # says a release's build does: APT_REFRESH is unique to the run and part of
 # this layer's cache key, so the registry cache never hands back an older
 # run's (#369: v2.6.2's arm64 image was v2.6.1's).
 ARG APT_REFRESH=
-RUN : "${APT_REFRESH}" && apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+RUN : "${APT_REFRESH}" && apt-get update && apt-get upgrade -y \
+    && sed 's/#.*//' /usr/local/share/tacplus/packages/build | xargs apt-get install -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=fetch /opt/protoc/bin/protoc /opt/protoc/bin/protoc-gen-grpc-java /usr/local/bin/
 COPY --from=fetch /opt/protoc/include /usr/local/include
 COPY --from=fetch /opt/just/just /usr/local/bin/just
@@ -122,6 +129,10 @@ COPY --from=node-tools /usr/local/lib/node_modules/@bufbuild /usr/local/lib/node
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=buildx /out/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
 RUN ln -s ../lib/node_modules/@bufbuild/protoc-gen-es/bin/protoc-gen-es /usr/local/bin/protoc-gen-es
+# No Debian package beyond images/base.packages and images/build.packages,
+# Debian's base system and their dependencies (#554): OpenEXR came in
+# through a base image's packages, and the build failed nowhere.
+RUN tacplus-packages-check /usr/local/share/tacplus/packages/base /usr/local/share/tacplus/packages/build
 # gcloud runs on the image's system Python: the SDK's bundled Python and its
 # gcloud-crc32c binary (a Go program) are removed in the fetch stage because
 # they pin cryptography, pyOpenSSL and a Go stdlib that Trivy flags at

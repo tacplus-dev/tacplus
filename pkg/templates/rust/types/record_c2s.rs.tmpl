@@ -127,7 +127,7 @@ impl {{.TraitPath}}::{{.TraitName}} for {{.StructName}} {
         // not something to page through.
         let (items, _, _) = sm
             .{{.ReaderFn}}()
-            .list({{if $.Routed}}&__tenant, {{end}}Some(filter), 1, String::new())
+            .list_traced({{if $.Routed}}&__tenant, {{end}}Some(filter), 1, String::new(), &req.trace_id)
             .await?;
         Ok({{.GetResp}} { items, ..Default::default() })
     }
@@ -173,7 +173,7 @@ impl {{.TraitPath}}::{{.TraitName}} for {{.StructName}} {
         };
         let (items, next_page_token, total_count) = sm
             .{{.ReaderFn}}()
-            .list({{if $.Routed}}&__tenant, {{end}}Some(filter), req.page_size, req.page_token)
+            .list_traced({{if $.Routed}}&__tenant, {{end}}Some(filter), req.page_size, req.page_token, &req.trace_id)
             .await?;
         Ok({{.ListResp}} {
             items,

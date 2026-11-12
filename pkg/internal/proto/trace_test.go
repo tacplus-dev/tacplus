@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
 func TestInjectTraceFieldsSkippedTypesUseDescriptorPackage(t *testing.T) {
@@ -123,6 +125,68 @@ func TestIsEventBusWireValueMessage_SuffixExact(t *testing.T) {
 	for _, n := range included {
 		if isEventBusWireValueMessage(n) {
 			t.Errorf("%q is a user message and must NOT be excluded from trace injection (over-broad name match)", n)
+		}
+	}
+}
+
+// #327: field 200 is on every message of the sys contract, as on a user's own.
+// The exceptions are sys/spec.proto's option schemas (never on the wire) and
+// trace.TraceEvent, which carries the trace it reports as trace_id = 1. A sys
+// message that declares trace_id = 200 itself (sys/tokenrequest.proto,
+// trace.TraceRequest) carries it like an injected one, so a store clears it.
+func TestInjectTraceFieldsCoversSysContract(t *testing.T) {
+	dir := t.TempDir()
+	if err := CopySysProtos(dir); err != nil {
+		t.Fatalf("CopySysProtos: %v", err)
+	}
+	if err := writeMinimalGeneratedStubs([]string{dir}); err != nil {
+		t.Fatalf("writeMinimalGeneratedStubs: %v", err)
+	}
+	skipped, err := InjectTraceFields(dir, dir)
+	if err != nil {
+		t.Fatalf("InjectTraceFields: %v", err)
+	}
+	dp, err := parser.NewDescriptorParser(dir)
+	if err != nil {
+		t.Fatalf("NewDescriptorParser: %v", err)
+	}
+
+	checked := 0
+	for relPath, fileDesc := range dp.GetAllFiles() {
+		if !IsSysProto(relPath) {
+			continue
+		}
+		for _, msg := range fileDesc.Messages {
+			fqn := fileDesc.Package + "." + msg.Name
+			wantTrace := !IsTraceExemptSysMessage(relPath, msg.Name)
+			trace, noop := false, false
+			for _, f := range msg.Fields {
+				if IsTraceField(f.Name, int(f.Number)) {
+					if IsNoopField(f.Name, int(f.Number)) {
+						noop = true
+					} else {
+						trace = true
+					}
+				}
+			}
+			if wantTrace != trace || wantTrace != noop {
+				t.Errorf("%s (%s): trace_id = 200 %v, noop = 201 %v; want both %v", fqn, relPath, trace, noop, wantTrace)
+			}
+			if got := CarriesInjectedTrace(dp, fqn, skipped); got != wantTrace {
+				t.Errorf("CarriesInjectedTrace(%q) = %v, want %v", fqn, got, wantTrace)
+			}
+			checked++
+		}
+	}
+	if checked < 100 {
+		t.Fatalf("checked %d sys messages; the sys protos were not all parsed", checked)
+	}
+	for _, exempt := range []struct{ relPath, msg string }{
+		{"sys/spec.proto", "StringConst"},
+		{"sys/trace.proto", "TraceEvent"},
+	} {
+		if !IsTraceExemptSysMessage(exempt.relPath, exempt.msg) {
+			t.Errorf("%s %s must be exempt", exempt.relPath, exempt.msg)
 		}
 	}
 }

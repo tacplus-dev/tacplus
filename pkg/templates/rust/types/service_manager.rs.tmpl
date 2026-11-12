@@ -1152,7 +1152,12 @@ impl ServiceManager {
     /// `https://api.anthropic.com`) on every call: sub = this service's SPIFFE
     /// ID, ES256, a fresh jti, exp at most 600 seconds out. Do not cache it.
     pub async fn token_for_external(&self, audience: &str) -> Result<String, Box<dyn std::error::Error>> {
-        self.identity.token_for_external(audience).await
+        self.token_for_external_traced(audience, "").await
+    }
+
+    /// `token_for_external` with `trace_id` on the mint request it sends (#327).
+    pub async fn token_for_external_traced(&self, audience: &str, trace_id: &str) -> Result<String, Box<dyn std::error::Error>> {
+        self.identity.token_for_external_traced(audience, trace_id).await
     }
 
     /// Returns an audience-scoped token-provider closure backed by the identity
@@ -1359,6 +1364,7 @@ impl ServiceManager {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as i64,
+            ..Default::default()
         }
     }
 
@@ -2955,14 +2961,18 @@ async fn run_tls_cert_stream(
         msg: Some(tlscert_pb::tls_cert_client_msg::Msg::Init(tlscert_pb::TlsCertInit {
             service_name: service_label.to_string(),
             instance_id: instance_id.to_string(),
+            ..Default::default()
         })),
+        ..Default::default()
     }).await.map_err(|e| format!("send Init: {}", e))?;
 
     // Send initial Csr.
     tx.send(tlscert_pb::TlsCertClientMsg {
         msg: Some(tlscert_pb::tls_cert_client_msg::Msg::Csr(tlscert_pb::TlsCertCsr {
             public_key: Some(pub_proto),
+            ..Default::default()
         })),
+        ..Default::default()
     }).await.map_err(|e| format!("send Csr: {}", e))?;
 
     let conn = conn_provider.conn().await
@@ -3143,7 +3153,9 @@ async fn run_tls_cert_stream(
                 tx.send(tlscert_pb::TlsCertClientMsg {
                     msg: Some(tlscert_pb::tls_cert_client_msg::Msg::Csr(tlscert_pb::TlsCertCsr {
                         public_key: Some(new_pub_proto),
+                        ..Default::default()
                     })),
+                    ..Default::default()
                 }).await.map_err(|e| format!("send renewal Csr: {}", e))?;
             }
             Some(tlscert_pb::tls_cert_server_msg::Msg::Error(e)) => {
@@ -3255,14 +3267,18 @@ async fn run_smb_cert_stream(
         msg: Some(smbcert_pb::smb_cert_client_msg::Msg::Init(smbcert_pb::SmbCertInit {
             smb_service: service_label.to_string(),
             instance_id: instance_id.to_string(),
+            ..Default::default()
         })),
+        ..Default::default()
     }).await.map_err(|e| format!("send Init: {}", e))?;
 
     // Send initial Csr (public key only — private key never leaves the process).
     tx.send(smbcert_pb::SmbCertClientMsg {
         msg: Some(smbcert_pb::smb_cert_client_msg::Msg::Csr(smbcert_pb::SmbCertCsr {
             public_key: Some(pub_proto),
+            ..Default::default()
         })),
+        ..Default::default()
     }).await.map_err(|e| format!("send Csr: {}", e))?;
 
     let conn = conn_provider.conn().await
@@ -3345,7 +3361,9 @@ async fn run_smb_cert_stream(
                 tx.send(smbcert_pb::SmbCertClientMsg {
                     msg: Some(smbcert_pb::smb_cert_client_msg::Msg::Csr(smbcert_pb::SmbCertCsr {
                         public_key: Some(new_pub_proto),
+                        ..Default::default()
                     })),
+                    ..Default::default()
                 }).await.map_err(|e| format!("send renewal Csr: {}", e))?;
             }
             Some(smbcert_pb::smb_cert_server_msg::Msg::Error(e)) => {
@@ -3403,6 +3421,7 @@ fn generate_key_and_proto() -> Result<(Vec<u8>, Vec<u8>, key_pb::PublicKey), Box
         id: format!("auto-tls-{}", now),
         base64: pub_base64,
         created: now,
+        ..Default::default()
     }))
 }
 

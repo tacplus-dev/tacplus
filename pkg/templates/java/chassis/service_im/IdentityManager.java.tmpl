@@ -419,6 +419,15 @@ public class IdentityManager implements AutoCloseable {
      * workload identity federation) rejects a replayed jti.
      */
     public String tokenForExternal(String audience) throws Exception {
+        return tokenForExternal(audience, "");
+    }
+
+    /**
+     * The same call as {@link #tokenForExternal(String)}, with {@code traceId}
+     * on the MintExternalServiceTokenRequest it sends (#327): pass the trace_id
+     * of the request that caused this mint, or "" for none.
+     */
+    public String tokenForExternal(String audience, String traceId) throws Exception {
 {{- if .MintExternalServiceTokenMethod}}
         String inputToken = getToken();
         ManagedChannel ch;
@@ -434,6 +443,7 @@ public class IdentityManager implements AutoCloseable {
                         .setInputToken(inputToken)
                         .setAud(audience)
                         .setExp(java.time.Instant.now().getEpochSecond() + EXTERNAL_TOKEN_LIFETIME_SECS)
+                        .setTraceId(traceId)
                         .build());
         String token = resp.getAccessToken().getBase64();
         if (token.isEmpty()) {

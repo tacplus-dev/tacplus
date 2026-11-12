@@ -499,6 +499,12 @@ func (im *IdentityManager) getTokenForOnce(audience string) (string, error) {
 // jti, exp at most 600 seconds out. Never cached — an external verifier (e.g.
 // workload identity federation) rejects a replayed jti.
 func (im *IdentityManager) TokenForExternal(audience string) (string, error) {
+	return im.TokenForExternalTraced(audience, "")
+}
+
+// TokenForExternalTraced is TokenForExternal with traceID on the mint request
+// it sends (#327).
+func (im *IdentityManager) TokenForExternalTraced(audience, traceID string) (string, error) {
 {{- if .MintExternalServiceTokenMethod}}
 	inputToken, err := im.GetToken()
 	if err != nil {
@@ -516,6 +522,7 @@ func (im *IdentityManager) TokenForExternal(audience string) (string, error) {
 		InputToken: inputToken,
 		Aud:        audience,
 		Exp:        time.Now().Add(externalTokenLifetime).Unix(),
+		TraceId:    traceID,
 	})
 	if err != nil {
 		return "", fmt.Errorf("external token mint (%s): %w", audience, err)
@@ -526,7 +533,7 @@ func (im *IdentityManager) TokenForExternal(audience string) (string, error) {
 	}
 	return token, nil
 {{- else}}
-	_ = audience
+	_, _ = audience, traceID
 	return "", fmt.Errorf("im: the token minter declares no MintExternalServiceTokenRequest RPC")
 {{- end}}
 }

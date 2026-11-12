@@ -109,7 +109,7 @@ public final class {{.ClassName}} implements {{.HandlerIfaceFqn}} {
                 .build();
         // page size 1: a key is unique, so a second row would be a store bug and
         // not something to page through.
-        {{$.PageResultFqn}}<{{.RecordFqn}}> page = sm.{{.ReaderAccessor}}().list({{if $.Routed}}tenant, {{end}}filter, 1, "");
+        {{$.PageResultFqn}}<{{.RecordFqn}}> page = sm.{{.ReaderAccessor}}().list({{if $.Routed}}tenant, {{end}}filter, 1, "", request.getTraceId());
         return {{$.SelfOuter}}.{{.GetResp}}.newBuilder().addAllItems(page.items).build();
     }
 
@@ -136,7 +136,7 @@ public final class {{.ClassName}} implements {{.HandlerIfaceFqn}} {
         }
 {{- end}}
         filter.{{.PrincipalPinSetter}}(principal).{{.NamespacePinSetter}}(namespace);
-        {{$.PageResultFqn}}<{{.RecordFqn}}> page = sm.{{.ReaderAccessor}}().list({{if $.Routed}}tenant, {{end}}filter.build(), request.getPageSize(), request.getPageToken());
+        {{$.PageResultFqn}}<{{.RecordFqn}}> page = sm.{{.ReaderAccessor}}().list({{if $.Routed}}tenant, {{end}}filter.build(), request.getPageSize(), request.getPageToken(), request.getTraceId());
         return {{$.SelfOuter}}.{{.ListResp}}.newBuilder()
                 .addAllItems(page.items)
                 .setNextPageToken(page.nextPageToken == null ? "" : page.nextPageToken)

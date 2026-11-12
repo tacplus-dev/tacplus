@@ -670,6 +670,11 @@ func (im *IdentityManager) TokenForExternal(audience string) (string, error) {
 	return "", errNoTokenSource
 }
 
+func (im *IdentityManager) TokenForExternalTraced(audience, traceID string) (string, error) {
+	_, _ = audience, traceID
+	return "", errNoTokenSource
+}
+
 func (im *IdentityManager) InstanceId() string {
 	if im == nil || im.cfg == nil {
 		return ""

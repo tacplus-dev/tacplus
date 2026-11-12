@@ -46,9 +46,9 @@ func TestJavaRecordC2SHandlerPinsCallerAndCopiesCriteria(t *testing.T) {
 		".setActivityId(request.getActivityId())",
 		".setOwnerSubject(principal)",
 		".setTenantNamespace(namespace)",
-		"sm.scottyActivityRecordReader().list(filter, 1, \"\")",
+		"sm.scottyActivityRecordReader().list(filter, 1, \"\", request.getTraceId())",
 		"if (supplied.hasUpdatedAtMsFrom()) {\n            filter.setUpdatedAtMsFrom(supplied.getUpdatedAtMsFrom());",
-		"sm.scottyActivityRecordReader().list(filter.build(), request.getPageSize(), request.getPageToken())",
+		"sm.scottyActivityRecordReader().list(filter.build(), request.getPageSize(), request.getPageToken(), request.getTraceId())",
 		".setTotalCount(page.total)",
 	} {
 		if !strings.Contains(src, want) {
@@ -97,9 +97,9 @@ func TestJavaRecordC2SHandlerRoutedReadsTheCallersTenant(t *testing.T) {
 		`throw new ProtoException(ProtoException.PERMISSION_DENIED,
                     method + ": the caller's namespace belongs to no tenant, and the record store is one instance per tenant");`,
 		`String tenant = requireTenant("GetScottyActivity", namespace);`,
-		"sm.scottyActivityRecordReader().list(tenant, filter, 1, \"\")",
+		"sm.scottyActivityRecordReader().list(tenant, filter, 1, \"\", request.getTraceId())",
 		`String tenant = requireTenant("GetScottyActivityPage", namespace);`,
-		"sm.scottyActivityRecordReader().list(tenant, filter.build(), request.getPageSize(), request.getPageToken())",
+		"sm.scottyActivityRecordReader().list(tenant, filter.build(), request.getPageSize(), request.getPageToken(), request.getTraceId())",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("routed plane handler missing %q:\n%s", want, src)

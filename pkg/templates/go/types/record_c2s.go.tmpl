@@ -112,7 +112,7 @@ func (g *{{$.StructName}}) {{.GetMethodName}}(ctx context.Context, caller *servi
 	}
 	// page size 1: a key is unique, so a second row would be a store bug and
 	// not something to page through.
-	items, _, _, err := g.sm.{{.ReaderAccessor}}().List(ctx, {{if $.Routed}}tenant, {{end}}filter, 1, "")
+	items, _, _, err := g.sm.{{.ReaderAccessor}}().ListTraced(ctx, {{if $.Routed}}tenant, {{end}}filter, 1, "", req.GetTraceId())
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +147,7 @@ func (g *{{$.StructName}}) {{.ListMethodName}}(ctx context.Context, caller *serv
 		{{.PrincipalPinGoField}}: &principal,
 		{{.NamespacePinGoField}}: &namespace,
 	}
-	items, next, total, err := g.sm.{{.ReaderAccessor}}().List(ctx, {{if $.Routed}}tenant, {{end}}filter, req.GetPageSize(), req.GetPageToken())
+	items, next, total, err := g.sm.{{.ReaderAccessor}}().ListTraced(ctx, {{if $.Routed}}tenant, {{end}}filter, req.GetPageSize(), req.GetPageToken(), req.GetTraceId())
 	if err != nil {
 		return nil, err
 	}

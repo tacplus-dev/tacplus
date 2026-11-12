@@ -413,8 +413,10 @@ async fn send_tls_cert(
         msg: Some(tlscert_pb::tls_cert_server_msg::Msg::Cert(
             tlscert_pb::TlsCertDelivery {
                 chain: Some(cert_chain_for_public_key(public_key, id)),
+                ..Default::default()
             },
         )),
+        ..Default::default()
     }))
     .await
 }
@@ -430,8 +432,10 @@ async fn send_tls_renew(
         msg: Some(tlscert_pb::tls_cert_server_msg::Msg::Renew(
             tlscert_pb::TlsCertRenew {
                 reason: reason.to_string(),
+                ..Default::default()
             },
         )),
+        ..Default::default()
     }))
     .await
 }
@@ -447,6 +451,7 @@ async fn send_tls_error(
         msg: Some(tlscert_pb::tls_cert_server_msg::Msg::Error(
             error.to_string(),
         )),
+        ..Default::default()
     }))
     .await
 }
@@ -464,8 +469,10 @@ async fn send_smb_cert(
             smbcert_pb::SmbCertDelivery {
                 member_chain: Some(cert_chain_for_public_key(public_key, id)),
                 ca: Some(proto_cert("rust-smb-ca", &[1, 2, 3])),
+                ..Default::default()
             },
         )),
+        ..Default::default()
     }))
     .await
 }
@@ -481,8 +488,10 @@ async fn send_smb_renew(
         msg: Some(smbcert_pb::smb_cert_server_msg::Msg::Renew(
             smbcert_pb::SmbCertRenew {
                 reason: reason.to_string(),
+                ..Default::default()
             },
         )),
+        ..Default::default()
     }))
     .await
 }
@@ -498,6 +507,7 @@ async fn send_smb_error(
         msg: Some(smbcert_pb::smb_cert_server_msg::Msg::Error(
             error.to_string(),
         )),
+        ..Default::default()
     }))
     .await
 }
@@ -508,6 +518,7 @@ fn cert_chain_for_public_key(public_key: &key_pb::PublicKey, id: &str) -> x509_p
         chain: vec![proto_cert(id, &cert_der)],
         key: None,
         id: id.to_string(),
+        ..Default::default()
     }
 }
 
@@ -515,6 +526,7 @@ fn proto_cert(id: &str, der: &[u8]) -> x509_pb::X509Cert {
     x509_pb::X509Cert {
         id: id.to_string(),
         base64: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(der),
+        ..Default::default()
     }
 }
 
@@ -1410,6 +1422,7 @@ fn rust_public_key_validation_rejects_empty_cert_chain() {
         id: "empty".to_string(),
         chain: Vec::new(),
         key: None,
+        ..Default::default()
     };
 
     let err = cert_leaf_matches_public_key(&chain, b"expected-key")

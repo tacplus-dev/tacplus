@@ -44,6 +44,7 @@ pub async fn build_aws_cloud_proof() -> Result<CloudIdentityProof, Box<dyn std::
             url: sts_url,
             headers: signed_headers,
             body: body.to_string(),
+            ..Default::default()
         }),
         ..Default::default()
     })

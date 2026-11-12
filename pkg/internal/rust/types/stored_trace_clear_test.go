@@ -43,7 +43,7 @@ func TestRustStateClientClearsInjectedTraceBeforeStoring(t *testing.T) {
 	for _, want := range []string{
 		"pub async fn set(&self, value: Config) -> Result<Config, tonic::Status> {\n" + clear +
 			"        let req = self.inner.authorized_request(value).await?;",
-		"pub async fn put_players(&self, key: String, value: Player) -> Result<(), tonic::Status> {\n" + clear +
+		"pub async fn put_players_traced(&self, key: String, value: Player, trace_id: &str) -> Result<(), tonic::Status> {\n" + clear +
 			"        let req = self.authorized_request(PlayersPutRequest {",
 	} {
 		if !strings.Contains(traced, want) {
@@ -58,7 +58,8 @@ func TestRustStateClientClearsInjectedTraceBeforeStoring(t *testing.T) {
 
 	// Paired control: a type without the injected trace generates as before.
 	plain := renderRustStateWrapperForTest(t, data(false))
-	if strings.Contains(plain, "trace_id") || strings.Contains(plain, "#313") {
+	// The requests carry their own trace_id (#327); the VALUE is never touched.
+	if strings.Contains(plain, "value.trace_id") || strings.Contains(plain, "#313") {
 		t.Fatalf("untraced state client must not clear a trace:\n%s", plain)
 	}
 }

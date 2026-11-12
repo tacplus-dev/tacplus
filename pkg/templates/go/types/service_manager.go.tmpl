@@ -873,6 +873,12 @@ func (sm *ServiceManager) TokenForExternal(audience string) (string, error) {
 return sm.identity.TokenForExternal(audience)
 }
 
+// TokenForExternalTraced is TokenForExternal with traceID on the mint request
+// it sends (#327).
+func (sm *ServiceManager) TokenForExternalTraced(audience, traceID string) (string, error) {
+return sm.identity.TokenForExternalTraced(audience, traceID)
+}
+
 // Close releases all resources held by the ServiceManager.
 // Use this when not calling Run(), e.g. in gateway or other custom entrypoints.
 func (sm *ServiceManager) Close() {

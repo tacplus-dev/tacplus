@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by looper (#313).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by looper (#327).
 
 - **Version / line:** v2.6.2 (latest release, 2026-11-07, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -65,8 +65,14 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   clears field 200 before it persists (the record dispatch, the service_store disk helpers, the store wrappers and the
   record write surface, the record store's subscriptions, state `Put`/`Set`), in Go, Java and Rust
   (`cross-test/trace-carry`, in `just gates`; on main for 2.7, and backported to release/2.0 through release/2.6 by pull requests #330-#336, each line's next patch).
-  Gap: sys contract messages mostly lack field 200, and helpers that build their own request take no `trace_id`
-  (#327, 2.7); a message without field 200 is not yet refused (#328, 3.0).
+  In 2.7 (#327): every message of the sys contract carries field 200 (not `sys/spec.proto`'s option schemas or
+  `trace.TraceEvent`), injected like a user's; every generated helper that builds its own request has an additive
+  traced form (Go `…Traced`, Java an overload with a trailing `traceId`, Rust `…_traced`): the state clients, the
+  record readers (and the generated record C2S handlers pass their request's trace to them) and `TokenForExternal`;
+  `cross-test/trace-carry` drives each against a recorder of field 200 and checks every generated sys message.
+  Gap: a message without field 200 is not yet refused, and the untraced forms stay (#328, 3.0); the `generated/`
+  protos, the approval check, the EventBus subscriber and a singleton's `Set` stay untraced (PROPOSALS.md); a Go
+  state topic (#454) and a Java state queue (#456) do not compile, so the gate's fixture has neither.
   The build image's docker-buildx is built from the v0.38.1 source with moby/go-archive 0.3.3 and golang.org/x/net
   0.62.0 (CVE-2026-17106, CVE-2026-78669, CVE-2026-78661, CVE-2026-97045; `tacplus-smoke` checks the floors)
   (#190; backported to release/2.0 through release/2.5 by pull request, as v2.0.13, v2.1.6, v2.2.3, v2.3.5, v2.4.4

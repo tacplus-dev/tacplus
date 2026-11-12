@@ -1,0 +1,73 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+// The trace-helpers gate's model (tacplus#327): every generated helper that
+// builds its own request has a traced form that puts the trace on it. The legs
+// drive the state client's helpers and the record reader and read field 200 off
+// each request they send. No topic (#454, Go) and no queue (#456, Java): their
+// state clients do not compile yet; Go's queue helpers are covered by
+// pkg/internal/go/types/stateclient_render_test.go meanwhile.
+syntax = "proto3";
+
+package tracehelpers;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "tracehelpers"};
+option (spec.vservice) = {
+  name: "tracehelpers"
+  id: 30
+};
+
+option (spec.record_read) = {
+  record: "tracehelpers.HelperRow"
+};
+
+message HelperRow {
+  option (spec.record) = {
+    key: "row_id"
+    owner: "owner"
+    s2s: {auth_services: ["*"]}
+    s2s_read: {auth_services: ["*"]}
+  };
+
+  string row_id = 1 [(spec.assert_required) = true];
+  string namespace = 2 [
+    (spec.assert_required) = true,
+    (spec.query_field) = {op: QUERY_OP_EQ},
+    (spec.store_namespace) = true
+  ];
+  string owner = 3 [
+    (spec.assert_required) = true,
+    (spec.query_field) = {op: QUERY_OP_EQ},
+    (spec.store_principal) = true
+  ];
+}
+
+message Settings {
+  string motd = 1 [(spec.assert_max_size) = 64];
+}
+
+message Player {
+  string player_id = 1 [(spec.indexed) = true, (spec.assert_max_size) = 64];
+  string name = 2 [(spec.assert_max_size) = 64];
+}
+
+message HelperState {
+  option (spec.service_state) = {label: ["kernel"]};
+
+  Settings settings = 1;
+  repeated Player players = 2;
+  repeated Player bench = 3;
+  repeated Player roster = 4 [(spec.view_sources) = "players", (spec.view_sources) = "bench"];
+}
+
+message HelperPing {}
+
+service TraceHelpers {
+  option (spec.service_s2s) = {};
+
+  rpc Ping(HelperPing) returns (HelperPing) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}

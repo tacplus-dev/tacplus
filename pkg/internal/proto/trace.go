@@ -51,8 +51,23 @@ func IsNoopField(name string, number int) bool {
 var TraceFieldsProto = fmt.Sprintf("  string %s = %d;\n  bool %s = %d;\n",
 	traceIDFieldName, traceIDFieldNumber, noopFieldName, noopFieldNumber)
 
-// InjectTraceFields injects trace fields into every user-defined message
-// in the proto directory. Each message gets:
+// IsTraceExemptSysMessage reports whether a message of the sys contract
+// (relPath under sys/) is one of the two kinds that carry no field 200:
+// sys/spec.proto's option schemas, read by the compiler and never on the wire,
+// and trace.TraceEvent, which carries the trace it reports as trace_id = 1.
+func IsTraceExemptSysMessage(relPath, msgName string) bool {
+	switch filepath.ToSlash(relPath) {
+	case "sys/spec.proto":
+		return true
+	case "sys/trace.proto":
+		return msgName == "TraceEvent"
+	}
+	return false
+}
+
+// InjectTraceFields injects trace fields into every user-defined message and
+// every message of the sys contract but the IsTraceExemptSysMessage ones
+// (#327) in the proto directory. Each message gets:
 //
 //	string trace_id = 200;
 //	bool noop = 201;
@@ -82,7 +97,8 @@ func InjectTraceFields(tempProtoDir, inputDir string) (SkippedTraceTypes, error)
 	fileMessages := make(map[string][]messageInfo)
 
 	for relPath, fileDesc := range dp.GetAllFiles() {
-		if IsInfraProtoFile(relPath, fileDesc) {
+		sysFile := IsSysProto(relPath)
+		if IsInfraProtoFile(relPath, fileDesc) && !sysFile {
 			continue
 		}
 		eventBusRPCMessages := eventBusTraceRPCMessages(relPath, fileDesc)
@@ -110,15 +126,26 @@ func InjectTraceFields(tempProtoDir, inputDir string) (SkippedTraceTypes, error)
 					continue
 				}
 			}
+			if sysFile && IsTraceExemptSysMessage(relPath, msg.Name) {
+				continue
+			}
 			// Check if trace fields already exist (idempotency).
 			// Skip by trace field number (200/201) or by name (trace_id/noop)
 			// to avoid conflicts with messages that already define trace_id.
-			hasTrace := false
+			hasTrace, declaresTrace := false, false
 			for _, f := range msg.Fields {
 				if f.Number == traceIDFieldNumber || f.Number == noopFieldNumber || f.Name == traceIDFieldName || f.Name == noopFieldName {
 					hasTrace = true
-					break
 				}
+				if f.Number == traceIDFieldNumber && f.Name == traceIDFieldName {
+					declaresTrace = true
+				}
+			}
+			// A sys message that declares trace_id = 200 itself
+			// (sys/tokenrequest.proto, trace.TraceRequest) is tacplus's own
+			// declaration of the same field, not an author's: not skipped.
+			if hasTrace && sysFile && declaresTrace {
+				continue
 			}
 			if hasTrace {
 				fqn := fileDesc.Package + "." + msg.Name
@@ -196,7 +223,7 @@ func InjectTraceFields(tempProtoDir, inputDir string) (SkippedTraceTypes, error)
 // CarriesInjectedTrace reports whether the message typeFqn (e.g.
 // "ballsports.Player"), as parsed by dp from the post-injection proto
 // directory, carries the trace_id InjectTraceFields added. False for a type
-// that is not found, lives in an infra proto (never injected), was recorded in
+// that is not found, lives in an infra proto outside sys/ (never injected), was recorded in
 // skipped (a <T>Public view, or a message defining its own trace_id/noop), or
 // simply has no trace_id at field 200.
 //
@@ -220,7 +247,7 @@ func CarriesInjectedTrace(dp *parser.DescriptorParser, typeFqn string, skipped m
 			if msg.Name != name {
 				continue
 			}
-			if IsInfraProtoFile(relPath, fileDesc) {
+			if IsInfraProtoFile(relPath, fileDesc) && !IsSysProto(relPath) {
 				return false
 			}
 			for _, f := range msg.Fields {

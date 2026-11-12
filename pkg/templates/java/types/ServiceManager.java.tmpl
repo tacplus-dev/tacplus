@@ -734,6 +734,15 @@ public class ServiceManager implements AutoCloseable {
     }
 
     /**
+     * The same call as {@link #tokenForExternal(String)}, with {@code traceId}
+     * on the mint request it sends (#327): pass the trace_id of the request
+     * that caused this call, or "" for none.
+     */
+    public String tokenForExternal(String audience, String traceId) throws Exception {
+        return identity.tokenForExternal(audience, traceId);
+    }
+
+    /**
      * Returns a token provider function for authenticated gRPC calls.
      * Returns a Supplier that yields the current bearer token.
      */

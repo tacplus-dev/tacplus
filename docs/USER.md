@@ -2128,7 +2128,11 @@ A trace follows one piece of work through the fleet in the `trace_id` field
 tacplus injects `string trace_id = 200;` and `bool noop = 201;` into every
 message of your protos. That includes the messages it generates from them:
 transformation outputs, the state service's requests, the record query plane
-and the write surface. These are the exceptions, each for a reason:
+and the write surface. Since 2.7 (#327) it also injects them into every message
+of the sys contract (`sys/*.proto`): its requests, responses, events, records,
+state and redo types, e.g. `redolog.RedoAppend`, `query`, `mcp` and
+`servicehealth`. `sys/tokenrequest.proto` and `trace.TraceRequest` declare the
+two fields themselves. These are the exceptions, each for a reason:
 
 | Message | Why it has no field 200 |
 |---|---|
@@ -2136,10 +2140,6 @@ and the write surface. These are the exceptions, each for a reason:
 | `<T>Public` (public view) | A renderer is handed only the SHOW fields, so a trace never reaches it (privacy). `<T>ToPublic` has nothing to copy it into. |
 | `trace.TraceEvent` | It is the trace's own record. It carries the trace it reports as `trace_id = 1`. |
 | A message that already declares `trace_id` or `noop` at another number | The field is the author's own and is left as declared. In 3.0 it is a generation error, and a warning before that (#328). |
-
-The sys contract's other messages carry field 200 only where their proto
-declares it: `sys/tokenrequest.proto` and `trace.TraceRequest`. Field 200 on
-every sys wire message comes in 2.7 (#327).
 
 ### Your code propagates it
 
@@ -2177,10 +2177,55 @@ async fn handle_request(&self, req: MyRequest) -> Result<MyResponse, ProtoError>
 The same pattern applies in Java, TypeScript and Python. Omitting the
 `trace_id` on a causal call breaks the trace chain from there on.
 
-A generated helper that builds its request itself from a key (a state client's
-`Fetch<F>(ctx, key)`, `Delete<F>`, `Query<F>`, the record readers) has no
-`trace_id` parameter yet, so its request goes out untraced. 2.7 adds a traced
-form of each beside today's (#327), and 3.0 keeps only the traced one (#328).
+### Helpers that build the request take the trace
+
+A generated helper that builds its request itself, from a key or from nothing
+(a state client's `Fetch<F>(ctx, key)`, the record readers), has no request
+of yours to copy the trace onto. Since 2.7 (#327) each has a **traced form**
+that takes the `trace_id` and puts it on every request it sends; today's form
+is the traced one with no trace, and stays until 3.0, which keeps only the
+traced one (#328).
+
+| Language | Traced form |
+|---|---|
+| Go | `<Helper>Traced(<same arguments>, traceID string)`, e.g. `FetchPlayersTraced(ctx, key, req.TraceId)` |
+| Java | an overload with a trailing `String traceId`, e.g. `fetchPlayers(key, req.getTraceId())` |
+| Rust | `<helper>_traced(<same arguments>, trace_id: &str)`, e.g. `fetch_players_traced(key, &req.trace_id)` |
+
+```go
+// Go: the read this handler causes carries its trace.
+player, err := s.state.FetchPlayersTraced(ctx, req.PlayerId, req.TraceId)
+```
+
+The helpers with a traced form:
+
+| Helper | Go / Java / Rust | Requests it traces |
+|---|---|---|
+| State singleton fetch | `<F>().FetchTraced` / `fetch<F>(traceId)`, `<f>().fetch(traceId)` / `<f>().fetch_traced` | `Get<F>` |
+| State collection fetch-all, put, delete | `FetchAll<F>Traced`, `Put<F>Traced`, `Delete<F>Traced` / `fetchAll<F>`, `put<F>`, `delete<F>` overloads / `fetch_all_<f>_traced`, `put_<f>_traced`, `delete_<f>_traced` | `GetAll<F>`, `Put<F>` (the stored value still keeps no trace), `Delete<F>` |
+| State collection fetch by key, query (Go) | `Fetch<F>Traced`, `Query<F>Traced`, `WatchQuery<F>Traced` | `Get<F>`, `Query<F>`, `WatchQuery<F>` |
+| State view reads (Go) | `Fetch<V>Traced`, `FetchAll<V>Traced`, `ContainsKey<V>Traced`, `KeySet<V>Traced`, `Size<V>Traced`, `Watch<V>Traced`, `Query<V>Traced`, `WatchQuery<V>Traced` | the view's RPC |
+| State topic subscribe, queue consume/peek/size (Go) | `SubscribeTraced`, `ConsumeTraced`, `PeekTraced`, `SizeTraced` | the boundary's RPC |
+| Record reader | `GetTraced`, `ListTraced` / `get`, `list` overloads / `get_traced`, `list_traced` | the read; a list's create, page and release |
+| External token | `TokenForExternalTraced` / `tokenForExternal(audience, traceId)` / `token_for_external_traced` | `MintExternalServiceTokenRequest` |
+
+The rows marked (Go) are helpers only the Go state client has; the Java and
+Rust state clients read those boundaries from their local cache, which sends
+nothing. In Java, pass `""`, never `null`, for no trace.
+
+Not traced, by design:
+- the state client's background watch loops and the ServiceManager's startup
+  config fetch: no request causes them;
+- the helpers that send your own message (a singleton's `Set`, a topic's
+  `Publish`, a queue's `Offer`, a command): you set its `trace_id`, as on any
+  message you build. `Set` sends the value it stores, whose trace is cleared,
+  so a `Set` goes out untraced;
+- the generated record C2S read handlers need nothing from you: they call the
+  reader's traced form with their own request's `trace_id`.
+
+`cross-test/trace-carry` (in `just gates`) drives each traced form in Go, Java
+and Rust and reads field 200 off every request it sends, and checks that every
+generated sys message has field 200.
 
 ### Projections and transformations copy it
 

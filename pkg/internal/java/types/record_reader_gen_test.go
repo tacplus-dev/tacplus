@@ -47,7 +47,7 @@ func TestJavaRecordReaderRendersGetAndList(t *testing.T) {
 		"public com.example.chassis.collection.CollectionRuntime.PageResult<com.example.types.services.messaging.Messaging.Message> list(com.example.types.vservices.query.Query.MessageFilter filter, int pageSize, String pageToken)",
 		"client.createMessageQuery(open.build())",
 		"client.listMessagePage(com.example.types.vservices.query.Query.PullMessageRequest.newBuilder()",
-		"client.deleteMessageQuery(com.example.types.vservices.query.Query.QueryHandle.newBuilder().setQueryId(handle.getQueryId()).build())",
+		"client.deleteMessageQuery(com.example.types.vservices.query.Query.QueryHandle.newBuilder().setQueryId(handle.getQueryId()).setTraceId(traceId).build())",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("generated reader missing %q:\n%s", want, out)
@@ -133,8 +133,8 @@ func TestJavaRecordReaderRoutedSetsTheTenantOnEveryCall(t *testing.T) {
 		"return queryPage(tenant, filter,",
 		"queryPage(String tenant, com.example.types.vservices.query.Query.MessageFilter filter,",
 		"open.setTargetTenant(tenant);",
-		".setPageToken(pageToken)\n                    .setTargetTenant(tenant)\n                    .build());",
-		"QueryHandle.newBuilder().setQueryId(handle.getQueryId()).setTargetTenant(tenant).build()",
+		".setPageToken(pageToken)\n                    .setTraceId(traceId)\n                    .setTargetTenant(tenant)\n                    .build());",
+		"QueryHandle.newBuilder().setQueryId(handle.getQueryId()).setTargetTenant(tenant).setTraceId(traceId).build()",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("routed reader missing %q:\n%s", want, out)

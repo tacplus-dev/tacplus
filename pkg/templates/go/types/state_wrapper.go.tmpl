@@ -662,10 +662,15 @@ func (w *{{$s.FieldName}}Wrapper) Get() *{{TypeRef $s.GoType $s.IsCrossPackage}}
 // arrives zero-valued and fails its own (spec.assert_*) check, and the retry
 // loop burns its whole budget on a value that should have passed.
 func (w *{{$s.FieldName}}Wrapper) Fetch(ctx context.Context) (*{{TypeRef $s.GoType $s.IsCrossPackage}}, error) {
+	return w.FetchTraced(ctx, "")
+}
+
+// FetchTraced is Fetch with traceID on each request it sends (#327).
+func (w *{{$s.FieldName}}Wrapper) FetchTraced(ctx context.Context, traceID string) (*{{TypeRef $s.GoType $s.IsCrossPackage}}, error) {
 	timeout := w.parent.configFetchTimeout()
 	deadline := time.Now().Add(timeout)
 	for attempt := 0; ; attempt++ {
-		value, err := w.parent.stateStub.Get{{$s.FieldName}}(ctx, &trace_pb.TraceRequest{})
+		value, err := w.parent.stateStub.Get{{$s.FieldName}}(ctx, &trace_pb.TraceRequest{TraceId: traceID})
 		if err != nil {
 			return nil, err
 		}
@@ -773,7 +778,12 @@ func (c *{{$.ClientTypeName}}) Get{{$c.FieldName}}() []*{{TypeRef $c.GoType $c.I
 
 // Fetch{{$c.FieldName}} retrieves a single {{$c.TypeName}} by key from the state service.
 func (c *{{$.ClientTypeName}}) Fetch{{$c.FieldName}}(ctx context.Context, key string) (*{{TypeRef $c.GoType $c.IsCrossPackage}}, error) {
-	resp, err := c.stateStub.Get{{$c.FieldName}}(ctx, &types.{{$c.FieldName}}GetRequest{Key: key})
+	return c.Fetch{{$c.FieldName}}Traced(ctx, key, "")
+}
+
+// Fetch{{$c.FieldName}}Traced is Fetch{{$c.FieldName}} with traceID on the request it sends (#327).
+func (c *{{$.ClientTypeName}}) Fetch{{$c.FieldName}}Traced(ctx context.Context, key, traceID string) (*{{TypeRef $c.GoType $c.IsCrossPackage}}, error) {
+	resp, err := c.stateStub.Get{{$c.FieldName}}(ctx, &types.{{$c.FieldName}}GetRequest{Key: key, TraceId: traceID})
 	if err != nil {
 		return nil, err
 	}
@@ -785,7 +795,12 @@ func (c *{{$.ClientTypeName}}) Fetch{{$c.FieldName}}(ctx context.Context, key st
 
 // Query{{$c.FieldName}} executes a structured query against the {{$c.FieldName}} collection.
 func (c *{{$.ClientTypeName}}) Query{{$c.FieldName}}(ctx context.Context, q *types.CollectionQuery) ([]*{{TypeRef $c.GoType $c.IsCrossPackage}}, int32, error) {
-	resp, err := c.stateStub.Query{{$c.FieldName}}(ctx, &types.{{$c.FieldName}}QueryRequest{Query: q})
+	return c.Query{{$c.FieldName}}Traced(ctx, q, "")
+}
+
+// Query{{$c.FieldName}}Traced is Query{{$c.FieldName}} with traceID on the request it sends (#327).
+func (c *{{$.ClientTypeName}}) Query{{$c.FieldName}}Traced(ctx context.Context, q *types.CollectionQuery, traceID string) ([]*{{TypeRef $c.GoType $c.IsCrossPackage}}, int32, error) {
+	resp, err := c.stateStub.Query{{$c.FieldName}}(ctx, &types.{{$c.FieldName}}QueryRequest{Query: q, TraceId: traceID})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -794,12 +809,22 @@ func (c *{{$.ClientTypeName}}) Query{{$c.FieldName}}(ctx context.Context, q *typ
 
 // WatchQuery{{$c.FieldName}} opens a server-streaming query subscription on the {{$c.FieldName}} collection.
 func (c *{{$.ClientTypeName}}) WatchQuery{{$c.FieldName}}(ctx context.Context, q *types.CollectionQuery) (types.{{$.StateServiceName}}_WatchQuery{{$c.FieldName}}Client, error) {
-	return c.stateStub.WatchQuery{{$c.FieldName}}(ctx, &types.{{$c.FieldName}}QueryRequest{Query: q})
+	return c.WatchQuery{{$c.FieldName}}Traced(ctx, q, "")
+}
+
+// WatchQuery{{$c.FieldName}}Traced is WatchQuery{{$c.FieldName}} with traceID on the request it sends (#327).
+func (c *{{$.ClientTypeName}}) WatchQuery{{$c.FieldName}}Traced(ctx context.Context, q *types.CollectionQuery, traceID string) (types.{{$.StateServiceName}}_WatchQuery{{$c.FieldName}}Client, error) {
+	return c.stateStub.WatchQuery{{$c.FieldName}}(ctx, &types.{{$c.FieldName}}QueryRequest{Query: q, TraceId: traceID})
 }
 
 // FetchAll{{$c.FieldName}} retrieves all entries from the {{$c.FieldName}} collection via GetAll RPC.
 func (c *{{$.ClientTypeName}}) FetchAll{{$c.FieldName}}(ctx context.Context) (map[string]*{{TypeRef $c.GoType $c.IsCrossPackage}}, error) {
-	resp, err := c.stateStub.GetAll{{$c.FieldName}}(ctx, &types.{{$c.FieldName}}GetAllRequest{})
+	return c.FetchAll{{$c.FieldName}}Traced(ctx, "")
+}
+
+// FetchAll{{$c.FieldName}}Traced is FetchAll{{$c.FieldName}} with traceID on the request it sends (#327).
+func (c *{{$.ClientTypeName}}) FetchAll{{$c.FieldName}}Traced(ctx context.Context, traceID string) (map[string]*{{TypeRef $c.GoType $c.IsCrossPackage}}, error) {
+	resp, err := c.stateStub.GetAll{{$c.FieldName}}(ctx, &types.{{$c.FieldName}}GetAllRequest{TraceId: traceID})
 	if err != nil {
 		return nil, err
 	}
@@ -809,6 +834,12 @@ func (c *{{$.ClientTypeName}}) FetchAll{{$c.FieldName}}(ctx context.Context) (ma
 // Put{{$c.FieldName}} inserts or updates a {{$c.TypeName}} in the {{$c.FieldName}} collection via Put RPC.
 // Returns the previous value (nil if the key was new).
 func (c *{{$.ClientTypeName}}) Put{{$c.FieldName}}(ctx context.Context, key string, value *{{TypeRef $c.GoType $c.IsCrossPackage}}) (*{{TypeRef $c.GoType $c.IsCrossPackage}}, error) {
+	return c.Put{{$c.FieldName}}Traced(ctx, key, value, "")
+}
+
+// Put{{$c.FieldName}}Traced is Put{{$c.FieldName}} with traceID on the request it sends (#327).
+// The stored value still keeps no trace.
+func (c *{{$.ClientTypeName}}) Put{{$c.FieldName}}Traced(ctx context.Context, key string, value *{{TypeRef $c.GoType $c.IsCrossPackage}}, traceID string) (*{{TypeRef $c.GoType $c.IsCrossPackage}}, error) {
 {{- if $c.ClearTrace}}
 	// A stored value never keeps a trace (#313).
 	if value != nil {
@@ -816,7 +847,7 @@ func (c *{{$.ClientTypeName}}) Put{{$c.FieldName}}(ctx context.Context, key stri
 		value.TraceId = ""
 	}
 {{- end}}
-	resp, err := c.stateStub.Put{{$c.FieldName}}(ctx, &types.{{$c.FieldName}}PutRequest{Key: key, Value: value})
+	resp, err := c.stateStub.Put{{$c.FieldName}}(ctx, &types.{{$c.FieldName}}PutRequest{Key: key, Value: value, TraceId: traceID})
 	if err != nil {
 		return nil, err
 	}
@@ -828,7 +859,12 @@ func (c *{{$.ClientTypeName}}) Put{{$c.FieldName}}(ctx context.Context, key stri
 
 // Delete{{$c.FieldName}} removes a {{$c.TypeName}} by key from the {{$c.FieldName}} collection via Delete RPC.
 func (c *{{$.ClientTypeName}}) Delete{{$c.FieldName}}(ctx context.Context, key string) error {
-	_, err := c.stateStub.Delete{{$c.FieldName}}(ctx, &types.{{$c.FieldName}}GetRequest{Key: key})
+	return c.Delete{{$c.FieldName}}Traced(ctx, key, "")
+}
+
+// Delete{{$c.FieldName}}Traced is Delete{{$c.FieldName}} with traceID on the request it sends (#327).
+func (c *{{$.ClientTypeName}}) Delete{{$c.FieldName}}Traced(ctx context.Context, key, traceID string) error {
+	_, err := c.stateStub.Delete{{$c.FieldName}}(ctx, &types.{{$c.FieldName}}GetRequest{Key: key, TraceId: traceID})
 	return err
 }
 {{end}}
@@ -856,7 +892,12 @@ func (w *{{$t.FieldName}}Wrapper) Publish(ctx context.Context, msg *{{TypeRef $t
 {{end}}
 // Subscribe opens a server-streaming subscription to the {{$t.FieldName}} topic.
 func (w *{{$t.FieldName}}Wrapper) Subscribe(ctx context.Context) (types.{{$.StateServiceName}}_SubscribeTo{{$t.FieldName}}Client, error) {
-	return w.parent.stateStub.SubscribeTo{{$t.FieldName}}(ctx, &trace_pb.TraceRequest{})
+	return w.SubscribeTraced(ctx, "")
+}
+
+// SubscribeTraced is Subscribe with traceID on the request it sends (#327).
+func (w *{{$t.FieldName}}Wrapper) SubscribeTraced(ctx context.Context, traceID string) (types.{{$.StateServiceName}}_SubscribeTo{{$t.FieldName}}Client, error) {
+	return w.parent.stateStub.SubscribeTo{{$t.FieldName}}(ctx, &trace_pb.TraceRequest{TraceId: traceID})
 }
 {{end}}
 // ============================================================================
@@ -882,17 +923,32 @@ func (w *{{$q.FieldName}}Wrapper) Offer(ctx context.Context, msg *{{TypeRef $q.G
 {{end}}
 // Consume opens a server-streaming consumer for the {{$q.FieldName}} queue.
 func (w *{{$q.FieldName}}Wrapper) Consume(ctx context.Context) (types.{{$.StateServiceName}}_ConsumeFrom{{$q.FieldName}}Client, error) {
-	return w.parent.stateStub.ConsumeFrom{{$q.FieldName}}(ctx, &trace_pb.TraceRequest{})
+	return w.ConsumeTraced(ctx, "")
+}
+
+// ConsumeTraced is Consume with traceID on the request it sends (#327).
+func (w *{{$q.FieldName}}Wrapper) ConsumeTraced(ctx context.Context, traceID string) (types.{{$.StateServiceName}}_ConsumeFrom{{$q.FieldName}}Client, error) {
+	return w.parent.stateStub.ConsumeFrom{{$q.FieldName}}(ctx, &trace_pb.TraceRequest{TraceId: traceID})
 }
 
 // Peek returns the head of the {{$q.FieldName}} queue without removing it.
 func (w *{{$q.FieldName}}Wrapper) Peek(ctx context.Context) (*{{TypeRef $q.GoType $q.IsCrossPackage}}, error) {
-	return w.parent.stateStub.Peek{{$q.FieldName}}(ctx, &trace_pb.TraceRequest{})
+	return w.PeekTraced(ctx, "")
+}
+
+// PeekTraced is Peek with traceID on the request it sends (#327).
+func (w *{{$q.FieldName}}Wrapper) PeekTraced(ctx context.Context, traceID string) (*{{TypeRef $q.GoType $q.IsCrossPackage}}, error) {
+	return w.parent.stateStub.Peek{{$q.FieldName}}(ctx, &trace_pb.TraceRequest{TraceId: traceID})
 }
 
 // Size returns the current size of the {{$q.FieldName}} queue.
 func (w *{{$q.FieldName}}Wrapper) Size(ctx context.Context) (*types.QueueSizeResponse, error) {
-	return w.parent.stateStub.Size{{$q.FieldName}}(ctx, &trace_pb.TraceRequest{})
+	return w.SizeTraced(ctx, "")
+}
+
+// SizeTraced is Size with traceID on the request it sends (#327).
+func (w *{{$q.FieldName}}Wrapper) SizeTraced(ctx context.Context, traceID string) (*types.QueueSizeResponse, error) {
+	return w.parent.stateStub.Size{{$q.FieldName}}(ctx, &trace_pb.TraceRequest{TraceId: traceID})
 }
 {{end}}
 // ============================================================================
@@ -918,17 +974,32 @@ func (w *{{$pq.FieldName}}Wrapper) Offer(ctx context.Context, msg *{{TypeRef $pq
 {{end}}
 // Consume opens a server-streaming consumer for the {{$pq.FieldName}} priority queue.
 func (w *{{$pq.FieldName}}Wrapper) Consume(ctx context.Context) (types.{{$.StateServiceName}}_ConsumeFrom{{$pq.FieldName}}Client, error) {
-	return w.parent.stateStub.ConsumeFrom{{$pq.FieldName}}(ctx, &trace_pb.TraceRequest{})
+	return w.ConsumeTraced(ctx, "")
+}
+
+// ConsumeTraced is Consume with traceID on the request it sends (#327).
+func (w *{{$pq.FieldName}}Wrapper) ConsumeTraced(ctx context.Context, traceID string) (types.{{$.StateServiceName}}_ConsumeFrom{{$pq.FieldName}}Client, error) {
+	return w.parent.stateStub.ConsumeFrom{{$pq.FieldName}}(ctx, &trace_pb.TraceRequest{TraceId: traceID})
 }
 
 // Peek returns the highest-priority item from the {{$pq.FieldName}} priority queue without removing it.
 func (w *{{$pq.FieldName}}Wrapper) Peek(ctx context.Context) (*{{TypeRef $pq.GoType $pq.IsCrossPackage}}, error) {
-	return w.parent.stateStub.Peek{{$pq.FieldName}}(ctx, &trace_pb.TraceRequest{})
+	return w.PeekTraced(ctx, "")
+}
+
+// PeekTraced is Peek with traceID on the request it sends (#327).
+func (w *{{$pq.FieldName}}Wrapper) PeekTraced(ctx context.Context, traceID string) (*{{TypeRef $pq.GoType $pq.IsCrossPackage}}, error) {
+	return w.parent.stateStub.Peek{{$pq.FieldName}}(ctx, &trace_pb.TraceRequest{TraceId: traceID})
 }
 
 // Size returns the current size of the {{$pq.FieldName}} priority queue.
 func (w *{{$pq.FieldName}}Wrapper) Size(ctx context.Context) (*types.QueueSizeResponse, error) {
-	return w.parent.stateStub.Size{{$pq.FieldName}}(ctx, &trace_pb.TraceRequest{})
+	return w.SizeTraced(ctx, "")
+}
+
+// SizeTraced is Size with traceID on the request it sends (#327).
+func (w *{{$pq.FieldName}}Wrapper) SizeTraced(ctx context.Context, traceID string) (*types.QueueSizeResponse, error) {
+	return w.parent.stateStub.Size{{$pq.FieldName}}(ctx, &trace_pb.TraceRequest{TraceId: traceID})
 }
 {{end}}
 // ============================================================================
@@ -952,7 +1023,12 @@ func (c *{{$.ClientTypeName}}) {{$cmd.FieldName}}(ctx context.Context, req *{{Ty
 {{range $v := .Views}}
 // Fetch{{$v.FieldName}} retrieves a single {{$v.TypeName}} by key from the {{$v.FieldName}} view.
 func (c *{{$.ClientTypeName}}) Fetch{{$v.FieldName}}(ctx context.Context, key string) (*{{TypeRef $v.GoType $v.IsCrossPackage}}, error) {
-	resp, err := c.stateStub.Get{{$v.FieldName}}(ctx, &types.{{$v.FieldName}}GetRequest{Key: key})
+	return c.Fetch{{$v.FieldName}}Traced(ctx, key, "")
+}
+
+// Fetch{{$v.FieldName}}Traced is Fetch{{$v.FieldName}} with traceID on the request it sends (#327).
+func (c *{{$.ClientTypeName}}) Fetch{{$v.FieldName}}Traced(ctx context.Context, key, traceID string) (*{{TypeRef $v.GoType $v.IsCrossPackage}}, error) {
+	resp, err := c.stateStub.Get{{$v.FieldName}}(ctx, &types.{{$v.FieldName}}GetRequest{Key: key, TraceId: traceID})
 	if err != nil {
 		return nil, err
 	}
@@ -964,7 +1040,12 @@ func (c *{{$.ClientTypeName}}) Fetch{{$v.FieldName}}(ctx context.Context, key st
 
 // FetchAll{{$v.FieldName}} retrieves all entries from the {{$v.FieldName}} view.
 func (c *{{$.ClientTypeName}}) FetchAll{{$v.FieldName}}(ctx context.Context) (map[string]*{{TypeRef $v.GoType $v.IsCrossPackage}}, error) {
-	resp, err := c.stateStub.GetAll{{$v.FieldName}}(ctx, &types.{{$v.FieldName}}GetAllRequest{})
+	return c.FetchAll{{$v.FieldName}}Traced(ctx, "")
+}
+
+// FetchAll{{$v.FieldName}}Traced is FetchAll{{$v.FieldName}} with traceID on the request it sends (#327).
+func (c *{{$.ClientTypeName}}) FetchAll{{$v.FieldName}}Traced(ctx context.Context, traceID string) (map[string]*{{TypeRef $v.GoType $v.IsCrossPackage}}, error) {
+	resp, err := c.stateStub.GetAll{{$v.FieldName}}(ctx, &types.{{$v.FieldName}}GetAllRequest{TraceId: traceID})
 	if err != nil {
 		return nil, err
 	}
@@ -973,7 +1054,12 @@ func (c *{{$.ClientTypeName}}) FetchAll{{$v.FieldName}}(ctx context.Context) (ma
 
 // ContainsKey{{$v.FieldName}} checks if a key exists in the {{$v.FieldName}} view.
 func (c *{{$.ClientTypeName}}) ContainsKey{{$v.FieldName}}(ctx context.Context, key string) (bool, error) {
-	resp, err := c.stateStub.ContainsKey{{$v.FieldName}}(ctx, &types.{{$v.FieldName}}GetRequest{Key: key})
+	return c.ContainsKey{{$v.FieldName}}Traced(ctx, key, "")
+}
+
+// ContainsKey{{$v.FieldName}}Traced is ContainsKey{{$v.FieldName}} with traceID on the request it sends (#327).
+func (c *{{$.ClientTypeName}}) ContainsKey{{$v.FieldName}}Traced(ctx context.Context, key, traceID string) (bool, error) {
+	resp, err := c.stateStub.ContainsKey{{$v.FieldName}}(ctx, &types.{{$v.FieldName}}GetRequest{Key: key, TraceId: traceID})
 	if err != nil {
 		return false, err
 	}
@@ -982,7 +1068,12 @@ func (c *{{$.ClientTypeName}}) ContainsKey{{$v.FieldName}}(ctx context.Context, 
 
 // KeySet{{$v.FieldName}} returns all keys in the {{$v.FieldName}} view.
 func (c *{{$.ClientTypeName}}) KeySet{{$v.FieldName}}(ctx context.Context) ([]string, error) {
-	resp, err := c.stateStub.KeySet{{$v.FieldName}}(ctx, &types.{{$v.FieldName}}KeysRequest{})
+	return c.KeySet{{$v.FieldName}}Traced(ctx, "")
+}
+
+// KeySet{{$v.FieldName}}Traced is KeySet{{$v.FieldName}} with traceID on the request it sends (#327).
+func (c *{{$.ClientTypeName}}) KeySet{{$v.FieldName}}Traced(ctx context.Context, traceID string) ([]string, error) {
+	resp, err := c.stateStub.KeySet{{$v.FieldName}}(ctx, &types.{{$v.FieldName}}KeysRequest{TraceId: traceID})
 	if err != nil {
 		return nil, err
 	}
@@ -991,7 +1082,12 @@ func (c *{{$.ClientTypeName}}) KeySet{{$v.FieldName}}(ctx context.Context) ([]st
 
 // Size{{$v.FieldName}} returns the total number of entries in the {{$v.FieldName}} view.
 func (c *{{$.ClientTypeName}}) Size{{$v.FieldName}}(ctx context.Context) (int32, error) {
-	resp, err := c.stateStub.Size{{$v.FieldName}}(ctx, &types.{{$v.FieldName}}SizeRequest{})
+	return c.Size{{$v.FieldName}}Traced(ctx, "")
+}
+
+// Size{{$v.FieldName}}Traced is Size{{$v.FieldName}} with traceID on the request it sends (#327).
+func (c *{{$.ClientTypeName}}) Size{{$v.FieldName}}Traced(ctx context.Context, traceID string) (int32, error) {
+	resp, err := c.stateStub.Size{{$v.FieldName}}(ctx, &types.{{$v.FieldName}}SizeRequest{TraceId: traceID})
 	if err != nil {
 		return 0, err
 	}
@@ -1000,12 +1096,22 @@ func (c *{{$.ClientTypeName}}) Size{{$v.FieldName}}(ctx context.Context) (int32,
 
 // Watch{{$v.FieldName}} opens a server-streaming subscription on the {{$v.FieldName}} view.
 func (c *{{$.ClientTypeName}}) Watch{{$v.FieldName}}(ctx context.Context) (types.{{$.StateServiceName}}_Watch{{$v.FieldName}}Client, error) {
-	return c.stateStub.Watch{{$v.FieldName}}(ctx, &trace_pb.TraceRequest{})
+	return c.Watch{{$v.FieldName}}Traced(ctx, "")
+}
+
+// Watch{{$v.FieldName}}Traced is Watch{{$v.FieldName}} with traceID on the request it sends (#327).
+func (c *{{$.ClientTypeName}}) Watch{{$v.FieldName}}Traced(ctx context.Context, traceID string) (types.{{$.StateServiceName}}_Watch{{$v.FieldName}}Client, error) {
+	return c.stateStub.Watch{{$v.FieldName}}(ctx, &trace_pb.TraceRequest{TraceId: traceID})
 }
 
 // Query{{$v.FieldName}} executes a structured query against the {{$v.FieldName}} view.
 func (c *{{$.ClientTypeName}}) Query{{$v.FieldName}}(ctx context.Context, q *types.CollectionQuery) ([]*{{TypeRef $v.GoType $v.IsCrossPackage}}, int32, error) {
-	resp, err := c.stateStub.Query{{$v.FieldName}}(ctx, &types.{{$v.FieldName}}QueryRequest{Query: q})
+	return c.Query{{$v.FieldName}}Traced(ctx, q, "")
+}
+
+// Query{{$v.FieldName}}Traced is Query{{$v.FieldName}} with traceID on the request it sends (#327).
+func (c *{{$.ClientTypeName}}) Query{{$v.FieldName}}Traced(ctx context.Context, q *types.CollectionQuery, traceID string) ([]*{{TypeRef $v.GoType $v.IsCrossPackage}}, int32, error) {
+	resp, err := c.stateStub.Query{{$v.FieldName}}(ctx, &types.{{$v.FieldName}}QueryRequest{Query: q, TraceId: traceID})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1014,6 +1120,11 @@ func (c *{{$.ClientTypeName}}) Query{{$v.FieldName}}(ctx context.Context, q *typ
 
 // WatchQuery{{$v.FieldName}} opens a server-streaming query subscription on the {{$v.FieldName}} view.
 func (c *{{$.ClientTypeName}}) WatchQuery{{$v.FieldName}}(ctx context.Context, q *types.CollectionQuery) (types.{{$.StateServiceName}}_WatchQuery{{$v.FieldName}}Client, error) {
-	return c.stateStub.WatchQuery{{$v.FieldName}}(ctx, &types.{{$v.FieldName}}QueryRequest{Query: q})
+	return c.WatchQuery{{$v.FieldName}}Traced(ctx, q, "")
+}
+
+// WatchQuery{{$v.FieldName}}Traced is WatchQuery{{$v.FieldName}} with traceID on the request it sends (#327).
+func (c *{{$.ClientTypeName}}) WatchQuery{{$v.FieldName}}Traced(ctx context.Context, q *types.CollectionQuery, traceID string) (types.{{$.StateServiceName}}_WatchQuery{{$v.FieldName}}Client, error) {
+	return c.stateStub.WatchQuery{{$v.FieldName}}(ctx, &types.{{$v.FieldName}}QueryRequest{Query: q, TraceId: traceID})
 }
 {{end}}

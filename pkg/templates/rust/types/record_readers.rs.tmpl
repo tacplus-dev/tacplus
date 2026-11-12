@@ -88,6 +88,21 @@ impl<'a> {{.StructName}}<'a> {
         include_deleted: bool,
         {{- end}}
     ) -> Result<Option<{{.RecordName}}>, tonic::Status> {
+        self.get_traced({{if .Routed}}tenant, {{end}}{{.KeyField}}, {{if .HasDeletedFlag}}include_deleted, {{end}}"").await
+    }
+
+    /// `get` with `trace_id` on the request it sends (#327).
+    pub async fn get_traced(
+        &self,
+        {{- if .Routed}}
+        tenant: &str,
+        {{- end}}
+        {{.KeyField}}: {{if .KeyIsString}}&str{{else}}{{.KeyRustType}}{{end}},
+        {{- if .HasDeletedFlag}}
+        include_deleted: bool,
+        {{- end}}
+        trace_id: &str,
+    ) -> Result<Option<{{.RecordName}}>, tonic::Status> {
         // The direct read: no result set, so nothing a connection failover
         // between two calls could lose.
         let filter = {{.FilterType}} {
@@ -99,6 +114,7 @@ impl<'a> {{.StructName}}<'a> {
             .{{.RowsFn}}({{.RowsReqType}} {
                 filter: Some(filter),
                 limit: 1,
+                trace_id: trace_id.to_string(),
 {{- if .HasDeletedFlag}}
                 include_deleted,
 {{- end}}
@@ -147,7 +163,25 @@ impl<'a> {{.StructName}}<'a> {
         include_deleted: bool,
         {{- end}}
     ) -> Result<(Vec<{{.RecordName}}>, String, i64), tonic::Status> {
-        self.query_page({{if .Routed}}tenant, {{end}}filter, page_size, page_token.into(){{if .HasDeletedFlag}}, include_deleted{{end}}).await
+        self.list_traced({{if .Routed}}tenant, {{end}}filter, page_size, page_token{{if .HasDeletedFlag}}, include_deleted{{end}}, "").await
+    }
+
+    /// `list` with `trace_id` on the requests it sends (#327): the open, the
+    /// pull and the release all carry it.
+    pub async fn list_traced(
+        &self,
+        {{- if .Routed}}
+        tenant: &str,
+        {{- end}}
+        filter: Option<{{.FilterType}}>,
+        page_size: i32,
+        page_token: impl Into<String>,
+        {{- if .HasDeletedFlag}}
+        include_deleted: bool,
+        {{- end}}
+        trace_id: &str,
+    ) -> Result<(Vec<{{.RecordName}}>, String, i64), tonic::Status> {
+        self.query_page({{if .Routed}}tenant, {{end}}filter, page_size, page_token.into(){{if .HasDeletedFlag}}, include_deleted{{end}}, trace_id).await
     }
 
     /// The full Create -> List -> Delete lifecycle, with the handle released on
@@ -169,12 +203,14 @@ impl<'a> {{.StructName}}<'a> {
         {{- if .HasDeletedFlag}}
         include_deleted: bool,
         {{- end}}
+        trace_id: &str,
     ) -> Result<(Vec<{{.RecordName}}>, String, i64), tonic::Status> {
         let handle = self
             .client
             .{{.CreateFn}}({{.OpenReqType}} {
                 filter,
                 standing: false,
+                trace_id: trace_id.to_string(),
                 {{- if .HasDeletedFlag}}
                 include_deleted,
                 {{- end}}
@@ -192,6 +228,7 @@ impl<'a> {{.StructName}}<'a> {
                 query_id: handle.query_id.clone(),
                 page_size,
                 page_token,
+                trace_id: trace_id.to_string(),
                 {{- if .Routed}}
                 {{.RouteField}}: tenant.to_string(),
                 {{- end}}
@@ -203,6 +240,7 @@ impl<'a> {{.StructName}}<'a> {
             .client
             .{{.DeleteFn}}({{$.HandleType}} {
                 query_id: handle.query_id.clone(),
+                trace_id: trace_id.to_string(),
                 {{- if .Routed}}
                 {{.RouteField}}: tenant.to_string(),
                 {{- end}}

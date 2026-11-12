@@ -34,6 +34,7 @@ func TestJavaStateClientClearsInjectedTraceBeforeStoring(t *testing.T) {
 
 	traced := renderJavaStateWrapperForTest(t, data(true))
 	want := "                        .setKey(key)\n" +
+		"                        .setTraceId(traceId)\n" +
 		"                        // A stored value never keeps a trace (#313).\n" +
 		"                        .setValue(value.toBuilder().clearTraceId().build())\n" +
 		"                        .build();\n" +
@@ -47,7 +48,7 @@ func TestJavaStateClientClearsInjectedTraceBeforeStoring(t *testing.T) {
 	if strings.Contains(plain, "clearTraceId") || strings.Contains(plain, "#313") {
 		t.Fatalf("untraced state client must not clear a trace:\n%s", plain)
 	}
-	if !strings.Contains(plain, "                        .setKey(key)\n                        .setValue(value)\n                        .build();") {
+	if !strings.Contains(plain, "                        .setKey(key)\n                        .setTraceId(traceId)\n                        .setValue(value)\n                        .build();") {
 		t.Fatalf("untraced putPlayers changed shape:\n%s", plain)
 	}
 }

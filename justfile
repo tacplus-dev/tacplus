@@ -361,7 +361,9 @@ redact-rust:
 
 # trace_id across projections and stores (#313): a projection carries its
 # source's trace_id; the record dispatch and the service_store disk helpers
-# persist with field 200 empty, read back raw.
+# persist with field 200 empty, read back raw. And (#327) each generated helper
+# that builds its own request has a traced form that puts the trace on every
+# request it sends, and every generated sys message has field 200.
 trace-carry: trace-carry-go trace-carry-java trace-carry-rust
 
 trace-carry-go:

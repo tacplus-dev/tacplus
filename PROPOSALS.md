@@ -20,6 +20,17 @@ the looper then marks it `promoted` or `declined` here with the date.
   readers, record-plane and kernel state helpers) gets a form that takes `trace_id`, beside today's, and every sys
   contract wire message gets field 200 (not `spec.proto` option schemas, `<T>Public` or `TraceEvent`). Unblocks
   coop#7, oauth#19, blobstore#12, llmproxy#18/#19, mailbox#12, stratum#29. On ROADMAP.md since 2026-11-06.
+- **trace_id beyond #327: generated/ protos, the approval check, the EventBus subscriber, `Set`** (2026-11-08, #327):
+  #327 puts field 200 on every `sys/*.proto` message and a traced form on the state clients, record readers and
+  `TokenForExternal`. Left: the protos tacplus synthesizes under `generated/` (`entitlements`, `persisted_store`,
+  `services`, and `eventbus_support`'s wire values `EventBusRecordMeta`/`*SubscribeRecord`) still get no field 200,
+  since `InjectTraceFields` skips every infra proto outside `sys/`; the `(spec.rpc).requires_device` gate's
+  `BrokerPendingApprovalRequest` is a call the inbound request causes, and goes out untraced because the gate does not
+  pass the request's `trace_id` to the generated check; the EventBus `Subscriber` builds its `SubscribeRequest`
+  untraced (a subscription is usually not caused by one request, but Go/Rust already take options it could go in);
+  a state singleton's `Set` sends the value it stores, so it cannot carry a trace without the state service clearing
+  it on the server side; Go's Empty-input gRPC client methods (infra RPCs only, after `SwapEmptyInputs`) build
+  `emptypb.Empty`. Each is a design choice for the 3.0 contract (#328).
 - **trace_id in 3.0: one traced signature per helper; a message without field 200 fails generation** (2026-11-06,
   #313 → #328): drops the untraced forms #327 adds, and turns today's silent skip of a message that lacks field 200
   or declares `trace_id`/`noop` at another number (`InjectTraceFields`) into an error (a warning from 2.7). Needs a

@@ -77,10 +77,32 @@ func TestGoRecordReaderRendersGetAndList(t *testing.T) {
 		"func (r *MessageRecordReader) List(ctx context.Context, filter *query_pb.MessageFilter, pageSize int32, pageToken string) ([]*messaging_pb.Message, string, int64, error)",
 		"r.client.CreateMessageQuery(ctx, &query_pb.OpenMessageQueryRequest{",
 		"r.client.ListMessagePage(ctx, &query_pb.PullMessageRequest{",
-		"r.client.DeleteMessageQuery(ctx, &query_pb.QueryHandle{QueryId: handle.GetQueryId()})",
+		"r.client.DeleteMessageQuery(ctx, &query_pb.QueryHandle{QueryId: handle.GetQueryId(), TraceId: traceID})",
+		// #327: the traced forms, which today's forms call with no trace, put
+		// the trace on every request: the read, and the query's create, page
+		// and release.
+		"func (r *MessageRecordReader) GetTraced(ctx context.Context, key string, traceID string) (*messaging_pb.Message, error)",
+		"return r.GetTraced(ctx, key, \"\")",
+		"func (r *MessageRecordReader) ListTraced(ctx context.Context, filter *query_pb.MessageFilter, pageSize int32, pageToken string, traceID string) ([]*messaging_pb.Message, string, int64, error)",
+		"return r.ListTraced(ctx, filter, pageSize, pageToken, \"\")",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("generated reader missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestGoRecordReaderTracesEveryRequest(t *testing.T) {
+	out := renderGoReaders(t, goReaderFile(goMessageReaderEntry()))
+	for _, req := range []string{"GetMessageRowsRequest{", "OpenMessageQueryRequest{", "PullMessageRequest{", "QueryHandle{"} {
+		i := strings.Index(out, req)
+		if i < 0 {
+			t.Fatalf("generated reader builds no %s", req)
+		}
+		body := out[i:]
+		body = body[:strings.Index(body, "})")]
+		if !strings.Contains(body, "TraceId:") {
+			t.Errorf("%s carries no trace_id: %s", req, body)
 		}
 	}
 }

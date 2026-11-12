@@ -1305,22 +1305,24 @@ assert_requiresdevice_singleton_state() {
     go)
       grep -q 'func (w \*LockSettingsWrapper) Fetch(' "$state" \
         || die "requires-device fixture (go): the lock_settings singleton generated no Fetch in $state"
+      # Fetch is FetchTraced with no trace (#327): the retry loop lives there.
       assert_singleton_fetch_defaults_before_validate "$state" \
-        'func \(w \*LockSettingsWrapper\) Fetch\(' '^}' \
+        'func \(w \*LockSettingsWrapper\) FetchTraced\(' '^}' \
         'LockSettingsDefaults\(value\)' 'ValidateLockSettings\(value\)'
       ;;
     rust)
       grep -q 'pub async fn fetch(&self) -> Result<LockSettings' "$state" \
         || die "requires-device fixture (rust): the lock_settings singleton generated no fetch in $state"
+      # fetch is fetch_traced with no trace (#327): the retry loop lives there.
       assert_singleton_fetch_defaults_before_validate "$state" \
-        'pub async fn fetch\(&self\) -> Result<LockSettings' '^    \}' \
+        'pub async fn fetch_traced\(&self, trace_id: &str\) -> Result<LockSettings' '^    \}' \
         'lock_settings_defaults\(&mut value\)' 'value\.validate\(\)'
       ;;
     java)
       grep -q 'LockSettings fetchLockSettings()' "$state" \
         || die "requires-device fixture (java): the lock_settings singleton generated no fetch in $state"
       assert_singleton_fetch_defaults_before_validate "$state" \
-        'public .*LockSettings fetchLockSettings\(' '^    \}' \
+        'public .*LockSettings fetchLockSettings\(String traceId\)' '^    \}' \
         'lockSettingsDefaults\(' 'validateLockSettings\('
       ;;
   esac

@@ -1061,6 +1061,17 @@ Generated service wrappers emit typed trace/accounting data where the surface
 requires it. Request handlers are responsible for propagating non-empty
 `trace_id` fields into downstream requests they create.
 
+Every message of the sys contract carries `trace_id = 200` (and `noop = 201`)
+but `sys/spec.proto`'s option schemas and `trace.TraceEvent` (#327). Every
+generated helper that builds its own request (the state client's fetch, query,
+put, delete, view and queue helpers, the record readers' `Get`/`List`, and
+`TokenForExternal`) has an additive traced form, Go `<Helper>Traced(...,
+traceID)`, Java an overload with a trailing `String traceId`, Rust
+`<helper>_traced(..., trace_id: &str)`, that puts the trace on every request it
+sends. The untraced forms are the traced ones with an empty trace and are
+removed in 3.0 (#328). The generated record C2S read handlers pass their
+request's `trace_id` to the reader. See USER.md, Distributed Tracing.
+
 Durable accounting (an `accountingrecord.AccountingRecord` event-bus topic)
 never holds an RPC in Go, Java, Rust, Python or TypeScript. The sink hands each
 record to a bounded in-process spool of 4096 records and returns; the publisher

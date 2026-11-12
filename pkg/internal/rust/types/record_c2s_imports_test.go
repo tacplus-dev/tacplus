@@ -40,8 +40,8 @@ func TestRecordC2SRoutedReadsTheCallersTenant(t *testing.T) {
 		"{}: the caller's namespace belongs to no tenant, and the record store is one instance per tenant",
 		`let __tenant = record_c2s_tenant("GetVaultRow", &__namespace)?;`,
 		`let __tenant = record_c2s_tenant("GetVaultRowPage", &__namespace)?;`,
-		".list(&__tenant, Some(filter), 1, String::new())",
-		".list(&__tenant, Some(filter), req.page_size, req.page_token)",
+		".list_traced(&__tenant, Some(filter), 1, String::new(), &req.trace_id)",
+		".list_traced(&__tenant, Some(filter), req.page_size, req.page_token, &req.trace_id)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("routed record_c2s.rs missing %q:\n%s", want, out)

@@ -142,3 +142,66 @@ func renderStateWrapperForTest(t *testing.T, data stateClientData) string {
 	}
 	return string(src)
 }
+
+// #327: each state-client helper that builds its own request has a traced form
+// that puts the trace on it, and today's form calls it with no trace.
+func TestStateWrapperRendersTracedForms(t *testing.T) {
+	src := renderStateWrapperForTest(t, stateClientData{
+		PackageName:           "demo",
+		ClientTypeName:        "StateClient",
+		StateServiceName:      "DemoStateService",
+		StateRootName:         "DemoState",
+		TypesImportPath:       "example.com/project/tacplus/types/services/demo",
+		ServiceManagerLibPath: "example.com/project/tacplus/chassis/servicemanager",
+		TraceTypesPath:        "example.com/project/tacplus/types/sys/trace",
+		Singletons:            []singletonBoundary{{FieldName: "Config", TypeName: "Config", GoType: "Config"}},
+		Collections:           []collectionBoundary{{FieldName: "Players", TypeName: "Player", GoType: "Player", KeyFieldName: "PlayerId", KeyGoType: "string", ClearTrace: true}},
+		Topics:                []topicBoundary{{FieldName: "Events", TypeName: "Event", GoType: "Event"}},
+		Queues:                []queueBoundary{{FieldName: "Tasks", TypeName: "Task", GoType: "Task"}},
+		PriorityQueues:        []priorityQueueBoundary{{FieldName: "Alerts", TypeName: "Alert", GoType: "Alert", PriorityField: "severity"}},
+		Views:                 []viewBoundary{{FieldName: "AllPlayers", TypeName: "Player", GoType: "Player", KeyFieldName: "PlayerId", KeyGoType: "string", ViewSources: []string{"Players"}}},
+	})
+	for _, want := range []string{
+		"func (w *ConfigWrapper) FetchTraced(ctx context.Context, traceID string) (*types.Config, error)",
+		"w.parent.stateStub.GetConfig(ctx, &trace_pb.TraceRequest{TraceId: traceID})",
+		"func (c *StateClient) FetchPlayersTraced(ctx context.Context, key, traceID string) (*types.Player, error)",
+		"&types.PlayersGetRequest{Key: key, TraceId: traceID}",
+		"func (c *StateClient) QueryPlayersTraced(ctx context.Context, q *types.CollectionQuery, traceID string)",
+		"func (c *StateClient) WatchQueryPlayersTraced(ctx context.Context, q *types.CollectionQuery, traceID string)",
+		"&types.PlayersQueryRequest{Query: q, TraceId: traceID}",
+		"func (c *StateClient) FetchAllPlayersTraced(ctx context.Context, traceID string)",
+		"&types.PlayersGetAllRequest{TraceId: traceID}",
+		"func (c *StateClient) PutPlayersTraced(ctx context.Context, key string, value *types.Player, traceID string)",
+		"&types.PlayersPutRequest{Key: key, Value: value, TraceId: traceID}",
+		"func (c *StateClient) DeletePlayersTraced(ctx context.Context, key, traceID string) error",
+		"func (w *EventsWrapper) SubscribeTraced(ctx context.Context, traceID string)",
+		"func (w *TasksWrapper) ConsumeTraced(ctx context.Context, traceID string)",
+		"func (w *TasksWrapper) PeekTraced(ctx context.Context, traceID string)",
+		"func (w *TasksWrapper) SizeTraced(ctx context.Context, traceID string)",
+		"func (w *AlertsWrapper) ConsumeTraced(ctx context.Context, traceID string)",
+		"func (c *StateClient) FetchAllPlayersTraced(ctx context.Context, traceID string)",
+		"func (c *StateClient) ContainsKeyAllPlayersTraced(ctx context.Context, key, traceID string) (bool, error)",
+		"&types.AllPlayersKeysRequest{TraceId: traceID}",
+		"&types.AllPlayersSizeRequest{TraceId: traceID}",
+		"func (c *StateClient) WatchAllPlayersTraced(ctx context.Context, traceID string)",
+		// Today's forms are the traced ones with no trace.
+		"return w.FetchTraced(ctx, \"\")",
+		"return c.FetchPlayersTraced(ctx, key, \"\")",
+		"return c.PutPlayersTraced(ctx, key, value, \"\")",
+		"return w.ConsumeTraced(ctx, \"\")",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("state wrapper missing %q", want)
+		}
+	}
+	// A stored value still keeps no trace: Put clears the value's own trace and
+	// the trace goes on the request only.
+	if !strings.Contains(src, "value.TraceId = \"\"") {
+		t.Error("PutPlayersTraced must still clear the stored value's trace (#313)")
+	}
+	// Every request a helper builds carries the trace, but the background
+	// watch loops' (no request causes them).
+	if got, want := strings.Count(src, "&trace_pb.TraceRequest{}"), 2; got != want {
+		t.Errorf("%d untraced TraceRequest literals, want %d (the two watch loops)", got, want)
+	}
+}

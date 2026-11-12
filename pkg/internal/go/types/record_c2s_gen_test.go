@@ -49,10 +49,11 @@ func TestGoRecordC2SHandlerPinsCallerAndCopiesCriteria(t *testing.T) {
 		"ActivityId:      &key,",
 		"OwnerSubject:    &principal,",
 		"TenantNamespace: &namespace,",
-		"g.sm.ScottyActivityRecordReader().List(ctx, filter, 1, \"\")",
+		// The handler's reads carry its request's trace_id (#327).
+		"g.sm.ScottyActivityRecordReader().ListTraced(ctx, filter, 1, \"\", req.GetTraceId())",
 		"UpdatedAtMsFrom: supplied.UpdatedAtMsFrom,",
 		"UpdatedAtMsTo:   supplied.UpdatedAtMsTo,",
-		"g.sm.ScottyActivityRecordReader().List(ctx, filter, req.GetPageSize(), req.GetPageToken())",
+		"g.sm.ScottyActivityRecordReader().ListTraced(ctx, filter, req.GetPageSize(), req.GetPageToken(), req.GetTraceId())",
 		"NextPageToken: next, TotalCount: total",
 	} {
 		if !strings.Contains(src, want) {

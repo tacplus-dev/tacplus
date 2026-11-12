@@ -81,6 +81,15 @@ bytes, err := mypkg.ConfigToJSON(config)
 // Wrong: json.Unmarshal(&config, data) — bypasses aliases, defaults, error typing
 ```
 
+Rust reads and writes YAML (the model's `_to_yaml`/`_from_yaml`/`_from_bytes`,
+`GrpcServerConfig::from_yaml_str`) with `serde-saphyr`, which a Rust
+`dependencies.yaml` must pin (the fixtures pin 2.1.1); `serde_yaml` is no longer used
+(#320). YAML is read as YAML 1.2 Core: only `true`/`false` are booleans, so an
+unquoted `yes` or `on` is a string. A duplicate key, a non-finite float
+(`.inf`, `.nan`) and nesting deeper than 64 are refused. The model writes
+strings that need quotes in double quotes, and also quotes a string a YAML 1.1
+reader would take for a bool or a number (`"yes"`, `"n"`).
+
 ### Use Generated Validation
 
 ```go

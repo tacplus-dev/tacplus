@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by looper (#313).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by looper (#320).
 
 - **Version / line:** v2.6.2 (latest release, 2026-11-07, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -133,6 +133,11 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   `cross-test/redact` (`just redact`, in the gates) against a hand-built fixture. The legacy egress redaction
   (`(spec.redact)`, `(spec.data_entitlement)`, `Sanitize<T>`, `<T>Entitlement`) is deprecated (generation warns),
   removed in 3.0. Gaps: no cross-package sensitive tree, no oneof leaves, no client-only target (PROPOSALS.md).
+  On main for 2.7 (#320): the generated Rust model and grpcserver config read and write YAML with `serde-saphyr`
+  (pure Rust, on granit-parser), off the deprecated serde_yaml and its unsafe-libyaml (RUSTSEC-2024-0449), which
+  current-generation refuses in the generated lockfile; a Rust `dependencies.yaml` must pin `serde-saphyr`. YAML is
+  read as YAML 1.2 Core as before; the model's YAML output changed (double quotes, YAML 1.1 bool/number spellings
+  quoted), so it is not backported.
 - **Released / deployed:** v2.6.0 is the newest release: the binaries and `checksums.txt`, and
   `ghcr.io/tacplus-dev/tacplus/build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c`
   (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.

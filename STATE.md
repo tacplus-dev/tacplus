@@ -60,7 +60,8 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-10 by lo
   2.6 gets none); `build:X.Y` per line, rebuilt on every release as an immutable `build:X.Y.Z`, carries Kani and
   cargo-fuzz too, and its `tacplus` is `images/tacplus.sh`, which runs exactly the pinned binary, checked against
   `checksums.txt`, and refuses a repository with no pin or a pin of another line. `tacplus verify` reports Go as
-  skipped.
+  skipped. This repository, the compiler and no tacplus project, pins its own gates' build image by digest in
+  `build.lock` (#340), which the build pipeline (tacplus-dev/build) plans from.
   `registry.json`'s layout is tacplus's own (#307): before, protojson chose one or two spaces after each `:` from a
   hash of the binary, so it flipped between patches and between amd64 and arm64. Now it is always two (2.5.8's
   format), pinned by a golden test on every supported line.

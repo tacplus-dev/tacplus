@@ -174,6 +174,11 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-10 by lo
   G115, G404, G703 or G704: each was fixed (enum parse bounded to int32, gRPC codes, IP packing via encoding/binary,
   JWK exponent, the AWS STS region validated) or annotated with its reason (wire two's complement, retry jitter,
   operator-named paths). Backported to release/2.0 through release/2.6 by pull request, each line's next patch.
+  On main for 2.7 (#320): the generated Rust model and grpcserver config read and write YAML with `serde-saphyr`
+  (pure Rust, on granit-parser), off the deprecated serde_yaml and its unsafe-libyaml (RUSTSEC-2024-0449), which
+  current-generation refuses in the generated lockfile; a Rust `dependencies.yaml` must pin `serde-saphyr`. YAML is
+  read as YAML 1.2 Core as before; the model's YAML output changed (double quotes, YAML 1.1 bool/number spellings
+  quoted), so it is not backported.
 - **Released / deployed:** v2.6.0 is the newest release: the binaries and `checksums.txt`, and
   `ghcr.io/tacplus-dev/tacplus/build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c`
   (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.

@@ -4,6 +4,13 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **CI's own jobs read `build.lock` instead of floating `build:latest`** (2026-11-12, #340): the build pipeline
+  (tacplus-dev/build) runs this repository's gates in the image `build.lock` pins by digest, but
+  `.github/workflows/nightly-gates.yml`, `nightly-security.yml`, `nightly-fixes.yml`, `site.yml` and
+  `just gates-container` still run in `build:latest`, which moves on every release and every main push of
+  `images/`. Reading the pin instead makes every gate run in the same image, and moving it one reviewed commit;
+  the cost is a pin to bump after each release (a pin older than `images/` on main gates against an image that does
+  not match the Dockerfile in the tree).
 - **Images on Google Artifact Registry through WIF, ghcr.io deprecated from 2.6** (2026-11-07, #223; parked by
   the hub 2026-11-07): publish `base`, `build` and the services' release images to the public
   `us-docker.pkg.dev/jody1-328023/tacplus`, pushed by the GitLab publish job with a short-lived GCP token from its

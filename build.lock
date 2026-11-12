@@ -1,0 +1,6 @@
+# The build image of tacplus-dev/tacplus, by digest (tacplus#340, looper#71): the tacplus build image
+# (images/build.Dockerfile) of the newest release, the one CI's jobs run in (build:latest), which carries every
+# SDK, tool and verifier `just gates` needs, without Docker. This repository is the compiler, no tacplus
+# project, so it has no tacplus.lock; the build pipeline (looper-build plan) reads this pin the way it reads
+# one. A new digest is a change like any other: it lands on the full gates.
+build_image: ghcr.io/tacplus-dev/tacplus/build:2.6.10@sha256:828add1a92dbe5788c6d0b300141c2a57ef5864cbba79abccf66c7457795f85b

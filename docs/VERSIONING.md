@@ -114,9 +114,21 @@ So `build:X.Y` (and `base:X.Y`) may move without a new `X.Y.Z`; every
 `X.Y.Z` stays the image of that release, immutable. A dispatch on a release
 branch is always such a line rebuild. A patch tag builds its `build` fresh
 (`apt-get upgrade`), from its line's `base:X.Y`, never re-tagging the line's
-older image.
+older image. Every run upgrades the OS packages (#369): the `apt-get upgrade`
+layer depends on the run's id (`APT_REFRESH`), so the build cache cannot hand
+back an older run's layer, and a run whose index lacks linux/amd64 or
+linux/arm64, or holds an image created before the run started, fails before
+any `X.Y.Z` or floating tag moves (`scripts/images-check-index.sh`).
 
-The definitions are `images/base.Dockerfile` and `images/build.Dockerfile`;
+The definitions are `images/base.Dockerfile` and `images/build.Dockerfile`.
+Their Debian packages are `images/base.packages` and `images/build.packages`
+(#554): an image carries those, Debian's base system (Essential, Priority
+required or important) and what they depend on, nothing else.
+`images/packages-check.sh`, shipped as `tacplus-packages-check`, is the last
+step of each image's build and fails it on any other package (OpenEXR, with
+CRITICAL CVEs, came in through `buildpack-deps`, which `rust:X-trixie` is
+built on; `base` now starts from `rust:X-slim-trixie`). A package an image
+needs goes into its list, never in through the image it starts from.
 `images/smoke.sh` ships in the build image as `tacplus-smoke` and runs inside
 every pushed image, and `images/smoke-pipeline.sh` generates, tests, verifies
 and fuzzes a pinned repository in it through its `tacplus`.

@@ -1,0 +1,1 @@
+- 2026-11-12 looper issue Generated Rust and TypeScript chassis hardcode floors outside dependencies.yaml that admit known advisories (@grpc/grpc-js ^1.9.0, rustls "0.23", tokio "1", regex "1", bzip2 "0.4", chrono "0.4", rand "0.8") (#338)

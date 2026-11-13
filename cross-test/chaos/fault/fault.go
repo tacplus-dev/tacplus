@@ -122,7 +122,7 @@ type Schedule struct {
 
 // NewSchedule builds a seeded schedule over the given menu.
 func NewSchedule(seed int64, menu []Fault) *Schedule {
-	return &Schedule{rng: rand.New(rand.NewSource(seed)), menu: menu}
+	return &Schedule{rng: rand.New(rand.NewSource(seed)), menu: menu} // #nosec G404 -- seeded on purpose: a chaos run replays from its seed; nothing secret is drawn (accepted: jodydadescott, #570)
 }
 
 // Next returns the next fault to inject (seeded selection).

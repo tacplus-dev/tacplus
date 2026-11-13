@@ -96,6 +96,50 @@ func TestReferenceCoversEveryType(t *testing.T) {
 	checkEnums(fd.Enums())
 }
 
+// PROTOC_BINARY is run only once it names an absolute path to an existing,
+// executable regular file; any other value is refused before anything runs.
+func TestProtocBinary(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "protoc")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plain := filepath.Join(dir, "plain")
+	if err := os.WriteFile(plain, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{
+		"protoc",                   // relative: resolved against the cwd
+		"./protoc",                 // relative
+		filepath.Join(dir, "nope"), // does not exist
+		dir,                        // a directory
+		plain,                      // not executable
+		exe + "; touch /tmp/x",     // shell text is a file name, not a command
+	} {
+		t.Run(bad, func(t *testing.T) {
+			t.Setenv("PROTOC_BINARY", bad)
+			if got, err := protocBinary(); err == nil {
+				t.Errorf("PROTOC_BINARY=%q: got %q, want an error", bad, got)
+			}
+		})
+	}
+	t.Run("absolute executable", func(t *testing.T) {
+		t.Setenv("PROTOC_BINARY", exe)
+		got, err := protocBinary()
+		if err != nil || got != exe {
+			t.Errorf("got %q, %v; want %q", got, err, exe)
+		}
+	})
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv("PATH", dir)
+		t.Setenv("PROTOC_BINARY", "")
+		got, err := protocBinary()
+		if err != nil || got != exe {
+			t.Errorf("got %q, %v; want %q", got, err, exe)
+		}
+	})
+}
+
 // The published documents stage without a broken relative link.
 func TestStageDocs(t *testing.T) {
 	if err := stageDocs(repoRoot, t.TempDir()); err != nil {

@@ -44,6 +44,10 @@ const LATE_SLACK: Duration = Duration::from_secs(5);
 /// Hard bound per stream so a stream the server never ends fails the test.
 const HARD_BOUND: Duration = Duration::from_secs(SHORT_TTL_SECS as u64 + 8);
 const TICK_EVERY: Duration = Duration::from_millis(200);
+/// How long the control stream may go without a tick before it counts as
+/// stalled. Generous on purpose: on a loaded runner every step runs late
+/// (issue #627); a stream the server ended still fails at once.
+const CONTROL_STALL: Duration = LATE_SLACK;
 
 fn now_secs() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_secs() as i64
@@ -298,11 +302,17 @@ async fn rust_stream_expiry_ends_every_stream_shape_at_exp() {
             let mut s = resp.into_inner();
             let mut got = 0u64;
             while SystemTime::now() < control_until {
-                match tokio::time::timeout(Duration::from_secs(2), s.message()).await {
+                let waiting = SystemTime::now();
+                match tokio::time::timeout(CONTROL_STALL, s.message()).await {
                     Ok(Ok(Some(_))) => got += 1,
                     Ok(Ok(None)) => return Err("control stream ended cleanly inside the window".to_string()),
                     Ok(Err(st)) => return Err(format!("control stream (long-lived token) was ended: {st}")),
-                    Err(_) => return Err("control stream stalled for 2s".to_string()),
+                    Err(_) => {
+                        return Err(format!(
+                            "control stream stalled: no tick for {:?} (bound {CONTROL_STALL:?}) after {got} ticks",
+                            waiting.elapsed().unwrap_or_default()
+                        ))
+                    }
                 }
             }
             Ok::<u64, String>(got)

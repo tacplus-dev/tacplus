@@ -4,6 +4,13 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **stream-expiry Go leg: the short token's 3 s also pay for the first dial** (2026-11-13, #627): the Java leg now
+  opens its long-token control stream first and waits for a tick, so the channel's TLS handshake is done before the
+  3 s token is minted; a stream the server sees only after its exp is refused at open and its expiry mid-stream is
+  never tested. The Go leg (`cross-test/stream-expiry/testdata/stream_expiry_behavior_test.go`) dials lazily
+  (`grpc.NewClient`) under `-race`, and its three subtests mint their tokens before that first handshake: on a
+  loaded runner they would fail the `earliest` check. `conn.Connect()` and waiting for `Ready` in `startServer` would
+  close it. The Rust leg connects before minting.
 - **Per-language gate sets, and more of the map** (2026-11-08, #266): `gates.yaml` runs the full gates (~3h) for any
   change under `pkg/**`, `cmd/**` or `.github/`. Next: `pkg/internal/<lang>/**` and `pkg/templates/<lang>/**` to that
   language's `current-generation-<lang>`, `determinism-<lang>` and `-<lang>` cross-tests (with `just test`), once each

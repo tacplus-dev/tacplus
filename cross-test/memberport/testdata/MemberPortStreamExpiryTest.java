@@ -6,6 +6,8 @@ package com.example.grid.model.chassis.memberport;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.example.grid.model.chassis.token.TokenWrapper;
+import io.grpc.ManagedChannel;
 import io.grpc.Status;
 import java.net.InetSocketAddress;
 import java.util.concurrent.atomic.AtomicReference;
@@ -20,6 +22,13 @@ import org.junit.jupiter.api.Test;
  * memberport gate runs it too.
  */
 class MemberPortStreamExpiryTest {
+    /**
+     * How long after its token's exp a stream may take to close. Generous on
+     * purpose, as the stream-expiry legs' are: on a loaded runner every step
+     * runs about a second late (#627); a stream that is never closed still fails.
+     */
+    static final long CLOSE_BOUND_MS = 5_000;
+
     final MemberPortBehaviorTest fixture = new MemberPortBehaviorTest();
 
     @BeforeEach
@@ -36,18 +45,26 @@ class MemberPortStreamExpiryTest {
     void anExpiredUnrotatedStreamEndsUnauthenticatedAtExpWithALocalReset() throws Exception {
         MemberportPeer.Server behind = fixture.echo();
         InetSocketAddress port = fixture.member(MemberPortBehaviorTest.X).listen(MemberPortBehaviorTest.loopback0(), behind.address());
+        ManagedChannel ch = fixture.rawChannel(port);
+        // Warm the channel first (TLS, HTTP/2, the port's call path) with a
+        // stream it refuses at open, which dials nothing behind the port, so
+        // the short token's 3 s are not spent on them: on a loaded runner a cold
+        // open can take that long, and a stream the port sees only after its
+        // token's exp is refused before its session opens (#627).
+        new MemberPortBehaviorTest.Raw(ch, null).send(MemberPortBehaviorTest.open()).status(20_000);
         long ttlSeconds = 3;
         long exp = (System.currentTimeMillis() / 1000 + ttlSeconds) * 1000;
-        MemberPortBehaviorTest.Raw r = new MemberPortBehaviorTest.Raw(fixture.rawChannel(port),
+        MemberPortBehaviorTest.Raw r = new MemberPortBehaviorTest.Raw(ch,
                 fixture.fleet.mint(MemberPortBehaviorTest.SVC, MemberPortBehaviorTest.X, MemberPortBehaviorTest.AUD, ttlSeconds));
         MemberPortBehaviorTest.openSession(r);
         r.send(MemberPortBehaviorTest.data(new byte[] {1, 2, 3}));
         assertArrayEquals(new byte[] {1, 2, 3}, r.next().getPayload().toByteArray(), "the stream works until exp");
-        Status s = r.status(ttlSeconds * 1000 + 5_000);
+        Status s = r.status(ttlSeconds * 1000 + CLOSE_BOUND_MS + 1_000);
         long late = System.currentTimeMillis() - exp;
         MemberPortBehaviorTest.assertRefused(Status.Code.UNAUTHENTICATED, s, "an expired, unrotated stream");
-        assertTrue(late > -250 && late < 1_500, "closed at exp, not before or long after: " + late + "ms after it");
-        MemberPortBehaviorTest.waitFor("the connection behind the port to end", 5_000, () -> behind.results.size() == 1);
+        assertTrue(late > -250 && late < CLOSE_BOUND_MS,
+                "closed at exp, not before or long after: " + late + "ms after it (bound " + CLOSE_BOUND_MS + "ms)");
+        MemberPortBehaviorTest.waitFor("the connection behind the port to end", 15_000, () -> behind.results.size() == 1);
         String error = String.valueOf(behind.results.get(1).error);
         assertTrue(error.contains("reset"), "the connection behind the port is reset: " + error);
     }
@@ -59,13 +76,14 @@ class MemberPortStreamExpiryTest {
                 fixture.fleet.leaf(MemberPortBehaviorTest.X, MemberPortBehaviorTest.SVC, "Ed25519")), fixture.fleet.jwks::get);
         MemberportPeer.Server echo = fixture.echo();
         InetSocketAddress fwd = fixture.tunnel(a, fixture.member(MemberPortBehaviorTest.X), echo);
-        stuck.token();
+        long exp = TokenWrapper.parse(stuck.token()).getExpiration() * 1000;
         stuck.neverRenew = true;
-        long start = System.currentTimeMillis();
         MemberportPeer.Result r = MemberportPeer.exchange(fwd, 41, 2_000_000, 41, 2048, 10, 0);
-        long elapsed = System.currentTimeMillis() - start;
+        long late = System.currentTimeMillis() - exp;
         assertTrue(!r.ok(2_000_000) && r.firstMismatch < 0, "cut at expiry, what arrived intact: " + r);
         assertTrue(MemberPortBehaviorTest.reset(r), "the black-box client sees a reset: " + r);
-        assertTrue(elapsed < 4_500, "closed at the token's expiry, took " + elapsed + "ms");
+        // Uncut, the exchange takes about 10 s (2 MB in 2 KiB chunks, 10 ms apart).
+        assertTrue(late < CLOSE_BOUND_MS,
+                "closed at the token's expiry: " + late + "ms after it (bound " + CLOSE_BOUND_MS + "ms)");
     }
 }

@@ -61,6 +61,14 @@ mkdir -p "$OUT/ts/client"
 cp "$EX/client/client.mjs" "$OUT/ts/client/client.mjs"
 ln -sfn "$OUT/ts/model/node_modules" "$OUT/ts/client/node_modules"
 
+echo "==> Checking the server refuses a non-loopback address"
+# It serves plaintext gRPC, so it binds loopback only (#583).
+if NOTES_ADDR=0.0.0.0:0 timeout 10 "$OUT/notes-server" > /dev/null 2> "$OUT/server-refuse.log"; then
+  echo "notes-server served on 0.0.0.0:0; it must refuse a non-loopback NOTES_ADDR" >&2
+  exit 1
+fi
+grep -q loopback "$OUT/server-refuse.log" || { echo "notes-server's refusal does not name loopback:" >&2; cat "$OUT/server-refuse.log" >&2; exit 1; }
+
 echo "==> Starting Go server"
 "$OUT/notes-server" > "$OUT/server-stdout.log" 2> "$OUT/server-stderr.log" &
 SERVER_PID=$!

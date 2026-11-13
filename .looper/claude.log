@@ -1,0 +1,400 @@
+= thinking_tokens
+= thinking_tokens
+All three release lines pass TypeScript. Next I'll prepare the backport PRs, modelled on an earlier one.
+> Bash gh pr list --repo tacplus-dev/tacplus --state all --head backport/351-release-2.6 --json number,title,body --jq '.[0] | .title, .body' | head -30
+< [release/2.6] current-generation: the retired-linked-claim check runs under the gate's work root (#351) Backport of 19a2ec34 from main (#351). Its hash on main follows the land, and this pull request stays a draft until then. **Once this merges, cut the line's next free patch tag on `release/2.6` at...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/657; git fetch -q --tags origin; msg=$(git log -1 --format=%B HEAD); for b in 2.4 2.5 2.6; do last=$(git tag -l "v$b.*" | sort -V | tail -1); echo "$b last=$last"; (cd /tmp/bp657-$b && git add -A cross-test/runtime-smoke && git commit -q -m "$msg" && git push -q orig...
+= task_started
+= task_notification
+= vcs_state_changed
+< 2.4 last=v2.4.22 remote:  dfe1dd58 runtime-smoke: run on the 2.4 sys contract again (#657) 2.5 last=v2.5.23 remote:  7cc4a961 runtime-smoke: run on the 2.4 sys contract again (#657) 2.6 last=v2.6.11 remote:  19c0f108 runtime-smoke: run on the 2.4 sys contract again (#657)
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/657; for b in 2.4 2.5 2.6; do last=$(git tag -l "v$b.*" | sort -V | tail -1); next="v$b.$(( ${last##*.} + 1 ))"; cat > /tmp/bp-body-$b.md <<EOF Backport of e0b02452 from main (#657). Its hash on main follows the land, and this pull request stays a draft until then. *...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/666 https://github.com/tacplus-dev/tacplus/pull/667 https://github.com/tacplus-dev/tacplus/pull/668
+= thinking_tokens
+= thinking_tokens
+Draft backport PRs are open: #666 (2.4), #667 (2.5), #668 (2.6). Checkpointing, then waiting on the gates and the land.
+> Bash cd /builds/looper/tacplus/issues/657; /usr/local/bin/repo-looper --repo tacplus --issue 657 --checkpoint "land queued (e0b02452); just gates running (/tmp/gates657.log); draft backport PRs #666 #667 #668 opened (ts smoke green on each); filed #665 (MCP-6 blocks python consumer). Left: gates+land ver...
+< [2026-11-13T18:40:34Z] checkpoint of #657 (a step) pushed to looper/tacplus-657:  7 files changed, 552 insertions(+), 7 deletions(-) === test === === test rc=0 === === current-generation ===
+> Bash until ! kill -0 16719 2>/dev/null; do sleep 30; done; grep '^=== ' /tmp/gates657.log | tail -40
+> Bash until ! kill -0 39865 2>/dev/null; do sleep 30; done; tail -15 /tmp/land657.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bscpb7dwq. Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/bscpb7dwq.output. You will be notified when it completes. To check interim output, use R...
+= background_tasks_changed
+= task_started
+< Command running in background with ID: b2tbi846l. Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/b2tbi846l.output. You will be notified when it completes. To check interim output, use R...
+Both are running in the background: the full gates (`just gates`) and the land queue. I'll pick up when either finishes.
+> ScheduleWakeup {"delaySeconds":1800,"noop":false,"prompt":"Check /tmp/gates657.log and /tmp/land657.log for issue #657; continue finishing (un-draft backport PRs with the main hash, outcome comment, Blocked-by: #665).","reason":"fallback heartbeat while full gates and the land queue run"}
+< Next wakeup scheduled for 19:11:00 (in 1818s). If you owe the user a status update this tick, write it now as ordinary response text; then end the turn — the harness re-invokes you when the wakeup fires or a task-notification arrives.
+= thinking_tokens
+= thinking_tokens
+Since ending my reply would end the run, I'll keep polling in the foreground instead of relying on the wakeup.
+> Bash until ! kill -0 16719 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep '^=== ' /tmp/gates657.log | tail -3; tail -2 /tmp/land657.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b9lk3ixpm). Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/b9lk3ixpm.output. You will be notified w...
+> Bash grep '^=== ' /tmp/gates657.log | tail -4; tail -2 /tmp/land657.log | cut -c1-300
+< === test rc=0 === === current-generation === === current-generation rc=1 === === determinism === [2026-11-13T18:37:19Z] checkpoint of #657 (land queued) pushed to looper/tacplus-657:  7 files changed, 552 insertions(+), 7 deletions(-) [2026-11-13T18:37:22Z] queued: the manager of tacplus merges loop...
+My local `current-generation` gate failed. Finding out why:
+> Bash awk '/^=== current-generation ===/,/^=== current-generation rc/' /tmp/gates657.log | grep -E 'ERROR|FAIL|Killed|error|137|no space' | head -20; awk '/^=== current-generation ===/,/^=== current-generation rc/' /tmp/gates657.log | tail -25 | cut -c1-300
+< 18:47:29.137 [grpc-default-worker-ELG-3-2] DEBUG io.grpc.netty.shaded.io.grpc.netty.NettyClientHandler -- [id: 0xc5bb0ce9, L:/127.0.0.1:47514 - R:127.0.0.1/127.0.0.1:42627] OUTBOUND SETTINGS: ack=false settings={ENABLE_PUSH=0, MAX_CONCURRENT_STREAMS=0, INITIAL_WINDOW_SIZE=1048576, MAX_HEADER_LIST_SI...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue list --repo tacplus-dev/tacplus --state all --search '"appends must not wait"' --json number,title,state | head; gh issue list --repo tacplus-dev/tacplus --state all --search 'DiskStore flaky' --json number,title,state | head
+< [{"number":539,"state":"OPEN","title":"Java DiskStore self-test testAppendsDoNotWaitForUploads fails on a loaded runner: 100 fsync'd appends must finish within 20s (current-generation red on main)"},{"number":308,"state":"OPEN","title":"Generated Rust chassis depends on rustls-pemfile, unmaintained ...
+= thinking_tokens
+= thinking_tokens
+It's the known open flake #539: the test fails on a loaded runner. Continuing to wait on the rest of the gates and the land.
+> Bash until ! kill -0 16719 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep '^=== ' /tmp/gates657.log | tail -3; tail -2 /tmp/land657.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: bqy4elgri). Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/bqy4elgri.output. You will be notified w...
+> Bash grep '^=== ' /tmp/gates657.log | tail -3; tail -1 /tmp/land657.log | cut -c1-200; date -u +%H:%M
+< === current-generation === === current-generation rc=1 === === determinism === [2026-11-13T18:37:22Z] queued: the manager of tacplus merges looper/tacplus-657 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your 19:00
+= thinking_tokens
+= thinking_tokens
+> Bash until ! kill -0 16719 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep '^=== ' /tmp/gates657.log | tail -3
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: bc5mr9hfc). Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/bc5mr9hfc.output. You will be notified w...
+> Bash grep '^=== ' /tmp/gates657.log | tail -3; tail -1 /tmp/land657.log | cut -c1-120; gh issue view 657 --repo tacplus-dev/tacplus --comments | tail -8
+< === determinism === === determinism rc=0 === === cert-stream === [2026-11-13T18:37:22Z] queued: the manager of tacplus merges looper/tacplus-657 after the lands queued before it, one at author:	tacplus-looper association:	none edited:	false status:	none -- The looper of tacplus starts this issue wit...
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash until ! kill -0 16719 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep '^=== ' /tmp/gates657.log | tail -3
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: bvvufah17). Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/bvvufah17.output. You will be notified w...
+> Bash grep '^=== ' /tmp/gates657.log | tail -3; tail -1 /tmp/land657.log | cut -c1-120; date -u +%H:%M
+< === CONT  TestGoStreamEndsAtTokenExp/server-streaming === CONT  TestGoStreamEndsAtTokenExp/client-streaming === RUN   TestGoStreamOutlivesWindowWithLongToken [2026-11-13T18:37:22Z] queued: the manager of tacplus merges looper/tacplus-657 after the lands queued before it, one at 19:20
+= task_updated
+= task_notification
+= background_tasks_changed
+Still waiting: my local full gates are at stream-expiry (only failure so far is the known flake #539), and the land is queued behind other lands.
+> Bash until ! kill -0 16719 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep -E '^=== [a-z-]+ (rc=|===)' /tmp/gates657.log | tail -3
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: bgn2lewvv). Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/bgn2lewvv.output. You will be notified w...
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash grep -E '^=== [a-z0-9-]+ (rc=[0-9]+ )?===$' /tmp/gates657.log | tail -4; tail -1 /tmp/land657.log | cut -c1-120; date -u +%H:%M
+< === stream-expiry rc=1 === === memberport === === memberport rc=0 === === claims-provenance === [2026-11-13T18:37:22Z] queued: the manager of tacplus merges looper/tacplus-657 after the lands queued before it, one at 19:30
+The stream-expiry gate also failed locally. Checking why:
+> Bash awk '/^=== stream-expiry ===$/,/^=== stream-expiry rc/' /tmp/gates657.log | grep -E -- '--- FAIL|FAIL|panic|error:|ERROR' | head -15; awk '/^=== stream-expiry ===$/,/^=== stream-expiry rc/' /tmp/gates657.log | grep -B2 -A10 -- '--- FAIL' | head -40 | cut -c1-250
+< [ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 12.52 s <<< FAILURE! -- in com.example.streamexpiry.model.chassis.grpcserver.StreamExpiryBehaviorTest [ERROR] com.example.streamexpiry.model.chassis.grpcserver.StreamExpiryBehaviorTest.streamsAreEndedAtTheOpeningTokensExpiry -- ...
+> Bash gh issue list --repo tacplus-dev/tacplus --state all --search 'streamsAreEndedAtTheOpeningTokensExpiry OR "SendTicks" OR "stream-expiry" java' --json number,title,state | head -c 1500
+< [{"number":627,"state":"OPEN","title":"stream-expiry Java self-test streamsAreEndedAtTheOpeningTokensExpiry fails on a loaded runner: handler Context cancellation must land within a fixed 3s"},{"number":455,"state":"OPEN","title":"cross-test/server-runtime does not build on main: the generated contr...
+Also a known load flake (#627). Neither failure is related to this change. Waiting on the rest.
+> Bash until ! kill -0 16719 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep -E '^=== [a-z0-9-]+ (rc=[0-9]+ )?===$' /tmp/gates657.log | tail -3
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: buk77xx71). Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/buk77xx71.output. You will be notified w...
+> Bash grep -E '^=== [a-z0-9-]+ (rc=[0-9]+ )?===$' /tmp/gates657.log | tail -3; tail -1 /tmp/land657.log | cut -c1-120; date -u +%H:%M
+< === w2s-validate === === w2s-validate rc=0 === === c2d-server === [2026-11-13T18:37:22Z] queued: the manager of tacplus merges looper/tacplus-657 after the lands queued before it, one at 19:40
+> Bash until ! kill -0 16719 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep -E '^=== [a-z0-9-]+ (rc=[0-9]+ )?===$' /tmp/gates657.log | tail -3
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: bzzvyoudx). Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/bzzvyoudx.output. You will be notified w...
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash grep -E '^=== [a-z0-9-]+ (rc=[0-9]+ )?===$' /tmp/gates657.log | tail -3; tail -1 /tmp/land657.log | cut -c1-120; date -u +%H:%M
+< === zero-rpc-s2s === === zero-rpc-s2s rc=0 === === jwk-alg === [2026-11-13T18:37:22Z] queued: the manager of tacplus merges looper/tacplus-657 after the lands queued before it, one at 19:50
+> Bash until ! kill -0 16719 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep -E '^=== [a-z0-9-]+ (rc=[0-9]+ )?===$' /tmp/gates657.log | tail -3
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: bj3z7qtzb). Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/bj3z7qtzb.output. You will be notified w...
+> Bash grep -E '^=== [a-z0-9-]+ (rc=[0-9]+ )?===$|OVERALL' /tmp/gates657.log | tail -3; tail -1 /tmp/land657.log | cut -c1-120; date -u +%H:%M
+< === redact === === redact rc=0 === === trace-carry === [2026-11-13T18:37:22Z] queued: the manager of tacplus merges looper/tacplus-657 after the lands queued before it, one at 20:00
+= task_updated
+= task_notification
+= background_tasks_changed
+My local gates are on the last two steps (trace-carry, tacplus-script). The land is still queued. Still waiting.
+> Bash until ! kill -0 16719 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep -E '^=== [a-z0-9-]+ (rc=[0-9]+ )?===$|OVERALL' /tmp/gates657.log | tail -3
+= task_started
+= task_notification
+< === tacplus-script === === tacplus-script rc=0 === === OVERALL fail=1 ===
+> Bash grep -E '^=== [a-z0-9-]+ rc=[0-9]+ ===$' /tmp/gates657.log | tr '\n' ' '; echo; tail -1 /tmp/land657.log | cut -c1-120
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=1 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=1 === === memberport rc=0 === === claims-provenance rc=0 === === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc...
+= task_updated
+= task_notification
+= background_tasks_changed
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/657; nohup bash -c 'just stream-expiry; echo "=== stream-expiry rc=$?"; just current-generation; echo "=== current-generation rc=$?"' > /tmp/rerun657.log 2>&1 & echo $!
+< 99502
+> Bash until ! kill -0 99502 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep '^=== ' /tmp/rerun657.log; tail -2 /tmp/land657.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: bssga2i50). Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/bssga2i50.output. You will be notified w...
+> Bash grep '^=== ' /tmp/rerun657.log; tail -1 /tmp/land657.log | cut -c1-200; date -u +%H:%M
+< === RUN   TestGoStreamEndsAtTokenExp === RUN   TestGoStreamEndsAtTokenExp/client-streaming === PAUSE TestGoStreamEndsAtTokenExp/client-streaming === RUN   TestGoStreamEndsAtTokenExp/server-streaming === PAUSE TestGoStreamEndsAtTokenExp/server-streaming === RUN   TestGoStreamEndsAtTokenExp/bidi === P...
+> Bash grep -E 'ERROR\].*(Failures:|Behavior.*:[0-9]+)|--- FAIL' /tmp/rerun657.log | head -5; uptime
+< --- FAIL: TestGoStreamOutlivesWindowWithLongToken (5.01s)  20:14:30 up  3:49,  0 users,  load average: 12.93, 13.54, 17.49
+> Bash grep -B3 -A8 -- '--- FAIL: TestGoStreamOutlivesWindowWithLongToken' /tmp/rerun657.log | cut -c1-250 | head -20; nproc
+<     --- PASS: TestGoStreamEndsAtTokenExp/client-streaming (2.82s) === RUN   TestGoStreamOutlivesWindowWithLongToken     stream_expiry_behavior_test.go:329: bidi stream with an hour-long token ended before the client's bound: rpc error: code = DeadlineExceeded desc = stream terminated by RST_STREAM w...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue list --repo tacplus-dev/tacplus --state all --search 'TestGoStreamOutlivesWindowWithLongToken' --json number,title,state
+< [{"number":689,"state":"OPEN","title":"stream-expiry Go: TestGoStreamOutlivesWindowWithLongToken fails when the server's deadline fires before the client's ctx"}]
+Known as well (#689). Waiting for the current-generation rerun and the land verdict.
+> Bash until ! kill -0 99502 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep '^=== current' /tmp/rerun657.log; tail -2 /tmp/land657.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: ba88a6tas). Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/ba88a6tas.output. You will be notified w...
+> Bash grep '^=== current' /tmp/rerun657.log; tail -1 /tmp/land657.log | cut -c1-120; date -u +%H:%M
+< [2026-11-13T18:37:22Z] queued: the manager of tacplus merges looper/tacplus-657 after the lands queued before it, one at 20:24
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash until ! kill -0 99502 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep '^=== current' /tmp/rerun657.log; tail -2 /tmp/land657.log | cut -c1-300
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: bg3hdsvwn). Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/bg3hdsvwn.output. You will be notified w...
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash grep '^=== current' /tmp/rerun657.log; grep -E 'FAIL|PASS go|PASS java|PASS rust' /tmp/rerun657.log | tail -3 | cut -c1-150; tail -1 /tmp/land657.log | cut -c1-120; date -u +%H:%M
+<     PASS go c2s-only     PASS rust health-only     PASS rust zero-rpc [2026-11-13T18:37:22Z] queued: the manager of tacplus merges looper/tacplus-657 after the lands queued before it, one at 20:34
+> Bash until ! kill -0 99502 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep '^=== current' /tmp/rerun657.log; tail -2 /tmp/land657.log | cut -c1-300
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: beej5yg8d). Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/beej5yg8d.output. You will be notified w...
+> Bash grep '^=== current' /tmp/rerun657.log; kill -0 39865 && echo land-waiting; tail -1 /tmp/land657.log | cut -c1-120; date -u +%H:%M; gh issue view 657 --repo tacplus-dev/tacplus --json comments --jq '.comments[-1].body' | head -5
+< land-waiting [2026-11-13T18:37:22Z] queued: the manager of tacplus merges looper/tacplus-657 after the lands queued before it, one at 20:44 The looper of tacplus starts this issue with its limit 4h capped at 3h58m by this job (https://gitlab.com/tacplus-dev/looper/-/jobs/18015253201), which ends soo...
+= task_updated
+= task_notification
+= background_tasks_changed
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash until ! kill -0 99502 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep '^=== current' /tmp/rerun657.log; tail -2 /tmp/land657.log | cut -c1-300
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: bmtu30v58). Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/bmtu30v58.output. You will be notified w...
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash grep '^=== current' /tmp/rerun657.log; grep -cE '^\s+PASS ' /tmp/rerun657.log; grep -E 'FAIL' /tmp/rerun657.log | head -3; kill -0 39865 && echo land-waiting; date -u +%H:%M
+< 14 --- FAIL: TestGoStreamOutlivesWindowWithLongToken (5.01s) FAIL FAIL	example.com/streamexpiry/tacplus/model/s2sm/grpc/servers/svc/streamexpiry	7.894s land-waiting 20:54
+> Bash until ! kill -0 99502 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep '^=== current' /tmp/rerun657.log; tail -2 /tmp/land657.log | cut -c1-300
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: bong529qf). Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/bong529qf.output. You will be notified w...
+> Bash grep '^=== current' /tmp/rerun657.log; grep -cE '^\s+PASS ' /tmp/rerun657.log; kill -0 39865 && echo land-waiting; tail -1 /tmp/land657.log | cut -c1-150; date -u +%H:%M
+< 16 land-waiting [2026-11-13T18:37:22Z] queued: the manager of tacplus merges looper/tacplus-657 after the lands queued before it, one at a time, and says on the issue 21:04
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash until ! kill -0 99502 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep '^=== current' /tmp/rerun657.log; tail -2 /tmp/land657.log | cut -c1-300
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 590s timeout and was moved to the background (ID: b3fp0ru2r). Output is being written to: /builds/looper/tacplus/homes/looper-657/tmp/claude-61000/-builds-looper-tacplus-issues-657/368593fc-7312-425b-85c2-e68cc5fa25d3/tasks/b3fp0ru2r.output. You will be notified w...
+> Bash grep '^=== current' /tmp/rerun657.log; grep -cE '^\s+PASS ' /tmp/rerun657.log; kill -0 39865 && echo land-waiting; tail -1 /tmp/land657.log | cut -c1-150; date -u +%H:%M
+< 20 land-waiting [2026-11-13T18:37:22Z] queued: the manager of tacplus merges looper/tacplus-657 after the lands queued before it, one at a time, and says on the issue 21:14
+= task_updated
+= task_notification
+= background_tasks_changed
+About 35 minutes left. The land is still queued and the current-generation rerun is about halfway through. I'll wait one more round, then write the outcome comment and the `Blocked-by: #665` line.
+> Bash until ! kill -0 99502 2>/dev/null || ! kill -0 39865 2>/dev/null; do sleep 20; done; grep '^=== current' /tmp/rerun657.log; tail -2 /tmp/land657.log | cut -c1-300
+= task_started
+= task_notification
+< === current-generation rc=1 [2026-11-13T18:37:19Z] checkpoint of #657 (land queued) pushed to looper/tacplus-657:  7 files changed, 552 insertions(+), 7 deletions(-) [2026-11-13T18:37:22Z] queued: the manager of tacplus merges looper/tacplus-657 after the lands queued before it, one at a time, and s...
+> Bash awk '/current-generation\/run.sh/,0' /tmp/rerun657.log | grep -E '^FAIL|FAIL:|ERROR:|check\(s\) FAILED|Exception in' | head -8 | cut -c1-250; date -u +%H:%M
+< 21:16
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash grep -nE 'FAIL|ERROR|error:' /tmp/rerun657.log | grep -v TestGoStreamOutlives | tail -12 | cut -c1-250
+< 463:    stream_expiry_behavior_test.go:329: bidi stream with an hour-long token ended before the client's bound: rpc error: code = DeadlineExceeded desc = stream terminated by RST_STREAM with error code: CANCEL 465:FAIL 466:FAIL	example.com/streamexpiry/tacplus/model/s2sm/grpc/servers/svc/streamexpi...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/657; tail -1 /tmp/land657.log | cut -c1-120; cat > /tmp/outcome657.md <<'EOF' **Fixed on looper/tacplus-657, land queued; the Python consumer waits on #665.**  ### What changed Commit `e0b02452` (branch; main's hash follows the land), `cross-test/runtime-smoke/` only...
+< [2026-11-13T18:37:22Z] queued: the manager of tacplus merges looper/tacplus-657 after the lands queued before it, one at https://github.com/tacplus-dev/tacplus/issues/657#issuecomment-6865122735
+Final checkpoint, then the `Blocked-by` outcome line as the last step.
+> Bash cd /builds/looper/tacplus/issues/657; for b in 2.4 2.5 2.6; do git worktree remove --force /tmp/bp657-$b; done; /usr/local/bin/repo-looper --repo tacplus --issue 657 --checkpoint "e0b02452 land queued (manager lands it); outcome comment posted; draft backports #666/#667/#668 (un-draft with main hash...
+= task_started
+= task_notification
+< [2026-11-13T21:16:54Z] checkpoint of #657 (a step) pushed to looper/tacplus-657:  7 files changed, 552 insertions(+), 7 deletions(-) Blocked-by: #665
+= thinking_tokens
+= thinking_tokens
+The runtime-smoke gate now passes with the TypeScript consumer, but the Python consumer is still blocked by a compiler rule. I've left issue #657 open with `Blocked-by: #665`. The fix is committed as `e0b02452` and queued to land on main; the land hadn't finished when the run ended, and the manager will land it afterwards.
+
+**What was broken:** `run.sh` copied `platform/health.proto`, which #161 deleted. Removing that copy only exposed more stale steps, which I also fixed:
+- **Fresh checkouts:** `run.sh` now runs `go generate` before building tacplus, as the other cross-tests do.
+- **Go server config:** it needs `grpc-servers: all`, as consumer-contract got in #161. Without it, `ContractApi` is dropped and the fixture server doesn't build.
+- **Deprecation warning:** the canonical proto's legacy `(spec.redact)` triggers a 2.6 warning. It's now allowed the same way consumer-contract allows it.
+- **Missing doc comments:** the client mirror proto needed the doc comments that the MCP-7 rule requires (copied from the canonical contract).
+- **Wrong error expected:** `consumer.py` expected `PermissionError`. The Python client now deliberately raises an UNAUTHENTICATED `ProtoError` instead (an earlier change, PAR-9).
+
+**Results:**
+- **TypeScript:** `run.sh --consumer typescript` passes on main and on release/2.4, 2.5 and 2.6.
+- **Python:** `--consumer python`, and so the default run, still fails at generation. The compiler's MCP-6 rule rejects a Python build if its protos contain any client-to-server (C2S) service, even one Python only calls. I filed that as **#665**. With a throwaway compiler build that drops the rule (not committed), the Python consumer passes with no other change.
+- **Full gates:** 14 of 16 passed, so the run ended `OVERALL fail=1`. The two failures are open timing flakes on a busy runner: Java DiskStore (#539) and stream-expiry (#627). Rerunning those two failed again on other timing tests (#689 and Rust durable-spool tests). My change only touches `cross-test/runtime-smoke` and PROPOSALS.md, and none of the gates run that code.
+
+**Release:** main has taken features since v2.6.1, so I didn't tag v2.6.2. Instead there are draft backport PRs, each naming the tag to cut once it merges:
+- #666 → release/2.4, `v2.4.23`
+- #667 → release/2.5, `v2.5.24`
+- #668 → release/2.6, `v2.6.12`
+
+They stay drafts until the land gives the commit hash on main. release/2.0–2.3 don't have the bug.
+
+**Also done:**
+- Posted the outcome comment on #657.
+- Added a PROPOSALS.md entry to put runtime-smoke into `just gates`, since it broke unnoticed while only the nightly run used it.
+- No handlers changed, so the trace-propagation check didn't apply.
+
+**Left for the next run:** once the land and #665 are done, take the backport PRs out of draft with main's hash, run the default `run.sh` green, then close #657.
+= success: The runtime-smoke gate now passes with the TypeScript consumer, but the Python consumer is still blocked by a compiler rule. I've left issue #657 open with `Blocked-by: #665`. The fix is committed as `e0b02452` and queued to land on main; the land hadn't finished when the run ended, and the manager will land it afterwards.
+
+**What was broken:** `run.sh` copied `platform/health.proto`, which #161 deleted. Removing that copy only exposed more stale steps, which I also fixed:
+- **Fresh checkouts:** `run.sh` now runs `go generate` before building tacplus, as the other cross-tests do.
+- **Go server config:** it needs `grpc-servers: all`, as consumer-contract got in #161. Without it, `ContractApi` is dropped and the fixture server doesn't build.
+- **Deprecation warning:** the canonical proto's legacy `(spec.redact)` triggers a 2.6 warning. It's now allowed the same way consumer-contract allows it.
+- **Missing doc comments:** the client mirror proto needed the doc comments that the MCP-7 rule requires (copied from the canonical contract).
+- **Wrong error expected:** `consumer.py` expected `PermissionError`. The Python client now deliberately raises an UNAUTHENTICATED `ProtoError` instead (an earlier change, PAR-9).
+
+**Results:**
+- **TypeScript:** `run.sh --consumer typescript` passes on main and on release/2.4, 2.5 and 2.6.
+- **Python:** `--consumer python`, and so the default run, still fails at generation. The compiler's MCP-6 rule rejects a Python build if its protos contain any client-to-server (C2S) service, even one Python only calls. I filed that as **#665**. With a throwaway compiler build that drops the rule (not committed), the Python consumer passes with no other change.
+- **Full gates:** 14 of 16 passed, so the run ended `OVERALL fail=1`. The two failures are open timing flakes on a busy runner: Java DiskStore (#539) and stream-expiry (#627). Rerunning those two failed again on other timing tests (#689 and Rust durable-spool tests). My change only touches `cross-test/runtime-smoke` and PROPOSALS.md, and none of the gates run that code.
+
+**Release:** main has taken features since v2.6.1, so I didn't tag v2.6.2. Instead there are draft backport PRs, each naming the tag to cut once it merges:
+- #666 → release/2.4, `v2.4.23`
+- #667 → release/2.5, `v2.5.24`
+- #668 → release/2.6, `v2.6.12`
+
+They stay drafts until the land gives the commit hash on main. release/2.0–2.3 don't have the bug.
+
+**Also done:**
+- Posted the outcome comment on #657.
+- Added a PROPOSALS.md entry to put runtime-smoke into `just gates`, since it broke unnoticed while only the nightly run used it.
+- No handlers changed, so the trace-propagation check didn't apply.
+
+**Left for the next run:** once the land and #665 are done, take the backport PRs out of draft with main's hash, run the default `run.sh` green, then close #657.
+= init
+> Bash tail -5 /tmp/land657.log | cut -c1-400; kill -0 39865 2>/dev/null && echo land-waiting; date -u +%H:%M; cd /builds/looper/tacplus/issues/657; git fetch -q origin; git log --oneline -3 origin/main; gh issue view 657 --repo tacplus-dev/tacplus --json comments --jq '.comments[-1] | .author.login + ": "...
+< [2026-11-13T18:37:19Z] checkpoint of #657 (land queued) pushed to looper/tacplus-657:  7 files changed, 552 insertions(+), 7 deletions(-) [2026-11-13T18:37:22Z] queued: the manager of tacplus merges looper/tacplus-657 after the lands queued before it, one at a time, and says on the issue what came o...
+= thinking_tokens
+= thinking_tokens
+Nothing has changed since my last report, so I couldn't take the backport PRs out of draft: there's no hash on main to give them yet.
+
+- **Land:** still queued since 18:37 UTC. Main is still at `4205075d` and my commit `e0b02452` isn't on it. The run stops in about 30 minutes, and the land runs the full gates (up to about 3 hours), so it will finish after me. The manager lands it then and posts the verdict on #657.
+- **Gates (`/tmp/gates657.log`):** finished with `OVERALL fail=1`. 14 of 16 gates passed. The two failures, current-generation and stream-expiry, are both in tests this diff doesn't touch.
+- **Backport PRs #666, #667, #668:** still drafts. Once the land puts the fix on main, the next run adds its hash to each and takes them out of draft. After each one merges, the patch tag it names gets cut: `v2.4.23`, `v2.5.24`, `v2.6.12`.
+- **Outcome comment:** already posted on #657.
+- **Blocked-by:** `Blocked-by: #665` is already in the outcome file. #657 stays open until #665 (the compiler rule that rejects the Python consumer) is fixed and the default `run.sh` passes.
+= success: Nothing has changed since my last report, so I couldn't take the backport PRs out of draft: there's no hash on main to give them yet.
+
+- **Land:** still queued since 18:37 UTC. Main is still at `4205075d` and my commit `e0b02452` isn't on it. The run stops in about 30 minutes, and the land runs the full gates (up to about 3 hours), so it will finish after me. The manager lands it then and posts the verdict on #657.
+- **Gates (`/tmp/gates657.log`):** finished with `OVERALL fail=1`. 14 of 16 gates passed. The two failures, current-generation and stream-expiry, are both in tests this diff doesn't touch.
+- **Backport PRs #666, #667, #668:** still drafts. Once the land puts the fix on main, the next run adds its hash to each and takes them out of draft. After each one merges, the patch tag it names gets cut: `v2.4.23`, `v2.5.24`, `v2.6.12`.
+- **Outcome comment:** already posted on #657.
+- **Blocked-by:** `Blocked-by: #665` is already in the outcome file. #657 stays open until #665 (the compiler rule that rejects the Python consumer) is fixed and the default `run.sh` passes.

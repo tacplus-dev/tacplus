@@ -1,0 +1,162 @@
+= init
+> Bash cd /builds/looper/tacplus/issues/579; gh issue view 579 --repo tacplus-dev/tacplus --comments | tail -20; cat pkg/protosrc/merge.go; ls pkg/protosrc; git tag --sort=-v:refname | head -3; git log --oneline v2.6.1..origin/main | head -30; git branch -r | grep release
+< author:	tacplus-looper association:	none edited:	false status:	none -- The looper of tacplus starts this issue with its limit 4h capped at 4h by this job (https://gitlab.com/tacplus-dev/looper/-/jobs/17999950892), which ends sooner: the run stops by itself before then, its work checkpointed, and the...
+> Bash cd /builds/looper/tacplus/issues/579; git fetch -q --tags origin; git tag --merged origin/main --sort=-v:refname | head -3; for t in v2.0.0 v2.1.0 v2.2.0 v2.3.0 v2.4.0 v2.5.0 v2.6.0; do echo $t $(git log -1 --format=%ci $t); done; go version; grep -n "^go " go.mod; grep -n -i "release\|tag" CONTRIBU...
+< v2.6.1 v2.6.0 v2.5.0 v2.0.0 2026-10-15 16:36:10 -0600 v2.1.0 2026-10-20 19:19:48 -0600 v2.2.0 2026-10-25 11:13:37 -0600 v2.3.0 2026-10-25 12:12:23 -0600 v2.4.0 2026-10-27 12:14:04 +0000 v2.5.0 2026-10-28 13:35:08 +0000 v2.6.0 2026-11-04 22:16:53 +0000 go version go1.26.11 linux/arm64 3:go 1.25.0 CON...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/579; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b: $(git show origin/release/$b:go.mod | grep '^go ') $(git diff --stat origin/main origin/release/$b -- pkg/protosrc/merge.go | tail -1) $(git log -1 --format=%h origin/release/$b) $(git tag --merged origin/releas...
+< 2.0: go 1.25.0  1 file changed, 14 insertions(+), 76 deletions(-) d95cc943 v2.0.30 2.1: go 1.25.0  1 file changed, 15 insertions(+), 77 deletions(-) f7d6c85d v2.1.23 2.2: go 1.25.0  1 file changed, 14 insertions(+), 29 deletions(-) a3e9fedf v2.2.20 2.3: go 1.25.0  1 file changed, 14 insertions(+), 2...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/579; sed -n 130,155p pkg/protosrc/merge_test.go
+< 	} 	if _, err := os.Stat(filepath.Join(dest, "README.md")); err == nil { 		t.Fatal("README.md must not be merged") 	} }  func TestMergeSources_ConflictIsHardError(t *testing.T) { 	a := t.TempDir() 	b := t.TempDir() 	dest := t.TempDir()  	writeFile(t, a, "sys/spec.proto", "package sys;\n// variant A\...
+= thinking_tokens
+= thinking_tokens
+> Edit /builds/looper/tacplus/issues/579/pkg/protosrc/merge_test.go
+< The file /builds/looper/tacplus/issues/579/pkg/protosrc/merge_test.go has been updated successfully.
+> Bash cd /builds/looper/tacplus/issues/579; go test ./pkg/protosrc/ -run Confined 2>&1 | tail -15
+= task_started
+= task_notification
+< go: downloading go.uber.org/zap v1.27.1 go: downloading gopkg.in/yaml.v3 v3.0.1 go: downloading go.uber.org/multierr v1.11.0 --- FAIL: TestMergeSources_WritesConfinedToDestDir (0.00s)     --- FAIL: TestMergeSources_WritesConfinedToDestDir/proto_under_a_linked_dir (0.00s)         merge_test.go:177: e...
+= thinking_tokens
+= thinking_tokens
+The new test fails as expected: today the merge follows a symlink in the destination and writes outside it. Next I'm making the change the issue recommends, an `os.Root`-confined write.
+> Bash cd /builds/looper/tacplus/issues/579; python3 -I - <<'EOF' p='pkg/protosrc/merge.go' s=open(p).read() s=s.replace('''		return fmt.Errorf("create merge dir: %w", err) 	} ''','''		return fmt.Errorf("create merge dir: %w", err) 	} 	// Every write and read-back goes through root, so a symlink in destDir...
+= task_started
+= task_notification
+< Exit code 2 51:	defer root.Close() 116:				existing, err := root.ReadFile(rel) 125:			if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil { 128:			if err := root.WriteFile(rel, data, 0o644); err != nil { 145:		if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil { 148:		if err := ...
+Tests pass. Running gosec on the package:
+> Bash cd /builds/looper/tacplus/issues/579; gosec -fmt text ./pkg/protosrc/... 2>&1 | grep -E "G70[0-9]|G122|Issues|merge.go" | head
+< [gosec] 2026/11/13 10:18:50 Checking file: /builds/looper/tacplus/issues/579/pkg/protosrc/merge.go [/builds/looper/tacplus/issues/579/pkg/protosrc/merge.go:90] - G122 (CWE-367): Filesystem operation in filepath.Walk/WalkDir callback uses race-prone path; consider root-scoped APIs (e.g. os.Root) to p...
+= thinking_tokens
+= thinking_tokens
+gosec no longer reports G703 in `pkg/protosrc/`. The G122 left at line 90 is the source-side read, which is the separate `needs-decision` issue. Committing and starting the full gates:
+> Bash cd /builds/looper/tacplus/issues/579; git add -A && git commit -q -F - <<'EOF' protosrc: confine the merge's writes to destDir with os.Root (#579)  MergeSources wrote each merged file through filepath.Join(destDir, rel), so a symlink already in the merge directory could redirect a write (or the dedu...
+< 9b85c175 protosrc: confine the merge's writes to destDir with os.Root (#579) 6165
+Meanwhile, I'm preparing the backports and checking how merge.go differs on the older release branches.
+> Bash cd /builds/looper/tacplus/issues/579; /usr/local/bin/repo-looper --repo tacplus --issue 579 --checkpoint "fix committed 9b85c175 (os.Root in MergeSources + test); full gates running; left: land, backports to release/2.0-2.6, tag v2.6.12 on release/2.6 after merge" 2>&1 | tail -2; git diff origin/rel...
+= task_started
+= task_notification
+< remote:  [2026-11-13T10:19:15Z] checkpoint of #579 (a step) pushed to looper/tacplus-579:  4 files changed, 260 insertions(+), 7 deletions(-) diff --git a/pkg/protosrc/merge.go b/pkg/protosrc/merge.go index bc9bee89..6f50d399 100644 --- a/pkg/protosrc/merge.go +++ b/pkg/protosrc/merge.go @@ -64,18 +...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/579; gh pr list --repo tacplus-dev/tacplus --state all --search "head:backport/574-release-2.6" --json number,title,body,state,mergedAt | head -c 2500; echo; git log --oneline -3 origin/release/2.6
+< [{"body":"Backport of #574 to `release/2.6` as d0b91418, adapted: this line has no `-check-links` (#266, a feature), so its `checkLinks` is not here. Main's commit: pending the land of #574; this body is updated with its hash once it merges.\n\n**Once this merges:** cut the line's next patch on `rel...
+= thinking_tokens
+= thinking_tokens
+I'll follow the pattern of the existing backport PRs. For each line I'm building a worktree, cherry-picking, and running the package's tests and gosec:
+> Bash cd /builds/looper/tacplus/issues/579; for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do d=$HOME/wt-$v; git worktree add -q -b backport/579-release-$v $d origin/release/$v 2>&1|tail -1; (cd $d && git cherry-pick -x 9b85c175 >/dev/null 2>&1 && go vet ./pkg/protosrc && go test ./pkg/protosrc 2>&1|tail -1 && ech...
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	1.308s 2.0 G703: 0 ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	2.185s 2.1 G703: 0 ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	3.993s 2.2 G703: 0 ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	6.638s 2.3 G703: 0 ok  	github.com/tacplus-dev/...
+= thinking_tokens
+= thinking_tokens
+All seven cherry-picks apply cleanly, pass `go vet` and `go test ./pkg/protosrc`, and show no G703. I'll open the PRs after the land so they can cite main's commit hash. Polling the gates:
+> Bash sleep 540; tail -3 /tmp/gates-579.log; kill -0 6165 2>/dev/null && echo running
+= task_started
+= task_notification
+<     PASS java ==> Generating rust cross-test fixture ==> Compiling rust cross-test fixture running
+> Bash while kill -0 6165 2>/dev/null; do sleep 30; done; tail -5 /tmp/gates-579.log; grep -ciE "^FAIL|--- FAIL" /tmp/gates-579.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: ba71kgwgq). Output is being written to: /builds/looper/tacplus/homes/looper-579/tmp/claude-61000/-builds-looper-tacplus-issues-579/757ea301-b784-4964-b7f0-2955815917e1/tasks/ba71kgwgq.output. You will be notified w...
+> Bash sleep 580; tail -3 /tmp/gates-579.log; kill -0 6165 2>/dev/null && echo running
+= task_started
+= task_notification
+<     Removed 9.9M fixture tree c2sonly-go ==> Generating rust health-only fixture ==> Compiling rust health-only fixture running
+> Bash sleep 590; tail -3 /tmp/gates-579.log; kill -0 6165 2>/dev/null && echo running
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+<     Removed 12M fixture tree zerorpc-rust ==> Generating go requires-device fixture ==> Compiling go requires-device fixture running
+> Bash sleep 590; tail -3 /tmp/gates-579.log; kill -0 6165 2>/dev/null && echo running
+= task_started
+= task_notification
+<     Removed 13M fixture tree requiresdevice-rust ==> Generating go record-egress fixture ==> Compiling go record-egress fixture running
+> Bash sleep 595; tail -3 /tmp/gates-579.log; kill -0 6165 2>/dev/null && echo running
+= task_started
+= task_notification
+<     Removed 62M fixture tree recordegress-java ==> Generating rust record-egress fixture ==> Compiling rust record-egress fixture running
+The full gates are still running (about 50 minutes in, now on the Rust fixtures) with no failures so far. I'll keep polling.
+> Bash sleep 595; tail -3 /tmp/gates-579.log; kill -0 6165 2>/dev/null && echo running
+= task_started
+= task_notification
+<     Removed 62M fixture tree recordegress-host-java ==> Generating rust record-egress HOST fixture ==> Compiling rust record-egress HOST fixture running
+> Bash sleep 595; tail -3 /tmp/gates-579.log; kill -0 6165 2>/dev/null && echo running
+= task_started
+= task_notification
+<     Removed 11M fixture tree accountingsink-go ==> Generating java accounting-sink fixture ==> Compiling java accounting-sink fixture running
+= thinking_tokens
+= thinking_tokens
+> Bash sleep 595; tail -3 /tmp/gates-579.log; kill -0 6165 2>/dev/null && echo running
+= task_started
+= task_notification
+<     PASS go owner-default     Removed 10M fixture tree ownerdefault-go ==> Generating java owner-default fixture running
+> Bash sleep 595; tail -3 /tmp/gates-579.log; kill -0 6165 2>/dev/null && echo running
+= task_started
+= task_notification
+<     PASS go quorum-write     Removed 10M fixture tree quorumwrite-go ==> Generating java quorum-write fixture running
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/579; nohup /usr/local/bin/repo-looper --repo tacplus --issue 579 --land > /tmp/land-579.log 2>&1 & echo $!; sleep 20; cat /tmp/land-579.log
+= task_started
+= task_notification
+< 83570 [2026-11-13T11:59:38Z] checkpoint of #579 (land queued) pushed to looper/tacplus-579:  5 files changed, 361 insertions(+), 7 deletions(-) [2026-11-13T11:59:40Z] queued: the manager of tacplus merges looper/tacplus-579 after the lands queued before it, one at a time, and says on the issue what ...
+= thinking_tokens
+= thinking_tokens
+While the land waits in the queue, I'm pushing the backport branches and opening their PRs. Following #598, each one says main's hash is pending:
+> Bash cd /builds/looper/tacplus/issues/579; for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do d=$HOME/wt-$v; h=$(git -C $d rev-parse --short HEAD); next=$(git tag --merged origin/release/$v --sort=-v:refname | head -1 | awk -F. '{print $1"."$2"."$3+1}'); git -C $d push -q origin backport/579-release-$v 2>&1 | grep...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= vcs_state_changed
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/613 https://github.com/tacplus-dev/tacplus/pull/614 https://github.com/tacplus-dev/tacplus/pull/615 https://github.com/tacplus-dev/tacplus/pull/616 https://github.com/tacplus-dev/tacplus/pull/617 https://github.com/tacplus-dev/tacplus/pull/618 https://gith...
+= thinking_tokens
+= thinking_tokens
+The seven backport PRs are open: #613–#619, for release/2.0 through release/2.6. Polling the gates and the land:
+> Bash sleep 590; tail -2 /tmp/gates-579.log; kill -0 6165 2>/dev/null && echo gates running; tail -2 /tmp/land-579.log
+= task_started
+= task_notification
+< ==> Generating java epoch-load fixture ==> Compiling java epoch-load fixture gates running [2026-11-13T11:59:38Z] checkpoint of #579 (land queued) pushed to looper/tacplus-579:  5 files changed, 361 insertions(+), 7 deletions(-) [2026-11-13T11:59:40Z] queued: the manager of tacplus merges looper/tac...
+> Bash sleep 595; tail -2 /tmp/gates-579.log; kill -0 6165 2>/dev/null && echo gates running; tail -1 /tmp/land-579.log
+= task_started

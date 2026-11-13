@@ -80,13 +80,14 @@ import (
 //	       rpc, a generated handler stub for it, and no dispatch at all — an
 //	       empty MCP transport handed to the author to implement by hand,
 //	       with every tool the service owns silently unserved. Go, Java and
-//	       Rust have the backend; Python is gated as a host without one.
-//	       TypeScript, Swift and C# are client-only targets that generate no
-//	       wrapper at all — they cannot host, so they are not gated, and a
-//	       typescript client (the webapp) of a tool-owning service generates
-//	       its client surface as usual. Under auto-exposure this stopped being
-//	       a corner: every c2s service owns tools, so a Python HOST of one has
-//	       to say so loudly rather than generate a hole.
+//	       Rust have the backend, and are the only hosts today. Python,
+//	       TypeScript, Swift and C# are client targets that generate no
+//	       wrapper (Python refuses one) — they cannot host, so they are not
+//	       gated, and a client (the typescript webapp, a python tool, #665)
+//	       of a tool-owning service generates its client surface as usual.
+//	       Under auto-exposure this stopped being a corner: every c2s service
+//	       owns tools, so a future host without a backend has to say so
+//	       loudly rather than generate a hole.
 //	MCP-7  an rpc publishing a tool whose leading comment cannot serve as the
 //	       tool's description                                        -> fail
 //	       The description IS the rpc's doc comment — there is no second
@@ -119,9 +120,11 @@ var mcpBackendLanguages = map[string]bool{"go": true, "java": true, "rust": true
 
 // mcpHostLanguages are the generation targets that emit a service wrapper and
 // can therefore HOST a service rather than only call one. Only these are gated
-// by MCP-6: a client-only target (typescript, swift, csharp) never serves a
-// tool, so it has no hole to fall into.
-var mcpHostLanguages = map[string]bool{"go": true, "java": true, "rust": true, "python": true}
+// by MCP-6: a client target (python, typescript, swift, csharp) never serves a
+// tool, so it has no hole to fall into — python's server wrappers are refused
+// outright, and a python client of a tool-owning service generates normally
+// (#665). Every host has a backend today; the gate holds for the next one.
+var mcpHostLanguages = map[string]bool{"go": true, "java": true, "rust": true}
 
 // McpToolDescription is the text the model reads to decide whether to call the
 // tool: the rpc's own leading comment, flattened to one paragraph. Every

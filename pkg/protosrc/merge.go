@@ -6,7 +6,9 @@ package protosrc
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -35,6 +37,8 @@ var mergedMetaFiles = map[string]bool{
 //     which is exactly the collision the multi-source model must not paper over.
 //   - dependencies.yaml / registry.yaml at the proto root are merged with a deep
 //     YAML union; conflicting scalar values for the same key are a hard error.
+//   - Each source is read only inside itself: a symlink that resolves outside
+//     its source is a hard error naming it, never followed (tacplus#569).
 //
 // The merge is order-independent: the resulting file set and bytes are identical
 // regardless of source order, so a build hash computed over destDir is stable.
@@ -50,38 +54,45 @@ func MergeSources(sourceDirs []string, destDir string) error {
 	metaDocs := map[string]map[string]any{}
 
 	for _, src := range sourceDirs {
-		walkErr := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		// Each source is read through an os.Root, so nothing in it (a symlink
+		// named like a proto, say) can make the merge read outside it: a fetched
+		// dependency must never copy a host file into the merged tree.
+		root, err := os.OpenRoot(src)
+		if err != nil {
+			return fmt.Errorf("open proto source %q: %w", src, err)
+		}
+		walkErr := fs.WalkDir(root.FS(), ".", func(slashRel string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
 			// Skip hidden paths entirely (.git, .gitlab-ci.yml, .DS_Store, ...).
-			if base := filepath.Base(path); strings.HasPrefix(base, ".") && path != src {
-				if info.IsDir() {
-					return filepath.SkipDir
+			if base := path.Base(slashRel); strings.HasPrefix(base, ".") && slashRel != "." {
+				if d.IsDir() {
+					return fs.SkipDir
 				}
 				return nil
 			}
-			if info.IsDir() {
+			if d.IsDir() {
 				return nil
 			}
-			rel, err := filepath.Rel(src, path)
-			if err != nil {
-				return err
-			}
+			rel := filepath.FromSlash(slashRel)
 			// Merge only what generation consumes: proto files, yaml metadata,
 			// and a fleet build's lock at the root (the compiler reads each
 			// service's depends from it when it scopes a generation). Everything
 			// else (READMEs, release scripts, CI config) is per-repo housekeeping
 			// that must not cause cross-source conflicts.
-			switch filepath.Ext(path) {
+			switch path.Ext(slashRel) {
 			case ".proto", ".yaml", ".yml":
 			default:
 				if rel != "fleet.lock" {
 					return nil
 				}
 			}
-			data, err := os.ReadFile(path)
+			data, err := fs.ReadFile(root.FS(), slashRel)
 			if err != nil {
+				if d.Type()&fs.ModeSymlink != 0 {
+					return fmt.Errorf("proto source %q: %s is a symlink that does not resolve inside the source; merging never reads outside a source tree: %w", src, rel, err)
+				}
 				return err
 			}
 
@@ -125,8 +136,12 @@ func MergeSources(sourceDirs []string, destDir string) error {
 			origin[rel] = src
 			return nil
 		})
+		closeErr := root.Close()
 		if walkErr != nil {
 			return walkErr
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close proto source %q: %w", src, closeErr)
 		}
 	}
 

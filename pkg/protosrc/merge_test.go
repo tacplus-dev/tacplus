@@ -375,3 +375,60 @@ func TestFileLayers(t *testing.T) {
 		t.Errorf("no layers named should give nil, got %v", got)
 	}
 }
+
+// A source must never make the merge read outside itself: a symlink named like
+// a proto (or a yaml) that points out of the source tree fails the merge with an
+// error naming it, and the target's bytes never reach the destination
+// (tacplus#569). A fetched dependency could otherwise copy a host file into the
+// merged tree and from there into generation.
+func TestMergeSources_RefusesASymlinkLeavingTheSource(t *testing.T) {
+	for _, name := range []string{"a.proto", "evil.yaml"} {
+		t.Run(name, func(t *testing.T) {
+			outside := t.TempDir()
+			src := t.TempDir()
+			dest := t.TempDir()
+			writeFile(t, outside, "secret.txt", "host secret\n")
+			writeFile(t, src, "services/app.proto", "package app;\n")
+			if err := os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(src, name)); err != nil {
+				t.Skipf("symlinks unsupported: %v", err)
+			}
+
+			err := MergeSources([]string{src}, dest)
+			if err == nil {
+				t.Fatal("MergeSources followed a symlink out of its source; want an error")
+			}
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("error %q does not name the symlink %s", err, name)
+			}
+			_ = filepath.Walk(dest, func(path string, info os.FileInfo, err error) error {
+				if err != nil || info.IsDir() {
+					return err
+				}
+				if b, _ := os.ReadFile(path); strings.Contains(string(b), "host secret") {
+					t.Errorf("the outside file's bytes reached the destination at %s", path)
+				}
+				return nil
+			})
+		})
+	}
+}
+
+// A relative symlink that stays inside its source still merges, its target's
+// content at the link's path.
+func TestMergeSources_MergesASymlinkInsideTheSource(t *testing.T) {
+	src := t.TempDir()
+	dest := t.TempDir()
+	writeFile(t, src, "shared/base.proto", "package base;\n")
+	if err := os.MkdirAll(filepath.Join(src, "services"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "shared", "base.proto"), filepath.Join(src, "services", "base.proto")); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+	if err := MergeSources([]string{src}, dest); err != nil {
+		t.Fatalf("MergeSources: %v", err)
+	}
+	if got := read(t, filepath.Join(dest, "services/base.proto")); got != "package base;\n" {
+		t.Errorf("in-source symlink merged as %q", got)
+	}
+}

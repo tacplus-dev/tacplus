@@ -20,6 +20,17 @@ import (
 
 const repoRoot = "../.."
 
+// openRoot opens dir as an os.Root, closed when the test ends.
+func openRoot(t *testing.T, dir string) *os.Root {
+	t.Helper()
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	return r
+}
+
 func requireProtoc(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("protoc"); err != nil {
@@ -98,7 +109,7 @@ func TestReferenceCoversEveryType(t *testing.T) {
 
 // The published documents stage without a broken relative link.
 func TestStageDocs(t *testing.T) {
-	if err := stageDocs(repoRoot, t.TempDir()); err != nil {
+	if err := stageDocs(openRoot(t, repoRoot), openRoot(t, t.TempDir())); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -158,7 +169,7 @@ func TestCheckLinks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	err := checkLinks(root, []string{"README.md", "docs/A.md", "docs/B.md"})
+	err := checkLinks(openRoot(t, root), []string{"README.md", "docs/A.md", "docs/B.md"})
 	if err == nil {
 		t.Fatal("broken links must be an error")
 	}
@@ -176,8 +187,31 @@ func TestCheckLinks(t *testing.T) {
 			t.Errorf("error reports a link that resolves or is not checked (%s):\n%v", fine, err)
 		}
 	}
-	if err := checkLinks(root, []string{"docs/NOT_THERE.md"}); err == nil {
+	if err := checkLinks(openRoot(t, root), []string{"docs/NOT_THERE.md"}); err == nil {
 		t.Error("a file that does not exist must be an error")
+	}
+}
+
+// A link to a file reached through a symbolic link that leaves the repository
+// is reported as one that does not exist: the file outside is not stat'ed.
+func TestCheckLinksStaysInRoot(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "repo")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "outside.md"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("..", filepath.Join(root, "up")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("[out](up/outside.md)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := checkLinks(openRoot(t, root), []string{"README.md"})
+	if err == nil || !strings.Contains(err.Error(), `link "up/outside.md"`) {
+		t.Fatalf("a link out of the repository through a symbolic link must be an error, got %v", err)
 	}
 }
 

@@ -15,7 +15,7 @@ import (
 // The committed README.md must be what README.src.md expands to, so an edit
 // to README.src.md or docs/snippets/ without regenerating fails `just test`.
 func TestReadmeIsCurrent(t *testing.T) {
-	want, err := readme(repoRoot)
+	want, err := readme(openRoot(t, repoRoot))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestReadmeIsCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(got) != want {
-		t.Fatalf("README.md is stale: it differs from the expansion of README.src.md.\n"+
+		t.Fatalf("README.md is stale: it differs from the expansion of README.src.md.\n" +
 			"Edit README.src.md or docs/snippets/ (never README.md), then run `go run ./cmd/sitegen` and commit the result.")
 	}
 }
@@ -34,7 +34,7 @@ func TestExpandSnippetsRejectsOtherForms(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "a.md"), []byte("A\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := expandSnippets(root, "x\n--8<-- \"a.md\"\ny\n")
+	got, err := expandSnippets(openRoot(t, root), "x\n--8<-- \"a.md\"\ny\n")
 	if err != nil || got != "x\nA\ny\n" {
 		t.Fatalf("simple form: got %q, %v", got, err)
 	}
@@ -45,10 +45,32 @@ func TestExpandSnippetsRejectsOtherForms(t *testing.T) {
 		"  --8<-- \"a.md\"\n",    // indented
 		"--8<-- \"missing.md\"\n",
 	} {
-		if _, err := expandSnippets(root, doc); err == nil {
+		if _, err := expandSnippets(openRoot(t, root), doc); err == nil {
 			t.Errorf("%q: expected an error", doc)
 		} else if !strings.Contains(err.Error(), "line ") {
 			t.Errorf("%q: error should name the line: %v", doc, err)
+		}
+	}
+}
+
+// A snippet marker naming a file past the root is an error: the file outside
+// the repository is not read, even when it exists.
+func TestExpandSnippetsStaysInRoot(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "repo")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "outside.md"), []byte("SECRET\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "outside.md"), filepath.Join(root, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+	for _, doc := range []string{"--8<-- \"../outside.md\"\n", "--8<-- \"link.md\"\n"} {
+		got, err := expandSnippets(openRoot(t, root), doc)
+		if err == nil {
+			t.Errorf("%q: expected an error, got %q", doc, got)
 		}
 	}
 }

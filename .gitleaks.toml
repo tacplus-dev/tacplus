@@ -2,6 +2,9 @@
 # runtime, a redaction/security test fixture that must contain a token-shaped
 # string to prove it gets redacted, or the JWK alg vectors (#179): tokens signed
 # by throwaway keys, of which only the public halves are written.
+# The chassis tests' fixtures no longer carry a token-shaped literal (#628,
+# pkg/internal/common TestNoTokenShapedLiteralInTemplates); their paths stay
+# listed for the history `gitleaks git` scans.
 # Re-run: gitleaks git . && gitleaks dir .
 [extend]
 useDefault = true

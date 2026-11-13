@@ -4,6 +4,10 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **runtime-smoke in the gates** (2026-11-13, #657, #665): `cross-test/runtime-smoke/run.sh` runs only in the nightly
+  matrix, so it rotted unnoticed through four contract changes (the 2.4 sys contract #161, MCP-7 doc comments,
+  `grpc-servers` scoping, PAR-9's Python error shape). `--consumer typescript` takes a few minutes; add it to
+  `just gates`, and `--consumer python` once #665 lets Python generate a client of a C2S service.
 - **Per-language gate sets, and more of the map** (2026-11-08, #266): `gates.yaml` runs the full gates (~3h) for any
   change under `pkg/**`, `cmd/**` or `.github/`. Next: `pkg/internal/<lang>/**` and `pkg/templates/<lang>/**` to that
   language's `current-generation-<lang>`, `determinism-<lang>` and `-<lang>` cross-tests (with `just test`), once each

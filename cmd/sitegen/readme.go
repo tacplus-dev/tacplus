@@ -6,7 +6,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -29,13 +28,14 @@ const (
 
 var snippetLine = regexp.MustCompile(`^--8<-- "([^":;]+)"$`)
 
-// readme returns README.md as generated from README.src.md under root.
-func readme(root string) (string, error) {
-	src, err := os.ReadFile(filepath.Join(root, readmeSrc))
+// readme returns README.md as generated from README.src.md in the repository
+// repo.
+func readme(repo *os.Root) (string, error) {
+	src, err := repo.ReadFile(readmeSrc)
 	if err != nil {
 		return "", err
 	}
-	out, err := expandSnippets(root, string(src))
+	out, err := expandSnippets(repo, string(src))
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", readmeSrc, err)
 	}
@@ -43,8 +43,9 @@ func readme(root string) (string, error) {
 }
 
 // expandSnippets replaces every snippet marker line in doc with the contents
-// of the named file, resolved against root.
-func expandSnippets(root, doc string) (string, error) {
+// of the named file, a repository path under repo. A path that leaves repo,
+// through ".." or a symbolic link, is an error and is not read.
+func expandSnippets(repo *os.Root, doc string) (string, error) {
 	lines := strings.Split(doc, "\n")
 	for i, line := range lines {
 		if !strings.Contains(line, "--8<--") {
@@ -54,7 +55,7 @@ func expandSnippets(root, doc string) (string, error) {
 		if m == nil {
 			return "", fmt.Errorf("line %d: %q: only the one-line form --8<-- \"path\" is supported", i+1, line)
 		}
-		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(m[1])))
+		data, err := repo.ReadFile(m[1])
 		if err != nil {
 			return "", fmt.Errorf("line %d: %w", i+1, err)
 		}

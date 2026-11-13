@@ -42,6 +42,13 @@ func MergeSources(sourceDirs []string, destDir string) error {
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("create merge dir: %w", err)
 	}
+	// Every write and read-back goes through root, so a symlink in destDir
+	// cannot redirect one outside it.
+	root, err := os.OpenRoot(destDir)
+	if err != nil {
+		return fmt.Errorf("open merge dir: %w", err)
+	}
+	defer root.Close()
 	// origin records which source first wrote each relative path, for clear
 	// conflict messages.
 	origin := map[string]string{}
@@ -101,9 +108,8 @@ func MergeSources(sourceDirs []string, destDir string) error {
 			}
 
 			// Regular files: dedup-identical, error on real conflict.
-			destPath := filepath.Join(destDir, rel)
 			if prevSrc, ok := origin[rel]; ok {
-				existing, err := os.ReadFile(destPath)
+				existing, err := root.ReadFile(rel)
 				if err != nil {
 					return err
 				}
@@ -112,10 +118,10 @@ func MergeSources(sourceDirs []string, destDir string) error {
 				}
 				return nil // identical: deduplicated
 			}
-			if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+			if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 				return err
 			}
-			if err := os.WriteFile(destPath, data, 0o644); err != nil {
+			if err := root.WriteFile(rel, data, 0o644); err != nil {
 				return err
 			}
 			origin[rel] = src
@@ -132,11 +138,10 @@ func MergeSources(sourceDirs []string, destDir string) error {
 		if err != nil {
 			return fmt.Errorf("marshal merged %s: %w", rel, err)
 		}
-		destPath := filepath.Join(destDir, rel)
-		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+		if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(destPath, out, 0o644); err != nil {
+		if err := root.WriteFile(rel, out, 0o644); err != nil {
 			return err
 		}
 	}

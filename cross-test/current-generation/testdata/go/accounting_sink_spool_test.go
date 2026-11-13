@@ -26,6 +26,12 @@ import (
 // emitBound is how long an RPC completion may take to hand its record to the sink.
 const emitBound = time.Second
 
+// progressBound is how long a wait for the sink's own goroutine to make progress
+// (deliver, append, compact) may take. It is a hang guard, not a latency bound: the
+// waits return as soon as their condition holds, and on a busy runner the goroutine
+// may not be scheduled for well over emitBound.
+const progressBound = 30 * time.Second
+
 func sinkEvent(i int) *accounting_pb.Event {
 	return &accounting_pb.Event{RequestId: fmt.Sprintf("r%d", i), SourceId: "test", TimestampMs: 1}
 }
@@ -93,7 +99,7 @@ func TestEventBusSinkReplaysSpoolInOrderAfterOutage(t *testing.T) {
 			if want := fmt.Sprintf("r%d", i); rec.RequestId != want {
 				t.Fatalf("record %d arrived as %q, want %q: the spool did not replay in order", i, rec.RequestId, want)
 			}
-		case <-time.After(emitBound):
+		case <-time.After(progressBound):
 			t.Fatalf("record %d did not reach the publisher after it resumed", i)
 		}
 	}
@@ -117,14 +123,22 @@ func TestEventBusSinkDropsAndCountsOnlyWhenSpoolFull(t *testing.T) {
 		t.Fatalf("emitted %d records past a spool of %d with the publisher blocked, none were dropped", emitted, accountingSpoolDepth)
 	}
 
+	// Every record not dropped is delivered once the publisher resumes, so drain until
+	// the two account for every emit, then check nothing more arrives.
 	delivered := 0
-	for drained := false; !drained; {
+	deadline := time.After(progressBound)
+	for delivered+dropped < emitted {
 		select {
 		case <-tx:
 			delivered++
-		case <-time.After(emitBound):
-			drained = true
+		case <-deadline:
+			t.Fatalf("delivered %d + dropped %d of %d records within %v: a record was lost without being counted", delivered, dropped, emitted, progressBound)
 		}
+	}
+	select {
+	case <-tx:
+		delivered++
+	case <-time.After(200 * time.Millisecond):
 	}
 	// One record sits in tx, one in the drain goroutine's hand, and up to
 	// accountingSpoolDepth in the spool.

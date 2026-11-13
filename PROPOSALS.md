@@ -342,9 +342,6 @@ the looper then marks it `promoted` or `declined` here with the date.
 - **A new release is not pinnable until its build image is pushed** (2026-10-29, #193): `tacplus pin` refuses a
   release without `build:X.Y.Z`, which `images.yml` builds from the tag, the arm64 half under QEMU, for hours, while
   the binaries are out in minutes. Native arm64 runners (or the GitLab pipeline, #194) would close the gap.
-- **The root `Dockerfile` is a stale image definition** (2026-10-29, #193): it layers a binary on a `tacplus-base`
-  built from a `Dockerfile.base` that does not exist, and nothing builds it. With the tacplus image gone it can be
-  deleted.
 - **README's install command names an unreleased build image** (2026-10-30, #201): on main, README.md and
   docs/snippets/install-container.md run `build:2.6 tacplus pin`, and `build:2.6` does not exist until v2.6.0
   (#213); the 2.5 images predate `tacplus pin`. The README on GitHub is main's, so until 2.6.0 ships a user copying

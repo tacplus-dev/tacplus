@@ -1,0 +1,400 @@
+< bash example/run.sh ==> Building tacplus
+= thinking_tokens
+= thinking_tokens
+> Bash cd /tmp && rm -rf sg && mkdir sg && git -C /builds/looper/tacplus/issues/583 show HEAD:example/server/main.go > sg/old.go && cp /builds/looper/tacplus/issues/583/example/server/main.go sg/new.go && semgrep --config r/go.grpc.security.grpc-server-insecure-connection.grpc-server-insecure-connection sg...
+= task_started
+= task_notification
+< sg/old.go:161 go.grpc.security.grpc-server-insecure-connection.grpc-server-insecure-connection Shell cwd was reset to /builds/looper/tacplus/issues/583
+Semgrep flags the old file and not the new one. Waiting on the example run.
+> Bash cd /builds/looper/tacplus/issues/583; for i in $(seq 1 50); do kill -0 1333 2>/dev/null || break; sleep 10; done; tail -12 /tmp/ex1.log
+= task_started
+= task_notification
+< 2026-11-13T17:08:32.947Z	DEBUG	Added go_package to sys proto	{"path": "sys/tags.proto"} 2026-11-13T17:08:32.947Z	DEBUG	Added go_package to sys proto	{"path": "sys/tlscert.proto"} 2026-11-13T17:08:32.948Z	DEBUG	Added go_package to sys proto	{"path": "sys/token.proto"} 2026-11-13T17:08:32.948Z	DEBUG	A...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/583; git status --short; find . -name 'entitlementview.proto' -not -path './example/target/*' | head; sed -n 171,203p justfile
+<  M example/run.sh  M example/server/main.go ./pkg/proto/sys/entitlementview.proto gates:   #!/usr/bin/env bash   set -uo pipefail   # Hold the tree lock across the WHOLE suite, not once per gate: taking it per   # gate would let another job interleave a regeneration between two of them.   # The nest...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/583; grep -rn 'run.sh\|just example\|example/' justfile .gitlab-ci.yml .github 2>/dev/null | head; grep -rln 'example/run.sh\|example/server' --include=*.go . | head
+< justfile:19:#   cross-test/current-generation/run.sh  write_java_compile_pom() justfile:20:#   cross-test/cert-stream/run.sh         write_java_compile_pom() justfile:23:#   cross-test/consumer-contract/run.sh   (pom heredoc) justfile:65:# in example/. See example/README.md. justfile:67:  bash examp...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/583; grep -c 'Added go_package' /tmp/ex1.log; grep -n 'entitlementview' /tmp/ex1.log | head; ls pkg/proto/sys | wc -l; grep -rn 'entitlementview' --include=*.go pkg | grep -v _test | head
+< 37 grep: /tmp/ex1.log: binary file matches 39 pkg/internal/java/types/libs.go:84:		"entitlementview": true, pkg/internal/proto/configholder.go:1923:// for embedded lib protos (accounting.proto, trace.proto, entitlementview.proto) pkg/internal/go/types/stateclient_gen.go:512:	for _, pkg := range []st...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/583; grep -rn 'MCP carrier injection' pkg --include=*.go | grep -v _test; grep -a -n 'sys/' /tmp/ex1.log | grep -av 'Added go_package' | head
+< pkg/internal/java/types/generator.go:742:			return fmt.Errorf("failed to regenerate generated/*.proto after MCP carrier injection: %w", err) pkg/internal/proto/libs_protos.go:350:			return "", fmt.Errorf("failed to regenerate generated/*.proto after MCP carrier injection: %w", err) pkg/internal/prot...
+> Bash cd /builds/looper/tacplus/issues/583; sed -n 60,110p pkg/internal/proto/mcp_carrier.go; grep -a -n 'scoped\|Removed\|delet\|prun' /tmp/ex1.log | head -20
+< // per-language message index as infra — so the value is stated here and pinned // to the proto by TestMcpResponseFrameBoundMatchesProto. const McpResponseFrameMaxBytes = 4000000  // AppendMcpCarrierRpcsToProtos injects, into every service that declares at // least one RPC_PRINCIPAL_MCP rpc, the bid...
+= thinking_tokens
+= thinking_tokens
+The failure looks like my first (killed) run's children kept running and raced the second run in the same `example/target`. Checking for leftover processes of mine.
+> Bash ps -u looper-583 -o pid,ppid,etime,cmd | grep -v 'ps -u' | head -30
+<     PID    PPID     ELAPSED CMD     545      12       03:49 timeout -k 30 13781 claude --print --verbose --output-format stream-json --model claude-opus-5-5 --permission-mode acceptEdits --allowedTools Bash,Read,Edit,Write,Grep,Glob,Task,Agent,TodoWrite,WebFetch,WebSearch     549     545       03:49...
+Clean now. Re-running the example by itself, in its own process group this time.
+> Bash cd /builds/looper/tacplus/issues/583; git stash push example/server/main.go -q; git stash list; setsid nohup just example > /tmp/ex-red.log 2>&1 & echo $!
+< stash@{0}: WIP on looper/tacplus-583: 4205075d Gate map: gates.yaml and a docs recipe, so a docs-only land runs minutes, not the full gates (#266) 8555
+> Bash cd /builds/looper/tacplus/issues/583; for i in $(seq 1 55); do kill -0 8555 2>/dev/null || break; sleep 10; done; grep -a '^==>\|loopback\|served' /tmp/ex-red.log | tail; tail -3 /tmp/ex-red.log
+= task_started
+= task_notification
+< ==> Building tacplus ==> Generating Go model ==> Building Go server ==> Generating TypeScript model ==> Building TypeScript model ==> Checking the server refuses a non-loopback address notes-server's refusal does not name loopback: notes-server's refusal does not name loopback: MCP tools: create_not...
+Red as expected (the old server serves on 0.0.0.0 until the timeout). Now the fix restored, green run:
+> Bash cd /builds/looper/tacplus/issues/583; git stash pop -q && git status --short; setsid nohup just example > /tmp/ex-green.log 2>&1 & echo $!
+<  M example/run.sh  M example/server/main.go 10080
+Meanwhile, the docs: README.src.md and example/README.md.
+> Bash cd /builds/looper/tacplus/issues/583; python3 - <<'EOF' import re p='README.src.md'; s=open(p).read() old="- [Quick start](example/README.md): generate and run the example, a Go server and a TypeScript client.\n" new="- [Quick start](example/README.md): generate and run the example, a Go server and ...
+< 75:  go run ./cmd/sitegen 82:  go run ./cmd/sitegen 243:  go run ./cmd/sitegen -check-links
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/583; sed -i 's/(127.0.0.1, ::1 or localhost)/(127.0.0.0\/8, ::1 or localhost)/' example/server/main.go; python3 - <<'EOF' p='example/README.md'; s=open(p).read() old="""not `127.0.0.1`, `::1` or `localhost`""" new="""not a loopback IP (`127.0.0.0/8`, `::1`) or `local...
+< example/README.md:73:  verifies one demo token. So it binds loopback only: the default `NOTES_ADDR` example/README.md:75:  not a loopback IP (`127.0.0.0/8`, `::1`) or `localhost` (a bearer token sent in clear text must example/server/main.go:71:// requireLoopback refuses an address whose host is not...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/583; python3 - <<'EOF' p='example/README.md'; s=open(p).read() i=s.index("- It hosts the generated wrapper"); j=s.index("  A deployed service calls") if "  A deployed service calls" in s else None print(repr(s[i:i+700])) EOF
+< "- It hosts the generated wrapper on a plain gRPC server, without TLS, and\n  verifies one demo token. So it binds loopback only: the default `NOTES_ADDR`\n  is `127.0.0.1:0`, and the server refuses to start on an address whose host is\n  not a loopback IP (`127.0.0.0/8`, `::1`) or `localhost` (a be...
+> Bash cd /builds/looper/tacplus/issues/583; python3 - <<'EOF' p='example/README.md'; s=open(p).read() old="""  not a loopback IP (`127.0.0.0/8`, `::1`) or `localhost` (a bearer token sent in clear text must   not cross the network). A deployed service calls `s2sm.New()` and `sm.Run(handler)` instead,   wh...
+< ## What this example does not do  - It hosts the generated wrapper on a plain gRPC server, without TLS, and   verifies one demo token. So it binds loopback only: the default `NOTES_ADDR`   is `127.0.0.1:0`, and the server refuses to start on an address whose host is   not a loopback IP (`127.0.0.0/8...
+> Bash cd /builds/looper/tacplus/issues/583; python3 - <<'EOF' p='example/README.md'; s=open(p).read() old="""  `s2sm.New()` and `sm.Run(handler)` instead, which brings up identity, TLS, health and state, and needs the platform's   token mint""" new="""  `s2sm.New()` and `sm.Run(handler)` instead, which br...
+< - It hosts the generated wrapper on a plain gRPC server, without TLS, and   verifies one demo token. So it binds loopback only: the default `NOTES_ADDR`   is `127.0.0.1:0`, and the server refuses to start on an address whose host is   not a loopback IP (`127.0.0.0/8`, `::1`) or `localhost`: a bearer...
+> Edit /builds/looper/tacplus/issues/583/example/README.md
+< The file /builds/looper/tacplus/issues/583/example/README.md has been updated successfully.
+> Bash cd /builds/looper/tacplus/issues/583; for i in $(seq 1 55); do kill -0 10080 2>/dev/null || break; sleep 10; done; grep -a '^==>\|loopback\|rejected\|listed' /tmp/ex-green.log | tail; tail -2 /tmp/ex-green.log; cat example/target/server-refuse.log
+= task_started
+= task_notification
+< ==> Generating Go model ==> Building Go server ==> Generating TypeScript model ==> Building TypeScript model ==> Checking the server refuses a non-loopback address ==> Starting Go server ==> Running TypeScript client against 127.0.0.1:45645 listed note-1, note-2 rejected empty text: field text below...
+= thinking_tokens
+= thinking_tokens
+Example is green with the refusal. Regenerating README.md, then the full gates.
+> Bash cd /builds/looper/tacplus/issues/583; gofmt -l example/server; go run ./cmd/sitegen > /tmp/sitegen.log 2>&1; echo rc=$?; tail -3 /tmp/sitegen.log; git status --short; git diff README.md; grep -n -i 'just example\|example.*gate' PROPOSALS.md | head
+< rc=0  M README.md  M README.src.md  M example/README.md  M example/run.sh  M example/server/main.go diff --git a/README.md b/README.md index bf769f23..3c1f454c 100644 --- a/README.md +++ b/README.md @@ -119,7 +119,7 @@ compiled spec package is generated at build time, not committed.    Everything el...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/583; head -30 PROPOSALS.md; grep -n '^## \|^### ' PROPOSALS.md | tail -8
+< # Proposals: tacplus  Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones into ROADMAP.md (via an agent); the looper then marks it `promoted` or `declined` here with the date.  ## Open - **Per-language gate sets, and more of the map** (2026-11-08, #266): `gates.yaml` run...
+> Edit /builds/looper/tacplus/issues/583/PROPOSALS.md
+< The file /builds/looper/tacplus/issues/583/PROPOSALS.md has been updated successfully.
+> Bash cd /builds/looper/tacplus/issues/583; git add -A && git commit -q -F - <<'EOF' example server: bind loopback only, it serves plaintext gRPC (#583)  The example is what consumers copy, and it serves gRPC without TLS while taking a bearer token on every call; NOTES_ADDR took any address, so NOTES_ADDR...
+= task_started
+= task_notification
+< be701451 example server: bind loopback only, it serves plaintext gRPC (#583) remote:  [2026-11-13T17:12:25Z] checkpoint of #583 (a step) pushed to looper/tacplus-583:  8 files changed, 356 insertions(+), 9 deletions(-) gates pid 11910
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/583; git status --short; git show --stat HEAD | tail -9; git diff --stat HEAD origin/looper/tacplus-583 2>/dev/null | tail -3
+<     Co-Authored-By: Claude <noreply@anthropic.com>   PROPOSALS.md           |  4 ++++  README.md              |  2 +-  README.src.md          |  2 +-  example/README.md      | 16 ++++++++++------  example/run.sh         |  8 ++++++++  example/server/main.go | 27 ++++++++++++++++++++++++++-  6 files ...
+= thinking_tokens
+= thinking_tokens
+Gates running (≈3h budget). Meanwhile: trace check and the backport branches.
+> Bash cd /builds/looper/tacplus/issues/583; /usr/local/bin/looper-trace check 2>&1 | tail -15; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b: main.go $(git diff --quiet 4205075d origin/release/$b -- example/server/main.go && echo same || echo differs) run.sh $(git diff --quiet 4205075d origin/release/...
+= task_started
+= task_notification
+<   causal cross-test/server-runtime/client/go/main.go:89 ListEvents: DROPS the inbound trace_id handler cross-test/server-runtime/client/go/main.go:112 checkPage (inbound: api)   causal cross-test/server-runtime/client/go/main.go:114 ListEventsPaged: DROPS the inbound trace_id handler cross-test/serv...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/583; /usr/local/bin/looper-trace check 2>&1 | grep -n 'example/' ; sed -n 65,95p cross-test/server-runtime/client/go/main.go; gh issue list --repo tacplus-dev/tacplus --state all --search 'server-runtime trace_id' --limit 10
+= task_started
+= task_notification
+< 	checkFailClosed(ctx, api, lang)  	fmt.Printf("go generated client OK against %s generated server (%s)\n", lang, addr) }  // checkUnary: auth_disabled unary. The generated remote wrapper validates the // request, dispatches to the handler, validates the response, and marshals it // back. Exact field...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The trace findings are in the cross-test driver, already filed as #311; the example server's handlers make no outgoing calls. Now the backport worktrees.
+> Bash cd /builds/looper/tacplus/issues/583; git diff 4205075d origin/release/2.1 -- example/server/main.go; BP=/builds/looper/tacplus/homes/looper-583/bp; mkdir -p $BP; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do git worktree add -q -b backport/583-release-$b $BP/$b origin/release/$b 2>&1 | tail -1; (cd $BP/...
+< diff --git a/example/server/main.go b/example/server/main.go index 660b9928..f07ab713 100644 --- a/example/server/main.go +++ b/example/server/main.go @@ -1,4 +1,4 @@ -// Copyright (c) 2026 Jody Scott +// Copyright (c) 2026 Seabeam LLC  // SPDX-License-Identifier: Apache-2.0    // The example server...
+= thinking_tokens
+= thinking_tokens
+> Bash BP=/builds/looper/tacplus/homes/looper-583/bp; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do cd $BP/$b; for f in PROPOSALS.md README.md README.src.md; do if git cat-file -e HEAD:$f 2>/dev/null; then git checkout -q HEAD -- $f; else git rm -q --cached $f 2>/dev/null; rm -f $f; fi; done; echo "$b: $(git st...
+< 2.0: M  example/README.md M  example/run.sh M  example/server/main.go  | README.md  README.md:13:[example](example/): README.md:91:client rejects locally. [example/README.md](example/README.md) walks through 2.1: M  example/README.md M  example/run.sh M  example/server/main.go  | README.md  README.m...
+= thinking_tokens
+= thinking_tokens
+> Bash BP=/builds/looper/tacplus/homes/looper-583/bp; for b in 2.0 2.1 2.2 2.5; do echo "=== $b"; f=README.md; [ -f $BP/$b/README.src.md ] && f=README.src.md; grep -n -i 'quick start\|just example\|example/README' $BP/$b/$f; done; sed -n 85,95p $BP/2.0/README.md
+< === 2.0 86:just example 91:client rejects locally. [example/README.md](example/README.md) walks through === 2.1 103:just example 108:client rejects locally. [example/README.md](example/README.md) walks through === 2.2 3:Documentation, quick start and reference: **[tacplus.dev](https://tacplus.dev)**...
+> Bash BP=/builds/looper/tacplus/homes/looper-583/bp; cd $BP; python3 - <<'EOF' import os BP=os.getcwd() note=" The example serves plaintext gRPC on loopback only; a deployed service gets TLS from the generated ServiceManager." for b in ["2.0","2.1"]:     p=f"{BP}/{b}/README.md"; s=open(p).read()     old="...
+= task_started
+= task_notification
+< 2.2 rc=0  M README.md  M README.src.md M  example/README.md M  example/run.sh M  example/server/main.go  2.3 rc=0  M README.md  M README.src.md M  example/README.md M  example/run.sh M  example/server/main.go  2.4 rc=0  M README.md  M README.src.md M  example/README.md M  example/run.sh M  example/s...
+= thinking_tokens
+= thinking_tokens
+> Bash BP=/builds/looper/tacplus/homes/looper-583/bp; for b in 2.0 2.1; do cd $BP/$b; git diff HEAD -- example/README.md example/run.sh | head -60; done
+< diff --git a/example/README.md b/example/README.md index 5e4da4b4..c4876224 100644 --- a/example/README.md +++ b/example/README.md @@ -69,12 +69,16 @@ generated from the same annotation.    ## What this example does not do   -- It hosts the generated wrapper on a plain gRPC server and verifies one d...
+Commit each backport, then run `just example` on each line in sequence (in the background, beside the gates).
+> Bash BP=/builds/looper/tacplus/homes/looper-583/bp; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do cd $BP/$b; git add -A; git commit -q -F - <<EOF example server: bind loopback only, it serves plaintext gRPC (#583, backport to release/$b)  Backport of be701451 from main. The example is what consumers copy, and...
+< 2.0 fe7ba36b example server: bind loopback only, it serves plaintext gRPC (#583, backport to release/2.0) 2.1 303db4d9 example server: bind loopback only, it serves plaintext gRPC (#583, backport to release/2.1) 2.2 81aa2241 example server: bind loopback only, it serves plaintext gRPC (#583, backpor...
+= thinking_tokens
+= thinking_tokens
+While those run, a look at how earlier backport PRs were written:
+> Bash gh pr list --repo tacplus-dev/tacplus --state all --search 'head:backport/' --limit 3 --json number,title,baseRefName,headRefName,body | jq -r '.[] | "#\(.number) \(.title) [\(.headRefName) -> \(.baseRefName)]\n\(.body)\n----"' | head -60
+< #649 [release/2.6] llmdesc: bound timeseries_cardinality_hint before narrowing it to int32 (#565) [backport/565-release-2.6 -> release/2.6] Backport of #565 to `release/2.6` as 77f5c599 (cherry-picked cleanly). Main's commit: pending the land of #565 (40486621 on its branch); this body is updated wi...
+Good template. Polling the gates and the backport example runs.
+> Bash for i in $(seq 1 55); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -4; cat /builds/looper/tacplus/homes/looper-583/bp/examples.done 2>/dev/null
+= task_started
+= task_notification
+< === soundness rc=0 === === test === === test rc=0 === === current-generation === 2.6 rc=0 2.5 rc=0 2.4 rc=0 2.3 rc=0 2.2 rc=0 2.1 rc=0 2.0 rc=0
+> Bash BP=/builds/looper/tacplus/homes/looper-583/bp; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b: $(grep -a -c 'Checking the server refuses' $BP/example-$b.log) $(tail -1 $BP/example-$b.log) | $(cat $BP/$b/example/target/server-refuse.log | grep loopback | cut -c1-60)"; done
+< 2.0: 1 ==> example OK | NOTES_ADDR: "0.0.0.0:0" is not a loopback address: this exam 2.1: 1 ==> example OK | NOTES_ADDR: "0.0.0.0:0" is not a loopback address: this exam 2.2: 1 ==> example OK | NOTES_ADDR: "0.0.0.0:0" is not a loopback address: this exam 2.3: 1 ==> example OK | NOTES_ADDR: "0.0.0.0:...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+All seven lines' examples pass, each with the refusal check. Waiting on the full gates on main's branch.
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -3
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation ===
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -3; tail -c 300 /tmp/gates.log
+= task_started
+= task_notification
+< === test === === test rc=0 === === current-generation === eManager;          real coverage is pkg/internal/java/types/tls_degrade_template_test.go) ==> Generating go c2s-only fixture ==> Compiling go c2s-only fixture     PASS go c2s-only     Removed 9.9M fixture tree c2sonly-go ==> Generating rust h...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The full gates take up to ~3h and the land re-runs them, so I'll queue the land now and keep my local run going as verification beside it.
+> Bash cd /builds/looper/tacplus/issues/583; /usr/local/bin/repo-looper --repo tacplus --issue 583 --checkpoint "Fix committed be701451; example green locally; backport commits ready in worktrees (~/bp/2.0..2.6, branches backport/583-release-X.Y, examples green on all). Landing now; local just gates runnin...
+= task_started
+= task_notification
+< [2026-11-13T17:42:23Z] checkpoint of #583 (a step) pushed to looper/tacplus-583:  8 files changed, 431 insertions(+), 9 deletions(-) land pid 64310
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/583; git fetch -q --tags origin; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b $(git tag -l "v$b.*" --sort=-v:refname | head -1)"; done; sleep 60; cat /tmp/land.log | tail -5
+= task_started
+= task_notification
+< 2.0 v2.0.30 2.1 v2.1.23 2.2 v2.2.20 2.3 v2.3.22 2.4 v2.4.22 2.5 v2.5.23 2.6 v2.6.11 [2026-11-13T17:42:28Z] checkpoint of #583 (land queued) pushed to looper/tacplus-583:  9 files changed, 438 insertions(+), 9 deletions(-) [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-58...
+= thinking_tokens
+= thinking_tokens
+Queued. Opening the backport PRs now (as earlier backports did, with main's hash pending the land).
+> Bash BP=/builds/looper/tacplus/homes/looper-583/bp; declare -A NEXT=([2.0]=v2.0.31 [2.1]=v2.1.24 [2.2]=v2.2.21 [2.3]=v2.3.23 [2.4]=v2.4.23 [2.5]=v2.5.24 [2.6]=v2.6.12); for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do cd $BP/$b; h=$(git rev-parse --short=8 HEAD); readme="README.src.md's Quick start line (README....
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= vcs_state_changed
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/658 https://github.com/tacplus-dev/tacplus/pull/659 https://github.com/tacplus-dev/tacplus/pull/660 https://github.com/tacplus-dev/tacplus/pull/661 https://github.com/tacplus-dev/tacplus/pull/662 https://github.com/tacplus-dev/tacplus/pull/663 https://gith...
+= thinking_tokens
+= thinking_tokens
+Quick check that the regenerated READMEs pass the README-is-current test on the release lines:
+> Bash BP=/builds/looper/tacplus/homes/looper-583/bp; for b in 2.2 2.3 2.4 2.5 2.6; do cd $BP/$b; p=$(grep -rl 'func TestReadmeIsCurrent' --include=*_test.go . | head -1); [ -n "$p" ] && echo "$b $(go test -run TestReadmeIsCurrent ./$(dirname $p)/ 2>&1 | tail -1)" || echo "$b no test"; done
+= task_started
+= task_notification
+< 2.2 ok  	github.com/tacplus-dev/tacplus/cmd/sitegen	0.102s 2.3 ok  	github.com/tacplus-dev/tacplus/cmd/sitegen	0.035s 2.4 ok  	github.com/tacplus-dev/tacplus/cmd/sitegen	0.060s 2.5 ok  	github.com/tacplus-dev/tacplus/cmd/sitegen	0.017s 2.6 ok  	github.com/tacplus-dev/tacplus/cmd/sitegen	0.026s Shell...
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 583 --checkpoint "Fix be701451 queued for land (land pid running); local just gates running (/tmp/gates.log). Backport PRs open: #658-#664 (release/2.0..2.6), examples green on each. Left: land verdict, update PR bodies with main's hash, outcome comm...
+= task_started
+= task_notification
+< [2026-11-13T17:44:36Z] checkpoint of #583 (a step) pushed to looper/tacplus-583:  9 files changed, 467 insertions(+), 9 deletions(-) === test rc=0 === === current-generation === [2026-11-13T17:42:28Z] checkpoint of #583 (land queued) pushed to looper/tacplus-583:  9 files changed, 438 insertions(+),...
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log
+= task_started
+= task_started
+= task_started
+= task_started
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+> Bash tail -c 400 /tmp/gates.log; echo; ls -la /tmp/gates.log; date
+< ing go requires-device fixture ==> Compiling go requires-device fixture     PASS go requires-device     Removed 11M fixture tree requiresdevice-go ==> Generating java requires-device fixture ==> Compiling java requires-device fixture     PASS java requires-device     Removed 49M fixture tree require...
+Progressing (Rust fixtures are slow). Continuing to poll.
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log; tail -c 200 /tmp/gates.log
+= task_started
+= task_started
+= task_started
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+= task_notification
+< === test rc=0 === === current-generation === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. ixtu...
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log; date
+= task_started
+= task_started
+= task_started
+= task_notification
+< === current-generation rc=1 === === determinism === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after yo...
+= task_notification
+< === current-generation rc=1 === === determinism === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after yo...
+= task_notification
+< === current-generation rc=1 === === determinism === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after yo...
+current-generation failed locally — looking at why (my diff touches nothing it reads).
+> Bash grep -a -n 'FAIL\|Error\|error:\|rc=1' /tmp/gates.log | grep -av 'PASS' | head -30
+< 706:FAIL: appends must not wait on a failing upload 707:1 DiskStore check(s) FAILED 708:error: recipe `current-generation` failed on line 95 with exit code 1 709:=== current-generation rc=1 ===
+> Bash sed -n 680,708p /tmp/gates.log; cd /builds/looper/tacplus/issues/583; grep -rn 'appends must not wait on a failing upload' --include=* cross-test pkg 2>/dev/null | head -3; gh issue list --repo tacplus-dev/tacplus --state all --search 'appends must not wait' --limit 5
+< PASS: redact case insensitive (AUTHORIZATION) PASS: redact basic auth PASS: redact cookie PASS: redact set-cookie PASS: redact x-auth-token PASS: redact client-secret PASS: redact access_token PASS: redact standalone Bearer PASS: redact JSON field with bare token PASS: redact JSON field preserves ke...
+= thinking_tokens
+= thinking_tokens
+A known flake, #539 (the Java DiskStore timing test fails on a loaded runner, and this one is loaded). My diff doesn't touch Java. Continuing.
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log; date
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log
+= task_started
+= task_started
+= task_started
+= task_started
+= task_notification
+< === current-generation rc=1 === === determinism === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after yo...
+= task_notification
+< === current-generation rc=1 === === determinism === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after yo...
+= task_notification
+< === current-generation rc=1 === === determinism === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after yo...
+= task_notification
+< === current-generation rc=1 === === determinism === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after yo...
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log; date
+= task_started
+= task_notification
+< === current-generation rc=1 === === determinism === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after yo...
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log; date
+= task_started
+= task_notification
+< === current-generation rc=1 === === determinism === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after yo...
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== ' /tmp/gates.log | tail -2; tail -1 /tmp/land.log; date
+= task_started
+= task_notification
+< === cert-stream rc=0 === === stream-expiry === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. Fr...
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== .*rc=' /tmp/gates.log; tail -1 /tmp/land.log; date
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=1 === === determinism rc=0 === === cert-stream rc=0 === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue ...
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== .*rc=' /tmp/gates.log | tail -4; tail -1 /tmp/land.log; date
+= task_started
+= task_notification
+< === current-generation rc=1 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=0 === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict...
+Still waiting: local gates are past stream-expiry (all green except the known #539 flake), and the land is queued behind other lands.
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== .*rc=' /tmp/gates.log | tail -3; tail -1 /tmp/land.log; gh issue view 583 --repo tacplus-dev/tacplus --comments | tail -5; date
+= task_started
+= task_notification
+< === stream-expiry rc=0 === === memberport rc=0 === === claims-provenance rc=0 === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out fir...
+> Bash for i in $(seq 1 58); do sleep 10; done; grep -a '^=== .*rc=\|OVERALL' /tmp/gates.log | tail -3; tail -1 /tmp/land.log; date
+= task_started
+= task_notification
+< === claims-provenance rc=0 === === w2s-validate rc=0 === === c2d-server rc=0 === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out firs...
+> Bash for i in $(seq 1 58); do sleep 10; grep -aq OVERALL /tmp/gates.log && break; done; grep -a '^=== .*rc=\|OVERALL' /tmp/gates.log | tail -7; tail -1 /tmp/land.log; date
+= task_started
+= task_notification
+< === stream-expiry rc=0 === === memberport rc=0 === === claims-provenance rc=0 === === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc=0 === === jwk-alg rc=0 === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at ...
+> Bash for i in $(seq 1 58); do sleep 10; grep -aq OVERALL /tmp/gates.log && break; done; grep -a '^=== .*rc=\|OVERALL' /tmp/gates.log | tail -5; tail -1 /tmp/land.log; date
+= task_started
+= task_notification
+< === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc=0 === === jwk-alg rc=0 === === redact rc=0 === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its...
+> Bash for i in $(seq 1 58); do sleep 10; grep -aq OVERALL /tmp/gates.log && break; done; grep -a '^=== .*rc=\|OVERALL' /tmp/gates.log | tail -4; tail -1 /tmp/land.log; date
+= task_started
+= task_notification
+< === redact rc=0 === === trace-carry rc=0 === === tacplus-script rc=0 === === OVERALL fail=1 === [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your tim...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Local full gates finished: everything green except `current-generation`, which failed only on the known #539 flake. About 3h of my 4h are gone, so I'm checkpointing now while the land stays queued.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 583 --checkpoint "Fix be701451 queued for land since 17:42Z (still queued at 20:05Z). Local just gates on it: all rc=0 except current-generation rc=1, solely the known flake #539 (Java DiskStore 'appends must not wait on a failing upload', loaded run...
+= task_started
+= task_notification
+< [2026-11-13T20:04:41Z] checkpoint of #583 (a step) pushed to looper/tacplus-583:  9 files changed, 585 insertions(+), 9 deletions(-)
+> Bash for i in $(seq 1 58); do sleep 10; kill -0 64310 2>/dev/null || break; done; tail -3 /tmp/land.log; date
+= task_started
+= task_notification
+< [2026-11-13T17:42:28Z] checkpoint of #583 (land queued) pushed to looper/tacplus-583:  9 files changed, 438 insertions(+), 9 deletions(-) [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came o...
+> Bash for i in $(seq 1 58); do sleep 10; kill -0 64310 2>/dev/null || break; done; tail -2 /tmp/land.log; date
+= task_started
+= task_notification
+< [2026-11-13T17:42:28Z] checkpoint of #583 (land queued) pushed to looper/tacplus-583:  9 files changed, 438 insertions(+), 9 deletions(-) [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came o...
+= thinking_tokens
+= thinking_tokens
+The land won't finish its full gates in the ~30 minutes I have left. I'll post a progress comment on the issue, leave it open (the manager lands after me and the next run finishes), and checkpoint.
+> Bash gh issue comment 583 --repo tacplus-dev/tacplus --body-file - <<'EOF' Progress (the looper's run, out of time before the land's verdict; the issue stays open and the next run finishes it):  **Fix:** be701451 on `looper/tacplus-583`, queued for land since 17:42Z. The manager lands it after this run. ...
+= task_started
+= task_notification
+< https://github.com/tacplus-dev/tacplus/issues/583#issuecomment-6863971356 [2026-11-13T20:24:26Z] checkpoint of #583 (a step) pushed to looper/tacplus-583:  9 files changed, 601 insertions(+), 9 deletions(-)
+> Bash for i in $(seq 1 90); do sleep 10; kill -0 64310 2>/dev/null || break; done; tail -2 /tmp/land.log; date
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bzfa9enbe). Output is being written to: /builds/looper/tacplus/homes/looper-583/tmp/claude-61000/-builds-looper-tacplus-issues-583/2345cb0d-8882-4825-90a8-572407e667f9/tasks/bzfa9enbe.output. You will be notified w...
+> Bash tail -2 /tmp/land.log; date
+< [2026-11-13T17:42:28Z] checkpoint of #583 (land queued) pushed to looper/tacplus-583:  9 files changed, 438 insertions(+), 9 deletions(-) [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came o...
+= thinking_tokens
+= thinking_tokens
+I fixed #583 and committed it as be701451, but it hasn't landed on main yet. It has been in the land queue since 17:42Z and was still waiting when my time ran out. The manager will land it after this run, so the issue stays open and the next run finishes it.
+
+**The fix**
+- **Server:** the example server (`example/server/main.go`) now refuses to start unless `NOTES_ADDR` is a loopback address (`127.0.0.0/8`, `::1`) or `localhost`. It exits non-zero with a message that names loopback.
+- **semgrep:** the `grpc.NewServer()` line has a `nosemgrep` comment saying it is loopback only and where that's enforced. semgrep flags the old file at line 161 and finds nothing in the new one.
+- **Test:** `example/run.sh` (`just example`) now checks that `NOTES_ADDR=0.0.0.0:0` is refused before the end-to-end run. I ran it against the old server first and it failed, because the old server just served on 0.0.0.0. With the fix it passes and ends `==> example OK`.
+- **Docs:** `example/README.md` and `README.md` (regenerated from `README.src.md`) now say the example is loopback only. `docs/USER.md` doesn't show the example, so I left it alone.
+- **Follow-up:** I added an entry to `PROPOSALS.md`, because `just example` isn't in any gate set, so nothing would catch this check breaking later.
+
+**Gates:** my local `just gates` ended `OVERALL fail=1`. Every gate passed except `current-generation`, and the only check that failed in it was the Java DiskStore timing test ("appends must not wait on a failing upload"). That's the known flaky test in #539, and the machine was busy running the land's queue next to my run. My diff touches no Java. The land's own run of the gates gives the real verdict.
+
+**Release:** main has taken features since `v2.6.1`, so I didn't tag main. I opened backport pull requests for all seven release lines, each naming the patch tag to cut once it merges (or the next free one):
+
+| Release line | PR | Tag |
+|---|---|---|
+| release/2.0 | #658 | `v2.0.31` |
+| release/2.1 | #659 | `v2.1.24` |
+| release/2.2 | #660 | `v2.2.21` |
+| release/2.3 | #661 | `v2.3.23` |
+| release/2.4 | #662 | `v2.4.23` |
+| release/2.5 | #663 | `v2.5.24` |
+| release/2.6 | #664 | `v2.6.12` |
+
+`just example` passes on every line, including the new check, and the README-is-current test passes on 2.2 through 2.6. I didn't run the full gates on the release branches.
+
+**Trace propagation:** the example server's three handlers make no outgoing calls. All 8 findings from `looper-trace check` are in the cross-test driver, which #311 already covers.
+
+**Left for the next run:** get the land's verdict, put main's commit hash into the seven PR descriptions, post the final outcome comment and close #583. I posted a progress comment on the issue and saved a checkpoint that says the same.
+= success: I fixed #583 and committed it as be701451, but it hasn't landed on main yet. It has been in the land queue since 17:42Z and was still waiting when my time ran out. The manager will land it after this run, so the issue stays open and the next run finishes it.
+
+**The fix**
+- **Server:** the example server (`example/server/main.go`) now refuses to start unless `NOTES_ADDR` is a loopback address (`127.0.0.0/8`, `::1`) or `localhost`. It exits non-zero with a message that names loopback.
+- **semgrep:** the `grpc.NewServer()` line has a `nosemgrep` comment saying it is loopback only and where that's enforced. semgrep flags the old file at line 161 and finds nothing in the new one.
+- **Test:** `example/run.sh` (`just example`) now checks that `NOTES_ADDR=0.0.0.0:0` is refused before the end-to-end run. I ran it against the old server first and it failed, because the old server just served on 0.0.0.0. With the fix it passes and ends `==> example OK`.
+- **Docs:** `example/README.md` and `README.md` (regenerated from `README.src.md`) now say the example is loopback only. `docs/USER.md` doesn't show the example, so I left it alone.
+- **Follow-up:** I added an entry to `PROPOSALS.md`, because `just example` isn't in any gate set, so nothing would catch this check breaking later.
+
+**Gates:** my local `just gates` ended `OVERALL fail=1`. Every gate passed except `current-generation`, and the only check that failed in it was the Java DiskStore timing test ("appends must not wait on a failing upload"). That's the known flaky test in #539, and the machine was busy running the land's queue next to my run. My diff touches no Java. The land's own run of the gates gives the real verdict.
+
+**Release:** main has taken features since `v2.6.1`, so I didn't tag main. I opened backport pull requests for all seven release lines, each naming the patch tag to cut once it merges (or the next free one):
+
+| Release line | PR | Tag |
+|---|---|---|
+| release/2.0 | #658 | `v2.0.31` |
+| release/2.1 | #659 | `v2.1.24` |
+| release/2.2 | #660 | `v2.2.21` |
+| release/2.3 | #661 | `v2.3.23` |
+| release/2.4 | #662 | `v2.4.23` |
+| release/2.5 | #663 | `v2.5.24` |
+| release/2.6 | #664 | `v2.6.12` |
+
+`just example` passes on every line, including the new check, and the README-is-current test passes on 2.2 through 2.6. I didn't run the full gates on the release branches.
+
+**Trace propagation:** the example server's three handlers make no outgoing calls. All 8 findings from `looper-trace check` are in the cross-test driver, which #311 already covers.
+
+**Left for the next run:** get the land's verdict, put main's commit hash into the seven PR descriptions, post the final outcome comment and close #583. I posted a progress comment on the issue and saved a checkpoint that says the same.
+= task_updated
+= task_notification
+= background_tasks_changed
+= init
+> Bash tail -3 /tmp/land.log; date; kill -0 64310 2>/dev/null && echo land-waiting
+< [2026-11-13T17:42:28Z] checkpoint of #583 (land queued) pushed to looper/tacplus-583:  9 files changed, 438 insertions(+), 9 deletions(-) [2026-11-13T17:42:30Z] queued: the manager of tacplus merges looper/tacplus-583 after the lands queued before it, one at a time, and says on the issue what came o...
+That notification was only my own polling loop finishing; nothing has changed. As of 20:39Z the fix (be701451) is still in the land queue with no verdict yet, and my run stops in about 15 minutes.
+
+I'm leaving #583 open on purpose. The manager will land the fix after this run, and the next run finishes the issue. It gets the land's verdict, adds main's commit hash to backport PRs #658–#664, posts the final comment and closes the issue. The progress comment on the issue and the last checkpoint both record this.
+= success: That notification was only my own polling loop finishing; nothing has changed. As of 20:39Z the fix (be701451) is still in the land queue with no verdict yet, and my run stops in about 15 minutes.
+
+I'm leaving #583 open on purpose. The manager will land the fix after this run, and the next run finishes the issue. It gets the land's verdict, adds main's commit hash to backport PRs #658–#664, posts the final comment and closes the issue. The progress comment on the issue and the last checkpoint both record this.

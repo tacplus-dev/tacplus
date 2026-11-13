@@ -89,7 +89,8 @@ just example
 generates a Go server and a TypeScript client from one proto set, starts the
 server, and drives it: create, get, a paged list, and a request the generated
 client rejects locally. [example/README.md](example/README.md) walks through
-what was written and what was generated.
+what was written and what was generated. The example serves plaintext gRPC on
+loopback only; a deployed service gets TLS from the generated ServiceManager.
 
 ## Targets
 

@@ -142,6 +142,10 @@ the looper then marks it `promoted` or `declined` here with the date.
   server and the TypeScript client, and check the server refuses a non-loopback `NOTES_ADDR`) runs in no gate set,
   not `just gates` nor `gates.yaml`'s map, so the README's quick start can break unnoticed. Add it to the full gates,
   and map `example/**` to a set that runs it.
+- **runtime-smoke in a gate, so its setup cannot rot unseen** (2026-11-13, #581 → #657): `cross-test/runtime-smoke/run.sh`
+  has failed at setup since #161 removed the `health.proto` it copies, and no land noticed because `just gates` does
+  not run it (only `cross-test/justfile` and the nightly matrix do). Once #657 makes it pass, put it in a gate set
+  (or `gates.yaml` for `cross-test/runtime-smoke/**`) so a land that breaks it fails.
 - **Per-language gate sets, and more of the map** (2026-11-08, #266): `gates.yaml` runs the full gates (~3h) for any
   change under `pkg/**`, `cmd/**` or `.github/`. Next: `pkg/internal/<lang>/**` and `pkg/templates/<lang>/**` to that
   language's `current-generation-<lang>`, `determinism-<lang>` and `-<lang>` cross-tests (with `just test`), once each

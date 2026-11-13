@@ -1,0 +1,279 @@
+= init
+> Bash cd /builds/looper/tacplus/issues/571; git status --short; git diff; gh issue view 571 --repo tacplus-dev/tacplus --comments | tail -20; sed -n 1,20p cross-test/chaos/orchestrator/orchestrator.go; sed -n 70,80p cross-test/chaos/orchestrator/orchestrator.go
+< Either way, the second acceptance criterion holds: the generator stays `rand.New(rand.NewSource(m.prof.Seed))`, so the same profile seed gives the same schedule.  Labelled `needs-decision`.  -- author:	jodydadescott association:	member edited:	false status:	none -- **Decision (Jody, via hub, 2026-11...
+> Bash cd /builds/looper/tacplus/issues/571; git fetch -q origin; git log --oneline origin/main -5; git grep -n "nosec" origin/main -- cross-test | head; ls cross-test/chaos/orchestrator/; grep -rn "Seed" cross-test/chaos/orchestrator/*_test.go | head
+< 4205075d Gate map: gates.yaml and a docs recipe, so a docs-only land runs minutes, not the full gates (#266) 0d66c1bb Gates: refuse a committed merge conflict marker in any tracked file (#329) 5380efab images: declare each image's Debian packages; drop buildpack-deps (OpenEXR) (#554) 822e15f0 curren...
+> Bash cd /builds/looper/tacplus/issues/571; cat cross-test/chaos/orchestrator/orchestrator_test.go | head -80; grep -n "rng" cross-test/chaos/orchestrator/orchestrator.go
+< package orchestrator  import ( 	"strings" 	"testing"  	"github.com/tacplus-dev/tacplus/cross-test/chaos/profile" )  // runResult wraps a report so tests can introspect verdicts. type runResult struct { 	verdicts []struct { 		Name string 		Pass bool 	} 	text string }  func (r *runResult) String() str...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/571; sed -n 80,200p cross-test/chaos/orchestrator/orchestrator.go; ls cross-test/chaos; cat cross-test/chaos/go.mod 2>/dev/null | head -3; ls cross-test
+< 		m.runInterop(rep) 	} 	if m.prof.Invariants.WatchGapless { 		m.runWatch(rep, rng) 	} 	if m.prof.Invariants.AuthClosed { 		m.runAuth(rep) 	} 	if m.prof.Invariants.NoLeak { 		m.runSoak(rep) 	} 	m.runFaultSchedule(rep)  	return rep }  // runInterop drives the NxN cross-language unary matrix and the un...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Edit /builds/looper/tacplus/issues/571/cross-test/chaos/orchestrator/orchestrator.go
+< The file /builds/looper/tacplus/issues/571/cross-test/chaos/orchestrator/orchestrator.go has been updated successfully.
+> Bash cd /builds/looper/tacplus/issues/571/cross-test/chaos && (gofmt -l . ; go vet ./orchestrator/ && go test ./orchestrator/ 2>&1 | tail -3); which gosec; cd /builds/looper/tacplus/issues/571; cat gates.yaml | head -40
+= task_started
+= task_notification
+< go: downloading gopkg.in/yaml.v3 v3.0.1 ok  	github.com/tacplus-dev/tacplus/cross-test/chaos/orchestrator	0.014s /usr/local/bin/gosec # The gate map of tacplus (tacplus#266; tacplus-dev/looper README, Gates scaled # to the diff): the gates a land runs, chosen by the paths its diff changes. A # path ...
+I've added the inline `#nosec` annotation; the tests pass. Now I'm confirming gosec no longer flags the line, then running the full gates.
+> Bash cd /builds/looper/tacplus/issues/571/cross-test/chaos && gosec -quiet -include=G404 -fmt=text ./... 2>&1 | grep -E "G404|Issues|orchestrator" | head
+= task_started
+= task_notification
+< [/builds/looper/tacplus/issues/571/cross-test/chaos/fault/fault.go:125] - G404 (CWE-338): Use of weak random number generator (math/rand or math/rand/v2 instead of crypto/rand) (Confidence: MEDIUM, Severity: HIGH)   Issues : 1
+= thinking_tokens
+= thinking_tokens
+The orchestrator line is clear; only fault.go:125 (#570) remains. Next: commit, checkpoint, start the full gates.
+> Bash cd /builds/looper/tacplus/issues/571 && git add -A && git commit -q -F - <<'EOF' chaos orchestrator: accept gosec G404 inline on the seeded mesh generator (#571)  The mesh run's math/rand generator is seeded from the chaos profile on purpose: the report records the seed so a failing run can be repla...
+= task_started
+= task_notification
+< bd636ad2 chaos orchestrator: accept gosec G404 inline on the seeded mesh generator (#571) [2026-11-13T17:33:35Z] checkpoint of #571 (a step) pushed to looper/tacplus-571:  3 files changed, 236 insertions(+), 1 deletion(-) PID 4576 33 v2.6.0 v2.6.1 v2.6.10 v2.6.11 v2.6.2 v2.6.3 v2.6.4 v2.6.5 v2.6.6 v...
+= thinking_tokens
+= thinking_tokens
+v2.6.2 to v2.6.11 already exist, but the prompt says main's newest release is v2.6.1. Checking where those tags sit.
+> Bash git fetch -q --tags origin; for t in v2.6.1 v2.6.2 v2.6.11; do echo "$t $(git rev-list -n1 $t) main-ancestor:$(git merge-base --is-ancestor $t origin/main && echo y || echo n) rel2.6:$(git merge-base --is-ancestor $t origin/release/2.6 && echo y || echo n) $(git log -1 --format=%cd --date=short $t)"...
+< v2.6.1 59419d5446bbba66a7bd8482ff00b8b4f1d5820f main-ancestor:y rel2.6:n 2026-11-05 v2.6.2 b597a839a796bf5a6edcfccf72d4cbade4cd99f8 main-ancestor:n rel2.6:y 2026-11-07 v2.6.11 3b3e20a01eca51117c30622c4d0a4a0ec4ff0ca9 main-ancestor:n rel2.6:y 2026-11-12 v2.1.0 2026-10-20 v2.2.0 2026-10-25 v2.3.0 2026...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for b in 2.2 2.3 2.4 2.5 2.6; do echo "== release/$b: $(git grep -n 'rand.New(rand.NewSource(m.prof.Seed))' origin/release/$b -- cross-test/chaos/orchestrator/orchestrator.go) latest=$(git tag -l "v$b.*" | sort -V | tail -1)"; done; grep -n -i "release\|backport" CONTRIBUTING.md docs/VERSIONING.md 2...
+< == release/2.2: origin/release/2.2:cross-test/chaos/orchestrator/orchestrator.go:77:	rng := rand.New(rand.NewSource(m.prof.Seed)) latest=v2.2.20 == release/2.3: origin/release/2.3:cross-test/chaos/orchestrator/orchestrator.go:77:	rng := rand.New(rand.NewSource(m.prof.Seed)) latest=v2.3.22 == release...
+= thinking_tokens
+= thinking_tokens
+The line is on every release branch. Listing all of them (2.0 and 2.1 too) and checking each patch tag.
+> Bash for r in $(git branch -r | grep -o 'release/[0-9.]*' | sort -V); do b=${r#release/}; has=$(git grep -q 'rand.New(rand.NewSource(m.prof.Seed))' origin/$r -- cross-test/chaos/orchestrator/orchestrator.go && echo has || echo no); z=$(git log -1 --format=%cd --date=short v$b.0 2>/dev/null); echo "$r $ha...
+< release/2.0 has .0=2026-10-15 latest=v2.0.30 release/2.1 has .0=2026-10-20 latest=v2.1.23 release/2.2 has .0=2026-10-25 latest=v2.2.20 release/2.3 has .0=2026-10-25 latest=v2.3.22 release/2.4 has .0=2026-10-27 latest=v2.4.22 release/2.5 has .0=2026-10-28 latest=v2.5.23 release/2.6 has .0=2026-11-04 ...
+Seven backport PRs to open. Looking at an existing backport PR to match its format.
+> Bash gh pr list --repo tacplus-dev/tacplus --base release/2.6 --state all --limit 3 --json number,title,headRefName,body | head -c 2500
+< [{"body":"Backport of #565 to `release/2.6` as 77f5c599 (cherry-picked cleanly). Main's commit: pending the land of #565 (40486621 on its branch); this body is updated with its hash once it merges.\n\n**Once this merges:** cut the line's next patch on `release/2.6` at the merge commit: `v2.6.12`, or...
+= thinking_tokens
+= thinking_tokens
+Following that format. While the gates run, I'm preparing the backport branches in separate worktrees.
+> Bash tail -3 /tmp/gates-571.log; C=bd636ad2; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do d=$HOME/bp571-$b; git worktree add -q -b backport/571-release-$b $d origin/release/$b 2>&1 | tail -1; (cd $d && git cherry-pick -x $C >/dev/null 2>&1 && echo "$b $(git log -1 --format=%h) $(sed -n 77p cross-test/chaos/o...
+= task_started
+= task_notification
+< Generated code outside sys/spiffe must not hand-roll SPIFFE URI parsing/construction, and descriptor lookups must not strip package context before matching names. - ✓ no hand-rolled SPIFFE parsing/construction or bare-name descriptor-match shapes found 2.0 1bbc198c 	rng := rand.New(rand.NewSource(m....
+Every cherry-pick applied cleanly. Verifying tests and gosec on each branch.
+> Bash for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do cd $HOME/bp571-$b/cross-test/chaos && echo "$b: $(go test ./orchestrator/ 2>&1 | tail -1) | gosec G404 in orchestrator: $(gosec -quiet -include=G404 -fmt=text ./orchestrator/ 2>&1 | grep -c 'G404 (')"; done
+= task_started
+= task_notification
+< 2.0: ok  	github.com/tacplus-dev/tacplus/cross-test/chaos/orchestrator	0.064s | gosec G404 in orchestrator: 0 2.1: ok  	github.com/tacplus-dev/tacplus/cross-test/chaos/orchestrator	0.096s | gosec G404 in orchestrator: 0 2.2: ok  	github.com/tacplus-dev/tacplus/cross-test/chaos/orchestrator	0.027s | ...
+= thinking_tokens
+= thinking_tokens
+All seven pass, and gosec is clean on each. Pushing the backport branches and opening the PRs.
+> Bash declare -A NEXT=([2.0]=v2.0.31 [2.1]=v2.1.24 [2.2]=v2.2.21 [2.3]=v2.3.23 [2.4]=v2.4.23 [2.5]=v2.5.24 [2.6]=v2.6.12) for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do cd $HOME/bp571-$b; h=$(git log -1 --format=%h); git push -q origin backport/571-release-$b 2>&1 | grep -v '^remote' | tail -1 body="Backport of...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= vcs_state_changed
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/650 https://github.com/tacplus-dev/tacplus/pull/651 https://github.com/tacplus-dev/tacplus/pull/652 https://github.com/tacplus-dev/tacplus/pull/653 https://github.com/tacplus-dev/tacplus/pull/654 https://github.com/tacplus-dev/tacplus/pull/655 https://gith...
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 571 --checkpoint "Committed bd636ad2 (inline #nosec G404). Backport PRs #650-#656 open (release/2.0-2.6). Left: full gates (running), land, update PR bodies with main hash, comment, close." 2>&1 | tail -1; tail -2 /tmp/gates-571.log; kill -0 4576 && ...
+= task_started
+= task_notification
+< [2026-11-13T17:35:59Z] checkpoint of #571 (a step) pushed to looper/tacplus-571:  3 files changed, 298 insertions(+), 1 deletion(-) go: downloading google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa go: downloading golang.org/x/sys v0.47.0 running
+= thinking_tokens
+= thinking_tokens
+The full gates are still running; I'll wait for them to finish.
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Bash while kill -0 4576 2>/dev/null; do sleep 20; done; tail -15 /tmp/gates-571.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bltqfrnwd. Output is being written to: /builds/looper/tacplus/homes/looper-571/tmp/claude-61000/-builds-looper-tacplus-issues-571/6a816993-71bb-4bfb-b93f-203f8994a391/tasks/bltqfrnwd.output. You will be notified when it completes. To check interim output, use R...
+= thinking_tokens
+= thinking_tokens
+While the gates run, I'm queueing the land too: the manager re-runs the gates itself, so it can run in parallel.
+> Bash nohup /usr/local/bin/repo-looper --repo tacplus --issue 571 --land > /tmp/land-571.log 2>&1 & echo PID $!
+< PID 11335
+> Bash while kill -0 11335 2>/dev/null; do sleep 30; done; tail -20 /tmp/land-571.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bfbqqhk95. Output is being written to: /builds/looper/tacplus/homes/looper-571/tmp/claude-61000/-builds-looper-tacplus-issues-571/6a816993-71bb-4bfb-b93f-203f8994a391/tasks/bfbqqhk95.output. You will be notified when it completes. To check interim output, use R...
+Both the gates and the land are running in the background; I'll continue when they report.
+= success: Both the gates and the land are running in the background; I'll continue when they report.
+= task_updated
+= task_notification
+= background_tasks_changed
+= init
+The background waiter for the gates hit its 2-hour limit and was stopped. Checking whether the gates themselves are still running.
+> Bash kill -0 4576 2>/dev/null && echo gates-running || echo gates-done; tail -8 /tmp/gates-571.log; echo ---; kill -0 11335 2>/dev/null && echo land-running; tail -5 /tmp/land-571.log; date -u
+< gates-running     Removed 62M fixture tree recordegress-java ==> Generating rust record-egress fixture ==> Compiling rust record-egress fixture     PASS rust record-egress      Removed 600 files, 3.2GiB total     Removed 16M fixture tree recordegress-rust ==> Generating go record-egress HOST fixture...
+= thinking_tokens
+= thinking_tokens
+Both are still running; the gates are on the record-egress fixtures. Re-arming the waits.
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash while kill -0 4576 2>/dev/null; do sleep 20; done; tail -15 /tmp/gates-571.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bnt1wys27. Output is being written to: /builds/looper/tacplus/homes/looper-571/tmp/claude-61000/-builds-looper-tacplus-issues-571/6a816993-71bb-4bfb-b93f-203f8994a391/tasks/bnt1wys27.output. You will be notified when it completes. To check interim output, use R...
+The land's waiter also hit its time limit and was stopped. The land itself (PID 11335) is still queued, so I'm re-arming that watch.
+> Bash while kill -0 11335 2>/dev/null; do sleep 30; done; tail -20 /tmp/land-571.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: b5wzap0ix. Output is being written to: /builds/looper/tacplus/homes/looper-571/tmp/claude-61000/-builds-looper-tacplus-issues-571/6a816993-71bb-4bfb-b93f-203f8994a391/tasks/b5wzap0ix.output. You will be notified when it completes. To check interim output, use R...
+Both waits are re-armed; I'll continue when the gates or the land reports.
+= success: Both waits are re-armed; I'll continue when the gates or the land reports.
+= task_updated
+= task_notification
+= background_tasks_changed
+= init
+> Bash tail -12 /tmp/gates-571.log; grep -ciE "^error|FAIL[^a-z]|recipe .* failed" /tmp/gates-571.log; grep -E "recipe .* failed|error: Recipe" /tmp/gates-571.log | head; echo; kill -0 11335 2>/dev/null && echo land-running; tail -3 /tmp/land-571.log; date -u
+< ok   on macOS the darwin binary is run, verified with shasum ==> determinism: building tacplus 2.6.0 and 2.6.1 from this checkout ok   determinism control: 2.6.1 is the newest release when the second build runs ok   determinism: the same commit, before and after 2.6.1, generates byte-identical outpu...
+The full gates failed in `current-generation`, a gate my one-line comment change shouldn't touch. Looking at why.
+> Bash grep -n "rc=" /tmp/gates-571.log; grep -n -B25 "recipe \`current-generation\` failed" /tmp/gates-571.log | grep -iE "fail|error|✗|not ok|missing|denied|No such" | head -20
+< 3:=== protoc-check rc=0 === 182:=== soundness rc=0 === 452:=== test rc=0 === 630:=== current-generation rc=1 === 659:=== determinism rc=0 === 3366:=== cert-stream rc=0 === 6480:=== stream-expiry rc=0 === 33874:=== memberport rc=0 === 33893:=== claims-provenance rc=0 === 35601:=== w2s-validate rc=0 =...
+> Bash sed -n 455,630p /tmp/gates-571.log | grep -vE "^\s*(ok|PASS)" | tail -40
+< ?   	gitlab.com/example/dummy/agentsensor/tacplus/model/types/sys/entitlement	[no test files] ?   	gitlab.com/example/dummy/agentsensor/tacplus/model/types/sys/entitlementview	[no test files] ?   	gitlab.com/example/dummy/agentsensor/tacplus/model/types/sys/errors	[no test files] ?   	gitlab.com/exa...
+> Bash sed -n 455,630p /tmp/gates-571.log | grep -nE "^(--- FAIL|FAIL|panic|.*_test.go:[0-9]+:)|cannot|undefined|error" | head -20
+< 83:--- FAIL: TestDurableSpoolReplaysUnacknowledgedAfterRestart (1.51s) 84:    accounting_sink_durable_test.go:93: record 1 of 3 did not reach the publisher; got [r0] 85:--- FAIL: TestDurableSpoolHoldsRPCWhenPublisherBlocked (1.01s) 86:    accounting_sink_durable_test.go:120: spool log did not reach ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash nohup just current-generation > /tmp/cg-571.log 2>&1 & echo PID $!
+< PID 125886
+> Bash while kill -0 125886 2>/dev/null; do sleep 15; done; grep -E "^(--- FAIL|FAIL|ok  .*chassis/am)|recipe" /tmp/cg-571.log | head; tail -2 /tmp/cg-571.log; date -u
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bxvwxd57s. Output is being written to: /builds/looper/tacplus/homes/looper-571/tmp/claude-61000/-builds-looper-tacplus-issues-571/6a816993-71bb-4bfb-b93f-203f8994a391/tasks/bxvwxd57s.output. You will be notified when it completes. To check interim output, use R...
+The `current-generation` re-run is in the background; I'll report what it shows.
+= success: The `current-generation` re-run is in the background; I'll report what it shows.
+= task_updated
+= task_notification
+= background_tasks_changed
+= init
+= thinking_tokens
+= thinking_tokens
+The land waiter hit its time limit again. Checking the time and both processes.
+> Bash date -u; kill -0 11335 2>/dev/null && echo land-running; tail -3 /tmp/land-571.log; kill -0 125886 2>/dev/null && echo cg-running; grep -E "^(--- FAIL|FAIL|ok  .*chassis/am)|recipe" /tmp/cg-571.log | head; tail -2 /tmp/cg-571.log
+< Fri Nov 13 21:06:24 UTC 2026 land-running [2026-11-13T17:36:25Z] checkpoint of #571 (land queued) pushed to looper/tacplus-571:  4 files changed, 320 insertions(+), 1 deletion(-) [2026-11-13T17:36:33Z] queued: the manager of tacplus merges looper/tacplus-571 after the lands queued before it, one at ...
+= thinking_tokens
+= thinking_tokens
+About 16 minutes remain before this run is stopped. Checking whether the re-run already passed the accounting-sink package.
+> Bash grep -nE "chassis/am|FAIL" /tmp/cg-571.log | head
+< (Bash completed with no output)
+= thinking_tokens
+= thinking_tokens
+The re-run hasn't reached that package yet, and there isn't time to wait for it or for the land's verdict. I'm checkpointing now so the next run resumes cleanly.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 571 --checkpoint "Done: bd636ad2 (inline #nosec G404 on cross-test/chaos/orchestrator/orchestrator.go:77, gosec clean there, go test ok); land queued 17:36Z (manager lands it after this run); backport PRs #650-#656 open against release/2.0..2.6, each...
+< [2026-11-13T21:06:39Z] checkpoint of #571 (a step) pushed to looper/tacplus-571:  4 files changed, 407 insertions(+), 1 deletion(-)
+Checkpointed. I'll use the remaining minutes to see whether the re-run gets to the accounting-sink tests.
+> Bash end=$(( $(date +%s) + 540 )); while [ $(date +%s) -lt $end ] && ! grep -qE "chassis/am" /tmp/cg-571.log && kill -0 125886 2>/dev/null; do sleep 10; done; grep -nE "chassis/am|^--- FAIL|recipe" /tmp/cg-571.log | head; date -u; tail -2 /tmp/land-571.log
+= task_started
+= task_notification
+< Fri Nov 13 21:15:44 UTC 2026 [2026-11-13T17:36:25Z] checkpoint of #571 (land queued) pushed to looper/tacplus-571:  4 files changed, 320 insertions(+), 1 deletion(-) [2026-11-13T17:36:33Z] queued: the manager of tacplus merges looper/tacplus-571 after the lands queued before it, one at a time, and s...
+= thinking_tokens
+= thinking_tokens
+The time is used up. I'm stopping my gate re-run, but not the queued land (the manager finishes it after this run).
+> Bash kill 125886 2>/dev/null; echo stopped
+< stopped
+#571 isn't finished: the fix is committed and queued to land, but it hadn't merged when this run's time ran out, and my local full gates did not all pass.
+
+**The fix:** commit bd636ad2 puts the exception on `cross-test/chaos/orchestrator/orchestrator.go:77`, as Jody decided:
+`// #nosec G404 -- seeded on purpose: the report's seed replays the run (#571)`
+- Nothing was added to `security-exceptions.yaml`.
+- The generator code is unchanged, so the same profile seed still gives the same schedule.
+- gosec now reports G404 in `cross-test/chaos` only at `fault/fault.go:125`, which is #570.
+- `go test ./orchestrator/` passes.
+
+**Land:** queued at 17:36Z and still waiting for its verdict at 21:15Z. The manager lands it after this run and posts the result on the issue.
+
+**My `just gates` run:** 15 of the 16 legs passed. `current-generation` failed on four tests in the generated Go durable accounting spool (`accounting_sink_durable_test.go` lines 93, 120, 152 and 196). They wait about one second for records, and the gates and the land were running at the same time on a loaded machine. My change is one comment in `cross-test/chaos`, so I don't think it caused this, but I haven't confirmed it. I re-ran `current-generation` alone; it hadn't reached those tests by the time limit, and I stopped it. Rule 7 says the release needs the full gates passing, so this still has to be settled.
+
+**Patch releases:** main has taken features since v2.6.1 (for example #321), so no patch is cut from main. Every release line has the same line, so I opened backport PRs. Each one passes its local test and is clean in gosec, but I did not run `just gates` on any of them.
+
+| PR | Branch | Tag to cut once merged |
+|---|---|---|
+| #650 | release/2.0 | v2.0.31 |
+| #651 | release/2.1 | v2.1.24 |
+| #652 | release/2.2 | v2.2.21 |
+| #653 | release/2.3 | v2.3.23 |
+| #654 | release/2.4 | v2.4.23 |
+| #655 | release/2.5 | v2.5.24 |
+| #656 | release/2.6 | v2.6.12 |
+
+No service handlers were touched, so the trace-propagation rule doesn't apply.
+
+**Left for the next run** (all in the checkpoint):
+1. Read the land's verdict on the issue, and land again if it failed.
+2. Re-run `current-generation` on a quiet machine. If the spool tests fail again, file them as a bug.
+3. Add main's commit hash to the bodies of #650–#656.
+4. Post the outcome comment and close #571.
+= success: #571 isn't finished: the fix is committed and queued to land, but it hadn't merged when this run's time ran out, and my local full gates did not all pass.
+
+**The fix:** commit bd636ad2 puts the exception on `cross-test/chaos/orchestrator/orchestrator.go:77`, as Jody decided:
+`// #nosec G404 -- seeded on purpose: the report's seed replays the run (#571)`
+- Nothing was added to `security-exceptions.yaml`.
+- The generator code is unchanged, so the same profile seed still gives the same schedule.
+- gosec now reports G404 in `cross-test/chaos` only at `fault/fault.go:125`, which is #570.
+- `go test ./orchestrator/` passes.
+
+**Land:** queued at 17:36Z and still waiting for its verdict at 21:15Z. The manager lands it after this run and posts the result on the issue.
+
+**My `just gates` run:** 15 of the 16 legs passed. `current-generation` failed on four tests in the generated Go durable accounting spool (`accounting_sink_durable_test.go` lines 93, 120, 152 and 196). They wait about one second for records, and the gates and the land were running at the same time on a loaded machine. My change is one comment in `cross-test/chaos`, so I don't think it caused this, but I haven't confirmed it. I re-ran `current-generation` alone; it hadn't reached those tests by the time limit, and I stopped it. Rule 7 says the release needs the full gates passing, so this still has to be settled.
+
+**Patch releases:** main has taken features since v2.6.1 (for example #321), so no patch is cut from main. Every release line has the same line, so I opened backport PRs. Each one passes its local test and is clean in gosec, but I did not run `just gates` on any of them.
+
+| PR | Branch | Tag to cut once merged |
+|---|---|---|
+| #650 | release/2.0 | v2.0.31 |
+| #651 | release/2.1 | v2.1.24 |
+| #652 | release/2.2 | v2.2.21 |
+| #653 | release/2.3 | v2.3.23 |
+| #654 | release/2.4 | v2.4.23 |
+| #655 | release/2.5 | v2.5.24 |
+| #656 | release/2.6 | v2.6.12 |
+
+No service handlers were touched, so the trace-propagation rule doesn't apply.
+
+**Left for the next run** (all in the checkpoint):
+1. Read the land's verdict on the issue, and land again if it failed.
+2. Re-run `current-generation` on a quiet machine. If the spool tests fail again, file them as a bug.
+3. Add main's commit hash to the bodies of #650–#656.
+4. Post the outcome comment and close #571.
+= task_updated
+= task_notification
+= background_tasks_changed
+= init
+That notification is only the waiter on the `current-generation` re-run ending because I stopped the re-run. It produced no result. The accounting-spool tests are still unconfirmed and stay on the next run's list, along with the land's verdict and closing #571.
+= success: That notification is only the waiter on the `current-generation` re-run ending because I stopped the re-run. It produced no result. The accounting-spool tests are still unconfirmed and stay on the next run's list, along with the land's verdict and closing #571.

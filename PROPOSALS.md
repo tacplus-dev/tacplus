@@ -132,6 +132,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   `os.OpenRoot` (gosec G122, HIGH). gosec still reports eleven G304 (CWE-22, MEDIUM, not blocking) in
   `cmd/soundness/main.go`: the other checks `os.ReadFile` paths joined under `-root` (the SPIFFE walk among them).
   Opening `-root` once and reading through it everywhere would clear them and confine the whole gate to its tree.
+- **No PEM header gitleaks reads as a private key in generated service managers** (2026-11-13, #628): the
+  Python, TypeScript and Rust `service_manager` templates assemble a PKCS#8 PEM at run time, and gitleaks'
+  `private-key` rule matches from the `-----BEGIN PRIVATE KEY-----` literal to the END one across the code between
+  them (5 matches; tacplus's `.gitleaks.toml` allowlists the templates, a generating project's scan does not). Build
+  the header from a label (`"PRIVATE KEY"`) so no line pair reads as a key, as #628 did for the chassis tests' token
+  fixtures (`TestNoTokenShapedLiteralInTemplates` could grow the rule).
 - **Per-language gate sets, and more of the map** (2026-11-08, #266): `gates.yaml` runs the full gates (~3h) for any
   change under `pkg/**`, `cmd/**` or `.github/`. Next: `pkg/internal/<lang>/**` and `pkg/templates/<lang>/**` to that
   language's `current-generation-<lang>`, `determinism-<lang>` and `-<lang>` cross-tests (with `just test`), once each

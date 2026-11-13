@@ -1,0 +1,165 @@
+= init
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/578; gh issue view 578 --repo tacplus-dev/tacplus --comments | tail -20; cat pkg/formatter/formatter.go; ls pkg/formatter; git tag --sort=-v:refname | head -3; git log --oneline v2.6.1..origin/main | head -40; git branch -r | grep release
+< author:	tacplus-looper association:	none edited:	false status:	none -- The looper of tacplus starts this issue with its limit 4h capped at 4h by this job (https://gitlab.com/tacplus-dev/looper/-/jobs/17999950891), which ends sooner: the run stops by itself before then, its work checkpointed, and the...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/578; git fetch -q --tags origin; git tag --merged origin/main --sort=-v:refname | head -5; git tag --sort=-creatordate | head -8; for t in v2.6.1 v2.6.11 v2.6.0; do echo $t $(git log -1 --format='%h %ci %s' $t); done; git log --format='%h %ci' -1 origin/release/2.6; ...
+< v2.6.1 v2.6.0 v2.5.0 v2.4.0 v2.3.0 v2.6.11 v2.5.23 v2.4.22 v2.3.22 v2.2.20 v2.1.23 v2.0.30 v2.6.10 v2.6.1 59419d54 2026-11-05 23:49:17 +0000 Bound the disk the cross-test gates use: prune each leg's build once it passes (#282) v2.6.11 3b3e20a0 2026-11-12 17:12:54 -0700 Gates: refuse a committed merg...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/578; sed -n 1,200p docs/VERSIONING.md | grep -n -i -B2 -A8 'patch\|backport' | head -80; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b $(git log -1 --format=%ci v$b.0) $(git diff --stat origin/main origin/release/$b -- pkg/formatter | tail -1)"; done; gh pr list ...
+< 6-## Versions 7- 8:tacplus releases are `MAJOR.MINOR.PATCH` git tags `vMAJOR.MINOR.PATCH` 9-(`.github/workflows/release.yml` builds the binaries from the tag). 10- 11:- **A patch is fixes only.** A new feature, a new annotation, a new generated 12:  surface or a changed generated surface never goes ...
+> Bash cd /builds/looper/tacplus/issues/578; git diff origin/main origin/release/2.1 -- pkg/formatter; git log --oneline origin/main -3 -- pkg/sysrename; git log --all --oneline -5 --grep='#567'; gh pr view 592 --repo tacplus-dev/tacplus --json body,isDraft -q .body; grep -n '^go ' go.mod
+< diff --git a/pkg/formatter/formatter.go b/pkg/formatter/formatter.go index f4f73a93..4963b35f 100644 --- a/pkg/formatter/formatter.go +++ b/pkg/formatter/formatter.go @@ -1,4 +1,4 @@ -// Copyright (c) 2026 Jody Scott +// Copyright (c) 2026 Seabeam LLC  // SPDX-License-Identifier: Apache-2.0    packa...
+> Bash cd /builds/looper/tacplus/issues/578; git show c917f818 -- cmd/sysrename/main.go | head -120; grep -rn 'formatter\.' --include=*.go . | grep -v _test | head; which gosec
+< commit c917f81814edc22883478e3fa7e0b28fca316e72 Author: jodydadescott <jody@thescottsweb.com> Date:   Fri Nov 13 10:07:43 2026 +0000      sysrename: read and write through os.Root, skip symlinks (#567)          gosec G122 (HIGH, CWE-367) and G703 failed every build's security     checks: sysrename r...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Plan: same pattern as #567's sysrename fix — open the dir as `os.Root`, walk its FS, touch regular files only. Writing the test first.
+> Write /builds/looper/tacplus/issues/578/pkg/formatter/formatter_test.go
+< File created successfully at: /builds/looper/tacplus/issues/578/pkg/formatter/formatter_test.go (file state is current in your context — no need to Read it back)
+> Bash cd /builds/looper/tacplus/issues/578; go test ./pkg/formatter/ 2>&1 | tail -8
+= task_started
+= task_notification
+< go: downloading go.uber.org/zap v1.27.1 go: downloading go.uber.org/multierr v1.11.0 --- FAIL: TestIndentFilesDoesNotWriteThroughSymlinks (0.00s)     formatter_test.go:93: /builds/looper/tacplus/homes/looper-578/tmp/TestIndentFilesDoesNotWriteThroughSymlinks3184401766/001/victim.rs outside the outpu...
+Fails as expected (the file symlink is written through). Now the fix:
+> Bash cd /builds/looper/tacplus/issues/578; python3 -I - <<'EOF' p='pkg/formatter/formatter.go' s=open(p).read() s=s.replace('''	"fmt" 	"os" ''','''	"fmt" 	"io/fs" 	"os" ''') s=s.replace('''// indentFiles walks dir, reads each file with the given extension, applies // codefile.IndentCode to auto-indent ba...
+= task_started
+= task_notification
+< FAIL	github.com/tacplus-dev/tacplus/pkg/builder [setup failed] ok  	github.com/tacplus-dev/tacplus/pkg/formatter	0.007s FAIL  [/builds/looper/tacplus/issues/578/pkg/formatter/formatter.go:115] - G204 (CWE-78): Subprocess launched with variable (Confidence: HIGH, Severity: MEDIUM)     114:    > 115: ...
+G703, G304 and G306 are gone; only the pre-existing MEDIUM G204 (the `black` exec) remains. Builder "setup failed" — checking why:
+> Bash cd /builds/looper/tacplus/issues/578; go test ./pkg/builder/ 2>&1 | head -5; git stash -q; go test ./pkg/builder/ 2>&1 | head -3; git stash pop -q
+< # github.com/tacplus-dev/tacplus/pkg/builder pkg/internal/common/parser/descriptor.go:20:2: no required module provides package github.com/tacplus-dev/tacplus/target/proto/spec/sys; to add it: 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sys FAIL	github.com/tacplus-dev/tacplus/pkg/builde...
+Pre-existing: it needs the generated `target/`, which the gates build. Committing, then running the full gates.
+> Bash cd /builds/looper/tacplus/issues/578; git add pkg/formatter && git commit -q -F - <<'EOF' formatter: read and write through os.Root, skip symlinks (#578)  gosec G703 (HIGH, CWE-22) failed every build's security checks: the indenter collected the Rust, Java and TypeScript files under the output direc...
+< b2cf44b3 formatter: read and write through os.Root, skip symlinks (#578) remote:  [2026-11-13T10:18:13Z] checkpoint of #578 (a step) pushed to looper/tacplus-578:  4 files changed, 346 insertions(+), 10 deletions(-) 5886
+= thinking_tokens
+= thinking_tokens
+While the gates run (PID 5886), I'll check the release branches for backports: `os.Root.ReadFile`/`WriteFile` need Go 1.25.
+> Bash cd /builds/looper/tacplus/issues/578; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b: $(git show origin/release/$b:go.mod | grep '^go ') $(git show origin/release/$b:pkg/formatter/formatter.go | md5sum | cut -c1-8) test:$(git ls-tree origin/release/$b pkg/formatter/ | wc -l) $(git describe --tags...
+< 2.0: go 1.25.0 41f27995 test:1 v2.0.30 2.1: go 1.25.0 d6fbd64c test:1 v2.1.23 2.2: go 1.25.0 41f27995 test:1 v2.2.20 2.3: go 1.25.0 41f27995 test:1 v2.3.22 2.4: go 1.25.0 41f27995 test:1 v2.4.22 2.5: go 1.25.0 41f27995 test:1 v2.5.23 2.6: go 1.25.0 41f27995 test:1 v2.6.11 41f27995
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+All seven lines carry the same `formatter.go` (2.1 differs only in its copyright line) on Go 1.25, so the change cherry-picks as is. Preparing backport branches in separate worktrees:
+> Bash cd /builds/looper/tacplus/issues/578; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do w=$HOME/bp-578-$b; git worktree add -q $w -b backport/578-release-$b origin/release/$b && (cd $w && git cherry-pick -x b2cf44b3 >/dev/null 2>&1 || echo "$b CONFLICT"; echo "$b: $(head -1 pkg/formatter/formatter.go)"; go t...
+= task_started
+= task_notification
+< 2.0: // Copyright (c) 2026 Jody Scott ok  	github.com/tacplus-dev/tacplus/pkg/formatter	0.016s G204  2.1: // Copyright (c) 2026 Seabeam LLC ok  	github.com/tacplus-dev/tacplus/pkg/formatter	0.015s G204  2.2: // Copyright (c) 2026 Jody Scott ok  	github.com/tacplus-dev/tacplus/pkg/formatter	0.010s G2...
+= thinking_tokens
+= thinking_tokens
+Cherry-picks are clean and pass on every line, with G703 gone from each. On 2.1 I'm matching the test file's copyright header to that branch's.
+> Bash cd $HOME/bp-578-2.1 && sed -i '1s/Jody Scott/Seabeam LLC/' pkg/formatter/formatter_test.go && git commit -q -a --amend --no-edit && git show --stat HEAD | tail -3; tail -3 /tmp/gates-578.log
+<  pkg/formatter/formatter.go      |  31 +++++++----  pkg/formatter/formatter_test.go | 110 ++++++++++++++++++++++++++++++++++++++++  2 files changed, 131 insertions(+), 10 deletions(-) go: downloading github.com/spf13/pflag v1.0.10 go: downloading golang.org/x/sys v0.47.0 go: downloading google.golan...
+> Bash cd /builds/looper/tacplus/issues/578; /usr/local/bin/looper-trace check 2>&1 | tail -5; sleep 240; tail -3 /tmp/gates-578.log
+= task_started
+= task_notification
+< FINDING dropped-trace cross-test/server-runtime/client/go/main.go:114: checkPage's call ListEventsPaged is caused by the request but does not carry its trace_id (api); propagate it, or, if the request does not cause the call, say so where it is made: `// trace: unrelated: <why>` FINDING untested cro...
+= thinking_tokens
+= thinking_tokens
+`looper-trace` reports 8 findings, all outside my change. Checking whether they are real and already filed:
+> Bash cd /builds/looper/tacplus/issues/578; /usr/local/bin/looper-trace check 2>&1 | grep -v '^  ' | head -30; sed -n 95,145p cross-test/server-runtime/client/go/main.go; gh issue list --repo tacplus-dev/tacplus --state all --search "trace_id cross-test client in:title,body" --limit 10
+= task_started
+= task_notification
+< looper-trace: /builds/looper/tacplus/issues/578 handler cross-test/outbound-deadline/fixture/rust/lib.rs:133 get_public_contract (inbound: req) handler cross-test/server-runtime/client/go/main.go:73 checkUnary (inbound: api) handler cross-test/server-runtime/client/go/main.go:88 checkServerStream (i...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash sleep 580; tail -3 /tmp/gates-578.log; kill -0 5886 && echo running
+= task_started
+= task_notification
+<     PASS java ==> Generating rust cross-test fixture ==> Compiling rust cross-test fixture running
+> Bash sleep 590; tail -3 /tmp/gates-578.log; kill -0 5886 && echo running
+= task_started
+= task_notification
+<          real coverage is pkg/internal/java/types/tls_degrade_template_test.go) ==> Generating go c2s-only fixture ==> Compiling go c2s-only fixture running
+> Bash sleep 595; grep -ciE 'FAIL' /tmp/gates-578.log; tail -3 /tmp/gates-578.log; kill -0 5886 && echo running
+= task_started
+= task_notification
+< 10     Removed 12M fixture tree healthonly-rust ==> Generating rust zero-rpc fixture ==> Compiling rust zero-rpc fixture running
+> Bash grep -nE 'FAIL' /tmp/gates-578.log | head -12
+< (Bash completed with no output)
+> Bash grep -niE 'fail' /tmp/gates-578.log | grep -viE 'fail-?closed|failover|fail_closed' | head -12
+< 57:A `·` is a build-failing gap; runtime and consumer-contract tests still prove behavior. 133:A `·` is a build-failing gap. Runtime tests still prove behavior; this gate checks wiring markers. 147:| structured auth failure (client outbound) | ✓ | ✓ | ✓ | ✓ | ✓ | 5/5 | 148:| structured auth failure ...
+Nothing failing so far. Still running:
+> Bash sleep 595; tail -2 /tmp/gates-578.log; kill -0 5886 && echo running
+= task_started
+= task_notification
+< ==> Generating rust requires-device fixture ==> Compiling rust requires-device fixture running
+> Bash sleep 595; tail -2 /tmp/gates-578.log; kill -0 5886 && echo running
+= task_started
+= task_notification
+< ==> Generating rust record-egress fixture ==> Compiling rust record-egress fixture running
+> Bash sleep 595; tail -2 /tmp/gates-578.log; kill -0 5886 && echo running
+= task_started
+= task_notification
+<     Removed 14M fixture tree recordegress-host-go ==> Generating java record-egress HOST fixture running
+> Bash sleep 595; tail -2 /tmp/gates-578.log; kill -0 5886 && echo running
+= task_started
+= task_notification
+< ==> Generating java event-bus backpressure fixture ==> Compiling java event-bus backpressure fixture running
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The gates have run about 70 minutes and are still green so far. To save time, I'm queueing the land now (the land re-runs the gates anyway) while my own full run finishes.
+> Bash cd /builds/looper/tacplus/issues/578; /usr/local/bin/repo-looper --repo tacplus --issue 578 --checkpoint "fix b2cf44b3 committed; full gates running locally, all green so far; land queued; backport branches prepared locally (backport/578-release-2.0..2.6, ~/bp-578-*), not pushed; left: PRs per relea...
+= task_started
+= task_notification
+< [2026-11-13T11:33:26Z] checkpoint of #578 (a step) pushed to looper/tacplus-578:  4 files changed, 429 insertions(+), 10 deletions(-) 65864
+> Bash sleep 590; tail -2 /tmp/gates-578.log; kill -0 5886 && echo running; tail -3 /tmp/land-578.log
+= task_started
+= task_notification
+< ==> Generating rust accounting-sink fixture ==> Compiling rust accounting-sink fixture running [2026-11-13T11:33:30Z] checkpoint of #578 (land queued) pushed to looper/tacplus-578:  5 files changed, 435 insertions(+), 10 deletions(-) [2026-11-13T11:33:32Z] queued: the manager of tacplus merges loope...
+= thinking_tokens
+= thinking_tokens
+The checkpoint reports 5 files changed but I committed 2, so I'm checking what the branch carries:
+> Bash cd /builds/looper/tacplus/issues/578; git fetch -q origin looper/tacplus-578; git diff --stat origin/main FETCH_HEAD; git status --short | head
+<  .looper/claude.log              | 123 ++++++++++++++++++++++++++++  .looper/land                    |   4 +  .looper/prompt.md               | 177 ++++++++++++++++++++++++++++++++++++++++  pkg/formatter/formatter.go      |  31 ++++---  pkg/formatter/formatter_test.go | 110 +++++++++++++++++++++++++...
+= thinking_tokens
+= thinking_tokens
+Those three are the looper's own `.looper/` checkpoint files; my commit is only the two formatter files. Waiting on both runs.
+> Bash sleep 595; tail -2 /tmp/gates-578.log; kill -0 5886 && echo running; tail -1 /tmp/land-578.log
+= task_started
+= task_notification
+< ==> Generating rust owner-default fixture ==> Compiling rust owner-default fixture running [2026-11-13T11:33:32Z] queued: the manager of tacplus merges looper/tacplus-578 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time run...
+> Bash sleep 595; tail -2 /tmp/gates-578.log; kill -0 5886 && echo running; tail -1 /tmp/land-578.log
+= task_started
+= task_notification
+< ==> Generating rust quorum-write fixture ==> Compiling rust quorum-write fixture running [2026-11-13T11:33:32Z] queued: the manager of tacplus merges looper/tacplus-578 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs ...
+> Bash sleep 595; tail -2 /tmp/gates-578.log; kill -0 5886 && echo running; tail -1 /tmp/land-578.log
+= task_started
+= task_notification
+< ==> Generating rust epoch-load fixture ==> Compiling rust epoch-load fixture running [2026-11-13T11:33:32Z] queued: the manager of tacplus merges looper/tacplus-578 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+About 2h used. While the queue and gates run, I'm opening the backport pull requests as drafts, following the #567 precedent; I'll mark them ready once main has the fix.
+> Bash cd /builds/looper/tacplus/issues/578; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do w=$HOME/bp-578-$b; last=$(git describe --tags --abbrev=0 origin/release/$b); next="v$b.$(( ${last##*.} + 1 ))"; h=$(git -C $w rev-parse --short=8 HEAD); same="the same change as main's; \`pkg/formatter\` is identical on t...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= vcs_state_changed
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/620 https://github.com/tacplus-dev/tacplus/pull/621 https://github.com/tacplus-dev/tacplus/pull/622 https://github.com/tacplus-dev/tacplus/pull/623 https://github.com/tacplus-dev/tacplus/pull/624 https://github.com/tacplus-dev/tacplus/pull/625 https://gith...
+> Bash cd /builds/looper/tacplus/issues/578; /usr/local/bin/repo-looper --repo tacplus --issue 578 --checkpoint "fix b2cf44b3; land queued; draft backport PRs #620-#626 (release/2.0..2.6) open, bodies say main hash pending; left: land verdict, update PR bodies with main hash + mark ready, outcome comment, ...
+= task_started

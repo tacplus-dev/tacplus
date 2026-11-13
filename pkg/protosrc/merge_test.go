@@ -108,6 +108,43 @@ func TestMergeSources_ConflictIsHardError(t *testing.T) {
 	}
 }
 
+// Every write stays inside destDir: a symlink already in it (to a directory or a
+// file outside) is refused, not followed, for proto files and merged meta files
+// alike.
+func TestMergeSources_WritesConfinedToDestDir(t *testing.T) {
+	for _, tc := range []struct{ name, link, rel string }{
+		{"proto under a linked dir", "sys", "sys/spec.proto"},
+		{"merged meta file linked", "dependencies.yaml", "dependencies.yaml"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := t.TempDir()
+			dest := t.TempDir()
+			outside := t.TempDir()
+
+			writeFile(t, a, tc.rel, "go: {}\n")
+			target := outside
+			if tc.link == tc.rel {
+				target = filepath.Join(outside, tc.rel)
+				writeFile(t, outside, tc.rel, "untouched\n")
+			}
+			if err := os.Symlink(target, filepath.Join(dest, tc.link)); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+
+			if err := MergeSources([]string{a}, dest); err == nil {
+				t.Fatal("expected an error writing through a symlink out of destDir, got nil")
+			}
+			if tc.link == tc.rel {
+				if got := read(t, target); got != "untouched\n" {
+					t.Errorf("file outside destDir was overwritten: %q", got)
+				}
+			} else if _, err := os.Stat(filepath.Join(outside, "spec.proto")); err == nil {
+				t.Error("proto file was written outside destDir")
+			}
+		})
+	}
+}
+
 // dependencies.yaml is merged semantically: disjoint language deps union.
 func TestMergeSources_DependenciesDeepMerge(t *testing.T) {
 	a := t.TempDir()

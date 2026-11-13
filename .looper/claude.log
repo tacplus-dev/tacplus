@@ -1,0 +1,178 @@
+= init
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/566; gh issue view 566 --repo tacplus-dev/tacplus --comments | tail -20; grep -n "storeVendor\|func skipStoreVendorDir" cmd/soundness/*.go | head -40; sed -n 1940,2010p cmd/soundness/main.go
+< author:	tacplus-looper association:	none edited:	false status:	none -- The looper of tacplus starts this issue with its limit 4h capped at 4h by this job (https://gitlab.com/tacplus-dev/looper/-/jobs/17999950883), which ends sooner: the run stops by itself before then, its work checkpointed, and the...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/566; grep -n "WalkDir\|filepath.Walk(" cmd/soundness/*.go; sed -n 140,200p cmd/soundness/main_test.go; which gosec go; go version; grep -n "soundness" justfile | head
+< cmd/soundness/main.go:1694:		if err := filepath.WalkDir(path, func(path string, d os.DirEntry, err error) error { cmd/soundness/main.go:1960:		if err := filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error { 	write := func(rel, content string) { 		p := filepath.Join(root, rel) 		...
+> Bash cd /builds/looper/tacplus/issues/566; sed -n 1680,1720p cmd/soundness/main.go; sed -n 125,140p cmd/soundness/main_test.go; gosec -include=G122 ./cmd/soundness/ 2>&1 | tail -20
+= task_started
+= task_notification
+< 	var files []string 	for _, rel := range subdirs { 		path := filepath.Join(root, rel) 		info, err := os.Stat(path) 		if err != nil { 			if os.IsNotExist(err) { 				continue 			} 			return nil, err 		} 		if !info.IsDir() { 			files = append(files, path) 			continue 		} 		if err := filepath.WalkDir(pa...
+= thinking_tokens
+= thinking_tokens
+Test first.
+> Bash cd /builds/looper/tacplus/issues/566; python3 - <<'EOF' p='cmd/soundness/main_test.go' s=open(p).read() anchor="// Pins token matching: a prefix-named constraint" new='''// Pins the store-vendor gate to its root: a symlink in the tree pointing // outside it (a file or a directory) is not followed, s...
+= task_started
+= task_notification
+< --- FAIL: TestStoreVendorSoundnessDoesNotFollowSymlinkOutOfTree (0.00s)     main_test.go:204: read /builds/looper/tacplus/homes/looper-566/tmp/TestStoreVendorSoundnessDoesNotFollowSymlinkOutOfTree2082509530/001/pkg/outside: is a directory FAIL FAIL	github.com/tacplus-dev/tacplus/cmd/soundness	0.015s...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/566; git ls-files -s pkg cmd docs cross-test | awk '$1=="120000"'; sed -n 1,30p cmd/soundness/main.go | grep -n '"'
+< 2:// coverage matrix described in docs/DEVELOPMENT.md ("fix A"). It derives the canonical 16:	"flag" 17:	"fmt" 18:	"os" 19:	"path/filepath" 20:	"regexp" 21:	"sort" 22:	"strings" 29:	"go":         "pkg/internal/go/types/validation.go", 30:	"java":       "pkg/internal/java/types/validation.go",
+No tracked symlinks in the scanned roots, so skipping non-regular entries changes nothing on the real tree.
+> Bash cd /builds/looper/tacplus/issues/566; python3 - <<'EOF' p='cmd/soundness/main.go' s=open(p).read() old_start=s.index("func storeVendorViolations(root string) ([]storeVendorViolation, error) {") old_end=s.index("\tsort.Slice(out, func(i, j int) bool {", old_start) new='''func storeVendorViolations(ro...
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/cmd/soundness	0.012s [gosec] 2026/11/13 10:06:06 Including rules: G122 [gosec] 2026/11/13 10:06:06 Including analyzers: G122   Issues : 0 		if out[i].RelPath != out[j].RelPath { 			return out[i].RelPath < out[j].RelPath 		} 		if out[i].Line != out[j].Line { 			ret...
+= thinking_tokens
+= thinking_tokens
+Tests pass, G122 gone. Now the full gosec on the package, `just soundness`, and the release situation.
+> Bash cd /builds/looper/tacplus/issues/566; gosec ./cmd/soundness/ 2>&1 | grep -E "Issues|\] - G"; just soundness 2>&1 | tail -3; git fetch -q --tags origin; git log --oneline v2.6.1..origin/main | head -30; git branch -r | grep release
+= task_started
+= task_notification
+< [/builds/looper/tacplus/issues/566/cmd/soundness/main.go:1719] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM) [/builds/looper/tacplus/issues/566/cmd/soundness/main.go:1586] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+G304 is MEDIUM (non-blocking). Now: has main taken features since v2.6.1? #321 looks like one.
+> Bash cd /builds/looper/tacplus/issues/566; for n in 321 211 266 329 554 351 338 310 319 318 263 307 369 313 350; do echo "$n $(gh issue view $n --repo tacplus-dev/tacplus --json labels -q '[.labels[].name]|join(",")' 2>/dev/null)"; done; git tag --sort=-creatordate | head -5; git log -1 --format=%ci v2.6...
+= task_started
+= task_notification
+< 321 approved,feature,priority:high 211 bug,approved 266 approved,feature,priority:high,looper:landing 329 bug,approved,looper:landing 554 bug,approved,priority:high 351 bug,approved 338 bug,approved,looper:landing 310 bug,approved,looper:landing 319 bug,approved,looper:landing 318 bug,approved,loope...
+= thinking_tokens
+= thinking_tokens
+Main carries features (#321, #266) since v2.6.1, so no tag from main; the fix goes to release branches as backports. Checking which lines have the code and their .0 dates.
+> Bash cd /builds/looper/tacplus/issues/566; for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "== $v .0=$(git log -1 --format=%cs v$v.0 2>/dev/null) latest=$(git tag -l "v$v.*" --sort=-v:refname | head -1) go=$(git show origin/release/$v:go.mod | grep '^go ') has=$(git show origin/release/$v:cmd/soundness/mai...
+< == 2.0 .0=2026-10-15 latest=v2.0.30 go=go 1.25.0 has=1 == 2.1 .0=2026-10-20 latest=v2.1.23 go=go 1.25.0 has=1 == 2.2 .0=2026-10-25 latest=v2.2.20 go=go 1.25.0 has=1 == 2.3 .0=2026-10-25 latest=v2.3.22 go=go 1.25.0 has=1 == 2.4 .0=2026-10-27 latest=v2.4.22 go=go 1.25.0 has=1 == 2.5 .0=2026-10-28 late...
+= thinking_tokens
+= thinking_tokens
+All seven lines have it. Commit, then run the full gates.
+> Bash cd /builds/looper/tacplus/issues/566; git add -A && git commit -q -F - <<'EOF' soundness: the store-vendor walk reads through os.Root, symlinks not followed (#566)  gosec G122 (HIGH, CWE-367) failed every build: storeVendorViolations read each WalkDir path with os.ReadFile, so a symlink in the tree ...
+= task_started
+= task_notification
+< 5056752f soundness: the store-vendor walk reads through os.Root, symlinks not followed (#566) 3556 remote:  [2026-11-13T10:07:05Z] checkpoint of #566 (a step) pushed to looper/tacplus-566:  4 files changed, 272 insertions(+), 11 deletions(-)
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+While gates run, look at an existing backport PR for the house format.
+> Bash cd /builds/looper/tacplus/issues/566; git status --short | head; gh pr list --repo tacplus-dev/tacplus --state all --head backport/554-release-2.6 --json number,title,body,state -q '.[0]|"\(.number) \(.state) \(.title)\n\(.body)"'
+< 561 MERGED [release/2.6] images: declare each image's Debian packages; drop buildpack-deps (OpenEXR) (#554) Backport of #554 to `release/2.6` as 7c0ef5c1 (cherry-picked cleanly). STATE.md is main's alone and is not carried. Main's commit: pending the land of #554; this body is updated with its hash ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Prepare the seven backport branches in side worktrees while the gates run.
+> Bash cd /builds/looper/tacplus/issues/566; C=5056752f; for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do d=$HOME/bp-$v; git worktree add -q -b backport/566-release-$v $d origin/release/$v 2>&1|tail -1; (cd $d && git cherry-pick -x $C >/dev/null 2>&1 && echo "$v picked $(git rev-parse --short HEAD)" || { echo "$v ...
+= task_started
+= task_notification
+< 2.0 picked 4906886d 2.1 picked 60b19442 2.2 picked edb4bab0 2.3 picked 0da2cfc4 2.4 picked 1b15fbcf 2.5 picked 10de97eb 2.6 picked 97c16cde
+> Bash for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do d=$HOME/bp-$v; cd $d; t=$(go test ./cmd/soundness/ 2>&1 | tail -1); g=$(gosec -include=G122 ./cmd/soundness/ 2>&1 | grep 'Issues :'); s=$(go run ./cmd/soundness -root . 2>&1 | grep -c 'no forbidden backend-store'); echo "$v | $t | $g | soundness-store-ok=$s e...
+= task_started
+= task_notification
+< 2.0 | ok  	github.com/tacplus-dev/tacplus/cmd/soundness	0.010s |   Issues : 0 | soundness-store-ok=1 exit 2.1 | ok  	github.com/tacplus-dev/tacplus/cmd/soundness	0.066s |   Issues : 0 | soundness-store-ok=1 exit 2.2 | ok  	github.com/tacplus-dev/tacplus/cmd/soundness	0.055s |   Issues : 0 | soundnes...
+> Bash for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do (cd $HOME/bp-$v && go run ./cmd/soundness -root . >/dev/null 2>&1; echo "$v soundness exit $?"); done; tail -3 /tmp/gates566.log; kill -0 $(cat /tmp/gates566.pid) && echo running
+= task_started
+= task_notification
+< 2.0 soundness exit 0 2.1 soundness exit 0 2.2 soundness exit 0 2.3 soundness exit 0 2.4 soundness exit 0 2.5 soundness exit 0 2.6 soundness exit 0 ==> Building local tacplus binary ==> Generating go cross-test fixture ==> Compiling go cross-test fixture running
+Gates are still running. I'll wait on them with Monitor.
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Bash p=$(cat /tmp/gates566.pid); until ! kill -0 $p 2>/dev/null; do sleep 20; done; tail -15 /tmp/gates566.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: btopjunea. Output is being written to: /builds/looper/tacplus/homes/looper-566/tmp/claude-61000/-builds-looper-tacplus-issues-566/fb78f8f4-bd67-4ea6-98eb-16b163f793f3/tasks/btopjunea.output. You will be notified when it completes. To check interim output, use R...
+= thinking_tokens
+= thinking_tokens
+While waiting: rule 6 asks for follow-ups in PROPOSALS.md. Check its format.
+> Bash cd /builds/looper/tacplus/issues/566; head -30 PROPOSALS.md; grep -n "G304\|gosec" PROPOSALS.md | head
+< # Proposals: tacplus  Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones into ROADMAP.md (via an agent); the looper then marks it `promoted` or `declined` here with the date.  ## Open - **Per-language gate sets, and more of the map** (2026-11-08, #266): `gates.yaml` run...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/566; python3 - <<'EOF' p='PROPOSALS.md' s=open(p).read() e='''- **cmd/soundness reads every file through one os.Root** (2026-11-13, #566): #566 moved the store-vendor walk onto   `os.OpenRoot` (gosec G122, HIGH). gosec still reports eleven G304 (CWE-22, MEDIUM, not b...
+< 986cdb38 PROPOSALS.md: cmd/soundness reads every file through one os.Root (#566) 5056752f soundness: the store-vendor walk reads through os.Root, symlinks not followed (#566)
+Waiting for the gates.
+> Bash sleep 1; tail -2 /tmp/gates566.log
+< ==> Generating go cross-test fixture ==> Compiling go cross-test fixture
+> Monitor p=$(cat /tmp/gates566.pid); while kill -0 $p 2>/dev/null; do sleep 30; done; echo "gates done"; tail -5 /tmp/gates566.log
+= permission_denied
+< A variable in this command can't be checked before it runs
+> Monitor while kill -0 3556 2>/dev/null; do sleep 30; done; echo "gates done"; tail -5 /tmp/gates566.log
+= permission_denied
+< This Bash command contains multiple operations. The following parts require approval: kill -0 3556, tail -5 /tmp/gates566.log
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 tail --pid=3556 -f /dev/null; tail -2 /tmp/gates566.log
+= task_started
+= task_notification
+< ==> Generating rust cross-test fixture ==> Compiling rust cross-test fixture
+> Bash timeout 590 tail --pid=3556 -f /dev/null; tail -2 /tmp/gates566.log
+> Bash timeout 590 tail --pid=3556 -f /dev/null; tail -2 /tmp/gates566.log
+> Bash timeout 590 tail --pid=3556 -f /dev/null; tail -2 /tmp/gates566.log
+= task_started
+= task_notification
+< ==> Generating go c2s-only fixture ==> Compiling go c2s-only fixture
+= task_started
+= task_notification
+< ==> Generating rust zero-rpc fixture ==> Compiling rust zero-rpc fixture
+= task_started
+= task_notification
+< ==> Generating rust requires-device fixture ==> Compiling rust requires-device fixture
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The full gates take hours; the land re-runs them anyway. Checkpoint and queue the land now, in parallel with the local run.
+> Bash cd /builds/looper/tacplus/issues/566; /usr/local/bin/repo-looper --repo tacplus --issue 566 --checkpoint "fix + PROPOSALS committed (5056752f, 986cdb38); local just gates running (/tmp/gates566.log); land queued; backport branches prepared in ~/bp-2.0..2.6 (cherry-picked, soundness tests+gosec+sound...
+= task_started
+= task_notification
+< [2026-11-13T10:53:05Z] checkpoint of #566 (a step) pushed to looper/tacplus-566:  5 files changed, 349 insertions(+), 11 deletions(-) 50334
+Meanwhile, push the backport branches and open the PRs.
+> Bash declare -A NEXT=([2.0]=v2.0.31 [2.1]=v2.1.24 [2.2]=v2.2.21 [2.3]=v2.3.23 [2.4]=v2.4.23 [2.5]=v2.5.24 [2.6]=v2.6.12) for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do d=$HOME/bp-$v; cd $d; h=$(git rev-parse --short HEAD); git push -q origin backport/566-release-$v 2>&1 | grep -v '^remote' ; cat > /tmp/body-$v...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= vcs_state_changed
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/606 https://github.com/tacplus-dev/tacplus/pull/607 https://github.com/tacplus-dev/tacplus/pull/608 https://github.com/tacplus-dev/tacplus/pull/609 https://github.com/tacplus-dev/tacplus/pull/610 https://github.com/tacplus-dev/tacplus/pull/611 https://gith...
+Backport PRs #606–#612 are open. Back to waiting on gates and the land.
+> Bash timeout 590 tail --pid=3556 -f /dev/null; tail -2 /tmp/gates566.log; tail -3 /tmp/land566.log
+> Bash timeout 590 tail --pid=3556 -f /dev/null; tail -2 /tmp/gates566.log; tail -3 /tmp/land566.log
+> Bash timeout 590 tail --pid=3556 -f /dev/null; tail -2 /tmp/gates566.log; tail -3 /tmp/land566.log
+> Bash timeout 590 tail --pid=3556 -f /dev/null; tail -2 /tmp/gates566.log; tail -3 /tmp/land566.log
+> Bash timeout 590 tail --pid=3556 -f /dev/null; tail -2 /tmp/gates566.log; tail -3 /tmp/land566.log
+= task_started
+> Bash timeout 590 tail --pid=3556 -f /dev/null; tail -2 /tmp/gates566.log; tail -3 /tmp/land566.log
+> Bash timeout 590 tail --pid=3556 -f /dev/null; tail -2 /tmp/gates566.log; tail -3 /tmp/land566.log
+> Bash timeout 590 tail --pid=3556 -f /dev/null; tail -2 /tmp/gates566.log; tail -3 /tmp/land566.log
+> Bash timeout 590 tail --pid=3556 -f /dev/null; tail -2 /tmp/gates566.log; tail -3 /tmp/land566.log
+> Bash timeout 590 tail --pid=3556 -f /dev/null; tail -2 /tmp/gates566.log; tail -3 /tmp/land566.log
+> Bash timeout 590 tail --pid=3556 -f /dev/null; tail -2 /tmp/gates566.log; tail -3 /tmp/land566.log
+= task_notification
+< ==> Generating rust record-egress fixture ==> Compiling rust record-egress fixture [2026-11-13T10:53:11Z] checkpoint of #566 (land queued) pushed to looper/tacplus-566:  6 files changed, 356 insertions(+), 11 deletions(-) [2026-11-13T10:53:14Z] queued: the manager of tacplus merges looper/tacplus-56...
+= task_started
+= task_notification
+<     Removed 14M fixture tree recordegress-host-go ==> Generating java record-egress HOST fixture [2026-11-13T10:53:11Z] checkpoint of #566 (land queued) pushed to looper/tacplus-566:  6 files changed, 356 insertions(+), 11 deletions(-) [2026-11-13T10:53:14Z] queued: the manager of tacplus merges loo...
+= task_started
+= task_notification
+< ==> Generating java event-bus backpressure fixture ==> Compiling java event-bus backpressure fixture [2026-11-13T10:53:11Z] checkpoint of #566 (land queued) pushed to looper/tacplus-566:  6 files changed, 356 insertions(+), 11 deletions(-) [2026-11-13T10:53:14Z] queued: the manager of tacplus merges...
+= task_started
+= task_notification
+< ==> Generating rust accounting-sink fixture ==> Compiling rust accounting-sink fixture [2026-11-13T10:53:11Z] checkpoint of #566 (land queued) pushed to looper/tacplus-566:  6 files changed, 356 insertions(+), 11 deletions(-) [2026-11-13T10:53:14Z] queued: the manager of tacplus merges looper/tacplu...
+= task_started
+= task_notification
+< ==> Generating rust owner-default fixture ==> Compiling rust owner-default fixture [2026-11-13T10:53:11Z] checkpoint of #566 (land queued) pushed to looper/tacplus-566:  6 files changed, 356 insertions(+), 11 deletions(-) [2026-11-13T10:53:14Z] queued: the manager of tacplus merges looper/tacplus-56...
+= task_started
+= task_notification
+< ==> Generating rust quorum-write fixture ==> Compiling rust quorum-write fixture [2026-11-13T10:53:11Z] checkpoint of #566 (land queued) pushed to looper/tacplus-566:  6 files changed, 356 insertions(+), 11 deletions(-) [2026-11-13T10:53:14Z] queued: the manager of tacplus merges looper/tacplus-566 ...
+= task_started
+= task_notification
+< ==> Generating rust epoch-load fixture ==> Compiling rust epoch-load fixture [2026-11-13T10:53:11Z] checkpoint of #566 (land queued) pushed to looper/tacplus-566:  6 files changed, 356 insertions(+), 11 deletions(-) [2026-11-13T10:53:14Z] queued: the manager of tacplus merges looper/tacplus-566 afte...
+= task_started

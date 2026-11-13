@@ -4,6 +4,10 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **`just example` in a gate** (2026-11-13, #583): the example (`example/run.sh`: generate, build and run the Go
+  server and the TypeScript client, and check the server refuses a non-loopback `NOTES_ADDR`) runs in no gate set,
+  not `just gates` nor `gates.yaml`'s map, so the README's quick start can break unnoticed. Add it to the full gates,
+  and map `example/**` to a set that runs it.
 - **Per-language gate sets, and more of the map** (2026-11-08, #266): `gates.yaml` runs the full gates (~3h) for any
   change under `pkg/**`, `cmd/**` or `.github/`. Next: `pkg/internal/<lang>/**` and `pkg/templates/<lang>/**` to that
   language's `current-generation-<lang>`, `determinism-<lang>` and `-<lang>` cross-tests (with `just test`), once each

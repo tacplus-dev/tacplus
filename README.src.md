@@ -54,7 +54,7 @@ compiled spec package is generated at build time, not committed.
 
 Everything else:
 
-- [Quick start](example/README.md): generate and run the example, a Go server and a TypeScript client.
+- [Quick start](example/README.md): generate and run the example, a Go server and a TypeScript client. The example serves plaintext gRPC on loopback only; a deployed service gets TLS from the generated ServiceManager.
 - [Languages](https://tacplus.dev/build/#pick-a-language): what each of the seven targets gets.
 - [User guide](docs/USER.md): annotations, `tacplus.yaml`, generated output, implementer rules.
 - [Annotation reference](pkg/proto/sys/spec.proto): every `(spec.*)` option, in the proto that defines them.

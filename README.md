@@ -111,7 +111,7 @@ commands and what `tacplus build` needs on `PATH`.
 
 Everything else is on [tacplus.dev](https://tacplus.dev):
 
-- [Quick start](https://tacplus.dev/quickstart/): generate and run the example, a Go server and a TypeScript client.
+- [Quick start](https://tacplus.dev/quickstart/): generate and run the example, a Go server and a TypeScript client. The example serves plaintext gRPC on loopback only; a deployed service gets TLS from the generated ServiceManager.
 - [Languages](https://tacplus.dev/languages/): what each of the seven targets gets.
 - [User guide](https://tacplus.dev/guide/user-guide/): annotations, `tacplus.yaml`, generated output, implementer rules.
 - [Annotation reference](https://tacplus.dev/reference/annotations/): every `(spec.*)` option.

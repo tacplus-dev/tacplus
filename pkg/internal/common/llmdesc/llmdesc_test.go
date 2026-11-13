@@ -4,6 +4,7 @@
 package llmdesc
 
 import (
+	"math"
 	"slices"
 	"testing"
 
@@ -194,6 +195,37 @@ func TestBuildTypeDescriptorPreservesOneofMetadata(t *testing.T) {
 	if !byName["cursor"].StoreKey || !byName["cursor"].QuorumWrite {
 		t.Fatalf("cursor store metadata = store_key %v quorum_write %v, want both true",
 			byName["cursor"].StoreKey, byName["cursor"].QuorumWrite)
+	}
+}
+
+func TestBuildTypeDescriptorBoundsTimeseriesCardinalityHint(t *testing.T) {
+	for _, tc := range []struct {
+		hint int64
+		want int32
+	}{
+		{hint: 2, want: 2},
+		{hint: math.MaxInt32, want: math.MaxInt32},
+		// Past int32, a narrowing cast would wrap (2^31 to a negative, 2^32+1
+		// to 1): the hint is not emitted rather than emitted as another value.
+		{hint: math.MaxInt32 + 1, want: 0},
+		{hint: 1<<32 + 1, want: 0},
+		{hint: math.MaxInt64, want: 0},
+	} {
+		msg := model.Message{
+			Name: "Sample",
+			Fields: []model.Field{{
+				Name: "host",
+				Type: "string",
+				Annotations: map[string]model.AnnotationValue{
+					"timeseries_cardinality_hint": {Type: model.AnnotationTypeInt, IntValue: tc.hint},
+				},
+			}},
+		}
+		got := BuildTypeDescriptor(msg, "metrics", nil, nil, map[string]bool{})
+		if got.Fields[0].TimeseriesCardinality != tc.want {
+			t.Errorf("hint %d: TimeseriesCardinality = %d, want %d",
+				tc.hint, got.Fields[0].TimeseriesCardinality, tc.want)
+		}
 	}
 }
 

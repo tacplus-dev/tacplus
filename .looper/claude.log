@@ -1,0 +1,273 @@
+= init
+> Bash cd /builds/looper/tacplus/issues/569; gh issue view 569 --repo tacplus-dev/tacplus --comments | tail -20; cat pkg/protosrc/merge.go; ls pkg/protosrc; git tag --sort=-v:refname | head -3; git log --oneline v2.6.1..origin/main | head -30; git branch -r | grep release
+< author:	jodydadescott association:	member edited:	false status:	none -- Decision (Jody, 2026-11-13: "I agree with all your recommendations", recorded by the hub): **fix in code.** Merging proto sources must not read through a symlink that leaves the source tree: refuse it with an error naming the pa...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/569; git fetch -q origin --tags; git log origin/main --oneline -3; git tag --merged origin/main --sort=-v:refname | head -3; git tag --merged origin/release/2.6 --sort=-v:refname | head -3; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo $b $(git log -1 --format=%ci v$...
+< 4205075d Gate map: gates.yaml and a docs recipe, so a docs-only land runs minutes, not the full gates (#266) 0d66c1bb Gates: refuse a committed merge conflict marker in any tracked file (#329) 5380efab images: declare each image's Debian packages; drop buildpack-deps (OpenEXR) (#554) v2.6.1 v2.6.0 v...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/569; which gosec golangci-lint; grep -rn gosec justfile scripts 2>/dev/null | head; head -60 pkg/protosrc/merge_test.go; grep -n '^func Test' pkg/protosrc/merge_test.go; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo $b $(git show origin/release/$b:go.mod | grep '^go ...
+< /usr/local/bin/gosec // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0  package protosrc  import ( 	"os" 	"path/filepath" 	"reflect" 	"strings" 	"testing"  	"gopkg.in/yaml.v3" )  func writeFile(t *testing.T, dir, rel, content string) { 	t.Helper() 	p := filepath.Join(dir, rel) ...
+Write the failing tests first.
+> Bash cd /builds/looper/tacplus/issues/569; cat >> pkg/protosrc/merge_test.go <<'EOF'  // A source must never make the merge read outside itself: a symlink named like // a proto (or a yaml) that points out of the source tree fails the merge with an // error naming it, and the target's bytes never reach th...
+= task_started
+= task_notification
+< go: downloading go.uber.org/zap v1.27.1 go: downloading gopkg.in/yaml.v3 v3.0.1 go: downloading go.uber.org/multierr v1.11.0 --- FAIL: TestMergeSources_RefusesASymlinkLeavingTheSource (0.00s)     --- FAIL: TestMergeSources_RefusesASymlinkLeavingTheSource/a.proto (0.00s)         merge_test.go:398: Me...
+Fails as expected. Now the fix: walk each source through `os.Root`.
+> Bash cd /builds/looper/tacplus/issues/569; python3 - <<'EOF' p='pkg/protosrc/merge.go' s=open(p).read() old_start='''	for _, src := range sourceDirs { 		walkErr := filepath.Walk(src, func(path string, info os.FileInfo, err error) error { 			if err != nil { 				return err 			} 			// Skip hidden paths enti...
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	1.278s
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/569; go test ./pkg/protosrc/ -run Leaving -v 2>&1 | grep -i 'symlink\|ok'; gosec -quiet -fmt text ./pkg/protosrc/... 2>&1 | grep -E 'G[0-9]+|Issues' | head -20
+< === RUN   TestMergeSources_RefusesASymlinkLeavingTheSource === RUN   TestMergeSources_RefusesASymlinkLeavingTheSource/a.proto === RUN   TestMergeSources_RefusesASymlinkLeavingTheSource/evil.yaml --- PASS: TestMergeSources_RefusesASymlinkLeavingTheSource (0.00s)     --- PASS: TestMergeSources_Refuses...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+No G122 now; my `root.Close()` adds a G104, so I'll handle its error.
+> Bash cd /builds/looper/tacplus/issues/569; python3 - <<'EOF' p='pkg/protosrc/merge.go' s=open(p).read() old='''		root.Close() 		if walkErr != nil { 			return walkErr 		} ''' new='''		closeErr := root.Close() 		if walkErr != nil { 			return walkErr 		} 		if closeErr != nil { 			return fmt.Errorf("close pr...
+< ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	1.250s [/builds/looper/tacplus/issues/569/pkg/protosrc/merge.go:119] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM) [/builds/looper/tacplus/issues/569/pkg/protosrc/merge.go:153] - G301 (CWE-276): Expect dir...
+= thinking_tokens
+= thinking_tokens
+Now the doc comment and the user docs, where sources are described.
+> Bash cd /builds/looper/tacplus/issues/569; grep -n -i 'hidden\|fleet.lock.*merge\|merged tree\|merge.*sources\|housekeeping' docs/USER.md docs/DEVELOPMENT.md | head -20
+< docs/USER.md:150:| `sources` | list | No | Additional proto sources merged with `src` into one generation (e.g. a shared base plus a reusable service's protos). Each entry is a path/URL string, or a `{src: <path/URL>, layer: <name>}` mapping to name its layer. All sources form one proto tree; a file...
+> Bash cd /builds/looper/tacplus/issues/569; python3 - <<'EOF' p='docs/USER.md' s=open(p).read() old="and `dependencies.yaml` is merged across sources (conflicting pins error). Repeatable" new="and `dependencies.yaml` is merged across sources (conflicting pins error). A source is read only inside itself: a...
+< 225:#   - `just test`: README.md is current with README.src.md and docs/snippets/
+= thinking_tokens
+= thinking_tokens
+Now commit, checkpoint, and run the full gates detached.
+> Bash cd /builds/looper/tacplus/issues/569; git add -A; git commit -q -F - <<'EOF' protosrc: merging sources never reads through a symlink out of a source (#569)  filepath.Walk lists a symlink as a plain entry and os.ReadFile follows it, so a source (including a dependency fetched for depends) could carry...
+< remote:  [2026-11-13T17:05:29Z] checkpoint of #569 (a step) pushed to looper/tacplus-569:  5 files changed, 329 insertions(+), 12 deletions(-) 6860
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+While gates run, let me see how previous backports were done.
+> Bash cd /builds/looper/tacplus/issues/569; gh pr list --repo tacplus-dev/tacplus --state all --search "head:backport/554" --json number,title,baseRefName,state,body --limit 3 | head -c 3000; echo; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b $(git tag --merged origin/release/$b --sort=-v:refname | g...
+< [{"baseRefName":"release/2.6","body":"Backport of #554 to `release/2.6` as 7c0ef5c1 (cherry-picked cleanly). STATE.md is main's alone and is not carried. Main's commit: pending the land of #554; this body is updated with its hash once it merges.\n\n**Once this merges:** cut the line's next patch on ...
+= thinking_tokens
+= thinking_tokens
+Prepare backport worktrees for each release line and cherry-pick.
+> Bash cd /builds/looper/tacplus/issues/569; C=$(git rev-parse HEAD); for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do d=$HOME/bp/$b; git worktree add -q -b backport/569-release-$b $d origin/release/$b 2>&1|tail -1; (cd $d && if git cherry-pick -x $C >/dev/null 2>&1; then echo "$b clean $(git rev-parse --short HEA...
+= task_started
+= task_notification
+< 2.0 CONFLICT: docs/USER.md pkg/protosrc/merge.go pkg/protosrc/merge_test.go 2.1 CONFLICT: docs/USER.md pkg/protosrc/merge.go pkg/protosrc/merge_test.go 2.2 CONFLICT: pkg/protosrc/merge.go 2.3 CONFLICT: pkg/protosrc/merge.go 2.4 clean b252ee42 2.5 clean f7216191 2.6 clean 66b2c849
+> Bash cd $HOME/bp/2.2; git diff pkg/protosrc/merge.go | head -80; cd $HOME/bp/2.0; sed -n 1,200p pkg/protosrc/merge.go | grep -n 'Walk\|ReadFile\|func \|fleet.lock\|Ext' 
+< diff --cc pkg/protosrc/merge.go index bc9bee89,5a09bb8e..00000000 --- a/pkg/protosrc/merge.go +++ b/pkg/protosrc/merge.go @@@ -61,23 -72,27 +72,36 @@@ func MergeSources(sourceDirs []string,    				}   				return nil   			} - 			if info.IsDir() { + 			if d.IsDir() {   				return nil   			} ++<<<<<<< ...
+= thinking_tokens
+= thinking_tokens
+Resolve 2.2/2.3 (no fleet.lock on those lines):
+> Bash for b in 2.2 2.3; do cd $HOME/bp/$b; python3 - <<'EOF' import re p='pkg/protosrc/merge.go' s=open(p).read() s=re.sub(r'<<<<<<< HEAD\n.*?=======\n.*?>>>>>>> [^\n]*\n', '''			rel := filepath.FromSlash(slashRel) 			// Merge only what generation consumes: proto files and yaml metadata. 			// Everything ...
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	3.061s  docs/USER.md               |  2 +-  pkg/protosrc/merge.go      | 37 +++++++++++++++++++++---------  pkg/protosrc/merge_test.go | 57 ++++++++++++++++++++++++++++++++++++++++++++++  3 files changed, 84 insertions(+), 12 deletions(-) ok  	github....
+> Bash for b in 2.2 2.3; do cd $HOME/bp/$b; git diff origin/release/$b -- pkg/protosrc/merge.go | head -70 | tail -45; git add -A; GIT_EDITOR=true git cherry-pick --continue >/dev/null && git log --oneline -1; break; done
+<  	for _, src := range sourceDirs { -		walkErr := filepath.Walk(src, func(path string, info os.FileInfo, err error) error { +		// Each source is read through an os.Root, so nothing in it (a symlink +		// named like a proto, say) can make the merge read outside it: a fetched +		// dependency must neve...
+> Bash cd $HOME/bp/2.3; git add -A; GIT_EDITOR=true git cherry-pick --continue >/dev/null && git log --oneline -1; cd $HOME/bp/2.0; git diff --name-only --diff-filter=U; git diff | head -150
+< 7d9d5feb protosrc: merging sources never reads through a symlink out of a source (#569) docs/USER.md pkg/protosrc/merge.go pkg/protosrc/merge_test.go diff --cc docs/USER.md index b6a0445c,9c7ddabb..00000000 --- a/docs/USER.md +++ b/docs/USER.md @@@ -138,8 -145,9 +138,14 @@@ that differ only in segme...
+= thinking_tokens
+= thinking_tokens
+> Bash for b in 2.0 2.1; do cd $HOME/bp/$b; python3 - <<'EOF' import re p='pkg/protosrc/merge.go' s=open(p).read() s=re.sub(r'<<<<<<< HEAD\n.*?=======\n.*?>>>>>>> [^\n]*\n', '''			rel := filepath.FromSlash(slashRel) 			// Merge only what generation consumes: proto files and yaml metadata. 			// Everything ...
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	2.061s  docs/USER.md               |  2 +-  pkg/protosrc/merge.go      | 37 +++++++++++++++++++++---------  pkg/protosrc/merge_test.go | 57 ++++++++++++++++++++++++++++++++++++++++++++++  3 files changed, 84 insertions(+), 12 deletions(-) b8cdbe69 pro...
+= thinking_tokens
+= thinking_tokens
+> Bash for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do cd $HOME/bp/$b; echo "$b: $(go test ./pkg/protosrc 2>&1|tail -1) | G122: $(gosec -quiet -fmt text ./pkg/protosrc/... 2>&1 | grep -c G122)"; done; tail -3 /tmp/gates569.log
+= task_started
+= task_notification
+< 2.0: ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	(cached) | G122: 0 2.1: ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	(cached) | G122: 0 2.2: ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	(cached) | G122: 0 2.3: ok  	github.com/tacplus-dev/tacplus/pkg/protosrc	(cached) | G122: 0 2.4: ok ...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/569; cat docs/embed.go | grep -n embed; grep -rln 'symlink that does not resolve\|USER.md' --include=*_test.go . | head
+< 4:// Package docs embeds all tacplus documentation files. 10:import "embed" 12://go:embed *.md *.tmpl 13:var FS embed.FS ./pkg/internal/proto/statedb_unimplemented_test.go ./pkg/internal/common/registry/embedded_docs_test.go ./scripts/verify_test.go ./cmd/sitegen/main_test.go
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for b in 2.0 2.3 2.6; do cd $HOME/bp/$b; echo "$b: $(go test ./pkg/internal/common/registry/ ./cmd/sitegen/ ./docs/... 2>&1 | grep -v '^ok\|no test files' | tail -3)"; done
+< 2.0: stat /builds/looper/tacplus/homes/looper-569/bp/2.0/cmd/sitegen: directory not found FAIL	./cmd/sitegen [setup failed] FAIL 2.3: 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sys FAIL	github.com/tacplus-dev/tacplus/cmd/sitegen [setup failed] FAIL 2.6: 	go get github.com/tacplus-dev/t...
+= thinking_tokens
+= thinking_tokens
+The registry embedded-docs tests pass. `sitegen` needs generated output, so it only runs in the gates. Now I'll wait for the gates.
+> Bash for i in $(seq 1 57); do kill -0 6860 2>/dev/null || break; sleep 10; done; kill -0 6860 2>/dev/null && echo RUNNING || echo DONE; tail -3 /tmp/gates569.log; grep -E '^(FAIL|---  FAIL|error:)' /tmp/gates569.log | head
+= task_started
+= task_notification
+< RUNNING     PASS java ==> Generating rust cross-test fixture ==> Compiling rust cross-test fixture
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 58); do kill -0 6860 2>/dev/null || break; sleep 10; done; kill -0 6860 2>/dev/null && echo RUNNING || echo DONE; tail -3 /tmp/gates569.log; grep -E '^(FAIL|--- FAIL|error)' /tmp/gates569.log | head
+= task_started
+= task_notification
+< RUNNING     PASS java ==> Generating rust cross-test fixture ==> Compiling rust cross-test fixture
+> Bash for i in $(seq 1 58); do kill -0 6860 2>/dev/null || break; sleep 10; done; kill -0 6860 2>/dev/null && echo RUNNING || echo DONE; tail -3 /tmp/gates569.log; grep -E '^(FAIL|--- FAIL|error)' /tmp/gates569.log | head
+= task_started
+= task_notification
+< RUNNING     Removed 9.9M fixture tree c2sonly-go ==> Generating rust health-only fixture ==> Compiling rust health-only fixture
+> Bash for i in $(seq 1 58); do kill -0 6860 2>/dev/null || break; sleep 10; done; kill -0 6860 2>/dev/null && echo RUNNING || echo DONE; tail -3 /tmp/gates569.log; grep -E '^(FAIL|--- FAIL|error)' /tmp/gates569.log | head
+= task_started
+= task_notification
+< RUNNING     Removed 12M fixture tree healthonly-rust ==> Generating rust zero-rpc fixture ==> Compiling rust zero-rpc fixture
+> Bash for i in $(seq 1 58); do kill -0 6860 2>/dev/null || break; sleep 10; done; kill -0 6860 2>/dev/null && echo RUNNING || echo DONE; tail -3 /tmp/gates569.log; grep -E '^(FAIL|--- FAIL|error)' /tmp/gates569.log | head
+= task_started
+= task_notification
+< RUNNING ==> python/base: asserting byte-identical model trees     PASS python/base (byte-identical) ==> typescript/base: generating twice into separate work dirs FAIL: JWK watch made 1 attempts in 2.5s against a rolling authority, want 2..4 (backoff 0.5s doubling) error: recipe `current-generation` ...
+A gate failed: a JWK-watch timing check in `current-generation`, which my change doesn't touch. Looking at the context:
+> Bash grep -n -B8 'JWK watch made' /tmp/gates569.log | head -30; grep -rn 'JWK watch made' --include=* . 2>/dev/null | grep -v '^./target' | head -3
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 120s timeout and was moved to the background (ID: bg25d36xw). Output is being written to: /builds/looper/tacplus/homes/looper-569/tmp/claude-61000/-builds-looper-tacplus-issues-569/00c06cf7-d337-4b4a-b32d-f99eefd8ed0b/tasks/bg25d36xw.output. You will be notified w...
+> Grep JWK watch made
+> Bash grep -n -B6 'JWK watch made' /tmp/gates569.log | head -20; kill -0 6860 2>/dev/null && echo RUNNING || echo DONE
+< No matches found
+< 620-17:52:30.800 [grpc-default-worker-ELG-3-3] DEBUG io.grpc.netty.shaded.io.grpc.netty.NettyServerHandler -- [id: 0x3e17eba3, L:/127.0.0.1:33739 - R:/127.0.0.1:38162] OUTBOUND PING: ack=false bytes=1234 621-17:52:30.801 [grpc-default-worker-ELG-3-2] DEBUG io.grpc.netty.shaded.io.grpc.netty.NettyCli...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 58); do kill -0 6860 2>/dev/null || break; sleep 10; done; kill -0 6860 2>/dev/null && echo RUNNING || echo DONE; tail -3 /tmp/gates569.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< RUNNING 2026-11-13T18:06:16.678Z	INFO	build complete	{"output": "/builds/looper/tacplus/homes/looper-569/tmp/tmp.8GcDVxnoZ7/tacplus/model", "mode": "0.0.0-SNAPSHOT"} ==> Generation must refuse (spec.member_port) without auto_tls ==> Running the member port tests: MemberPortBehaviorTest,MemberPortStr...
+> Bash for i in $(seq 1 58); do kill -0 6860 2>/dev/null || break; sleep 10; done; kill -0 6860 2>/dev/null && echo RUNNING || echo DONE; tail -3 /tmp/gates569.log; grep -E '^(FAIL|error)' /tmp/gates569.log
+= task_started
+= task_notification
+< RUNNING ==> Building local tacplus binary ==> Generating rust model ==> Building rust zero-rpc-s2s fixture FAIL: JWK watch made 1 attempts in 2.5s against a rolling authority, want 2..4 (backoff 0.5s doubling) error: recipe `current-generation` failed on line 95 with exit code 1
+> Bash for i in $(seq 1 58); do kill -0 6860 2>/dev/null || break; sleep 10; done; kill -0 6860 2>/dev/null && echo RUNNING || echo DONE; tail -3 /tmp/gates569.log; grep -E '^(FAIL|error)' /tmp/gates569.log
+= task_started
+= task_notification
+< DONE === OVERALL fail=1 === error: recipe `gates` failed with exit code 1 error: recipe `gates` failed with exit code 1 FAIL: JWK watch made 1 attempts in 2.5s against a rolling authority, want 2..4 (backoff 0.5s doubling) error: recipe `current-generation` failed on line 95 with exit code 1 error: ...
+> Bash cd /builds/looper/tacplus/issues/569; grep -n 'OVERALL\|^=== \|PASS \|FAIL ' /tmp/gates569.log | grep -v '    PASS' | tail -30; grep -n -B3 -A3 'JWK watch made\|rolling authority' justfile scripts/*.sh 2>/dev/null | head -30
+< 3842:=== RUN   TestGoStreamEndsAtTokenExp/bidi 3843:=== PAUSE TestGoStreamEndsAtTokenExp/bidi 3844:=== CONT  TestGoStreamEndsAtTokenExp/server-streaming 3845:=== CONT  TestGoStreamEndsAtTokenExp/bidi 3846:=== CONT  TestGoStreamEndsAtTokenExp/client-streaming 3851:=== RUN   TestGoStreamOutlivesWindow...
+Only `current-generation` failed. Let me find the check and rerun that recipe on its own:
+> Grep attempts in .* against a rolling authority
+< Found 1 file pkg/templates/java/chassis/grpcserver/AuthorizerBehaviorTest.java.tmpl
+> Bash cd /builds/looper/tacplus/issues/569; git log --oneline -3 -- pkg/templates/java/chassis/grpcserver/AuthorizerBehaviorTest.java.tmpl; grep -n -B25 'against a rolling authority' pkg/templates/java/chassis/grpcserver/AuthorizerBehaviorTest.java.tmpl | head -45; gh issue list --repo tacplus-dev/tacplus...
+< 95bb2fc4 Tenant-owned instances serve the tid of their own subject, not of their namespace claim (#202) 6a8849fc Tenant-owned services are routed by a declared field; MCP takes the tenant from the token (#170) b6071e80 JWK verification: take a missing alg from the token, within the key's family (#17...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/569; nohup just current-generation > /tmp/cg569.log 2>&1 & echo cg=$!; /usr/local/bin/repo-looper --repo tacplus --issue 569 --checkpoint "Fix committed; just gates: all green except current-generation's JWK backoff flake (#540). Backport branches prepared locally in...
+= task_started
+= task_notification
+< cg=97680 [2026-11-13T18:27:00Z] checkpoint of #569 (a step) pushed to looper/tacplus-569:  5 files changed, 477 insertions(+), 12 deletions(-) land=97912
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+While the land queues, I'm watching the rerun.
+> Bash for i in $(seq 1 58); do kill -0 97680 2>/dev/null || break; sleep 10; done; kill -0 97680 2>/dev/null && echo CG RUNNING || echo CG DONE; tail -2 /tmp/cg569.log; grep -E '^(FAIL|error)' /tmp/cg569.log; tail -3 /tmp/land569.log
+= task_started
+= task_notification
+< CG RUNNING ==> Generating rust cross-test fixture ==> Compiling rust cross-test fixture [2026-11-13T18:27:03Z] checkpoint of #569 (land queued) pushed to looper/tacplus-569:  6 files changed, 484 insertions(+), 12 deletions(-) [2026-11-13T18:27:05Z] queued: the manager of tacplus merges looper/tacpl...
+> Bash for i in $(seq 1 58); do kill -0 97680 2>/dev/null || break; sleep 10; done; kill -0 97680 2>/dev/null && echo CG RUNNING || echo CG DONE; tail -2 /tmp/cg569.log; grep -E '^(FAIL|error)' /tmp/cg569.log; tail -1 /tmp/land569.log
+= task_started
+= task_notification
+< CG RUNNING ==> Generating rust zero-rpc fixture ==> Compiling rust zero-rpc fixture [2026-11-13T18:27:05Z] queued: the manager of tacplus merges looper/tacplus-569 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out f...
+> Bash for i in $(seq 1 58); do kill -0 97680 2>/dev/null || break; sleep 10; done; kill -0 97680 2>/dev/null && echo CG RUNNING || echo CG DONE; tail -2 /tmp/cg569.log; grep -E '^(FAIL|error)' /tmp/cg569.log; tail -1 /tmp/land569.log
+= task_started
+= task_notification
+< CG RUNNING ==> Generating rust requires-device fixture ==> Compiling rust requires-device fixture [2026-11-13T18:27:05Z] queued: the manager of tacplus merges looper/tacplus-569 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your t...
+> Bash for i in $(seq 1 58); do kill -0 97680 2>/dev/null || break; sleep 10; done; kill -0 97680 2>/dev/null && echo CG RUNNING || echo CG DONE; tail -2 /tmp/cg569.log; grep -E '^(FAIL|error)' /tmp/cg569.log; tail -1 /tmp/land569.log
+= task_started
+= task_notification
+< CG RUNNING ==> Generating rust record-egress fixture ==> Compiling rust record-egress fixture [2026-11-13T18:27:05Z] queued: the manager of tacplus merges looper/tacplus-569 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time ...
+> Bash for i in $(seq 1 58); do kill -0 97680 2>/dev/null || break; sleep 10; done; kill -0 97680 2>/dev/null && echo CG RUNNING || echo CG DONE; tail -2 /tmp/cg569.log; grep -E '^(FAIL|error)' /tmp/cg569.log; tail -1 /tmp/land569.log
+= task_started
+= task_notification
+< CG RUNNING ==> Generating java record-egress HOST fixture ==> Compiling java record-egress HOST fixture [2026-11-13T18:27:05Z] queued: the manager of tacplus merges looper/tacplus-569 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If ...
+> Bash for i in $(seq 1 58); do kill -0 97680 2>/dev/null || break; sleep 10; done; kill -0 97680 2>/dev/null && echo CG RUNNING || echo CG DONE; tail -2 /tmp/cg569.log; grep -E '^(FAIL|error)' /tmp/cg569.log; tail -1 /tmp/land569.log
+= task_started
+= task_notification
+< CG RUNNING ==> Generating go accounting-sink fixture ==> Compiling go accounting-sink fixture [2026-11-13T18:27:05Z] queued: the manager of tacplus merges looper/tacplus-569 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time ...
+Still waiting on two things: the solo rerun of `current-generation`, to show the JWK failure was the #540 flake, and the land queue, where my branch waits behind earlier lands. Continuing to poll.
+> Bash for i in $(seq 1 58); do kill -0 97680 2>/dev/null || break; sleep 10; done; kill -0 97680 2>/dev/null && echo CG RUNNING || echo CG DONE; tail -2 /tmp/cg569.log; grep -E '^(FAIL|error)' /tmp/cg569.log; tail -1 /tmp/land569.log
+= task_started
+= task_notification
+< CG RUNNING ==> Generating rust accounting-sink fixture ==> Compiling rust accounting-sink fixture [2026-11-13T18:27:05Z] queued: the manager of tacplus merges looper/tacplus-569 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your t...
+> Bash for i in $(seq 1 58); do kill -0 97680 2>/dev/null || break; sleep 10; done; kill -0 97680 2>/dev/null && echo CG RUNNING || echo CG DONE; tail -2 /tmp/cg569.log; grep -E '^(FAIL|error)' /tmp/cg569.log; tail -1 /tmp/land569.log
+= task_started
+= task_notification
+< CG RUNNING ==> Generating rust owner-default fixture ==> Compiling rust owner-default fixture [2026-11-13T18:27:05Z] queued: the manager of tacplus merges looper/tacplus-569 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time ...
+> Bash for i in $(seq 1 58); do kill -0 97680 2>/dev/null || break; sleep 10; done; kill -0 97680 2>/dev/null && echo CG RUNNING || echo CG DONE; tail -2 /tmp/cg569.log; grep -E '^(FAIL|error)' /tmp/cg569.log; tail -1 /tmp/land569.log
+= task_started
+= task_notification
+< CG RUNNING ==> Generating rust quorum-write fixture ==> Compiling rust quorum-write fixture [2026-11-13T18:27:05Z] queued: the manager of tacplus merges looper/tacplus-569 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time ru...
+> Bash for i in $(seq 1 58); do kill -0 97680 2>/dev/null || break; sleep 10; done; kill -0 97680 2>/dev/null && echo CG RUNNING || echo CG DONE; tail -2 /tmp/cg569.log; grep -E '^(FAIL|error)' /tmp/cg569.log; tail -1 /tmp/land569.log
+= task_started
+= task_notification
+< CG RUNNING ==> Generating rust epoch-load fixture ==> Compiling rust epoch-load fixture [2026-11-13T18:27:05Z] queued: the manager of tacplus merges looper/tacplus-569 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs o...
+> Bash for i in $(seq 1 58); do kill -0 97680 2>/dev/null || break; sleep 10; done; kill -0 97680 2>/dev/null && echo CG RUNNING || echo CG DONE; tail -2 /tmp/cg569.log; grep -E '^(FAIL|error)' /tmp/cg569.log; tail -1 /tmp/land569.log
+= task_started
+= task_notification
+< CG RUNNING ==> Generating rust tenant-route fixture (harbor) ==> Compiling rust tenant-route fixture (harbor) [2026-11-13T18:27:05Z] queued: the manager of tacplus merges looper/tacplus-569 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdic...
+> Bash for i in $(seq 1 58); do kill -0 97680 2>/dev/null || break; sleep 10; done; kill -0 97680 2>/dev/null && echo CG RUNNING || echo CG DONE; tail -2 /tmp/cg569.log; grep -E '^(FAIL|error)' /tmp/cg569.log; tail -1 /tmp/land569.log
+= task_started
+= task_notification
+< CG RUNNING ==> Generating go redo-contract fixture (stratum) ==> Compiling go redo-contract fixture (stratum) [2026-11-13T18:27:05Z] queued: the manager of tacplus merges looper/tacplus-569 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdic...
+Both are still running: the `current-generation` rerun is working through its fixtures, and the land is still queued. Polling again.
+> Bash for i in $(seq 1 58); do kill -0 97680 2>/dev/null || break; sleep 10; done; kill -0 97680 2>/dev/null && echo CG RUNNING || echo CG DONE; tail -2 /tmp/cg569.log; grep -E '^(FAIL|error)' /tmp/cg569.log; tail -1 /tmp/land569.log
+= task_started
+= task_notification
+< CG RUNNING ==> Generating rust redo-contract fixture (stratum) ==> Compiling rust redo-contract fixture (stratum) [2026-11-13T18:27:05Z] queued: the manager of tacplus merges looper/tacplus-569 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its ve...
+> Bash for i in $(seq 1 58); do kill -0 97680 2>/dev/null || break; sleep 10; done; kill -0 97680 2>/dev/null && echo CG RUNNING || echo CG DONE; tail -2 /tmp/cg569.log; grep -E '^(FAIL|error)' /tmp/cg569.log; tail -1 /tmp/land569.log
+= task_started
+= task_notification
+< CG RUNNING ==> Generating go tenant-record fixture (tmessaging) ==> Compiling go tenant-record fixture (tmessaging) [2026-11-13T18:27:05Z] queued: the manager of tacplus merges looper/tacplus-569 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its ...
+> Bash for i in $(seq 1 58); do kill -0 97680 2>/dev/null || break; sleep 10; done; kill -0 97680 2>/dev/null && echo CG RUNNING || echo CG DONE; tail -2 /tmp/cg569.log; grep -E '^(FAIL|error)' /tmp/cg569.log; tail -1 /tmp/land569.log
+= task_started
+= task_notification
+< CG RUNNING ==> Generating rust tenant-record fixture (tstratum) ==> Compiling rust tenant-record fixture (tstratum) [2026-11-13T18:27:05Z] queued: the manager of tacplus merges looper/tacplus-569 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its ...
+> Bash for i in $(seq 1 58); do kill -0 97680 2>/dev/null || break; sleep 10; done; kill -0 97680 2>/dev/null && echo CG RUNNING || echo CG DONE; tail -2 /tmp/cg569.log; grep -E '^(FAIL|error)' /tmp/cg569.log; tail -1 /tmp/land569.log
+= task_started
+= task_notification
+< Exit code 137

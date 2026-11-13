@@ -1,0 +1,377 @@
+= init
+> Bash gh issue view 572 --repo tacplus-dev/tacplus --comments | tail -30; sed -n 60,130p cmd/sitegen/annotations.go; ls cmd/sitegen; git tag --sort=-v:refname | head -3; git log --oneline v2.6.1..origin/main | head -30; git branch -r | grep release
+< author:	jodydadescott association:	member edited:	false status:	none -- Decision (Jody, 2026-11-13: "I agree with all your recommendations", recorded by the hub): **fix in code.** The protoc that PROTOC_BINARY names is resolved and checked before it is run (an absolute path to an existing executable...
+= thinking_tokens
+= thinking_tokens
+> Bash git fetch -q --tags origin; git describe --tags --abbrev=0 origin/main; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b: $(git log -1 --format=%cs v$b.0 2>/dev/null) $(git show origin/release/$b:cmd/sitegen/annotations.go 2>/dev/null | grep -c PROTOC_BINARY) $(git describe --tags --abbrev=0 origin...
+< v2.6.1 2.0: 2026-10-15 0 v2.0.30 2.1: 2026-10-20 3 v2.1.23 2.2: 2026-10-25 3 v2.2.20 2.3: 2026-10-25 3 v2.3.22 2.4: 2026-10-27 3 v2.4.22 2.5: 2026-10-28 3 v2.5.23 2.6: 2026-11-04 3 v2.6.11 ./pkg/internal/tactype/config.go:301:// 2. Environment variable (PROTOC_BINARY, PROTOC_GO_BINARY, etc.) ./pkg/i...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash git log --oneline v2.6.1..origin/main | wc -l; git log -1 --format='%cs %s' v2.6.1; grep -n -i -A3 "feature\|backport" docs/VERSIONING.md | head -60
+< 33 2026-11-05 Bound the disk the cross-test gates use: prune each leg's build once it passes (#282) 11:- **A patch is fixes only.** A new feature, a new annotation, a new generated 12-  surface or a changed generated surface never goes into a patch. A patch 13-  changes behaviour only where the prev...
+= thinking_tokens
+= thinking_tokens
+> Bash gh pr list --repo tacplus-dev/tacplus --state all --search "head:backport/566-release-2.6" --json number,title,body,state | head -c 2500; echo; gh issue view 566 --repo tacplus-dev/tacplus --comments | tail -40
+< [{"body":"Backport of #566 to `release/2.6` as 97c16cde (cherry-picked cleanly). Main's commit: 5056752f on `looper/tacplus-566`, pending the land of #566; this body is updated with main's hash once it merges.\n\n**Once this merges:** cut the line's next patch on `release/2.6` at the merge commit: `...
+Now the tests and docs recipe.
+> Bash head -40 cmd/sitegen/main_test.go; grep -n "func Test" cmd/sitegen/*_test.go; sed -n 1,30p cmd/sitegen/annotations.go; grep -n -B2 -A8 "^docs" justfile; which protoc gosec go
+< // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0  package main  import ( 	"os" 	"os/exec" 	"path/filepath" 	"strings" 	"testing"  	"google.golang.org/protobuf/reflect/protoreflect" 	"google.golang.org/protobuf/reflect/protoregistry"  	// The compiled spec package registers eve...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n "sitegen" justfile gates.yaml | head; gosec -version 2>&1|head -2; cd cmd/sitegen && gosec -include=G702,G204 -fmt text ./ 2>&1 | tail -30
+= task_started
+= task_notification
+< justfile:69:# The tacplus.dev site (site/, MkDocs + Material). cmd/sitegen stages the justfile:75:  go run ./cmd/sitegen justfile:82:  go run ./cmd/sitegen justfile:223:#     (cmd/sitegen -check-links). justfile:243:  go run ./cmd/sitegen -check-links Version: 2.30.0 Git tag: v2.30.0   > 99: 	cmd :=...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/572 && sed -n 95,110p cmd/sitegen/main_test.go; sed -n 66,90p justfile
+< 	check(fd.Messages()) 	checkEnums(fd.Enums()) }  // The published documents stage without a broken relative link. func TestStageDocs(t *testing.T) { 	if err := stageDocs(repoRoot, t.TempDir()); err != nil { 		t.Fatal(err) 	} }  func TestRewriteLinks(t *testing.T) { 	pages := map[string]string{ 		"do...
+Write the failing test first.
+> Edit /builds/looper/tacplus/issues/572/cmd/sitegen/main_test.go
+> Bash gofmt -w cmd/sitegen/main_test.go && go test ./cmd/sitegen/ -run TestProtocBinary 2>&1 | tail -5
+< The file /builds/looper/tacplus/issues/572/cmd/sitegen/main_test.go has been updated successfully.
+< # github.com/tacplus-dev/tacplus/cmd/sitegen cmd/sitegen/main_test.go:18:2: no required module provides package github.com/tacplus-dev/tacplus/target/proto/spec/sys; to add it: 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sys FAIL	github.com/tacplus-dev/tacplus/cmd/sitegen [setup failed]...
+> Bash grep -n "target/proto" justfile | head; grep -n "^[a-z-]*:" justfile | head -40
+< 33:default: install 35:generate: 38:build: generate 42:install: generate 54:test: generate soundness 58:soundness: 61:vet: 66:example: 74:site: site-venv 81:site-serve: site-venv 85:site-venv: 94:current-generation: 97:current-generation-go: 100:current-generation-java: 103:current-generation-rust: ...
+> Bash just generate >/tmp/gen572.log 2>&1; tail -3 /tmp/gen572.log; go test ./cmd/sitegen/ -run TestProtocBinary 2>&1 | tail -5
+= task_started
+= task_notification
+< bash scripts/with-tree-lock.sh go generate ./pkg/internal/proto/spec/... cmd/sitegen/main_test.go:121:19: undefined: protocBinary cmd/sitegen/main_test.go:128:15: undefined: protocBinary cmd/sitegen/main_test.go:136:15: undefined: protocBinary FAIL	github.com/tacplus-dev/tacplus/cmd/sitegen [build f...
+Now the fix.
+> Edit /builds/looper/tacplus/issues/572/cmd/sitegen/annotations.go
+< The file /builds/looper/tacplus/issues/572/cmd/sitegen/annotations.go has been updated successfully.
+> Bash go test ./cmd/sitegen/ 2>&1 | tail -15; cd cmd/sitegen && gosec -include=G702,G204 -fmt text ./ 2>&1 | grep -E "^\[|Issues"
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/cmd/sitegen	0.929s [gosec] 2026/11/13 17:07:42 Including rules: G702,G204 [gosec] 2026/11/13 17:07:42 Excluding rules: default [gosec] 2026/11/13 17:07:42 Including analyzers: G702,G204 [gosec] 2026/11/13 17:07:42 Excluding analyzers: default [gosec] 2026/11/13 17...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/572 && git grep -n "#nosec" -- '*.go' | grep -v "^target\|/gen" | head; gh issue list --repo tacplus-dev/tacplus --search "G204 sitegen" --state all --json number,title,state | head -c 800
+< [{"number":572,"state":"OPEN","title":"gosec G702 (HIGH, CWE-78) at cmd/sitegen/annotations.go:99: exec.Command runs the protoc that PROTOC_BINARY names"},{"number":585,"state":"OPEN","title":"Security checks: 1331 other new findings (MEDIUM and LOW: gosec, semgrep, bandit), none failing the policy"...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash go run ./cmd/sitegen && echo unset-ok; PROTOC_BINARY=$(command -v protoc) go run ./cmd/sitegen && echo set-ok; PROTOC_BINARY=protoc go run ./cmd/sitegen; echo "bad exit $?"; ls site/docs/reference/annotations; git status --short
+= task_started
+= task_notification
+< unset-ok set-ok sitegen: PROTOC_BINARY="protoc": not an absolute path exit status 1 bad exit 1 ls: cannot access 'site/docs/reference/annotations': No such file or directory  M cmd/sitegen/annotations.go  M cmd/sitegen/main_test.go
+> Bash sed -n 1,80p cmd/sitegen/main.go | grep -n -i "out\|docs" | head -20
+< 5:// MkDocs docs directory (site/docs). It is deterministic and runs before every 6:// `mkdocs build`: 8://   - The user-facing repository documents (docs/THEORY.md, docs/USER.md, ...) 13://     the only source; the staged copies are git-ignored build output. 18://     docs/snippets/. It is committe...
+> Bash find site/docs -path '*annotations*' | head; 
+< (Bash completed with no output)
+> Bash sed -n 54,80p cmd/sitegen/main.go; ls site site/docs 2>&1 | head -30
+< func run(root, out string) error { 	// sitegen owns these directories under the docs directory outright: they 	// are removed and rewritten on every run so a document dropped from the 	// published set disappears from the site too. 	for _, dir := range generatedDirs { 		if err := os.RemoveAll(filepa...
+Fix and test are in place and pass; I'm now checking that the site pages actually get generated.
+> Bash PROTOC_BINARY=$(command -v protoc) go run ./cmd/sitegen && ls site/docs/reference/annotations && go run ./cmd/sitegen && ls site/docs/reference/annotations | wc -l; git status --short
+< enum-value.md field.md file.md index.md message.md method.md service.md types.md 8  M cmd/sitegen/annotations.go  M cmd/sitegen/main_test.go
+= thinking_tokens
+= thinking_tokens
+> Bash git grep -n "PROTOC_BINARY" -- '*.md' site justfile | head
+< (Bash completed with no output)
+= thinking_tokens
+= thinking_tokens
+Commit, checkpoint, then run the full gates.
+> Bash git add cmd/sitegen && git commit -q -F - <<'EOF' sitegen: check the protoc PROTOC_BINARY names before running it (#572)  gosec G702 (HIGH, CWE-78) flagged exec.Command running $PROTOC_BINARY unchecked, failing the security checks of every build. Per Jody's decision on #572, fix it in code rather th...
+< 3b0ceae4 sitegen: check the protoc PROTOC_BINARY names before running it (#572) remote:  [2026-11-13T17:08:15Z] checkpoint of #572 (a step) pushed to looper/tacplus-572:  4 files changed, 335 insertions(+), 8 deletions(-) 3683
+= thinking_tokens
+= thinking_tokens
+While gates run, prepare the backports.
+> Bash for b in 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b $(git diff --stat origin/main origin/release/$b -- cmd/sitegen/annotations.go cmd/sitegen/main_test.go | tail -1)"; done
+< 2.1  2 files changed, 2 insertions(+), 43 deletions(-) 2.2  1 file changed, 41 deletions(-) 2.3  1 file changed, 41 deletions(-) 2.4  1 file changed, 41 deletions(-) 2.5  1 file changed, 41 deletions(-) 2.6  1 file changed, 41 deletions(-)
+= thinking_tokens
+= thinking_tokens
+> Bash git diff origin/main origin/release/2.6 -- cmd/sitegen/ | head -60
+< diff --git a/cmd/sitegen/docs.go b/cmd/sitegen/docs.go index fcf5f3a9..74a62127 100644 --- a/cmd/sitegen/docs.go +++ b/cmd/sitegen/docs.go @@ -4,7 +4,6 @@  package main    import ( -	"errors"  	"fmt"  	"os"  	"path" @@ -75,13 +74,13 @@ var (  // rewriteLinks rewrites every relative link in a Markdow...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for b in 2.1 2.2 2.3 2.4 2.5 2.6; do wt=/tmp/bp572-$b; git worktree add -q -b backport/572-release-$b $wt origin/release/$b && (cd $wt && git cherry-pick -x 3b0ceae4 >/dev/null 2>&1 && echo "$b picked $(git log -1 --format=%h)" || { echo "$b CONFLICT"; git status --short; }); done
+< 2.1 picked 6e0876c1 2.2 picked e4d1e212 2.3 picked 7923265c 2.4 picked fd0b44a6 2.5 picked 8b7851b9 2.6 picked 7f15c4ff
+= thinking_tokens
+= thinking_tokens
+> Bash cat > /tmp/bp572-test.sh <<'EOF' for b in 2.1 2.2 2.3 2.4 2.5 2.6; do   cd /tmp/bp572-$b || continue   echo "== $b"   just generate >/tmp/bp572-gen-$b.log 2>&1 || echo "$b generate FAILED"   go test ./cmd/sitegen/ 2>&1 | tail -3   (cd cmd/sitegen && gosec -include=G702 -quiet ./ 2>&1 | grep -E "G702...
+< 3866
+Meanwhile, the trace check (rule 13; no handlers touched, but it's a floor).
+> Bash /usr/local/bin/looper-trace check 2>&1 | tail -8
+= task_started
+= task_notification
+< FINDING untested cross-test/server-runtime/client/go/main.go:73: checkUnary makes causal downstream calls (GetPublicContract) but no test asserts that its trace_id arrives on them FINDING dropped-trace cross-test/server-runtime/client/go/main.go:89: checkServerStream's call ListEvents is caused by t...
+= thinking_tokens
+= thinking_tokens
+> Bash /usr/local/bin/looper-trace check 2>&1 | grep -v "^FINDING" | head -20; gh issue list --repo tacplus-dev/tacplus --state all --search "server-runtime trace_id in:title,body" --json number,title,state | head -c 1000; sed -n 60,95p cross-test/server-runtime/client/go/main.go
+= task_started
+= task_notification
+< looper-trace: /builds/looper/tacplus/issues/572 handler cross-test/outbound-deadline/fixture/rust/lib.rs:133 get_public_contract (inbound: req)   causal cross-test/outbound-deadline/fixture/rust/lib.rs:148 get_public_contract: carries the inbound trace_id   tested by cross-test/outbound-deadline/fix...
+Already tracked as #311; nothing new to file. Polling the gates and the backport tests.
+> Bash sleep 240; tail -3 /tmp/gates572.log; cat /tmp/bp572-test.log
+< <tool_use_error>Blocked: sleep 240 followed by: tail -3 /tmp/gates572.log cat /tmp/bp572-test.log. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain shorter sleeps to work aro...
+> Bash timeout 900 bash -c 'until grep -q DONE /tmp/bp572-test.log; do sleep 10; done'; cat /tmp/bp572-test.log; tail -3 /tmp/gates572.log
+< == 2.1 cmd/sitegen/main_test.go:112:3: undefined: filepath FAIL	github.com/tacplus-dev/tacplus/cmd/sitegen [build failed] FAIL gosec G702 exit 1 sitegen unset ok sitegen set ok == 2.2 cmd/sitegen/main_test.go:112:3: undefined: filepath FAIL	github.com/tacplus-dev/tacplus/cmd/sitegen [build failed] F...
+The release lines' test file lacks the `path/filepath` import; fixing each backport.
+> Bash for b in 2.1 2.2 2.3 2.4 2.5 2.6; do cd /tmp/bp572-$b && sed -n 6,12p cmd/sitegen/main_test.go | tr '\n' ' '; echo; done
+< import ( 	"os/exec" 	"strings" 	"testing"  	"google.golang.org/protobuf/reflect/protoreflect" 	"google.golang.org/protobuf/reflect/protoregistry"  import ( 	"os/exec" 	"strings" 	"testing"  	"google.golang.org/protobuf/reflect/protoreflect" 	"google.golang.org/protobuf/reflect/protoregistry"  import...
+= thinking_tokens
+= thinking_tokens
+> Bash for b in 2.1 2.2 2.3 2.4 2.5 2.6; do (cd /tmp/bp572-$b && sed -i '0,/^\t"os\/exec"$/s//\t"os"\n\t"os\/exec"\n\t"path\/filepath"/' cmd/sitegen/main_test.go && gofmt -l cmd/sitegen; go vet ./cmd/sitegen/ && go test ./cmd/sitegen/ 2>&1 | tail -1 && (cd cmd/sitegen && gosec -include=G702 -quiet ./ >/dev...
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/cmd/sitegen	0.246s 2.1 gosec-G702 exit 0 2.1 2ef945e5 cmd/sitegen/readme_test.go ok  	github.com/tacplus-dev/tacplus/cmd/sitegen	0.117s 2.2 gosec-G702 exit 0 2.2 63292a03 cmd/sitegen/readme_test.go ok  	github.com/tacplus-dev/tacplus/cmd/sitegen	0.401s 2.3 gosec-G...
+= thinking_tokens
+= thinking_tokens
+> Bash for b in 2.1 2.2 2.3 2.4 2.5 2.6; do (cd /tmp/bp572-$b && echo "$b: $(git show --stat --format= HEAD | tr '\n' ' ')"; git diff --quiet HEAD -- cmd/sitegen/readme_test.go && echo " readme_test unchanged"); done; tail -3 /tmp/gates572.log
+< 2.1:  cmd/sitegen/annotations.go | 38 ++++++++++++++++++++++++++++++--------  cmd/sitegen/main_test.go   | 46 ++++++++++++++++++++++++++++++++++++++++++++++  2 files changed, 76 insertions(+), 8 deletions(-)   readme_test unchanged 2.2:  cmd/sitegen/annotations.go | 38 ++++++++++++++++++++++++++++++...
+= thinking_tokens
+= thinking_tokens
+Backports pass on all six lines. Waiting for the full gates on main's fix.
+> Bash timeout 590 bash -c 'while kill -0 3683 2>/dev/null; do sleep 15; done'; kill -0 3683 2>/dev/null && echo RUNNING || echo FINISHED; tail -3 /tmp/gates572.log
+= task_started
+= task_notification
+< RUNNING     PASS java ==> Generating rust cross-test fixture ==> Compiling rust cross-test fixture
+> Bash timeout 590 bash -c 'while kill -0 3683 2>/dev/null; do sleep 15; done'; kill -0 3683 2>/dev/null && echo RUNNING || echo FINISHED; tail -3 /tmp/gates572.log
+= task_started
+= task_notification
+< RUNNING     Removed 9.9M fixture tree c2sonly-go ==> Generating rust health-only fixture ==> Compiling rust health-only fixture
+> Bash timeout 590 bash -c 'while kill -0 3683 2>/dev/null; do sleep 15; done'; kill -0 3683 2>/dev/null && echo RUNNING || echo FINISHED; tail -3 /tmp/gates572.log; grep -n -i "fail" /tmp/gates572.log | grep -v -i "fail-closed\|failclosed\|FailClosed" | head
+= task_started
+= task_notification
+< RUNNING     Removed 12M fixture tree healthonly-rust ==> Generating rust zero-rpc fixture ==> Compiling rust zero-rpc fixture 57:A `·` is a build-failing gap; runtime and consumer-contract tests still prove behavior. 133:A `·` is a build-failing gap. Runtime tests still prove behavior; this gate che...
+> Bash timeout 590 bash -c 'while kill -0 3683 2>/dev/null; do sleep 15; done'; kill -0 3683 2>/dev/null && echo RUNNING || echo FINISHED; tail -3 /tmp/gates572.log
+= task_started
+= task_notification
+< RUNNING     Removed 11M fixture tree requiresdevice-go ==> Generating java requires-device fixture ==> Compiling java requires-device fixture
+> Bash timeout 590 bash -c 'while kill -0 3683 2>/dev/null; do sleep 15; done'; kill -0 3683 2>/dev/null && echo RUNNING || echo FINISHED; tail -3 /tmp/gates572.log
+= task_started
+= task_notification
+< RUNNING     Removed 49M fixture tree requiresdevice-java ==> Generating rust requires-device fixture ==> Compiling rust requires-device fixture
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'while kill -0 3683 2>/dev/null; do sleep 15; done'; kill -0 3683 2>/dev/null && echo RUNNING || echo FINISHED; tail -3 /tmp/gates572.log
+= task_started
+= task_notification
+< RUNNING     Removed 62M fixture tree recordegress-java ==> Generating rust record-egress fixture ==> Compiling rust record-egress fixture
+Still waiting on the full gates (in the Rust cross-test fixtures now).
+> Bash timeout 590 bash -c 'while kill -0 3683 2>/dev/null; do sleep 15; done'; kill -0 3683 2>/dev/null && echo RUNNING || echo FINISHED; tail -3 /tmp/gates572.log
+= task_started
+= task_notification
+< RUNNING     Removed 62M fixture tree recordegress-java ==> Generating rust record-egress fixture ==> Compiling rust record-egress fixture
+> Bash timeout 590 bash -c 'while kill -0 3683 2>/dev/null; do sleep 15; done'; kill -0 3683 2>/dev/null && echo RUNNING || echo FINISHED; tail -3 /tmp/gates572.log; ps --ppid 3683 -o pid,etime,cmd | head; ps -u $(id -u) -o pid,etime,rss,cmd --sort=-etime | grep -v "ps -u" | tail -8
+= task_started
+= task_notification
+< RUNNING     Removed 16M fixture tree recordegress-rust ==> Generating go record-egress HOST fixture ==> Compiling go record-egress HOST fixture     PID     ELAPSED CMD    3685    01:20:24 bash scripts/with-tree-lock.sh just gates    3691    01:20:24  2808 bash /builds/looper/tacplus/homes/looper-572...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Gates are 80 min in and still going; the land re-runs them anyway, so I'll queue it now in parallel to save wall time (it only pushes on green).
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 572 --checkpoint "Fix committed 3b0ceae4; local full gates running; landing; backports ready in /tmp worktrees (branches backport/572-release-2.1..2.6, not yet pushed); left: land, push backports + PRs, comment, close" 2>&1 | tail -1; nohup /usr/loca...
+= task_started
+= task_notification
+< [2026-11-13T18:29:42Z] checkpoint of #572 (a step) pushed to looper/tacplus-572:  4 files changed, 427 insertions(+), 8 deletions(-) 64805
+> Bash timeout 590 bash -c 'while kill -0 3683 2>/dev/null; do sleep 15; done'; kill -0 3683 2>/dev/null && echo RUNNING || echo FINISHED; tail -3 /tmp/gates572.log; echo ---; tail -5 /tmp/land572.log
+= task_started
+= task_notification
+< RUNNING     PASS go record-egress host     Removed 14M fixture tree recordegress-host-go ==> Generating java record-egress HOST fixture --- [2026-11-13T18:30:01Z] checkpoint of #572 (land queued) pushed to looper/tacplus-572:  5 files changed, 435 insertions(+), 8 deletions(-) [2026-11-13T18:30:03Z]...
+= thinking_tokens
+= thinking_tokens
+> Bash git fetch -q origin looper/tacplus-572 && git diff --stat origin/main FETCH_HEAD; git status --short | head
+<  .looper/claude.log         | 177 ++++++++++++++++++++++++++++++++++++++++++++  .looper/land               |   4 +  .looper/prompt.md          | 180 +++++++++++++++++++++++++++++++++++++++++++++  cmd/sitegen/annotations.go |  38 ++++++++--  cmd/sitegen/main_test.go   |  44 +++++++++++  5 files chang...
+Only the looper's own bookkeeping plus my two files. Polling.
+> Bash timeout 590 bash -c 'while kill -0 3683 2>/dev/null; do sleep 15; done'; kill -0 3683 2>/dev/null && echo RUNNING || echo FINISHED; tail -3 /tmp/gates572.log; echo ---; tail -2 /tmp/land572.log
+= task_started
+= task_notification
+< RUNNING ==> go/requiresdevice: asserting byte-identical model trees     PASS go/requiresdevice (byte-identical) ==> rust/base: generating twice into separate work dirs --- [2026-11-13T18:30:01Z] checkpoint of #572 (land queued) pushed to looper/tacplus-572:  5 files changed, 435 insertions(+), 8 del...
+> Bash timeout 590 bash -c 'while kill -0 3683 2>/dev/null; do sleep 15; done'; kill -0 3683 2>/dev/null && echo RUNNING || echo FINISHED; tail -3 /tmp/gates572.log; echo ---; tail -2 /tmp/land572.log
+= task_started
+= task_notification
+< RUNNING ==> java/base: asserting byte-identical model trees     PASS java/base (byte-identical) ==> java/requiresdevice: generating twice into separate work dirs --- [2026-11-13T18:30:01Z] checkpoint of #572 (land queued) pushed to looper/tacplus-572:  5 files changed, 435 insertions(+), 8 deletions...
+> Bash timeout 590 bash -c 'while kill -0 3683 2>/dev/null; do sleep 15; done'; kill -0 3683 2>/dev/null && echo RUNNING || echo FINISHED; tail -3 /tmp/gates572.log; echo ---; tail -2 /tmp/land572.log
+= task_started
+= task_notification
+< RUNNING    Compiling ip v0.1.0 (/builds/looper/tacplus/homes/looper-572/tmp/tmp.8UkSn9HxZu/tacplus/model/chassis/ip)    Compiling jwk v0.1.0 (/builds/looper/tacplus/homes/looper-572/tmp/tmp.8UkSn9HxZu/tacplus/model/chassis/jwk)    Compiling x509 v0.1.0 (/builds/looper/tacplus/homes/looper-572/tmp/tm...
+> Bash timeout 590 bash -c 'while kill -0 3683 2>/dev/null; do sleep 15; done'; kill -0 3683 2>/dev/null && echo RUNNING || echo FINISHED; tail -3 /tmp/gates572.log; echo ---; tail -2 /tmp/land572.log
+= task_started
+= task_notification
+< RUNNING bash scripts/with-tree-lock.sh bash cross-test/claims-provenance/run.sh ==> tacplus binary: /builds/looper/tacplus/homes/looper-572/tmp/tacplus-claims-provenance.dI5EOF/tacplus-local ==> generating java --- [2026-11-13T18:30:01Z] checkpoint of #572 (land queued) pushed to looper/tacplus-572:...
+> Bash timeout 590 bash -c 'while kill -0 3683 2>/dev/null; do sleep 15; done'; kill -0 3683 2>/dev/null && echo RUNNING || echo FINISHED; tail -3 /tmp/gates572.log; echo ---; tail -2 /tmp/land572.log
+= task_started
+= task_notification
+< RUNNING ==> Running generated Go standalone C2D host test ==> c2d-server check PASSED (go) ==> Generating C2D server fixture (java) --- [2026-11-13T18:30:01Z] checkpoint of #572 (land queued) pushed to looper/tacplus-572:  5 files changed, 435 insertions(+), 8 deletions(-) [2026-11-13T18:30:03Z] que...
+= thinking_tokens
+= thinking_tokens
+While waiting, I'll open the backport PRs now (as #566's did, noting main's hash is pending the land), so they exist even if time runs short.
+> Bash date -u +%H:%M; cd /builds/looper/tacplus/issues/572 && for b in 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b next: v$b.$(( $(git tag -l "v$b.*" | sed "s/v$b.//" | sort -n | tail -1) + 1 ))"; done; gh pr list --repo tacplus-dev/tacplus --base release/2.6 --state open --json number,title | head -c 600
+< 19:29 2.1 next: v2.1.24 2.2 next: v2.2.21 2.3 next: v2.3.23 2.4 next: v2.4.23 2.5 next: v2.5.24 2.6 next: v2.6.12 [{"number":675,"title":"[release/2.6] runtime-smoke fixture: accept the main C2S server's plaintext inline (#581)"},{"number":668,"title":"[release/2.6] runtime-smoke: run on the 2.4 sys...
+> Bash for b in 2.1 2.2 2.3 2.4 2.5 2.6; do tag="v$b.$(( $(git tag -l "v$b.*" | sed "s/v$b.//" | sort -n | tail -1) + 1 ))" h=$(git -C /tmp/bp572-$b log -1 --format=%h) git -C /tmp/bp572-$b push -q origin backport/572-release-$b 2>&1 | grep -v "^remote:"  body=$(cat <<EOF Backport of #572 to \`release/$b\`...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= vcs_state_changed
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/676 https://github.com/tacplus-dev/tacplus/pull/677 https://github.com/tacplus-dev/tacplus/pull/678 https://github.com/tacplus-dev/tacplus/pull/679 https://github.com/tacplus-dev/tacplus/pull/680 https://github.com/tacplus-dev/tacplus/pull/681
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 572 --checkpoint "Fix 3b0ceae4 land queued; backport PRs #676-#681 open (release/2.1..2.6; bodies say main hash pending); left: land verdict, update PR bodies with main hash, comment, close. No tag on main (main has features since v2.6.1)." 2>&1 | ta...
+= task_started
+= task_notification
+< [2026-11-13T19:30:01Z] checkpoint of #572 (a step) pushed to looper/tacplus-572:  5 files changed, 479 insertions(+), 8 deletions(-) RUNNING bash scripts/with-tree-lock.sh bash cross-test/jwk-alg/run.sh --language python ==> Building local tacplus binary ==> Generating python model --- [2026-11-13T1...
+> Bash timeout 590 bash -c 'while kill -0 3683 2>/dev/null; do sleep 15; done'; kill -0 3683 2>/dev/null && echo RUNNING || echo FINISHED; tail -3 /tmp/gates572.log; echo ---; tail -2 /tmp/land572.log
+= task_started
+= task_notification
+< RUNNING bash scripts/with-tree-lock.sh bash cross-test/trace-carry/run.sh --language java ==> Building local tacplus binary ==> Generating java model --- [2026-11-13T18:30:01Z] checkpoint of #572 (land queued) pushed to looper/tacplus-572:  5 files changed, 435 insertions(+), 8 deletions(-) [2026-11...
+> Bash timeout 590 bash -c 'while kill -0 3683 2>/dev/null; do sleep 15; done'; kill -0 3683 2>/dev/null && echo RUNNING || echo FINISHED; tail -3 /tmp/gates572.log; echo ---; tail -2 /tmp/land572.log
+= task_started
+= task_notification
+< FINISHED === OVERALL fail=1 === error: recipe `gates` failed with exit code 1 error: recipe `gates` failed with exit code 1 --- [2026-11-13T18:30:01Z] checkpoint of #572 (land queued) pushed to looper/tacplus-572:  5 files changed, 435 insertions(+), 8 deletions(-) [2026-11-13T18:30:03Z] queued: the...
+> Bash grep -n -E "FAIL|fail=|error" /tmp/gates572.log | grep -v "fail=0" | tail -25
+< 32825:19:25:27.738 [grpc-default-worker-ELG-3-4] DEBUG io.grpc.netty.shaded.io.grpc.netty.NettyServerHandler -- [id: 0x8e9b8748, L:/127.0.0.1:41923 - R:/127.0.0.1:51606] INBOUND GO_AWAY: lastStreamId=0 errorCode=0 length=0 bytes= 32826:19:25:27.748 [grpc-default-worker-ELG-3-4] DEBUG io.grpc.netty.s...
+The local full gates reported one failure; finding which leg.
+> Bash grep -n -E "^(--- FAIL|FAIL|    FAIL|==> .*FAIL|.*: FAIL)|FAILED|fail=[1-9]" /tmp/gates572.log | head -20
+< 3963:--- FAIL: TestGoStreamOutlivesWindowWithLongToken (5.01s) 3964:FAIL 3965:FAIL	example.com/streamexpiry/tacplus/model/s2sm/grpc/servers/svc/streamexpiry	7.366s 3966:FAIL 3967:stream-expiry check FAILED: generated Go stream-expiry behavior tests failed 33232:=== OVERALL fail=1 ===
+> Bash sed -n 3940,3968p /tmp/gates572.log; gh issue list --repo tacplus-dev/tacplus --state all --search "TestGoStreamOutlivesWindowWithLongToken" --json number,title,state
+< 2026-11-13T19:13:02.083Z	INFO	generation complete	{"language": "GO"} 2026-11-13T19:13:02.084Z	INFO	build complete	{"output": "/builds/looper/tacplus/homes/looper-572/tmp/tmp.jOND5U5WQX/tacplus/model", "mode": "0.0.0-SNAPSHOT"} ==> Running generated Go stream-expiry behavior tests go: finding module ...
+= thinking_tokens
+= thinking_tokens
+Unrelated to this change (a timing test in the stream-expiry leg, under heavy machine load). Re-running that leg alone.
+> Bash timeout 590 just stream-expiry-go > /tmp/se572.log 2>&1; echo "exit $?"; grep -E "^(--- |ok|FAIL|PASS)|check" /tmp/se572.log | tail -8
+= task_started
+= task_notification
+< exit 1 --- PASS: TestGoStreamEndsAtTokenExp (0.04s) --- FAIL: TestGoStreamOutlivesWindowWithLongToken (5.02s) FAIL FAIL	example.com/streamexpiry/tacplus/model/s2sm/grpc/servers/svc/streamexpiry	7.555s FAIL stream-expiry check FAILED: generated Go stream-expiry behavior tests failed
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Reproducible. Checking whether it fails on plain origin/main too, and whether it's already filed.
+> Bash gh issue list --repo tacplus-dev/tacplus --state all --search "stream-expiry in:title" --json number,title,state,createdAt | head -c 1500; echo; git worktree add -q --detach /tmp/main572 origin/main && cd /tmp/main572 && (timeout 590 just stream-expiry-go > /tmp/se572-main.log 2>&1; echo "main exit ...
+= task_started
+= task_notification
+< [{"createdAt":"2026-10-31T17:32:15Z","number":259,"state":"OPEN","title":"Long-lived streams survive token expiry by make-before-break rotation; the member port moves onto gRPC"},{"createdAt":"2026-11-13T12:21:11Z","number":627,"state":"OPEN","title":"stream-expiry Java self-test streamsAreEndedAtTh...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Passes on main once. My diff touches only `cmd/sitegen`, so this looks like a timing race at the 5s boundary. Re-running both to confirm.
+> Bash (timeout 590 just stream-expiry-go > /tmp/se572b.log 2>&1; echo "mine exit $?"); grep -E "^--- |behavior_test" /tmp/se572b.log; cd /tmp/main572 && (timeout 590 just stream-expiry-go > /tmp/se572-main2.log 2>&1; echo "main exit $?"); grep -E "^--- |behavior_test" /tmp/se572-main2.log
+= task_started
+= task_notification
+< mine exit 0 2026-11-13T20:02:37.444Z	DEBUG	Wrote library file	{"path": "collection/page_behavior_test.go"} 2026-11-13T20:02:37.446Z	DEBUG	Wrote library file	{"path": "grpcserver/authorizer_behavior_test.go"} --- PASS: TestGoStreamEndsAtTokenExp (0.03s) --- PASS: TestGoStreamOutlivesWindowWithLongTok...
+= thinking_tokens
+= thinking_tokens
+It passes on rerun: a flake at the 5s boundary (2 of 3 runs failed on my branch, which only touches `cmd/sitegen`; 2 of 2 passed on main). Looking at the test so I can file it.
+> Bash f=$(git grep -l "TestGoStreamOutlivesWindowWithLongToken" | head -1); echo $f; n=$(grep -n "func TestGoStreamOutlivesWindowWithLongToken" $f | cut -d: -f1); sed -n "$n,$((n+50))p" $f
+< cross-test/stream-expiry/testdata/stream_expiry_behavior_test.go func TestGoStreamOutlivesWindowWithLongToken(t *testing.T) { 	client, key := startServer(t) 	ctx, cancel := context.WithTimeout(bearer(context.Background(), serviceToken(t, key, time.Now().Add(time.Hour))), 		tokenLifetime+2*time.Secon...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n -i "stream-expiry\|flak" ROADMAP.md | head; gh api repos/tacplus-dev/roadmap/contents/ROADMAP.md -H 'Accept: application/vnd.github.raw' | grep -n -i "stream-expiry\|flak" | head; gh issue list --repo tacplus-dev/tacplus --state open --search "OutlivesWindow OR \"hour-long token\"" --json nu...
+< []
+> Bash gh issue create --repo tacplus-dev/tacplus --label bug --title "stream-expiry Go: TestGoStreamOutlivesWindowWithLongToken fails when the server's deadline fires before the client's ctx" --body "$(cat <<'EOF' Found while running the full `just gates` for #572 (whose change, in `cmd/sitegen`, cannot r...
+< https://github.com/tacplus-dev/tacplus/issues/689
+> Bash git worktree remove --force /tmp/main572; date -u +%H:%M; tail -3 /tmp/land572.log; gh issue view 572 --repo tacplus-dev/tacplus --comments | tail -15
+< 20:04 [2026-11-13T18:30:01Z] checkpoint of #572 (land queued) pushed to looper/tacplus-572:  5 files changed, 435 insertions(+), 8 deletions(-) [2026-11-13T18:30:03Z] queued: the manager of tacplus merges looper/tacplus-572 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 572 --checkpoint "Fix 3b0ceae4 land queued (still waiting at 20:05Z). Local full just gates: all pass except stream-expiry-go TestGoStreamOutlivesWindowWithLongToken, a deadline race unrelated to sitegen (passed on rerun; filed #689). Backport PRs #6...
+= task_started
+= task_notification
+< [2026-11-13T20:04:29Z] checkpoint of #572 (a step) pushed to looper/tacplus-572:  5 files changed, 556 insertions(+), 8 deletions(-) [2026-11-13T18:30:01Z] checkpoint of #572 (land queued) pushed to looper/tacplus-572:  5 files changed, 435 insertions(+), 8 deletions(-) [2026-11-13T18:30:03Z] queued...
+> Bash timeout 580 bash -c 'while kill -0 64805 2>/dev/null; do sleep 15; done'; date -u +%H:%M; tail -3 /tmp/land572.log
+= task_started
+= task_notification
+< 20:23 [2026-11-13T18:30:01Z] checkpoint of #572 (land queued) pushed to looper/tacplus-572:  5 files changed, 435 insertions(+), 8 deletions(-) [2026-11-13T18:30:03Z] queued: the manager of tacplus merges looper/tacplus-572 after the lands queued before it, one at a time, and says on the issue what ...
+= thinking_tokens
+= thinking_tokens
+About 30 minutes remain and the land is still queued. I'll post a progress comment now so the record is complete whichever way it goes, then keep polling.
+> Bash gh issue comment 572 --repo tacplus-dev/tacplus --body "$(cat <<'EOF' Progress (looper run of 2026-11-13). The fix is queued to land. This issue stays open until the manager's verdict.  **Change** (3b0ceae4 on `looper/tacplus-572`; the hash on main changes when the land rebases it). This is the fix ...
+< https://github.com/tacplus-dev/tacplus/issues/572#issuecomment-6863966285
+> Bash timeout 1080 bash -c 'while kill -0 64805 2>/dev/null; do sleep 15; done'; date -u +%H:%M; tail -4 /tmp/land572.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bygwdxweo). Output is being written to: /builds/looper/tacplus/homes/looper-572/tmp/claude-61000/-builds-looper-tacplus-issues-572/3d8716b0-eec0-45d2-9410-d6cc222c68ef/tasks/bygwdxweo.output. You will be notified w...
+> Bash date -u +%H:%M; tail -3 /tmp/land572.log
+< 20:34 [2026-11-13T18:30:01Z] checkpoint of #572 (land queued) pushed to looper/tacplus-572:  5 files changed, 435 insertions(+), 8 deletions(-) [2026-11-13T18:30:03Z] queued: the manager of tacplus merges looper/tacplus-572 after the lands queued before it, one at a time, and says on the issue what ...
+= thinking_tokens
+= thinking_tokens
+Final checkpoint before time runs out, then one more wait.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 572 --checkpoint "Fix 3b0ceae4 land still queued at 20:34Z (manager lands it after this run). Progress comment posted on #572 with all verification. Backport PRs #676-#681 open. Flake filed #689. Left for next run: read land verdict on #572, update #...
+= task_started
+= task_notification
+< [2026-11-13T20:34:20Z] checkpoint of #572 (a step) pushed to looper/tacplus-572:  5 files changed, 579 insertions(+), 8 deletions(-)
+> Bash timeout 540 bash -c 'while kill -0 64805 2>/dev/null; do sleep 15; done'; date -u +%H:%M; tail -3 /tmp/land572.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< 20:43 [2026-11-13T18:30:01Z] checkpoint of #572 (land queued) pushed to looper/tacplus-572:  5 files changed, 435 insertions(+), 8 deletions(-) [2026-11-13T18:30:03Z] queued: the manager of tacplus merges looper/tacplus-572 after the lands queued before it, one at a time, and says on the issue what ...
+> Bash kill -0 64805 2>/dev/null && echo LAND-RUNNING || echo LAND-DONE; tail -5 /tmp/land572.log; date -u +%H:%M
+< LAND-RUNNING [2026-11-13T18:30:01Z] checkpoint of #572 (land queued) pushed to looper/tacplus-572:  5 files changed, 435 insertions(+), 8 deletions(-) [2026-11-13T18:30:03Z] queued: the manager of tacplus merges looper/tacplus-572 after the lands queued before it, one at a time, and says on the issu...
+= thinking_tokens
+= thinking_tokens
+I didn't finish #572 in this run: the fix is queued to land on main but had no verdict at 20:43Z, ~13 minutes before my time limit. The issue stays open. The repository's manager lands the fix after this run ends, and the next run finishes the rest.
+
+**The fix** (commit 3b0ceae4, following Jody's "fix in code" decision; no exception and no `#nosec`):
+- `cmd/sitegen/annotations.go`: when `PROTOC_BINARY` is set, it is now checked before anything runs. It must be an absolute path to an existing executable file, and it runs directly, never through a shell. A bad value stops with an error that names it. When it is unset, protoc is still found on `PATH` as before.
+- `TestProtocBinary` covers the rejected values (relative path, missing file, directory, non-executable file, shell text appended to a valid path) and the two accepted cases. I wrote it first and it failed until the fix was in.
+
+**Checks I ran**
+- `go test ./cmd/sitegen/` passes.
+- gosec no longer reports the HIGH finding (G702) at `annotations.go`.
+- gosec still reports the MEDIUM finding (G204) at the same line. It fires on any command name that isn't a constant, so only a suppression would clear it, and the decision ruled those out. It doesn't fail builds and stays with #585.
+- The site generator writes all 8 annotation pages with `PROTOC_BINARY` unset and with it set to protoc's absolute path.
+- **Full `just gates` ended with one failure**: `TestGoStreamOutlivesWindowWithLongToken` in the stream-expiry tests. It failed 2 of 3 runs on my branch and passed on the third; on plain main it passed 2 of 2. This change only touches the site generator, so it can't affect that test. I think the test has a timing race: the server can end the stream at the deadline a moment before the client's own timer fires. I filed it as #689.
+- The trace check found no handlers touched by this change. Its 8 findings are all in `cross-test/server-runtime/client/go/main.go` and already tracked in #311.
+
+**Release**
+- I did not tag `v2.6.2` on main, because main has taken features since `v2.6.1` (e.g. e0ead97c). The patch goes through the release branches instead.
+- Backport pull requests are open, each naming the patch tag to cut once it merges: #676 (2.1, `v2.1.24`), #677 (2.2, `v2.2.21`), #678 (2.3, `v2.3.23`), #679 (2.4, `v2.4.23`), #680 (2.5, `v2.5.24`), #681 (2.6, `v2.6.12`).
+- `release/2.0` doesn't have this code, so it needs no backport.
+- On each release line the sitegen tests pass, G702 is gone and the pages build. The cherry-pick needed two imports added to that line's test file. I did not run the full gates on the release branches.
+
+**Left for the next run:** read the land's verdict and the gate set it ran, update the backport descriptions with main's final commit hash (the land rebases it, so 3b0ceae4 will change), then close #572. A progress comment with all of the above is on the issue, and the last checkpoint says the same.
+= success: I didn't finish #572 in this run: the fix is queued to land on main but had no verdict at 20:43Z, ~13 minutes before my time limit. The issue stays open. The repository's manager lands the fix after this run ends, and the next run finishes the rest.
+
+**The fix** (commit 3b0ceae4, following Jody's "fix in code" decision; no exception and no `#nosec`):
+- `cmd/sitegen/annotations.go`: when `PROTOC_BINARY` is set, it is now checked before anything runs. It must be an absolute path to an existing executable file, and it runs directly, never through a shell. A bad value stops with an error that names it. When it is unset, protoc is still found on `PATH` as before.
+- `TestProtocBinary` covers the rejected values (relative path, missing file, directory, non-executable file, shell text appended to a valid path) and the two accepted cases. I wrote it first and it failed until the fix was in.
+
+**Checks I ran**
+- `go test ./cmd/sitegen/` passes.
+- gosec no longer reports the HIGH finding (G702) at `annotations.go`.
+- gosec still reports the MEDIUM finding (G204) at the same line. It fires on any command name that isn't a constant, so only a suppression would clear it, and the decision ruled those out. It doesn't fail builds and stays with #585.
+- The site generator writes all 8 annotation pages with `PROTOC_BINARY` unset and with it set to protoc's absolute path.
+- **Full `just gates` ended with one failure**: `TestGoStreamOutlivesWindowWithLongToken` in the stream-expiry tests. It failed 2 of 3 runs on my branch and passed on the third; on plain main it passed 2 of 2. This change only touches the site generator, so it can't affect that test. I think the test has a timing race: the server can end the stream at the deadline a moment before the client's own timer fires. I filed it as #689.
+- The trace check found no handlers touched by this change. Its 8 findings are all in `cross-test/server-runtime/client/go/main.go` and already tracked in #311.
+
+**Release**
+- I did not tag `v2.6.2` on main, because main has taken features since `v2.6.1` (e.g. e0ead97c). The patch goes through the release branches instead.
+- Backport pull requests are open, each naming the patch tag to cut once it merges: #676 (2.1, `v2.1.24`), #677 (2.2, `v2.2.21`), #678 (2.3, `v2.3.23`), #679 (2.4, `v2.4.23`), #680 (2.5, `v2.5.24`), #681 (2.6, `v2.6.12`).
+- `release/2.0` doesn't have this code, so it needs no backport.
+- On each release line the sitegen tests pass, G702 is gone and the pages build. The cherry-pick needed two imports added to that line's test file. I did not run the full gates on the release branches.
+
+**Left for the next run:** read the land's verdict and the gate set it ran, update the backport descriptions with main's final commit hash (the land rebases it, so 3b0ceae4 will change), then close #572. A progress comment with all of the above is on the issue, and the last checkpoint says the same.

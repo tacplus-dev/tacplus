@@ -68,6 +68,24 @@ func mustDemoToken() *wrapperToken.TokenWrapper {
 	return tok
 }
 
+// requireLoopback refuses an address whose host is not loopback. The example
+// serves plaintext gRPC and takes a bearer token on every call, so it must not
+// be reachable from the network; a deployed service gets TLS from the
+// generated ServiceManager.
+func requireLoopback(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	if host == "localhost" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("%q is not a loopback address: this example serves plaintext gRPC, so it binds loopback only (127.0.0.0/8, ::1 or localhost)", addr)
+}
+
 func requireBearer(ctx context.Context) error {
 	md, _ := metadata.FromIncomingContext(ctx)
 	if vals := md.Get("authorization"); len(vals) == 1 && vals[0] == demoBearer {
@@ -158,7 +176,10 @@ func main() {
 		return demoToken, nil
 	})
 
-	grpcSrv := grpc.NewServer()
+	// Plaintext gRPC, so loopback only: requireLoopback refuses any other
+	// NOTES_ADDR below. A deployed service gets TLS from the generated
+	// ServiceManager.
+	grpcSrv := grpc.NewServer() // nosemgrep: go.grpc.security.grpc-server-insecure-connection.grpc-server-insecure-connection -- loopback only, enforced by requireLoopback
 	if err := wrapper.RegisterServices(grpcSrv); err != nil {
 		fmt.Fprintln(os.Stderr, "register:", err)
 		os.Exit(1)
@@ -174,6 +195,10 @@ func main() {
 	addr := os.Getenv("NOTES_ADDR")
 	if addr == "" {
 		addr = "127.0.0.1:0"
+	}
+	if err := requireLoopback(addr); err != nil {
+		fmt.Fprintln(os.Stderr, "NOTES_ADDR:", err)
+		os.Exit(1)
 	}
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {

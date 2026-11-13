@@ -74,7 +74,7 @@ func (m *Mesh) Run() *report.Report {
 		Seed:          m.prof.Seed,
 		RecoveryTimes: map[string][]time.Duration{},
 	}
-	rng := rand.New(rand.NewSource(m.prof.Seed))
+	rng := rand.New(rand.NewSource(m.prof.Seed)) // #nosec G404 -- seeded on purpose: the report's seed replays the run (#571)
 
 	if m.prof.Invariants.UnaryInterop {
 		m.runInterop(rep)

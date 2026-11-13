@@ -30,6 +30,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class AccountingSinkDurableTest {
     // EMIT_BOUND_MS is how long an RPC completion may take to hand its record to the sink.
     private static final long EMIT_BOUND_MS = 1000;
+    // PROGRESS_BOUND_MS is how long a wait for the sink's own thread to make progress
+    // (deliver, append, compact) may take. It is a hang guard, not a latency bound: the
+    // waits return as soon as their condition holds, and on a busy runner the thread
+    // may not be scheduled for well over EMIT_BOUND_MS.
+    private static final long PROGRESS_BOUND_MS = 30_000;
 
     private static Accounting.Event event(int i) {
         return Accounting.Event.newBuilder()
@@ -74,7 +79,7 @@ public final class AccountingSinkDurableTest {
                                         int n) throws InterruptedException {
         List<String> got = new ArrayList<>();
         for (int i = 0; i < n; i++) {
-            Accountingrecord.AccountingRecord rec = queue.poll(EMIT_BOUND_MS, TimeUnit.MILLISECONDS);
+            Accountingrecord.AccountingRecord rec = queue.poll(PROGRESS_BOUND_MS, TimeUnit.MILLISECONDS);
             check(rec != null, "record " + i + " of " + n + " did not reach the publisher; got " + got);
             got.add(rec.getRequestId());
             sink.ack();
@@ -91,7 +96,7 @@ public final class AccountingSinkDurableTest {
     // waitForCursor polls the spool cursor until it reads want. A sink writes its
     // cursor on shutdown, so a restart must wait for it.
     private static void waitForCursor(Path dir, int want) throws Exception {
-        long deadline = System.currentTimeMillis() + EMIT_BOUND_MS;
+        long deadline = System.currentTimeMillis() + PROGRESS_BOUND_MS;
         Path cursor = dir.resolve("accounting-spool").resolve("cursor");
         while (true) {
             String raw = Files.exists(cursor) ? new String(Files.readAllBytes(cursor), StandardCharsets.UTF_8).trim() : "";
@@ -147,7 +152,7 @@ public final class AccountingSinkDurableTest {
         }
         expectNoMore(queue);
         Path log = dir.resolve("accounting-spool").resolve("records.log");
-        long deadline = System.currentTimeMillis() + EMIT_BOUND_MS;
+        long deadline = System.currentTimeMillis() + PROGRESS_BOUND_MS;
         while (Files.exists(log)) {
             check(System.currentTimeMillis() < deadline, "log " + log + " was not removed after every record was acknowledged");
             Thread.sleep(10);
@@ -167,17 +172,31 @@ public final class AccountingSinkDurableTest {
             AccountingManager.EventBusSink sink = durable(queue, tempDir(), stop);
             final int emitted = 40;
             emitAll(sink, emitted);
-            // Let the drain thread take everything in its spool before counting.
-            Thread.sleep(300);
-            long dropped = sink.droppedCount();
-            check(dropped > 0, "emitted " + emitted + " records past a 1024-byte disk bound, none were dropped");
-
-            long delivered = 0;
-            Accountingrecord.AccountingRecord rec;
-            while ((rec = queue.poll(EMIT_BOUND_MS, TimeUnit.MILLISECONDS)) != null) {
-                delivered++;
-                sink.ack();
+            // Wait for the drain thread to reach the bound. Nothing reads the queue yet,
+            // so it drops each record that would take the log past the bound.
+            long deadline = System.currentTimeMillis() + PROGRESS_BOUND_MS;
+            while (sink.droppedCount() == 0) {
+                check(System.currentTimeMillis() < deadline,
+                        "emitted " + emitted + " records past a 1024-byte disk bound, none were dropped");
+                Thread.sleep(10);
             }
+
+            // Every record not dropped reaches the publisher once it reads, so drain
+            // until the two account for every emit, then check nothing more arrives.
+            long delivered = 0;
+            while (delivered + sink.droppedCount() < emitted) {
+                check(System.currentTimeMillis() < deadline,
+                        "delivered " + delivered + " + dropped " + sink.droppedCount() + " of " + emitted
+                                + " records within " + PROGRESS_BOUND_MS + " ms: a record was lost without being counted");
+                if (queue.poll(10, TimeUnit.MILLISECONDS) != null) {
+                    delivered++;
+                    sink.ack();
+                }
+            }
+            if (queue.poll(200, TimeUnit.MILLISECONDS) != null) {
+                delivered++;
+            }
+            long dropped = sink.droppedCount();
             check(delivered + dropped == emitted,
                     "delivered " + delivered + " + dropped " + dropped + " != emitted " + emitted
                             + ": a record was lost without being counted");

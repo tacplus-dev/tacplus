@@ -1,0 +1,363 @@
+= init
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/665; gh issue view 665 --repo tacplus-dev/tacplus --comments | tail -40; gh issue view 665 --repo tacplus-dev/tacplus --json labels; sed -n 200,290p pkg/internal/common/parser/mcp_validate.go; grep -n "mcpHostLanguages" -r pkg | head
+< author:	tacplus-looper association:	none edited:	false status:	none -- The looper of tacplus starts this issue with its limit 4h capped at 3h55m by this job (https://gitlab.com/tacplus-dev/looper/-/jobs/18016383753), which ends sooner: the run stops by itself before then, its work checkpointed, and ...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/665; sed -n 105,130p pkg/internal/common/parser/mcp_validate.go; grep -rn "Mcp6LanguageGate" pkg | head; grep -n -i "python" docs/USER.md | grep -i -E "mcp|wrapper|MCP-6|host" ; grep -rn "mcpHostLanguages\|mcpBackendLanguages" --include=*.go . | grep -v "_test" | hea...
+< //	       No language's MCP dispatch runs the device-approval gate, so the //	       tool would execute with no approval — the annotation a promise //	       nothing keeps. An auto-exposed rpc carrying the gate is excluded by //	       mcpAutoExposed rather than refused, because nobody asked for tha...
+> Bash cd /builds/looper/tacplus/issues/665; sed -n 1455,1475p docs/USER.md; grep -n -i "python" docs/USER.md | head -30; sed -n 330,400p pkg/internal/common/parser/mcp_auto_expose_test.go; grep -rn "MCP-6" --include=*.go --include=*.md . | grep -v "^./pkg/internal/common/parser/mcp_validate.go" | head -20
+<   call's `page_size`/`page_token` with the same token codec and the same   trust-tier clamp. A malformed `page_token` is `INVALID_ARGUMENT`, never a   silent reset to page 1, and the `(spec.store_principal)` /   `(spec.store_namespace)` egress filters run over the page exactly as they do   on the gR...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/665; sed -n 170,185p docs/USER.md; grep -rn "rejected loudly\|server wrapper" pkg --include=*.go | grep -i python | head
+< is the runtime web-transport alternative to C2S, and the application chooses which client to use at runtime.  Language targets do not all support the same surface set:  - Full-service targets (`go`, `rust`, `java`) generate service runtimes and any   declared C2S/W2S/C2D client surfaces. - Full-clie...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/665; python3 - <<'EOF' p='pkg/internal/common/parser/mcp_auto_expose_test.go' s=open(p).read() old=s[s.index('// MCP-6: a language that generates'):s.index('\n}\n', s.index('func TestAutoExpose_Mcp6LanguageGate'))+3] new='''// MCP-6: a language that generates a servi...
+< # github.com/tacplus-dev/tacplus/pkg/internal/common/parser pkg/internal/common/parser/descriptor.go:20:2: no required module provides package github.com/tacplus-dev/tacplus/target/proto/spec/sys; to add it: 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sys FAIL	github.com/tacplus-dev/tac...
+I've written the failing test for the Python MCP-6 refusal. Now I'm setting up the generated sources so I can run it.
+> Bash cd /builds/looper/tacplus/issues/665; grep -n "^[a-z-]*:" justfile | head -40; grep -n -i "target/proto\|bootstrap\|setup" docs/DEVELOPMENT.md | head
+< 33:default: install 35:generate: 38:build: generate 42:install: generate 54:test: generate soundness 58:soundness: 61:vet: 66:example: 74:site: site-venv 81:site-serve: site-venv 85:site-venv: 94:current-generation: 97:current-generation-go: 100:current-generation-java: 103:current-generation-rust: ...
+> Bash cd /builds/looper/tacplus/issues/665; just generate 2>&1 | tail -3; go test ./pkg/internal/common/parser/ -run Mcp6 2>&1 | tail -5
+= task_started
+= task_notification
+< bash scripts/with-tree-lock.sh go generate ./pkg/internal/proto/spec/...     mcp_auto_expose_test.go:349: language "python": unexpected MCP-6 failure: mcp annotation errors:           rpctest.Surface: owns MCP tools but is being generated for language "python", which has no MCP dispatch backend; the...
+Fails as expected. Now the fix and docs.
+> Bash cd /builds/looper/tacplus/issues/665; python3 - <<'EOF' p='pkg/internal/common/parser/mcp_validate.go' s=open(p).read() old='''// mcpHostLanguages are the generation targets that emit a service wrapper and // can therefore HOST a service rather than only call one. Only these are gated // by MCP-6: a...
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/pkg/internal/common/parser	20.545s 75://	MCP-6  a service owning tools, generated for a language whose server 116:// A service owning tools is generatable for these and, per MCP-6, refused for a 122:// by MCP-6: a client target (python, typescript, swift, csharp) ...
+> Bash cd /builds/looper/tacplus/issues/665; sed -n 83,86p pkg/internal/common/parser/mcp_validate.go; grep -rn -i "python" docs/DEVELOPMENT.md STATE.md PROPOSALS.md | grep -i "mcp" | head; grep -rln "MCP-6\|Mcp6" --include=* . 2>/dev/null | grep -v "^./target\|node_modules" | head
+< //	       Rust have the backend; Python is gated as a host without one. //	       TypeScript, Swift and C# are client-only targets that generate no //	       wrapper at all — they cannot host, so they are not gated, and a //	       typescript client (the webapp) of a tool-owning service generates ./...
+> Bash cd /builds/looper/tacplus/issues/665; sed -n 86,88p pkg/internal/common/parser/mcp_validate.go; python3 - <<'EOF' p='pkg/internal/common/parser/mcp_validate.go' s=open(p).read() old='''//	       Rust have the backend; Python is gated as a host without one. //	       TypeScript, Swift and C# are clie...
+< //	       typescript client (the webapp) of a tool-owning service generates //	       its client surface as usual. Under auto-exposure this stopped being //	       a corner: every c2s service owns tools, so a Python HOST of one has //	MCP-6  a service owning tools, generated for a language whose ser...
+> Bash cd /builds/looper/tacplus/issues/665; python3 - <<'EOF' p='pkg/internal/common/parser/mcp_validate.go' s=open(p).read() old='''//	       gated, and a client (the typescript webapp, a python tool, #665) //	       of a tool-owning service generates //	       its client surface as usual. Under auto-exp...
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/pkg/internal/common/parser	29.568s  docs/USER.md                                       | 10 ++++----  pkg/internal/common/parser/mcp_auto_expose_test.go | 28 ++++++++++++----------  pkg/internal/common/parser/mcp_validate.go         | 23 ++++++++++--------  3 file...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/665; ls cmd; ls cross-test/runtime-smoke | head; sed -n 1,40p cross-test/runtime-smoke/run.sh | grep -n -i "tacplus\|consumer" | head
+< build cmd.go fleet registry sitegen soundness sysrename upgrade validate verify version consumers fixture proto run.sh 6:# go servers (canonical consumer-contract proto) hosts C2S gRPC + W2S 11:# `both` consumers (see consumer-contract git history), whose bodies hosted 23:# Separate from consumer-co...
+> Bash cd /builds/looper/tacplus/issues/665; go build -o /tmp/tp665 . 2>&1|tail -3; (TACPLUS_BIN=/tmp/tp665 timeout 900 bash cross-test/runtime-smoke/run.sh --consumer python > /tmp/smoke665.log 2>&1; echo exit $? >> /tmp/smoke665.log) ; tail -15 /tmp/smoke665.log
+= task_started
+= task_notification
+< go: downloading golang.org/x/tools v0.49.0 go: downloading github.com/spf13/pflag v1.0.10 go: downloading golang.org/x/sync v0.22.0 cp: cannot stat '/builds/looper/tacplus/issues/665/cross-test/consumer-contract/proto/platform/health.proto': No such file or directory exit 1
+Runtime-smoke is broken on main for an unrelated reason (#657 is fixing it), so I'm reproducing the issue with a small caller/remote tree of my own instead.
+> Bash cd /builds/looper/tacplus/issues/665; ls examples 2>/dev/null | head; grep -rl "grpc_c2s_client" --include=*.proto . | grep -v target | head -5; grep -rl "language: python" --include=tacplus.yaml . | head -5
+< ./pkg/proto/sys/spec.proto ./pkg/internal/swift/types/testdata/tenantroute/services/harbor.proto ./example/proto/client/notesclient.proto ./cross-test/wire-corpus/proto/corpus/corpus.proto ./cross-test/runtime-smoke/proto/contract/contract.proto
+> Bash cd /builds/looper/tacplus/issues/665; ls example example/proto example/proto/*; cat example/proto/client/notesclient.proto | head -40; ls example/*.yaml; grep -n "client\|python" -i example/tacplus.yaml | head
+< example/proto/dependencies.yaml example/proto/registry.yaml  example: README.md client proto run.sh server  example/proto: client dependencies.yaml notes registry.yaml  example/proto/client: notesclient.proto  example/proto/notes: notes.proto // Copyright (c) 2026 Jody Scott // SPDX-License-Identifi...
+> Bash cd /builds/looper/tacplus/issues/665; cat example/run.sh | grep -n "tacplus\|typescript\|language" | head -20; ls example/client
+< 2:# Builds tacplus, generates the Go server model and the TypeScript client model 10:TACPLUS_BIN="${TACPLUS_BIN:-$OUT/tacplus}" 15:if [[ "$TACPLUS_BIN" == "$OUT/tacplus" ]]; then 16:  echo "==> Building tacplus" 25:  cat > "$1/tacplus.yaml" <<YAML 26:language: "$2" 38:(cd "$OUT/go" && "$TACPLUS_BIN"...
+> Bash cd /builds/looper/tacplus/issues/665; sed -n 20,36p example/run.sh; grep -n "service_c2s" example/proto/notes/notes.proto
+< # pkg's last segment names the proto package this build HOSTS. The Go build # hosts notesapi; the TypeScript build is a client of it, so it gets its own # package name, hosts nothing, and names the notes service in depends (by its # registry name) for the types it uses. write_config() {   cat > "$1/...
+Good: the example is exactly the issue's shape. Running a Python client build with the fixed binary and with main's.
+> Bash cd /builds/looper/tacplus/issues/665; git stash -q && go build -o /tmp/tp665-main . && git stash pop -q; for b in tp665-main tp665; do d=/tmp/py665-$b; rm -rf $d; mkdir -p $d; printf 'language: "python"\npkg: "com.example.notesclient"\ndepends: [notes]\noutput-dir: "model"\nheader: |\n  x\n' > $d/ta...
+= task_started
+= task_notification
+< 2026-11-13T19:01:59.218Z	INFO	No git tag found; using tag "latest" 2026-11-13T19:01:59.218Z	INFO	using --tag 'latest' — building from HEAD, version set to 0.0.0-SNAPSHOT Error: failed to resolve proto source: proto source "/tmp/py665-tp665-main/example/proto" is not a local directory and does not lo...
+> Bash cd /builds/looper/tacplus/issues/665; S=$PWD/example/proto; for b in tp665-main tp665; do d=/tmp/py665-$b; (cd $d && /tmp/$b build --config tacplus.yaml --src $S 2>&1 | grep -v INFO | tail -3; echo "$b exit ${PIPESTATUS[0]}"); done; find /tmp/py665-tp665/model -name "*.py" | head -5
+= task_started
+= task_notification
+< Error: mcp annotation errors:   notesapi.NotesApi: owns MCP tools but is being generated for language "python", which has no MCP dispatch backend; the session carrier would be injected into the proto and stubbed on the handler with nothing to serve the tools it carries. Generate this service's serve...
+= thinking_tokens
+= thinking_tokens
+Reproduced on main, and the fix generates the client. Checking that Python hosting a tool-owning service is still refused by its own server-wrapper rejection:
+> Bash cd /builds/looper/tacplus/issues/665; S=$PWD/example/proto; d=/tmp/py665-host; rm -rf $d; mkdir -p $d; printf 'language: "python"\npkg: "com.example.notesapi"\noutput-dir: "model"\nheader: |\n  x\n' > $d/tacplus.yaml; (cd $d && /tmp/tp665 build --config tacplus.yaml --src $S 2>&1 | grep -v INFO | ta...
+= task_started
+= task_notification
+< Error: failed to generate python: generation failed: python is a client-only target; only client generation is supported. Remove ServiceManager/state generation from service_state on notesapi.NotesState or use a full-service target (go, rust, java) exit 1
+= thinking_tokens
+= thinking_tokens
+The host build is still refused. Next I'll check STATE.md, commit, and run the full gates.
+> Bash cd /builds/looper/tacplus/issues/665; grep -n -i "mcp-6\|python.*mcp\|mcp.*python" STATE.md PROPOSALS.md | head; cat gates.yaml | head -40; sed -n 171,204p justfile
+< # The gate map of tacplus (tacplus#266; tacplus-dev/looper README, Gates scaled # to the diff): the gates a land runs, chosen by the paths its diff changes. A # path no set names, a path under full's paths, a change to this file, the # nightly gates and every release run full. Each set's run is a sh...
+> Bash cd /builds/looper/tacplus/issues/665; git add -A && git commit -q -F - <<'EOF' MCP-6: python is a client target, not an MCP host (#665)  MCP-6 gated python as a language that emits a service wrapper with no MCP dispatch backend, and checked every service in the descriptor set. Python is a full-clien...
+< remote:  [2026-11-13T19:03:45Z] checkpoint of #665 (a step) pushed to looper/tacplus-665:  5 files changed, 244 insertions(+), 26 deletions(-) 7060
+= thinking_tokens
+= thinking_tokens
+Full gates are running (PID 7060). Meanwhile I'm checking the release state: commits since v2.6.1 and the release branches.
+> Bash cd /builds/looper/tacplus/issues/665; git fetch -q --tags origin; git log --oneline v2.6.1..origin/main | head -40; git log --oneline v2.6.1..origin/main | wc -l; git branch -r | grep release; git log -1 --format=%ci v2.6.0; git log -1 --format=%ci v2.5.0 2>/dev/null
+< 4205075d Gate map: gates.yaml and a docs recipe, so a docs-only land runs minutes, not the full gates (#266) 0d66c1bb Gates: refuse a committed merge conflict marker in any tracked file (#329) 5380efab images: declare each image's Debian packages; drop buildpack-deps (OpenEXR) (#554) 822e15f0 curren...
+= thinking_tokens
+= thinking_tokens
+Main has 33 commits since v2.6.1, so I'm checking whether any are features (that would decide where v2.6.2 is cut) and how the earlier patches were released.
+> Bash cd /builds/looper/tacplus/issues/665; git tag --sort=-creatordate | head -12; tail -25 HISTORY.md; for i in 321 211 313 338 351 554 329 266; do echo "$i $(gh issue view $i --repo tacplus-dev/tacplus --json labels -q '[.labels[].name]|join(",")')"; done
+= task_started
+= task_notification
+< v2.6.11 v2.5.23 v2.4.22 v2.3.22 v2.2.20 v2.1.23 v2.0.30 v2.6.10 v2.5.22 v2.4.21 v2.3.21 v2.2.19 - 2026-11-08 looper release v2.4.13 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.4.13) - 2026-11-08 looper release v2.5.14 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.5.14) - 2026-1...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/665; for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$v .0=$(git log -1 --format=%cs v$v.0) newest=$(git tag -l "v$v.*" --sort=-v:refname | head -1) gate=$(git show origin/release/$v:pkg/internal/common/parser/mcp_validate.go 2>/dev/null | grep -c '"python": true')"; ...
+< 2.0 .0=2026-10-15 newest=v2.0.30 gate=1 2.1 .0=2026-10-20 newest=v2.1.23 gate=1 2.2 .0=2026-10-25 newest=v2.2.20 gate=1 2.3 .0=2026-10-25 newest=v2.3.22 gate=1 2.4 .0=2026-10-27 newest=v2.4.22 gate=1 2.5 .0=2026-10-28 newest=v2.5.23 gate=1 2.6 .0=2026-11-04 newest=v2.6.11 gate=1 668 [release/2.6] ru...
+All seven lines (2.0–2.6) have the gate and are under twelve months old. I'll copy the format of an existing backport PR:
+> Bash cd /builds/looper/tacplus/issues/665; gh pr view 668 --repo tacplus-dev/tacplus --json body,headRefName -q '.headRefName+"\n"+.body'; gh pr list --repo tacplus-dev/tacplus --state open --base release/2.0 --json number,body -q '.[].body' | grep -o "v2\.0\.[0-9]*" | sort -V | tail -2
+< backport/657-release-2.6 Backport of e0b02452 from main (#657). Its hash on main follows the land, and this pull request stays a draft until then. **Once this merges, cut the line's next free patch tag on `release/2.6` at the merge commit: `v2.6.12` today**, unless another backport on this line take...
+= thinking_tokens
+= thinking_tokens
+I'll prepare the seven backports in separate worktrees while the gates run here.
+> Bash cd /builds/looper/tacplus/issues/665; C=$(git rev-parse HEAD); mkdir -p ~/bp665; for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do w=~/bp665/$v; git worktree add -q -b backport/665-release-$v $w origin/release/$v 2>&1|tail -1; (cd $w && git cherry-pick -x $C >/dev/null 2>&1 && echo "$v picked" || { echo "$v ...
+= task_started
+= task_notification
+< 2.0 picked 2.1 picked 2.2 picked 2.3 picked 2.4 picked 2.5 picked 2.6 picked
+= thinking_tokens
+= thinking_tokens
+All seven cherry-picks applied cleanly. Running the parser tests on each line:
+> Bash for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do cd ~/bp665/$v && go generate ./pkg/internal/proto/spec/... >/dev/null 2>&1; echo "$v $(go test ./pkg/internal/common/parser/ 2>&1 | tail -1)"; done; tail -3 /tmp/gates665.log
+= task_started
+= task_notification
+< 2.0 ok  	github.com/tacplus-dev/tacplus/pkg/internal/common/parser	35.128s 2.1 ok  	github.com/tacplus-dev/tacplus/pkg/internal/common/parser	35.209s 2.2 ok  	github.com/tacplus-dev/tacplus/pkg/internal/common/parser	45.354s 2.3 ok  	github.com/tacplus-dev/tacplus/pkg/internal/common/parser	31.810s ...
+= thinking_tokens
+= thinking_tokens
+Parser tests pass on all seven lines. Next I'm running the end-to-end Python client repro on the oldest line (2.0), before and after the fix:
+> Bash cd ~/bp665/2.0 && go build -o /tmp/tp665-20 . && git stash -q 2>/dev/null; git checkout -q HEAD~1 && go build -o /tmp/tp665-20-old . && git checkout -q backport/665-release-2.0; S=$PWD/example/proto; ls $S; for b in tp665-20-old tp665-20; do d=/tmp/py665-$b; rm -rf $d; mkdir -p $d; printf 'language:...
+= task_started
+= task_notification
+< client dependencies.yaml notes platform registry.yaml Error: mcp annotation errors:   notesapi.NotesApi: owns MCP tools but is being generated for language "python", which has no MCP dispatch backend; the session carrier would be inje tp665-20-old exit 1 All done! ✨ 🍰 ✨ 103 files reformatted, 67 fil...
+= thinking_tokens
+= thinking_tokens
+The bug is present on 2.0 and the backport fixes it. I'll open the backport PRs after the land, once main's hash is known. Polling the gates:
+> Bash sleep 1; grep "^=== .* rc=" /tmp/gates665.log; tail -2 /tmp/gates665.log | cut -c1-200
+< === protoc-check rc=0 === === soundness rc=0 === ok  	github.com/tacplus-dev/tacplus/pkg/codefile	0.032s ok  	github.com/tacplus-dev/tacplus/pkg/depfiles	0.132s
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Bash until grep -q "OVERALL" /tmp/gates665.log || ! kill -0 7060 2>/dev/null; do sleep 20; done; grep "^=== .* rc=\|OVERALL" /tmp/gates665.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bdfytxtgx. Output is being written to: /builds/looper/tacplus/homes/looper-665/tmp/claude-61000/-builds-looper-tacplus-issues-665/0f2fa3df-b5e6-4298-a282-e2992128d7d9/tasks/bdfytxtgx.output. You will be notified when it completes. To check interim output, use R...
+= thinking_tokens
+= thinking_tokens
+The gates are running in the background; I'll pick up when they finish. My change touches no service handlers, so the trace-propagation rule (13) has nothing to check here.
+> Bash sleep 1500; grep "^=== .* rc=\|OVERALL" /tmp/gates665.log
+< <tool_use_error>Blocked: sleep 1500 followed by: grep "^=== .* rc=\|OVERALL" /tmp/gates665.log. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain shorter sleeps to work around...
+> Monitor tail -n +1 -f /tmp/gates665.log | grep --line-buffered -E "^=== .* rc=|OVERALL"
+= permission_denied
+< This Bash command contains multiple operations. The following part requires approval: tail -n +1 -f /tmp/gates665.log
+> Monitor until grep -q OVERALL /tmp/gates665.log || ! kill -0 7060 2>/dev/null; do sleep 30; done; grep -E "rc=|OVERALL" /tmp/gates665.log
+= permission_denied
+< This Bash command contains multiple operations. The following parts require approval: grep -q OVERALL /tmp/gates665.log, kill -0 7060, grep -E "rc=|OVERALL" /tmp/gates665.log
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 57); do grep -q OVERALL /tmp/gates665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===
+Still waiting on the full gates: soundness and test have passed, and current-generation is running.
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3; tail -c 300 /tmp/gates665.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === eManager;          real coverage is pkg/internal/java/types/tls_degrade_template_test.go) ==> Generating go c2s-only fixture ==> Compiling go c2s-only fixture     PASS go c2s-only     Removed 9.9M fixture tree c2sonly-go ==> Generati...
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3; tail -c 200 /tmp/gates665.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===  ==> Compiling java record-egress fixture     PASS java record-egress     Removed 62M fixture tree recordegress-java ==> Generating rust record-egress fixture ==> Compiling rust record-egress fixture
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===
+= thinking_tokens
+= thinking_tokens
+The full gates take up to 180 minutes, and the land re-runs them, so I'm starting the land now alongside my local run rather than one after the other. Checkpointing first:
+> Bash cd /builds/looper/tacplus/issues/665; /usr/local/bin/repo-looper --repo tacplus --issue 665 --checkpoint "Fix committed; local just gates running (soundness,test pass); landing now. Backport branches backport/665-release-2.0..2.6 prepared locally in ~/bp665 (cherry-picked, parser tests pass) - push ...
+= task_started
+= task_notification
+< [2026-11-13T20:39:43Z] checkpoint of #665 (a step) pushed to looper/tacplus-665:  5 files changed, 367 insertions(+), 26 deletions(-) 70949
+= thinking_tokens
+= thinking_tokens
+The checkpoint reported 5 files changed, more than my 3, so I'm checking what's in the checkout:
+> Bash cd /builds/looper/tacplus/issues/665; git status --short | head; git diff --stat origin/main..origin/looper/tacplus-665 2>/dev/null | tail -8; cat /tmp/land665.log
+<  .looper/claude.log                                 | 206 +++++++++++++++++++++  .looper/land                                       |   4 +  .looper/prompt.md                                  | 128 +++++++++++++  docs/USER.md                                       |  10 +-  pkg/internal/common/parser...
+= thinking_tokens
+= thinking_tokens
+The extra files are the looper's own `.looper/` bookkeeping, so that's fine. While the land is queued, I'll push the backport branches and open them as draft PRs, as #668 does.
+> Bash cd /builds/looper/tacplus/issues/665; cat > /tmp/bp665body.md <<'EOF' Backport of the fix for #665 from main ("MCP-6: python is a client target, not an MCP host"). Its hash on main follows the land, and this pull request stays a draft until then. **Once this merges, cut the line's next free patch ta...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= vcs_state_changed
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/691 https://github.com/tacplus-dev/tacplus/pull/692 https://github.com/tacplus-dev/tacplus/pull/693 https://github.com/tacplus-dev/tacplus/pull/694 https://github.com/tacplus-dev/tacplus/pull/695 https://github.com/tacplus-dev/tacplus/pull/696 https://gith...
+Seven draft backport PRs are open (#691–#697). Now I'm polling the local gates and the land.
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -4; tail -3 /tmp/land665.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-13T20:39:46Z] checkpoint of #665 (land queued) pushed to looper/tacplus-665:  6 files changed, 373 insertions(+), 26 deletions(-) [2026-11-13T20:39:49Z] queued: the manager of tacplus merges looper/tacplus-665 after the land...
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3; tail -1 /tmp/land665.log | cut -c1-200
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3; tail -1 /tmp/land665.log | cut -c1-200
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-13T20:39:49Z] queued: the manager of tacplus merges looper/tacplus-665 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-13T20:39:49Z] queued: the manager of tacplus merges looper/tacplus-665 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your
+current-generation has been running a long time, so I'm checking it's still making progress:
+> Bash ls -la /tmp/gates665.log; date; tail -c 300 /tmp/gates665.log; kill -0 7060 && echo alive
+< -rw-r--r-- 1 looper-665 looper-665 33443 Nov 13 21:05 /tmp/gates665.log Fri Nov 13 21:09:43 UTC 2026 PASS go quorum-write     Removed 10M fixture tree quorumwrite-go ==> Generating java quorum-write fixture ==> Compiling java quorum-write fixture     PASS java quorum-write     Removed 47M fixture tr...
+It's progressing (now on the Rust fixtures). Polling continues.
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3; tail -1 /tmp/land665.log | cut -c1-120
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3; tail -1 /tmp/land665.log | cut -c1-120
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3; tail -1 /tmp/land665.log | cut -c1-120
+= task_started
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3; tail -1 /tmp/land665.log | cut -c1-120; date
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-13T20:39:49Z] queued: the manager of tacplus merges looper/tacplus-665 after the lands queued before it, one at
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-13T20:39:49Z] queued: the manager of tacplus merges looper/tacplus-665 after the lands queued before it, one at
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-13T20:39:49Z] queued: the manager of tacplus merges looper/tacplus-665 after the lands queued before it, one at
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-13T20:39:49Z] queued: the manager of tacplus merges looper/tacplus-665 after the lands queued before it, one at Fri Nov 13 21:48:27 UTC 2026
+= thinking_tokens
+= thinking_tokens
+The background watcher hit its time limit; the gates themselves are still running. With about an hour left, I'm checkpointing so a next run can finish if needed.
+> Bash cd /builds/looper/tacplus/issues/665; /usr/local/bin/repo-looper --repo tacplus --issue 665 --checkpoint "Fix committed and land queued (manager lands it). Local just gates: protoc-check/soundness/test pass, current-generation still running at 21:50Z. Draft backport PRs open: #691(2.0) #692(2.1) #69...
+< [2026-11-13T21:48:35Z] checkpoint of #665 (a step) pushed to looper/tacplus-665:  6 files changed, 433 insertions(+), 26 deletions(-) === soundness rc=0 === === test rc=0 ===
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; grep -q "verdict\|merged\|landed\|refused\|failed" /tmp/land665.log && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3; tail -2 /tmp/land665.log | cut -c1-300
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-13T20:39:46Z] checkpoint of #665 (land queued) pushed to looper/tacplus-665:  6 files changed, 373 insertions(+), 26 deletions(-) [2026-11-13T20:39:49Z] queued: the manager of tacplus merges looper/tacplus-665 after the land...
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; [ $(wc -l < /tmp/land665.log) -gt 2 ] && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3; tail -2 /tmp/land665.log | cut -c1-300; date
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; [ $(wc -l < /tmp/land665.log) -gt 2 ] && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3; tail -1 /tmp/land665.log | cut -c1-300; date
+> Bash for i in $(seq 58); do grep -q OVERALL /tmp/gates665.log && break; [ $(wc -l < /tmp/land665.log) -gt 2 ] && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3; tail -1 /tmp/land665.log | cut -c1-300; date
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-13T20:39:46Z] checkpoint of #665 (land queued) pushed to looper/tacplus-665:  6 files changed, 373 insertions(+), 26 deletions(-) [2026-11-13T20:39:49Z] queued: the manager of tacplus merges looper/tacplus-665 after the land...
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-13T20:39:49Z] queued: the manager of tacplus merges looper/tacplus-665 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still la...
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-13T20:39:49Z] queued: the manager of tacplus merges looper/tacplus-665 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still la...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/665; tail -c 200 /tmp/gates665.log; git rev-parse --short HEAD; gh issue comment 665 --repo tacplus-dev/tacplus --body-file - <<EOF Progress, not done. This run's time runs out before the land's verdict and its local full gates complete. The manager still lands the q...
+= task_started
+= task_notification
+< xture ==> Compiling java tenant-slice fixture     PASS java tenant-slice     Removed 53M fixture tree tenantslice-java ==> Generating rust tenant-slice fixture ==> Compiling rust tenant-slice fixture c416e3a7 https://github.com/tacplus-dev/tacplus/issues/665#issuecomment-6866296829 [2026-11-13T22:17...
+I'll keep polling for the land's verdict in the time left.
+> Bash for i in $(seq 55); do grep -q OVERALL /tmp/gates665.log && break; [ $(wc -l < /tmp/land665.log) -gt 2 ] && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3; tail -1 /tmp/land665.log | cut -c1-300; date
+> Bash for i in $(seq 50); do grep -q OVERALL /tmp/gates665.log && break; [ $(wc -l < /tmp/land665.log) -gt 2 ] && break; sleep 10; done; grep -E "rc=|OVERALL" /tmp/gates665.log | tail -3; tail -1 /tmp/land665.log | cut -c1-300; date
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-13T20:39:49Z] queued: the manager of tacplus merges looper/tacplus-665 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still la...
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === [2026-11-13T20:39:49Z] queued: the manager of tacplus merges looper/tacplus-665 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still la...
+= thinking_tokens
+= thinking_tokens
+> Bash kill 7060; echo done
+< done
+I fixed the bug, but issue #665 is not closed: my time ran out before the land's verdict came back and before my local full gates finished.
+
+**The fix (commit c416e3a7, queued to land on main):** I took the issue's first option. `python` is removed from `mcpHostLanguages` in `pkg/internal/common/parser/mcp_validate.go`, so it is treated like TypeScript, Swift and C#. Python only generates clients and already refuses to generate servers, so it can never host MCP tools and the MCP-6 check had nothing to protect against. The check itself stays in place for a future server language that lacks MCP support. `TestAutoExpose_Mcp6LanguageGate` now accepts python and tests the refusal with a stand-in language. The test failed before the fix and passes after it. I also updated the MCP-6 paragraph in `docs/USER.md`.
+
+**What I verified:**
+- **Python client build:** a Python build of `example/proto`'s `notesclient`, which calls `notesapi.NotesApi`, fails with the MCP-6 error on main and generates after the fix. The same is true on release/2.0.
+- **Python host build:** a Python build that tries to host `notesapi` is still refused, by Python's own client-only rule.
+- **Local `just gates`:** protoc-check, soundness and test passed. current-generation was still running when time ran out, so I stopped it; the full local run is not confirmed.
+- **Not checked:** `cross-test/runtime-smoke/run.sh --consumer python`. On main it still fails at setup on `platform/health.proto`, which #657 is fixing.
+
+**Release:** I tagged nothing on main, because main has taken features since v2.6.1 (#321, #266). Also, the newest 2.6 release is v2.6.11, not v2.6.1 as the run's instructions said, so the patch can't be v2.6.2. Every release line from 2.0 to 2.6 has the bug. Each has a draft backport PR, and each PR names that line's next patch tag (v2.6.12 for 2.6) to cut once it merges. The parser tests pass on every branch.
+
+| Line | PR |
+|---|---|
+| 2.0 | #691 |
+| 2.1 | #692 |
+| 2.2 | #693 |
+| 2.3 | #694 |
+| 2.4 | #695 |
+| 2.5 | #696 |
+| 2.6 | #697 |
+
+No service handlers were touched, so there was no trace propagation to check.
+
+I posted a progress comment on #665 and checkpointed the branch. The manager still lands the queued commit after this run. The next run needs to read the land's verdict and the gate set it ran, take the backports out of draft, post the final comment and close the issue.
+= success: I fixed the bug, but issue #665 is not closed: my time ran out before the land's verdict came back and before my local full gates finished.
+
+**The fix (commit c416e3a7, queued to land on main):** I took the issue's first option. `python` is removed from `mcpHostLanguages` in `pkg/internal/common/parser/mcp_validate.go`, so it is treated like TypeScript, Swift and C#. Python only generates clients and already refuses to generate servers, so it can never host MCP tools and the MCP-6 check had nothing to protect against. The check itself stays in place for a future server language that lacks MCP support. `TestAutoExpose_Mcp6LanguageGate` now accepts python and tests the refusal with a stand-in language. The test failed before the fix and passes after it. I also updated the MCP-6 paragraph in `docs/USER.md`.
+
+**What I verified:**
+- **Python client build:** a Python build of `example/proto`'s `notesclient`, which calls `notesapi.NotesApi`, fails with the MCP-6 error on main and generates after the fix. The same is true on release/2.0.
+- **Python host build:** a Python build that tries to host `notesapi` is still refused, by Python's own client-only rule.
+- **Local `just gates`:** protoc-check, soundness and test passed. current-generation was still running when time ran out, so I stopped it; the full local run is not confirmed.
+- **Not checked:** `cross-test/runtime-smoke/run.sh --consumer python`. On main it still fails at setup on `platform/health.proto`, which #657 is fixing.
+
+**Release:** I tagged nothing on main, because main has taken features since v2.6.1 (#321, #266). Also, the newest 2.6 release is v2.6.11, not v2.6.1 as the run's instructions said, so the patch can't be v2.6.2. Every release line from 2.0 to 2.6 has the bug. Each has a draft backport PR, and each PR names that line's next patch tag (v2.6.12 for 2.6) to cut once it merges. The parser tests pass on every branch.
+
+| Line | PR |
+|---|---|
+| 2.0 | #691 |
+| 2.1 | #692 |
+| 2.2 | #693 |
+| 2.3 | #694 |
+| 2.4 | #695 |
+| 2.5 | #696 |
+| 2.6 | #697 |
+
+No service handlers were touched, so there was no trace propagation to check.
+
+I posted a progress comment on #665 and checkpointed the branch. The manager still lands the queued commit after this run. The next run needs to read the land's verdict and the gate set it ran, take the backports out of draft, post the final comment and close the issue.

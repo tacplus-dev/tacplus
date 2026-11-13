@@ -1,0 +1,223 @@
+= init
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/627; git log --oneline -3 origin/main; git fetch -q; git log --oneline -8 origin/main; git diff --stat; gh issue view 627 --repo tacplus-dev/tacplus --comments | tail -40; git tag --sort=-v:refname | head -3
+< 4205075d Gate map: gates.yaml and a docs recipe, so a docs-only land runs minutes, not the full gates (#266) 0d66c1bb Gates: refuse a committed merge conflict marker in any tracked file (#329) 5380efab images: declare each image's Debian packages; drop buildpack-deps (OpenEXR) (#554) 4205075d Gate m...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/627; git tag --merged origin/main --sort=-v:refname | head -3; git log -1 --format='%h %ci' v2.6.11; git branch -r | grep release; gh pr list --repo tacplus-dev/tacplus --search 627 --state all; gh pr list --repo tacplus-dev/tacplus --state all -L 15
+< v2.6.1 v2.6.0 v2.5.0 3b3e20a0 2026-11-12 17:12:54 -0700   origin/backport/190-release-2.0   origin/backport/190-release-2.1   origin/backport/190-release-2.2   origin/backport/190-release-2.3   origin/backport/190-release-2.4   origin/backport/190-release-2.5   origin/backport/199-release-2.0   orig...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/627; git tag -l 'v2.6.*' --format='%(refname:short) %(*objectname:short)%(objectname:short)' | sort -V; git log --oneline -1 v2.6.1; git log --oneline v2.6.1..origin/main | wc -l; git log --oneline v2.6.1..origin/main | grep -iv -E 'fix|bug' | head -30
+< v2.6.0 87adda9e11be8a0b v2.6.1 59419d54b6f658b6 v2.6.2 b597a839d98521ec v2.6.3 8e6e50c4bbc542ac v2.6.4 31f69e946f8dba91 v2.6.5 9be1ff79 v2.6.6 07cc1025 v2.6.7 7fb3e140 v2.6.8 db542d3f v2.6.9 3143a97a v2.6.10 172921ce v2.6.11 3b3e20a0 59419d54 Bound the disk the cross-test gates use: prune each leg's...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/627; git diff; gh pr view 642 --repo tacplus-dev/tacplus --json body -q .body; ls ~/ /tmp/*.log 2>/dev/null
+< Exit code 2 diff --git a/PROPOSALS.md b/PROPOSALS.md index 5846ea64..ad07ae96 100644 --- a/PROPOSALS.md +++ b/PROPOSALS.md @@ -4,6 +4,13 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones  the looper then marks it `promoted` or `declined` here with the date.    ## Op...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/627; cat gates.yaml | head -60
+< # The gate map of tacplus (tacplus#266; tacplus-dev/looper README, Gates scaled # to the diff): the gates a land runs, chosen by the paths its diff changes. A # path no set names, a path under full's paths, a change to this file, the # nightly gates and every release run full. Each set's run is a sh...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The previous run's work is all here but uncommitted, and its land never got a verdict. I'm committing it and landing it now.
+> Bash cd /builds/looper/tacplus/issues/627; git add -A && git commit -q -F - <<'EOF' stream-expiry: bound the self-tests' checks for a loaded runner (#627)  The stream-expiry gate's self-tests gave fixed wall-clock budgets that a loaded runner exceeds: the Java leg gave a handler's Context cancellation 3 ...
+= task_started
+= task_notification
+< 7c1acbe2 stream-expiry: bound the self-tests' checks for a loaded runner (#627) [2026-11-13T16:25:59Z] checkpoint of #627 (a step) pushed to looper/tacplus-627:  7 files changed, 346 insertions(+), 32 deletions(-) 945
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/627; /usr/local/bin/looper-trace check 2>&1 | tail -15; nohup just stream-expiry > /tmp/se627.log 2>&1 & echo $!
+= task_started
+= task_notification
+<   causal cross-test/server-runtime/client/go/main.go:89 ListEvents: DROPS the inbound trace_id handler cross-test/server-runtime/client/go/main.go:112 checkPage (inbound: api)   causal cross-test/server-runtime/client/go/main.go:114 ListEventsPaged: DROPS the inbound trace_id handler cross-test/serv...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/627; sed -n 60,95p cross-test/server-runtime/client/go/main.go; gh issue list --repo tacplus-dev/tacplus --state all --search "server-runtime trace_id in:title,body" -L 5
+< 	defer cancel()  	checkUnary(ctx, api, lang) 	checkServerStream(ctx, api, lang) 	checkPage(ctx, api, lang) 	checkFailClosed(ctx, api, lang)  	fmt.Printf("go generated client OK against %s generated server (%s)\n", lang, addr) }  // checkUnary: auth_disabled unary. The generated remote wrapper valida...
+= thinking_tokens
+= thinking_tokens
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Bash until ! kill -0 1114 2>/dev/null; do sleep 10; done; tail -8 /tmp/se627.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: b4h6rfv6s. Output is being written to: /builds/looper/tacplus/homes/looper-627/tmp/claude-61000/-builds-looper-tacplus-issues-627/607791df-732e-4179-9ebe-9e10cb9430a3/tasks/b4h6rfv6s.output. You will be notified when it completes. To check interim output, use R...
+> Bash until ! kill -0 945 2>/dev/null; do sleep 30; done; tail -30 /tmp/land627.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bneqpfda4. Output is being written to: /builds/looper/tacplus/homes/looper-627/tmp/claude-61000/-builds-looper-tacplus-issues-627/607791df-732e-4179-9ebe-9e10cb9430a3/tasks/bneqpfda4.output. You will be notified when it completes. To check interim output, use R...
+The land is queued and a local `just stream-expiry` check is running. I'm waiting for both.
+> Monitor until ! kill -0 1114 2>/dev/null; do sleep 10; done; grep -E "rc=|FAIL|ERROR|passed|OK" /tmp/se627.log | tail -8; echo done
+= permission_denied
+< This Bash command contains multiple operations. The following part requires approval: until ! kill -0 1114 ; do sleep 10; done; grep -E "rc=|FAIL|ERROR|passed|OK" /tmp/se627.log
+= thinking_tokens
+= thinking_tokens
+> Bash until ! kill -0 1114 2>/dev/null; do sleep 10; done; tail -6 /tmp/se627.log
+= task_started
+= task_notification
+< test s2sm::stream_expiry_behavior_test::rust_stream_expiry_ends_every_stream_shape_at_exp ... ok  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 8.06s       Removed 153 files, 403.8MiB total ==> stream-expiry check PASSED (rust)
+> Bash grep -E "check PASSED|check FAILED" /tmp/se627.log; tail -5 /tmp/land627.log
+< ==> stream-expiry check PASSED (go) ==> memberport check PASSED (java) ==> stream-expiry check PASSED (java) ==> stream-expiry check PASSED (rust) [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16...
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash until ! kill -0 945 2>/dev/null; do sleep 30; done; tail -25 /tmp/land627.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b1ylwxilq). Output is being written to: /builds/looper/tacplus/homes/looper-627/tmp/claude-61000/-builds-looper-tacplus-issues-627/607791df-732e-4179-9ebe-9e10cb9430a3/tasks/b1ylwxilq.output. You will be notified w...
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -3 /tmp/land627.log
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -3 /tmp/land627.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+The land is still in the manager's queue, and the local stream-expiry check passed on all legs. I'm still waiting for the land's verdict.
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -3 /tmp/land627.log
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -3 /tmp/land627.log
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -3 /tmp/land627.log; date -u
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land627.log; date -u
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land627.log; date -u
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land627.log; date -u
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land627.log; date -u
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land627.log; date -u
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land627.log; date -u
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash gh api repos/tacplus-dev/tacplus/issues/627/comments --jq '.[-2:][] | .created_at + " " + .body[0:400]'
+< 2026-11-13T14:04:03Z The looper of tacplus starts this issue with its limit 4h capped at 4h by this job (https://gitlab.com/tacplus-dev/looper/-/jobs/18006604294), which ends sooner: the run stops by itself before then, its work checkpointed, and the next run resumes it. 2026-11-13T16:25:09Z The loo...
+Still in the merge queue: no verdict on the issue yet. Waiting.
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land627.log; date -u
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land627.log; date -u
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land627.log; date -u
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land627.log; date -u
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash cd /builds/looper/tacplus/issues/627; /usr/local/bin/repo-looper --repo tacplus --issue 627 --checkpoint "Fix committed as 7c1acbe2 (one commit on 4205075d), land queued 16:26Z, still waiting on the manager at 19:08Z. Local just stream-expiry passed (go, java, rust, memberport java); the previous ru...
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land627.log; date -u
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land627.log; date -u
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land627.log; date -u
+= task_started
+= task_notification
+< [2026-11-13T19:07:42Z] checkpoint of #627 (a step) pushed to looper/tacplus-627:  8 files changed, 468 insertions(+), 32 deletions(-)
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land627.log; date -u
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land627.log; date -u
+> Bash for i in $(seq 57); do kill -0 945 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land627.log; date -u
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+= task_started
+= task_notification
+< [2026-11-13T16:26:05Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  8 files changed, 352 insertions(+), 32 deletions(-) [2026-11-13T16:26:07Z] queued: the manager of tacplus merges looper/tacplus-627 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash cd /builds/looper/tacplus/issues/627; /usr/local/bin/repo-looper --repo tacplus --issue 627 --checkpoint "Fix committed as 7c1acbe2 and its land was queued at 16:26Z. By 20:05Z there was still no verdict, and the manager lands it after this run. Local just stream-expiry passed. Backport PRs #636-#64...
+= task_started
+= task_notification
+< [2026-11-13T20:04:54Z] checkpoint of #627 (a step) pushed to looper/tacplus-627:  8 files changed, 493 insertions(+), 32 deletions(-)
+The fix for #627 is committed (7c1acbe2) and queued to land on main, but it hasn't landed yet. The queue had given no verdict by 20:05Z, and this run's time is nearly up. The manager will still land it after the run ends, and the next run will finish the issue. The issue stays open for now.
+
+**What the fix changes** (tests only; no generated code changes):
+- **Java:** each handler now gets 15 s after its stream closes, up from 3 s. A failure says how long after the close it waited. A new test checks that a listener added to an already-cancelled Context still runs.
+- **Rust:** the control stream's 2 s stall limit is now 5 s, and the failure message gives the wait.
+- **Go:** it had no fixed limit on the handler signal. The control test now also accepts DEADLINE_EXCEEDED sent by the server for the client's own deadline, once the window has passed. Under load it had failed on that timing.
+- **Member port:** the expiry test there (`MemberPortStreamExpiryTest`) now warms its connection before creating its 3 s token, and its limit on the stream close is more generous.
+
+**Verified:**
+- `just stream-expiry` passed in this run on all legs (Go, Java and Rust), plus the member port Java test.
+- The previous run reports 10 passes out of 10 with the machine loaded. I didn't repeat that here.
+- I did not run the full `just gates` myself. The land runs the full set, because `cross-test/` isn't listed in `gates.yaml`, but that result isn't back yet.
+
+**Release:**
+- I didn't tag a patch on main. Main has taken features since v2.6.1, and a `v2.6.2` tag already exists anyway.
+- Backport pull requests #636–#642 are open against release/2.0 through 2.6. Each one names the patch tag to cut on its branch once it merges.
+- Their descriptions still cite the old commit hashes (7cf43dbb, 74307086). They need main's hash once the land merges.
+
+**Trace check:** `looper-trace check` reports 8 findings, all in `cross-test/server-runtime/client/go/main.go`, which this change doesn't touch. #311 already covers them. The handlers this change touches make no outgoing calls.
+
+**Left for the next run:**
+1. Read the land's verdict on the issue, and fix and land again if the gates failed.
+2. Update the backport descriptions with main's hash.
+3. Post the outcome comment, then close the issue.
+= success: The fix for #627 is committed (7c1acbe2) and queued to land on main, but it hasn't landed yet. The queue had given no verdict by 20:05Z, and this run's time is nearly up. The manager will still land it after the run ends, and the next run will finish the issue. The issue stays open for now.
+
+**What the fix changes** (tests only; no generated code changes):
+- **Java:** each handler now gets 15 s after its stream closes, up from 3 s. A failure says how long after the close it waited. A new test checks that a listener added to an already-cancelled Context still runs.
+- **Rust:** the control stream's 2 s stall limit is now 5 s, and the failure message gives the wait.
+- **Go:** it had no fixed limit on the handler signal. The control test now also accepts DEADLINE_EXCEEDED sent by the server for the client's own deadline, once the window has passed. Under load it had failed on that timing.
+- **Member port:** the expiry test there (`MemberPortStreamExpiryTest`) now warms its connection before creating its 3 s token, and its limit on the stream close is more generous.
+
+**Verified:**
+- `just stream-expiry` passed in this run on all legs (Go, Java and Rust), plus the member port Java test.
+- The previous run reports 10 passes out of 10 with the machine loaded. I didn't repeat that here.
+- I did not run the full `just gates` myself. The land runs the full set, because `cross-test/` isn't listed in `gates.yaml`, but that result isn't back yet.
+
+**Release:**
+- I didn't tag a patch on main. Main has taken features since v2.6.1, and a `v2.6.2` tag already exists anyway.
+- Backport pull requests #636–#642 are open against release/2.0 through 2.6. Each one names the patch tag to cut on its branch once it merges.
+- Their descriptions still cite the old commit hashes (7cf43dbb, 74307086). They need main's hash once the land merges.
+
+**Trace check:** `looper-trace check` reports 8 findings, all in `cross-test/server-runtime/client/go/main.go`, which this change doesn't touch. #311 already covers them. The handlers this change touches make no outgoing calls.
+
+**Left for the next run:**
+1. Read the land's verdict on the issue, and fix and land again if the gates failed.
+2. Update the backport descriptions with main's hash.
+3. Post the outcome comment, then close the issue.

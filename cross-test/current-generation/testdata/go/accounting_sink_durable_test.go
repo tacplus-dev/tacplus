@@ -46,7 +46,7 @@ func receiveRequestIDs(t *testing.T, sink *EventBusSink, tx <-chan *accountingre
 		case rec := <-tx:
 			got = append(got, rec.RequestId)
 			sink.Ack()
-		case <-time.After(emitBound):
+		case <-time.After(progressBound):
 			t.Fatalf("record %d of %d did not reach the publisher; got %v", i, n, got)
 		}
 	}
@@ -67,7 +67,7 @@ func expectNoMore(t *testing.T, tx <-chan *accountingrecord_pb.AccountingRecord)
 // cursor on shutdown and at intervals, so a restart must wait for it.
 func waitForCursor(t *testing.T, dir string, want int) {
 	t.Helper()
-	deadline := time.Now().Add(emitBound)
+	deadline := time.Now().Add(progressBound)
 	for {
 		raw, _ := os.ReadFile(filepath.Join(dir, "accounting-spool", "cursor"))
 		if n, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && n == want {
@@ -124,7 +124,7 @@ func TestDurableSpoolHoldsRPCWhenPublisherBlocked(t *testing.T) {
 // waitForLines polls the spool log until it holds want lines.
 func waitForLines(t *testing.T, dir string, want int) {
 	t.Helper()
-	deadline := time.Now().Add(emitBound)
+	deadline := time.Now().Add(progressBound)
 	log := filepath.Join(dir, "accounting-spool", "records.log")
 	for {
 		raw, _ := os.ReadFile(log)
@@ -158,7 +158,7 @@ func TestDurableSpoolReplaysOutageInOrderAndCompacts(t *testing.T) {
 	expectNoMore(t, tx)
 
 	logPath := filepath.Join(dir, "accounting-spool", "records.log")
-	deadline := time.Now().Add(emitBound)
+	deadline := time.Now().Add(progressBound)
 	for {
 		if _, err := os.Stat(logPath); os.IsNotExist(err) {
 			break
@@ -185,27 +185,36 @@ func TestDurableSpoolDropsAndCountsOnlyPastDiskBound(t *testing.T) {
 
 	const emitted = 40
 	emitAll(t, sink, emitted)
-	// Let the spool goroutine take everything in its queue before counting.
-	deadline := time.Now().Add(emitBound)
-	for len(sink.spool) > 0 && time.Now().Before(deadline) {
+	// Wait for the spool goroutine to reach the bound. Nothing reads tx yet, so it
+	// drops each record that would take the log past the bound.
+	deadline := time.Now().Add(progressBound)
+	for sink.dropped.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("emitted %d records past a 1024-byte disk bound, none were dropped", emitted)
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	time.Sleep(100 * time.Millisecond)
-	dropped := int(sink.dropped.Load())
-	if dropped == 0 {
-		t.Fatalf("emitted %d records past a 1024-byte disk bound, none were dropped", emitted)
-	}
 
+	// Every record not dropped reaches the publisher once it reads, so drain until the
+	// two account for every emit, then check nothing more arrives.
 	delivered := 0
-	for drained := false; !drained; {
+	for delivered+int(sink.dropped.Load()) < emitted {
 		select {
 		case <-tx:
 			delivered++
 			sink.Ack()
-		case <-time.After(emitBound):
-			drained = true
+		case <-time.After(10 * time.Millisecond):
+			if time.Now().After(deadline) {
+				t.Fatalf("delivered %d + dropped %d of %d records within %v: a record was lost without being counted", delivered, sink.dropped.Load(), emitted, progressBound)
+			}
 		}
 	}
+	select {
+	case <-tx:
+		delivered++
+	case <-time.After(200 * time.Millisecond):
+	}
+	dropped := int(sink.dropped.Load())
 	// The record in tx is counted as delivered once it is read, so the sum is exact.
 	if delivered+dropped != emitted {
 		t.Fatalf("delivered %d + dropped %d != emitted %d: a record was lost without being counted", delivered, dropped, emitted)

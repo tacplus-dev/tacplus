@@ -1,0 +1,203 @@
+= init
+> Bash gh issue view 574 --repo tacplus-dev/tacplus --comments | tail -30; git status --short; git diff --stat; git log --oneline -1 origin/main
+< author:	tacplus-looper association:	none edited:	false status:	none -- The looper of tacplus starts this issue with its limit 4h capped at 4h by this job (https://gitlab.com/tacplus-dev/looper/-/jobs/17999950887), which ends sooner: the run stops by itself before then, its work checkpointed, and the...
+> Bash git diff; gh pr list --repo tacplus-dev/tacplus --search "574" --state all --json number,title,baseRefName,state
+< diff --git a/cmd/sitegen/docs.go b/cmd/sitegen/docs.go index fcf5f3a9..5977536f 100644 --- a/cmd/sitegen/docs.go +++ b/cmd/sitegen/docs.go @@ -8,7 +8,6 @@ import (  	"fmt"  	"os"  	"path" -	"path/filepath"  	"regexp"  	"strings"  ) @@ -38,27 +37,23 @@ var publishedDocs = []struct{ Src, Dst string }{...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash gofmt -l cmd/sitegen; go vet ./cmd/sitegen && go test ./cmd/sitegen 2>&1 | tail -5; grep -n "func annotationPages" -A15 cmd/sitegen/*.go | head -30; which gosec
+< go: downloading google.golang.org/protobuf v1.36.11 cmd/sitegen/main_test.go:18:2: no required module provides package github.com/tacplus-dev/tacplus/target/proto/spec/sys; to add it: 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sys cmd/sitegen/annotations.go:64:func annotationPages(root...
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n "^docs\|^gates\|^test\|sitegen" justfile | head -20; cat gates.yaml | head -40
+< 54:test: generate soundness 69:# The tacplus.dev site (site/, MkDocs + Material). cmd/sitegen stages the 75:  go run ./cmd/sitegen 82:  go run ./cmd/sitegen 171:gates: 204:gates-container: 223:#     (cmd/sitegen -check-links). 230:docs: 243:  go run ./cmd/sitegen -check-links # The gate map of tacpl...
+= thinking_tokens
+= thinking_tokens
+> Bash sed -n 220,250p justfile; nohup just docs > /tmp/docs574.log 2>&1 & echo $!
+< #     merge base). PLANNING_FILES_CHECK names a local copy; else the one on #     PATH; else tacplus-dev/looper main's, fetched. #   - every relative link of every tracked Markdown document resolves #     (cmd/sitegen -check-links). #   - no secret in the history (gitleaks with .gitleaks.toml, as CI...
+Running `just docs` on the re-applied fix; meanwhile checking gosec on cmd/sitegen.
+> Bash gosec -quiet -include=G703,G304 ./cmd/sitegen/... 2>&1 | tail -15
+= task_started
+= task_notification
+< [/builds/looper/tacplus/issues/574/cmd/sitegen/annotations.go:107] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM)     106: 	}   > 107: 	raw, err := os.ReadFile(descPath)     108: 	if err != nil {  Autofix: Consider using os.Root to scope file access under...
+= thinking_tokens
+= thinking_tokens
+No G703 left (one pre-existing MEDIUM G304 on protoc's temp output, outside this issue). Waiting on `just docs`.
+> Bash for i in $(seq 1 50); do kill -0 801 2>/dev/null || break; sleep 10; done; tail -15 /tmp/docs574.log
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/pkg/internal/rust/types	129.189s ok  	github.com/tacplus-dev/tacplus/pkg/internal/swift/types	51.667s ok  	github.com/tacplus-dev/tacplus/pkg/internal/tactype	0.045s ok  	github.com/tacplus-dev/tacplus/pkg/internal/typescript/types	16.417s ok  	github.com/tacplus-...
+> Bash grep -nE "FAIL|sitegen|resolve|leaks found|===" /tmp/docs574.log | head -20; kill -0 801 2>/dev/null && echo running || echo done; git status --short
+< 1:=== planning-files-check 4205075dfd67ac748696bc630736e65e56c18bbb === 3:=== links === 4:sitegen: the links of 45 documents resolve 5:=== gitleaks === 8:[90m4:26PM[0m [32mINF[0m [1mno leaks found[0m 9:=== test === 206:ok  	github.com/tacplus-dev/tacplus/cmd/sitegen	1.464s done  M cmd/sitegen/...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+`just docs` passes and sitegen tests pass. Committing, checkpointing, and landing.
+> Bash git add cmd/sitegen && git commit -q -F - <<'EOF' sitegen: every file operation through os.Root, confined to the repository (#574)  gosec reported G703 (HIGH, CWE-22) at four sitegen sites: link targets, snippet markers and output paths were joined onto the root with filepath.Join, so a "../" in rep...
+< 5c067b2b sitegen: every file operation through os.Root, confined to the repository (#574) [2026-11-13T16:31:49Z] checkpoint of #574 (a step) pushed to looper/tacplus-574:  7 files changed, 352 insertions(+), 43 deletions(-)
+> Bash nohup /usr/local/bin/repo-looper --repo tacplus --issue 574 --land > /tmp/land574.log 2>&1 & echo $!
+< 16820
+= thinking_tokens
+= thinking_tokens
+While the land queues, checking the backport PRs.
+> Bash for n in 593 594 595 596 597 598; do gh pr view $n --repo tacplus-dev/tacplus --json number,baseRefName,mergeable,statusCheckRollup,body --jq '"\(.number) \(.baseRefName) \(.mergeable) \([.statusCheckRollup[]?|.conclusion // .state]|join(","))"'; done; gh pr view 598 --repo tacplus-dev/tacplus --jso...
+= task_started
+= task_notification
+< 593 release/2.1 MERGEABLE SUCCESS,SUCCESS,SUCCESS,SUCCESS,SUCCESS 594 release/2.2 MERGEABLE SUCCESS,SUCCESS,SUCCESS,SUCCESS,SUCCESS 595 release/2.3 MERGEABLE SUCCESS,SUCCESS,SUCCESS,SUCCESS,SUCCESS 596 release/2.4 MERGEABLE SUCCESS,SUCCESS,SUCCESS,SUCCESS,SUCCESS 597 release/2.5 MERGEABLE SUCCESS,SU...
+> Bash git ls-remote --heads origin 'release/*' | awk '{print $2}'; git log -1 --format="%ci" v2.0.0 2>/dev/null; /usr/local/bin/looper-trace check 2>&1 | tail -3; tail -3 /tmp/land574.log
+= task_started
+= task_notification
+< refs/heads/release/2.0 refs/heads/release/2.1 refs/heads/release/2.2 refs/heads/release/2.3 refs/heads/release/2.4 refs/heads/release/2.5 refs/heads/release/2.6 2026-10-15 16:36:10 -0600 FINDING dropped-trace cross-test/server-runtime/client/go/main.go:138: checkFailClosed's call GetContract is caus...
+= thinking_tokens
+= thinking_tokens
+release/2.0 has no backport PR; checking whether it has the vulnerable code.
+> Bash git fetch -q origin release/2.0 && git ls-tree --name-only origin/release/2.0 cmd/ ; git show origin/release/2.0:cmd/sitegen/main.go 2>&1 | grep -n "filepath.Join" | head
+< cmd/build cmd/cmd.go cmd/registry cmd/soundness cmd/sysrename cmd/upgrade cmd/validate cmd/verify cmd/version
+= thinking_tokens
+= thinking_tokens
+release/2.0 has no sitegen, so it needs no backport. The trace check's findings are all in cross-test code this change doesn't touch; checking whether they're already filed.
+> Bash /usr/local/bin/looper-trace check 2>&1 | grep FINDING | cut -c1-110; gh issue list --repo tacplus-dev/tacplus --state open --search "trace_id cross-test" --json number,title --jq '.[]|"\(.number) \(.title)"' | head
+= task_started
+= task_notification
+< FINDING dropped-trace cross-test/server-runtime/client/go/main.go:74: checkUnary's call GetPublicContract is c FINDING untested cross-test/server-runtime/client/go/main.go:73: checkUnary makes causal downstream calls (Get FINDING dropped-trace cross-test/server-runtime/client/go/main.go:89: checkSer...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Already filed as #311, so nothing new to file. Starting the full `just gates` locally (rule 4) while the land waits in the queue.
+> Bash nohup just gates > /tmp/gates574.log 2>&1 & echo $!
+< 17126
+> Bash for i in $(seq 1 58); do grep -qiE "landed|merged nothing|verdict|fail" /tmp/land574.log && break; kill -0 16820 2>/dev/null || break; sleep 10; done; tail -4 /tmp/land574.log; tail -2 /tmp/gates574.log
+< [2026-11-13T16:31:54Z] checkpoint of #574 (land queued) pushed to looper/tacplus-574:  8 files changed, 359 insertions(+), 43 deletions(-) [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came ...
+Both are running; polling.
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -2 /tmp/gates574.log; free -m | head -2
+= task_started
+= task_notification
+< [2026-11-13T16:31:54Z] checkpoint of #574 (land queued) pushed to looper/tacplus-574:  8 files changed, 359 insertions(+), 43 deletions(-) [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -2 /tmp/gates574.log
+= task_started
+= task_notification
+< [2026-11-13T16:31:54Z] checkpoint of #574 (land queued) pushed to looper/tacplus-574:  8 files changed, 359 insertions(+), 43 deletions(-) [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -2 /tmp/gates574.log
+= task_started
+= task_notification
+< [2026-11-13T16:31:54Z] checkpoint of #574 (land queued) pushed to looper/tacplus-574:  8 files changed, 359 insertions(+), 43 deletions(-) [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -2 /tmp/gates574.log
+= task_started
+= task_notification
+< [2026-11-13T16:31:54Z] checkpoint of #574 (land queued) pushed to looper/tacplus-574:  8 files changed, 359 insertions(+), 43 deletions(-) [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -2 /tmp/gates574.log; gh issue view 574 --repo tacplus-dev/tacplus --comments | tail -5
+= task_started
+= task_notification
+< [2026-11-13T16:31:54Z] checkpoint of #574 (land queued) pushed to looper/tacplus-574:  8 files changed, 359 insertions(+), 43 deletions(-) [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -2 /tmp/gates574.log
+= task_started
+= task_notification
+< [2026-11-13T16:31:54Z] checkpoint of #574 (land queued) pushed to looper/tacplus-574:  8 files changed, 359 insertions(+), 43 deletions(-) [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came ...
+The land is still queued and the local full gates are compiling fixtures. Still polling.
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -2 /tmp/gates574.log
+= task_started
+= task_notification
+< [2026-11-13T16:31:54Z] checkpoint of #574 (land queued) pushed to looper/tacplus-574:  8 files changed, 359 insertions(+), 43 deletions(-) [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -2 /tmp/gates574.log
+= task_started
+= task_notification
+< [2026-11-13T16:31:54Z] checkpoint of #574 (land queued) pushed to looper/tacplus-574:  8 files changed, 359 insertions(+), 43 deletions(-) [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -2 /tmp/gates574.log
+= task_started
+= task_notification
+< [2026-11-13T16:31:54Z] checkpoint of #574 (land queued) pushed to looper/tacplus-574:  8 files changed, 359 insertions(+), 43 deletions(-) [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -2 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -2 /tmp/gates574.log
+= task_started
+= task_notification
+< [2026-11-13T16:31:54Z] checkpoint of #574 (land queued) pushed to looper/tacplus-574:  8 files changed, 359 insertions(+), 43 deletions(-) [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came ...
+= thinking_tokens
+= thinking_tokens
+> Bash date -u +%H:%M; for i in $(seq 1 56); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -1 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -1 /tmp/gates574.log
+= task_started
+= task_notification
+< 18:07 [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. gates-running ==> Compiling rust owner-defa...
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -1 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -1 /tmp/gates574.log
+= task_started
+= task_notification
+< [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. gates-running ==> Compiling rust quorum-write fix...
+The land is still queued behind others, and the local `just gates` is partway through the fixtures. Still polling.
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -1 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -1 /tmp/gates574.log
+= task_started
+= task_notification
+< [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. gates-running ==> Compiling rust epoch-load fixtu...
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -1 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -1 /tmp/gates574.log
+= task_started
+= task_notification
+< [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. gates-running ==> Compiling java tenant-route fix...
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; date -u +%H:%M; tail -1 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -1 /tmp/gates574.log; grep -c FAIL /tmp/gates574.log
+= task_started
+= task_notification
+< 18:55 [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. gates-running ==> Compiling rust tenant-rou...
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -1 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -1 /tmp/gates574.log
+= task_started
+= task_notification
+< [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. gates-running ==> Compiling go redo-contract fixt...
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -1 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -1 /tmp/gates574.log
+= task_started
+= task_notification
+< [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. gates-running ==> Compiling rust redo-contract fi...
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; date -u +%H:%M; tail -1 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -1 /tmp/gates574.log
+= task_started
+= task_notification
+< 19:24 [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. gates-running ==> Compiling go tenant-recor...
+Still waiting: the land is queued and the local gates are still going, about 45 minutes before this run's limit. Checkpointing now so the next run knows where things stand.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 574 --checkpoint "Fix committed 5c067b2b on looper/tacplus-574, land queued since 16:31Z (manager lands it if this run ends). Verified: just docs green, go test ./cmd/sitegen, gosec no G703 (one pre-existing MEDIUM G304 at annotations.go:107, protoc ...
+= task_started
+= task_notification
+< [2026-11-13T19:24:19Z] checkpoint of #574 (a step) pushed to looper/tacplus-574:  8 files changed, 470 insertions(+), 43 deletions(-)
+= thinking_tokens
+= thinking_tokens
+> Bash git status --short | head
+< (Bash completed with no output)
+Clean. Polling again.
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -1 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -1 /tmp/gates574.log
+= task_started
+= task_notification
+< [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. gates-running ==> Compiling rust tenant-record fi...
+> Bash for i in $(seq 1 57); do kill -0 16820 2>/dev/null || break; sleep 10; done; date -u +%H:%M; tail -1 /tmp/land574.log; kill -0 17126 2>/dev/null && echo gates-running; tail -1 /tmp/gates574.log
+= task_started
+= task_notification
+< 19:43 [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. gates-running ==> Compiling rust tenant-rec...
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 45); do kill -0 16820 2>/dev/null || break; sleep 10; done; tail -1 /tmp/land574.log; tail -1 /tmp/gates574.log; grep -c "FAIL" /tmp/gates574.log
+= task_started
+= task_notification
+< [2026-11-13T16:31:57Z] queued: the manager of tacplus merges looper/tacplus-574 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you. ==> Compiling rust tenant-slice fixture 0
+The run is close to its limit and the land still hasn't come out of the queue. I'm stopping my local gates by PID and leaving the queued land to the manager.
+> Bash kill 17126; cd /builds/looper/tacplus/issues/574 && /usr/local/bin/repo-looper --repo tacplus --issue 574 --checkpoint "Fix committed 5c067b2b, land queued since 16:31Z (still queued at 19:52Z; the manager lands it after this run). Verified: just docs green, go test ./cmd/sitegen, gosec no G703. Loc...
+< [2026-11-13T19:51:08Z] checkpoint of #574 (a step) pushed to looper/tacplus-574:  8 files changed, 494 insertions(+), 43 deletions(-)
+The fix for #574 is committed and queued to land, but it hasn't merged yet. The queue still hadn't reached it after about 3h20m, and the run is at its time limit. The manager will merge it after this run ends and post the verdict on the issue; the next run finishes the rest.
+
+**What changed:** commit `5c067b2b` on `looper/tacplus-574`. sitegen now opens the repository and the docs directory once each with `os.OpenRoot`, and does every read, stat and write through them. A link or snippet path that climbs out with `..` or follows a symbolic link outside is now an error, and the file outside is not read. The same commit fixes the other three sites of this finding (#573, #575, #576). Two new tests cover a snippet marker with `../` past the root and a link that leaves through a symbolic link.
+
+**Checks run:**
+- `just docs` passes: "sitegen: the links of 45 documents resolve", "no leaks found", and `ok cmd/sitegen` in the test step.
+- gosec reports no G703 in `cmd/sitegen/`. It still reports one MEDIUM finding (G304) at `cmd/sitegen/annotations.go:107`, on a file protoc writes to a temporary location; that predates this change and is outside the issue.
+- The full `just gates` locally ran about 3h20m with no FAIL, but I stopped it at the run's limit before it finished. The land will run the full gates anyway, because the change is under `cmd/`.
+- The trace check found nothing in sitegen, which has no service handlers. Its only findings are in `cross-test/server-runtime/client/go/main.go`, which this change doesn't touch, and they're already filed as #311.
+
+**Backports:** the pull requests #593–#598 (release/2.1 through release/2.6) are open, mergeable and green. release/2.0 has no sitegen, so it needs none. I won't tag `v2.6.2` on main, because main has taken features since `v2.6.1`. The patch ships as the next `v2.6.x` on release/2.6 once #598 merges.
+
+**Left for the next run:** confirm the land verdict, add main's commit hash to the bodies of #593–#598, comment on #574 (and on #573, #575, #576), then close the issue. All of this is in the last checkpoint.
+= success: The fix for #574 is committed and queued to land, but it hasn't merged yet. The queue still hadn't reached it after about 3h20m, and the run is at its time limit. The manager will merge it after this run ends and post the verdict on the issue; the next run finishes the rest.
+
+**What changed:** commit `5c067b2b` on `looper/tacplus-574`. sitegen now opens the repository and the docs directory once each with `os.OpenRoot`, and does every read, stat and write through them. A link or snippet path that climbs out with `..` or follows a symbolic link outside is now an error, and the file outside is not read. The same commit fixes the other three sites of this finding (#573, #575, #576). Two new tests cover a snippet marker with `../` past the root and a link that leaves through a symbolic link.
+
+**Checks run:**
+- `just docs` passes: "sitegen: the links of 45 documents resolve", "no leaks found", and `ok cmd/sitegen` in the test step.
+- gosec reports no G703 in `cmd/sitegen/`. It still reports one MEDIUM finding (G304) at `cmd/sitegen/annotations.go:107`, on a file protoc writes to a temporary location; that predates this change and is outside the issue.
+- The full `just gates` locally ran about 3h20m with no FAIL, but I stopped it at the run's limit before it finished. The land will run the full gates anyway, because the change is under `cmd/`.
+- The trace check found nothing in sitegen, which has no service handlers. Its only findings are in `cross-test/server-runtime/client/go/main.go`, which this change doesn't touch, and they're already filed as #311.
+
+**Backports:** the pull requests #593–#598 (release/2.1 through release/2.6) are open, mergeable and green. release/2.0 has no sitegen, so it needs none. I won't tag `v2.6.2` on main, because main has taken features since `v2.6.1`. The patch ships as the next `v2.6.x` on release/2.6 once #598 merges.
+
+**Left for the next run:** confirm the land verdict, add main's commit hash to the bodies of #593–#598, comment on #574 (and on #573, #575, #576), then close the issue. All of this is in the last checkpoint.

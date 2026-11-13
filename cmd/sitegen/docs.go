@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -37,31 +36,40 @@ var publishedDocs = []struct{ Src, Dst string }{
 // generatedDirs are the docs subdirectories sitegen owns outright.
 var generatedDirs = []string{"guide", "project", "reference"}
 
-func stageDocs(root, out string) error {
+// stageDocs stages the published documents of the repository repo into the
+// docs directory docs.
+func stageDocs(repo, docs *os.Root) error {
 	pages := map[string]string{}
 	for _, d := range publishedDocs {
 		pages[d.Src] = d.Dst
 	}
 	for _, d := range publishedDocs {
-		src, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(d.Src)))
+		src, err := repo.ReadFile(d.Src)
 		if err != nil {
 			return err
 		}
-		staged, err := rewriteLinks(string(src), d.Src, d.Dst, pages, func(p string) (bool, bool) {
-			fi, err := os.Stat(filepath.Join(root, filepath.FromSlash(p)))
-			if err != nil {
-				return false, false
-			}
-			return true, fi.IsDir()
-		})
+		staged, err := rewriteLinks(string(src), d.Src, d.Dst, pages, existsIn(repo))
 		if err != nil {
 			return fmt.Errorf("%s: %w", d.Src, err)
 		}
-		if err := writeFile(filepath.Join(out, filepath.FromSlash(d.Dst)), []byte(staged)); err != nil {
+		if err := writeFile(docs, d.Dst, []byte(staged)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// existsIn reports whether a repository path exists under repo and whether it
+// is a directory, for rewriteLinks. A path that leaves repo, through ".." or a
+// symbolic link, does not exist.
+func existsIn(repo *os.Root) func(string) (bool, bool) {
+	return func(p string) (bool, bool) {
+		fi, err := repo.Stat(p)
+		if err != nil {
+			return false, false
+		}
+		return true, fi.IsDir()
+	}
 }
 
 var (

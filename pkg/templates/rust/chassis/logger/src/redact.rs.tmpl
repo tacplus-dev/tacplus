@@ -107,9 +107,24 @@ impl<'a> MakeWriter<'a> for RedactingStderrMakeWriter {
 mod tests {
     use super::*;
 
+    // The fake tokens are assembled at run time, never one literal: a secret
+    // scan reads a token-shaped literal as a key in every project that
+    // generates this module (tacplus#628).
+    fn fake_jwt_prefix() -> String {
+        ["eyJraWQiOiIzOTE2YTM1My1i", "ODY3LTQ1ZTQtODk2ZS1mMDhkZjA"].concat()
+    }
+
+    fn fake_jwt() -> String {
+        ["eyJraWQiOiIzOTE2YTM1My1i", "ODY3LTQ1ZTQtODk2ZS1mMDhk", "ZjBhYjcxNDYi"].concat()
+    }
+
+    fn fake_jwt_header_payload() -> String {
+        ["eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9", ".", "eyJzdWIiOiIxMjM0NTY3ODkwIn0"].concat()
+    }
+
     #[test]
     fn test_redact_bearer_token() {
-        let token = "eyJraWQiOiIzOTE2YTM1My1iODY3LTQ1ZTQtODk2ZS1mMDhkZjA";
+        let token = &fake_jwt_prefix();
         let input = format!("authorization: Bearer {}", token);
         let result = redact_credentials(&input);
         assert!(!result.contains(token), "token leaked: {}", result);
@@ -127,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_redact_case_insensitive() {
-        let token = "eyJraWQiOiIzOTE2YTM1My1iODY3LTQ1ZTQtODk2ZS1mMDhkZjA";
+        let token = &fake_jwt_prefix();
         for key in &["Authorization", "AUTHORIZATION", "authorization"] {
             let input = format!("{}: Bearer {}", key, token);
             let result = redact_credentials(&input);
@@ -168,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_redact_standalone_bearer() {
-        let token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0";
+        let token = &fake_jwt_header_payload();
         let input = format!("Value: Bearer {}", token);
         let result = redact_credentials(&input);
         assert!(!result.contains(token), "bearer token leaked: {}", result);
@@ -181,7 +196,7 @@ mod tests {
     // while the suite stayed green.
     #[test]
     fn test_redact_json_structured_field() {
-        let token = "eyJraWQiOiIzOTE2YTM1My1iODY3LTQ1ZTQtODk2ZS1mMDhkZjBhYjcxNDYi";
+        let token = &fake_jwt();
 
         // Built by concatenation rather than format!: this file is itself a Go
         // text/template, and the doubled braces format! needs to emit a literal
@@ -212,7 +227,7 @@ mod tests {
     fn test_redacting_writer_behavioral() {
         use std::io::Write;
 
-        let token = "eyJraWQiOiIzOTE2YTM1My1iODY3LTQ1ZTQtODk2ZS1mMDhkZjA";
+        let token = &fake_jwt_prefix();
         let mut output_buf = Vec::new();
         {
             let mut writer = RedactingWriter::new(&mut output_buf);
@@ -242,7 +257,7 @@ mod tests {
         use std::sync::{Arc, Mutex};
         use tracing_subscriber::layer::SubscriberExt;
 
-        let token = "eyJraWQiOiIzOTE2YTM1My1iODY3LTQ1ZTQtODk2ZS1mMDhkZjA";
+        let token = &fake_jwt_prefix();
         let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
 
         struct TestMakeWriter(Arc<Mutex<Vec<u8>>>);

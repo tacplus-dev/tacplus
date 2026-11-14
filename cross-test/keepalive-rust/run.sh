@@ -113,7 +113,7 @@ contractclient-model = { path = "$MODEL_DIR/model" }
 futures = "0.3.31"
 grpcserver = { path = "$MODEL_DIR/model/chassis/grpcserver" }
 servicemanager = { path = "$MODEL_DIR/model/chassis/servicemanager" }
-tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.51.6", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1.17", features = ["net"] }
 tonic = "0.14.0"
 EOF

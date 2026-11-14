@@ -1827,6 +1827,40 @@ Client-only targets do not have a supported service runtime library surface.
 Accepted builds should use only the generated C2D/C2S/W2S client helpers, the
 `client_im` identity manager, and any client-side primitives they import.
 
+**The generated Python package supports Python 3.8 or later on this line.**
+Its runtime libraries import `cryptography`, `httpx`, `requests` and
+`urllib3`, so the generated `pyproject.toml` declares them as root
+dependencies at the floors `dependencies.yaml` sets, and
+`requires-python = ">=3.8"`. Set `cryptography: '>=47.0.0'`,
+`requests: '>=2.32.4'` and `urllib3: '>=2.2.3'` or higher, as
+`example/proto/dependencies.yaml` does: these are the newest releases that
+install on 3.8, and older floors admit releases with more known advisories,
+which a lockfile or another constraint holding the package back would install.
+A regeneration over an existing `pyproject.toml` raises these floors in place.
+
+The releases that clear every advisory need Python 3.10, so on this line these
+remain at the floors, accepted (#264). **Move to tacplus 2.6+ / Python 3.10+
+to clear them**: 2.6 requires Python 3.10 and raises the floors to
+cryptography 50.0.0, requests 2.33.0 and urllib3 2.8.0. A consumer on Python
+3.10 or later clears them on this line too, by setting those floors in its own
+`dependencies.yaml`.
+
+| Package | Floor | Advisory | Fixed in |
+|---------|-------|----------|----------|
+| cryptography | 47.0.0 | GHSA-537c-gmf6-5ccf | 48.0.1 |
+| cryptography | 47.0.0 | PYSEC-2026-3554 (CVE-2026-69248) | 49.0.0 |
+| cryptography | 47.0.0 | PYSEC-2026-3553 (CVE-2026-69249) | 49.0.0 |
+| cryptography | 47.0.0 | PYSEC-2026-3552 (CVE-2026-69247) | 50.0.0 |
+| requests | 2.32.4 | PYSEC-2026-2275 (CVE-2026-25645) | 2.33.0 |
+| urllib3 | 2.2.3 | PYSEC-2026-1997 (CVE-2025-50182) | 2.5.0 |
+| urllib3 | 2.2.3 | PYSEC-2026-1999 (CVE-2025-50181) | 2.5.0 |
+| urllib3 | 2.2.3 | PYSEC-2026-1998 (CVE-2025-66418) | 2.6.0 |
+| urllib3 | 2.2.3 | PYSEC-2026-1994 (CVE-2025-66471) | 2.6.0 |
+| urllib3 | 2.2.3 | PYSEC-2026-1996 (CVE-2026-21441) | 2.6.3 |
+| urllib3 | 2.2.3 | PYSEC-2026-141 (CVE-2026-44431) | 2.7.0 |
+| urllib3 | 2.2.3 | PYSEC-2026-4175 (CVE-2026-97687) | 2.8.0 |
+| urllib3 | 2.2.3 | PYSEC-2026-4177 (CVE-2026-97689) | 2.8.0 |
+
 ---
 
 ## Service Lifecycle

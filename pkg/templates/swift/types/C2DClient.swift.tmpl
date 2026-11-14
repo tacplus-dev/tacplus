@@ -4,19 +4,32 @@ import GRPCNIOTransportHTTP2
 
 public struct C2DClient: Sendable {
     public let socketPath: String
-
+{{if .DefaultSocketPath}}
     /// Creates a C2D client dialing the daemon at `socketPath`.
     /// - Parameter socketPath: path to the daemon's unix-domain socket. When
-    ///   omitted, defaults to `~/.{{.DaemonDirectory}}/daemon.sock`.
+    ///   omitted, defaults to the `socket_path` the services declare, the one
+    ///   the generated daemons bind.
     /// - Precondition: `socketPath` must not be empty.
     public init(socketPath: String = C2DClient.defaultSocketPath()) {
+{{- else}}
+    /// Creates a C2D client dialing the daemon at `socketPath`. The services
+    /// this client covers declare different socket paths, so there is no
+    /// default socket: pass the one of the daemon serving them.
+    /// - Parameter socketPath: path to the daemon's unix-domain socket.
+    /// - Precondition: `socketPath` must not be empty.
+    public init(socketPath: String) {
+{{- end}}
         precondition(!socketPath.isEmpty, "C2DClient: socketPath must not be empty")
         self.socketPath = socketPath
     }
+{{- if .DefaultSocketPath}}
 
-    public static func defaultSocketPath(homeDirectory: String = FileManager.default.homeDirectoryForCurrentUser.path) -> String {
-        "\(homeDirectory)/.{{.DaemonDirectory}}/daemon.sock"
+    /// The default daemon socket: the `socket_path` the services declare,
+    /// which the generated daemons bind.
+    public static func defaultSocketPath() -> String {
+        "{{.DefaultSocketPath}}"
     }
+{{- end}}
 {{range .Services}}
 
     public func {{.MethodName}}<Result: Sendable>(

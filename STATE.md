@@ -1,6 +1,10 @@
 # State: tacplus
 
+<<<<<<< HEAD
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-10 by looper (#359).
+=======
 Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by looper (#266).
+>>>>>>> origin/main
 
 - **Version / line:** v2.6.2 (latest release, 2026-11-07, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -140,6 +144,14 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   `cross-test/redact` (`just redact`, in the gates) against a hand-built fixture. The legacy egress redaction
   (`(spec.redact)`, `(spec.data_entitlement)`, `Sanitize<T>`, `<T>Entitlement`) is deprecated (generation warns),
   removed in 3.0. Gaps: no cross-package sensitive tree, no oneof leaves, no client-only target (PROPOSALS.md).
+  The generated Go chassis pins a TLS peer on every handshake, a resumed one too (#359): `x509.TLSConfig` verifies
+  in `VerifyConnection` (crypto/tls skips `VerifyPeerCertificate` on resumption, gosec G123), and the mesh and
+  bootstrap clients (servicemanager, service_im) share `x509.SpiffeClientTLSConfig`, whose `InsecureSkipVerify` is
+  justified in place (`#nosec G402`: its chain check runs in `VerifyConnection`); `x509_resumption_test.go` refuses a
+  resumed session to a peer that no longer passes. gosec 2.30 on the generated example service reports no G402, G123,
+  G115, G404, G703 or G704: each was fixed (enum parse bounded to int32, gRPC codes, IP packing via encoding/binary,
+  JWK exponent, the AWS STS region validated) or annotated with its reason (wire two's complement, retry jitter,
+  operator-named paths). Backported to release/2.0 through release/2.6 by pull request, each line's next patch.
 - **Released / deployed:** v2.6.0 is the newest release: the binaries and `checksums.txt`, and
   `ghcr.io/tacplus-dev/tacplus/build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c`
   (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.

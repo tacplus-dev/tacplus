@@ -4,6 +4,14 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+<<<<<<< HEAD
+- **gosec on the generated Go in tacplus's own gates** (2026-11-08, #359): #359 cleared G402, G123, G115, G404,
+  G703 and G704 from the generated example service (fixed or `#nosec`-annotated with a reason in the templates),
+  but nothing here keeps them out: tacplus-dev/looper#108's scan sees a regression only after a release. A gate
+  (or a step of `current-generation`) that runs a pinned gosec over the generated Go of cross-test/proto and the
+  example, failing on those rules, would catch it at land. The other rules gosec reports there (G103 in protoc's
+  gencode, G104, G304, G101, G117, G301/G302) need a decision on each before they join it.
+=======
 - **Per-language gate sets, and more of the map** (2026-11-08, #266): `gates.yaml` runs the full gates (~3h) for any
   change under `pkg/**`, `cmd/**` or `.github/`. Next: `pkg/internal/<lang>/**` and `pkg/templates/<lang>/**` to that
   language's `current-generation-<lang>`, `determinism-<lang>` and `-<lang>` cross-tests (with `just test`), once each
@@ -11,6 +19,7 @@ the looper then marks it `promoted` or `declined` here with the date.
   stay full); `cmd/sitegen/**` and `site/**` to `just docs` plus `just site`; `.github/workflows/**` to a workflow
   lint. Also for `just docs`: it checks relative links but not their anchors (GitHub's heading slugs) nor external
   URLs, and does not build the site (`site/docs/*.md` link to site paths; `just site` checks them, needing a venv).
+>>>>>>> origin/main
 - **Images on Google Artifact Registry through WIF, ghcr.io deprecated from 2.6** (2026-11-07, #223; parked by
   the hub 2026-11-07): publish `base`, `build` and the services' release images to the public
   `us-docker.pkg.dev/jody1-328023/tacplus`, pushed by the GitLab publish job with a short-lived GCP token from its

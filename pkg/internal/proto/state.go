@@ -608,20 +608,14 @@ func buildStateService(
 	}
 
 	var buf strings.Builder
-	eventC2S := false
-	hasDeclaredEventSurface := false
+	var publicTopicSurfaces []stateEventSurface
 	for _, topic := range topics {
 		if topic.isPrivate {
 			continue
 		}
-		hasDeclaredEventSurface = hasDeclaredEventSurface || topic.hasEventSurface
-		eventC2S = eventC2S || topic.publishC2S != nil
+		publicTopicSurfaces = append(publicTopicSurfaces, stateEventSurface{c2s: topic.publishC2S, declared: topic.hasEventSurface})
 	}
-	if !hasDeclaredEventSurface && len(topics) > 0 {
-		if export, ok := stateRoot.Annotations["service_state_export"]; ok && export.BoolValue {
-			eventC2S = true
-		}
-	}
+	eventC2S := stateServiceIsEventC2S(stateRoot, len(topics) > 0, publicTopicSurfaces)
 
 	buf.WriteString("\n// ============================================================================\n")
 	buf.WriteString("// Auto-generated State Service (tacplus)\n")
@@ -745,7 +739,8 @@ func buildStateService(
 		// A record/event c2s declaration is a producer surface only. When this
 		// state service is the ordinary C2S client descriptor, omit internal-only
 		// topics and do not turn the broker's S2S Subscribe method into a C2S RPC.
-		if eventC2S && b.hasEventSurface && b.publishC2S == nil {
+		hasPublish, hasSubscribe := topicStateRPCs(eventC2S, stateEventSurface{c2s: b.publishC2S, declared: b.hasEventSurface})
+		if !hasPublish {
 			continue
 		}
 		fmt.Fprintf(&buf, "\t// Topic: %s\n", b.goName)
@@ -765,7 +760,7 @@ func buildStateService(
 		// half, and it emits at the same per-RPC level for the same reason — one
 		// topic, not the whole state root. Undeclared keeps the service-level
 		// default, which is what every topic had before the field existed.
-		if !eventC2S || !b.hasEventSurface {
+		if hasSubscribe {
 			subscribeOption := formatEventBusS2SMethodOption(b.subscribeS2S)
 			if subscribeOption == "" {
 				fmt.Fprintf(&buf, "\trpc SubscribeTo%s(stream eventbus_support.SubscribeRequest) returns (stream %s);\n", b.goName, b.subscribeRecord)
@@ -957,6 +952,100 @@ func buildStateService(
 // type for a topic boundary.
 func TopicSubscribeRecordName(stateName, fieldName string) string {
 	return strutil.ToPascalCase(stateName) + fieldName + "SubscribeRecord"
+}
+
+// stateServiceIsEventC2S reports whether a state root's generated service is
+// the ordinary C2S descriptor of its record/event topics rather than an S2S
+// state service. surfaces holds the event surface of each non-private topic.
+func stateServiceIsEventC2S(stateRoot *parser.MessageDescriptor, hasTopics bool, surfaces []stateEventSurface) bool {
+	eventC2S := false
+	hasDeclaredEventSurface := false
+	for _, s := range surfaces {
+		hasDeclaredEventSurface = hasDeclaredEventSurface || s.declared
+		eventC2S = eventC2S || s.c2s != nil
+	}
+	if !hasDeclaredEventSurface && hasTopics {
+		if export, ok := stateRoot.Annotations["service_state_export"]; ok && export.BoolValue {
+			eventC2S = true
+		}
+	}
+	return eventC2S
+}
+
+// topicStateRPCs is the rule for which of a topic's two RPCs its state service
+// declares: an event-C2S service omits a declared record/event topic with no
+// C2S producer surface, and never turns the broker's Subscribe into a C2S RPC.
+func topicStateRPCs(eventC2S bool, surface stateEventSurface) (publish, subscribe bool) {
+	if eventC2S && surface.declared && surface.c2s == nil {
+		return false, false
+	}
+	return true, !eventC2S || !surface.declared
+}
+
+// isStateTopicField reports whether buildStateService classifies field as a
+// topic boundary: the same skips, in the same order, ahead of its topic case.
+func isStateTopicField(field parser.FieldDescriptor) bool {
+	if field.TypeKind != "message" || (field.Number >= 200 && field.Number <= 203) || field.IsMap {
+		return false
+	}
+	if ann, ok := field.Annotations["state_import"]; ok && ann.StringValue != "" {
+		return false
+	}
+	if ann, ok := field.Annotations["view_sources"]; ok && len(ann.StringSliceValue) > 0 {
+		return false
+	}
+	if ann, ok := field.Annotations["command"]; ok && ann.BoolValue {
+		return false
+	}
+	if ann, ok := field.Annotations["queue"]; ok && ann.BoolValue {
+		return false
+	}
+	if ann, ok := field.Annotations["priority_queue"]; ok && ann.StringValue != "" {
+		return false
+	}
+	ann, ok := field.Annotations["topic"]
+	return ok && ann.BoolValue
+}
+
+// StateTopicRPCs says which per-topic RPCs a generated state service declares.
+type StateTopicRPCs struct {
+	Publish   bool // PublishTo<Field>
+	Subscribe bool // SubscribeTo<Field>
+}
+
+// StateTopicRPCSurface returns, keyed by proto field name, the RPCs the
+// generated state service of stateRoot declares for each of its non-private
+// topics, by the same rule AppendStateServiceToProtos emits them with. A state
+// client calls only these: a stub method the service does not declare does not
+// exist, and the client would not compile.
+func StateTopicRPCSurface(allFiles map[string]*parser.FileDescriptor, stateRoot *parser.MessageDescriptor) map[string]StateTopicRPCs {
+	eventSurfaces := collectStateEventSurfaces(allFiles)
+	type topicField struct {
+		name    string
+		surface stateEventSurface
+	}
+	var topics []topicField
+	var publicSurfaces []stateEventSurface
+	hasTopics := false
+	for _, field := range stateRoot.Fields {
+		if !isStateTopicField(field) {
+			continue
+		}
+		hasTopics = true
+		if _, isPrivate := field.Annotations["private"]; isPrivate {
+			continue
+		}
+		surface := eventSurfaces[field.Type]
+		topics = append(topics, topicField{name: field.Name, surface: surface})
+		publicSurfaces = append(publicSurfaces, surface)
+	}
+	eventC2S := stateServiceIsEventC2S(stateRoot, hasTopics, publicSurfaces)
+	out := make(map[string]StateTopicRPCs, len(topics))
+	for _, t := range topics {
+		publish, subscribe := topicStateRPCs(eventC2S, t.surface)
+		out[t.name] = StateTopicRPCs{Publish: publish, Subscribe: subscribe}
+	}
+	return out
 }
 
 // appendStateServicesForFile processes all state roots in a single proto file,

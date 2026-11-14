@@ -1,0 +1,106 @@
+= init
+> Bash git status && git log --oneline -3 && grep -n '^<<<<<<<\|^=======\|^>>>>>>>' PROPOSALS.md && gh issue view 475 --repo tacplus-dev/tacplus --comments | tail -20
+< On branch looper/tacplus-475 Your branch is up to date with 'origin/main'.  Changes not staged for commit:   (use "git add <file>..." to update what will be committed)   (use "git restore <file>..." to discard changes in working directory) 	modified:   PROPOSALS.md 	modified:   roadmap/README.md  Un...
+> Read /builds/looper/tacplus/issues/475/PROPOSALS.md
+< 1	# Proposals: tacplus 2	 3	Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones into ROADMAP.md (via an agent); 4	the looper then marks it `promoted` or `declined` here with the date. 5	 6	## Open 7	<<<<<<< HEAD 8	- **Product layer: a product's owner tenant reads across ...
+> Bash git diff roadmap/README.md && head -20 roadmap/PRODUCTS_LAYER.md && wc -l roadmap/PRODUCTS_LAYER.md
+< diff --git a/roadmap/README.md b/roadmap/README.md index 0133c4e6..d8359c13 100644 --- a/roadmap/README.md +++ b/roadmap/README.md @@ -13,6 +13,11 @@ tacplus behavior yet. Current behavior lives in [../docs/](../docs/).    over annotated `.proto`: five block keywords (`config`/`state`/`s2s`/`c2s`/`c...
+Resolve by keeping both entries (newest first).
+> Bash python3 - <<'EOF' p='PROPOSALS.md' s=open(p).read() a=s.index('<<<<<<< HEAD\n'); m=s.index('=======\n',a); b=s.index('>>>>>>> origin/main\n',m) ours=s[a+len('<<<<<<< HEAD\n'):m]; theirs=s[m+8:b] s=s[:a]+ours+theirs+s[b+len('>>>>>>> origin/main\n'):] open(p,'w').write(s) EOF grep -c '^<<<<<<<\|^=====...
+< 0  PROPOSALS.md      | 7 +++++++  roadmap/README.md | 5 +++++  2 files changed, 12 insertions(+) {"state":"OPEN","title":"Enforce: S2S never crosses tenants (door refuses other tenants' service tokens even on ANY_TENANT; S2S client stamps its own tid)"}
+= thinking_tokens
+= thinking_tokens
+> Bash cat gates.yaml | head -60
+< # The gate map of tacplus (tacplus#266; tacplus-dev/looper README, Gates scaled # to the diff): the gates a land runs, chosen by the paths its diff changes. A # path no set names, a path under full's paths, a change to this file, the # nightly gates and every release run full. Each set's run is a sh...
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 600 just docs 2>&1 | tail -15
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/pkg/internal/rust/types	168.142s ok  	github.com/tacplus-dev/tacplus/pkg/internal/swift/types	43.635s ok  	github.com/tacplus-dev/tacplus/pkg/internal/tactype	0.034s ok  	github.com/tacplus-dev/tacplus/pkg/internal/typescript/types	14.634s ok  	github.com/tacplus-...
+> Bash timeout 600 just docs > /tmp/docs475.log 2>&1; echo rc=$?; grep -E 'FAIL|^---|error' /tmp/docs475.log | head
+= task_started
+= task_notification
+< rc=0 - streaming/error-path trace and accounting completeness is covered by consumer-contract runtime cases. include timeouts, structured errors, and streaming-method stubs. - `swift W2S structured errors` ✓ (pkg/templates/swift/types/W2SClient.swift.tmpl) - `csharp W2S structured errors` ✓ (pkg/tem...
+Docs gate green. Commit, checkpoint, land.
+> Bash git add PROPOSALS.md roadmap/README.md roadmap/PRODUCTS_LAYER.md && git commit -q -F - <<'EOF' roadmap/PRODUCTS_LAYER.md: the product layer's approved design (#475)  Jody approved the design on #475 (2026-11-09) and asked for the doc to land with the first commit, before implementation, which waits ...
+= task_started
+= task_notification
+< 56218b1b roadmap/PRODUCTS_LAYER.md: the product layer's approved design (#475) [2026-11-14T01:19:15Z] checkpoint of #475 (a step) pushed to looper/tacplus-475:  5 files changed, 745 insertions(+)
+= thinking_tokens
+= thinking_tokens
+> Bash nohup /usr/local/bin/repo-looper --repo tacplus --issue 475 --land > /tmp/land475.log 2>&1 & echo $!
+< 17307
+While it queues, I'll prepare the kernel/operator issues: read roadmaps first (rule 11).
+> Bash grep -n -i 'product\|475' ROADMAP.md | head; gh api repos/tacplus-dev/roadmap/contents/ROADMAP.md -H 'Accept: application/vnd.github.raw' | grep -n -i 'product' | head; gh api repos/tacplus-dev/roadmap/contents/items --jq '.[].name' | grep -i prod; for r in kernel operator; do echo "== $r"; gh issue...
+< 11:- Product layer: `/products/<name>` between `/system` and the tenants; tenant → product and product → `/system` only; tenant data there only as a custodian keyed by the token's tid; design first (#475) (Jody, 2026-11-08) 41:      (cross-deployment, Later). `/system` stays the platform only (`deci...
+> Bash sed -n '/^## 2. Identity/,/^tacplus itself generates/p' roadmap/PRODUCTS_LAYER.md; gh api repos/tacplus-dev/roadmap/contents/ROADMAP.md -H 'Accept: application/vnd.github.raw' | sed -n '36,42p'
+< ## 2. Identity  **Kernel (an issue on tacplus-dev/kernel).** For a service the operator deploys as a product's, the kernel mints a service token and SVID with subject `spiffe://<td>/products/<name>/services/<svc>` and namespace claim `/products/<name>`, and **no `tid` claim**. `aud` is unchanged (th...
+= thinking_tokens
+= thinking_tokens
+> Bash for r in kernel operator; do gh label list --repo tacplus-dev/$r --search feature; done; cat /tmp/land475.log | tail -3
+< feature	New behaviour: needs design, approval and a ROADMAP.md entry; ships in a minor	#a2eeef enhancement	New feature or request	#a2eeef feature		#a2eeef enhancement	New feature or request	#a2eeef [2026-11-14T01:19:21Z] checkpoint of #475 (land queued) pushed to looper/tacplus-475:  6 files changed...
+= thinking_tokens
+= thinking_tokens
+> Bash mkdir -p /tmp/i475 && cat > /tmp/i475/kernel.md <<'EOF' Asks to prioritize a feature already on a roadmap: tacplus-dev/tacplus ROADMAP.md, "Product layer: `/products/<name>` between `/system` and the tenants" (tacplus-dev/tacplus#475; decision tacplus-dev/roadmap `decisions/products-layer-2026-11-08...
+< [2026-11-14T01:19:21Z] checkpoint of #475 (land queued) pushed to looper/tacplus-475:  6 files changed, 756 insertions(+) [2026-11-14T01:19:23Z] queued: the manager of tacplus merges looper/tacplus-475 after the lands queued before it, one at a time, and says on the issue what came of it; waiting fo...
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Bash until ! kill -0 17307 2>/dev/null; do sleep 20; done; tail -5 /tmp/land475.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: byp4d8vvo. Output is being written to: /builds/looper/tacplus/homes/looper-475/tmp/claude-61000/-builds-looper-tacplus-issues-475/9f4e0f7e-95ac-4e0e-8817-08f4bd9fb28f/tasks/byp4d8vvo.output. You will be notified when it completes. To check interim output, use R...
+I resolved the PROPOSALS.md conflict and committed the approved design doc as 56218b1b. The docs gate passed, and the commit is now queued to land on main. I'm waiting for the manager's verdict before opening the kernel and operator issues.
+= success: I resolved the PROPOSALS.md conflict and committed the approved design doc as 56218b1b. The docs gate passed, and the commit is now queued to land on main. I'm waiting for the manager's verdict before opening the kernel and operator issues.
+= task_updated
+= task_notification
+= background_tasks_changed
+= init
+> Bash kill -0 17307 2>/dev/null && echo running; tail -4 /tmp/land475.log; date -u
+< running [2026-11-14T01:19:21Z] checkpoint of #475 (land queued) pushed to looper/tacplus-475:  6 files changed, 756 insertions(+) [2026-11-14T01:19:23Z] queued: the manager of tacplus merges looper/tacplus-475 after the lands queued before it, one at a time, and says on the issue what came of it; wa...
+= thinking_tokens
+= thinking_tokens
+> Bash end=$(( $(date +%s) + 4800 )); while kill -0 17307 2>/dev/null && [ $(date +%s) -lt $end ]; do sleep 30; done; date -u; tail -4 /tmp/land475.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: b0qfz6x65. Output is being written to: /builds/looper/tacplus/homes/looper-475/tmp/claude-61000/-builds-looper-tacplus-issues-475/9f4e0f7e-95ac-4e0e-8817-08f4bd9fb28f/tasks/b0qfz6x65.output. You will be notified when it completes. To check interim output, use R...
+The design commit has been in the land queue for two hours with no verdict yet. I'm waiting up to 80 more minutes for the manager.
+= success: The design commit has been in the land queue for two hours with no verdict yet. I'm waiting up to 80 more minutes for the manager.
+= task_updated
+= task_notification
+= background_tasks_changed
+= init
+> Bash cat /builds/looper/tacplus/homes/looper-475/tmp/claude-61000/-builds-looper-tacplus-issues-475/9f4e0f7e-95ac-4e0e-8817-08f4bd9fb28f/tasks/b0qfz6x65.output; kill -0 17307 2>/dev/null && echo running
+< Sat Nov 14 04:39:57 UTC 2026 [2026-11-14T01:19:21Z] checkpoint of #475 (land queued) pushed to looper/tacplus-475:  6 files changed, 756 insertions(+) [2026-11-14T01:19:23Z] queued: the manager of tacplus merges looper/tacplus-475 after the lands queued before it, one at a time, and says on the issu...
+= thinking_tokens
+= thinking_tokens
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 475 --checkpoint "Commit 56218b1b (PROPOSALS.md conflict resolved keeping both entries; roadmap/PRODUCTS_LAYER.md approved; roadmap/README.md pointer; just docs green) queued for land since 01:19Z, no verdict by run end; the manager lands it after. N...
+< [2026-11-14T04:40:07Z] checkpoint of #475 (a step) pushed to looper/tacplus-475:  6 files changed, 800 insertions(+)
+The approved design commit for #475 (56218b1b) has been waiting in the land queue since 01:19Z and still had no verdict when my time ran out. The manager will land it after this run and post the result on the issue.
+
+**What I did this run:**
+- **Merge conflict:** PROPOSALS.md conflicted with main. I kept both entries: option B for the product layer (a product's owner tenant reading across tenants), and main's new per-language gate sets entry.
+- **The commit:** it adds `roadmap/PRODUCTS_LAYER.md` with Jody's answers recorded, a pointer to it in `roadmap/README.md`, and the PROPOSALS.md entry. It changes only docs, so I ran just the docs gate (`just docs`), not the full `just gates`; it passed (exit 0).
+- **Checkpoint:** saved, with the steps that are left.
+
+**Not done yet:** Jody asked for the kernel and operator issues only once the design has landed, so I haven't opened them. I wrote their text from section 2 of the doc, but only in a temp file that won't carry over, so the next run rewrites them. The next run should:
+1. Confirm the commit landed. If the manager sends it back, rebase on main and land again.
+2. Open the two issues on tacplus-dev/kernel and tacplus-dev/operator, labelled `feature` and not approved. Each asks to prioritize the existing product-layer entry in this repository's ROADMAP.md and links #475.
+3. Comment on #475.
+4. Write `Blocked-by: #258` to the outcome, since Jody said implementation waits on #258, which is still open.
+
+No handler code changed, so the trace-propagation check did not apply.
+= success: The approved design commit for #475 (56218b1b) has been waiting in the land queue since 01:19Z and still had no verdict when my time ran out. The manager will land it after this run and post the result on the issue.
+
+**What I did this run:**
+- **Merge conflict:** PROPOSALS.md conflicted with main. I kept both entries: option B for the product layer (a product's owner tenant reading across tenants), and main's new per-language gate sets entry.
+- **The commit:** it adds `roadmap/PRODUCTS_LAYER.md` with Jody's answers recorded, a pointer to it in `roadmap/README.md`, and the PROPOSALS.md entry. It changes only docs, so I ran just the docs gate (`just docs`), not the full `just gates`; it passed (exit 0).
+- **Checkpoint:** saved, with the steps that are left.
+
+**Not done yet:** Jody asked for the kernel and operator issues only once the design has landed, so I haven't opened them. I wrote their text from section 2 of the doc, but only in a temp file that won't carry over, so the next run rewrites them. The next run should:
+1. Confirm the commit landed. If the manager sends it back, rebase on main and land again.
+2. Open the two issues on tacplus-dev/kernel and tacplus-dev/operator, labelled `feature` and not approved. Each asks to prioritize the existing product-layer entry in this repository's ROADMAP.md and links #475.
+3. Comment on #475.
+4. Write `Blocked-by: #258` to the outcome, since Jody said implementation waits on #258, which is still open.
+
+No handler code changed, so the trace-propagation check did not apply.

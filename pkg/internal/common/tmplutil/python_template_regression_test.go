@@ -45,7 +45,7 @@ func TestPythonRuntimeTemplatesMatchProtoShapes(t *testing.T) {
 			want: []string{
 				"from __future__ import annotations",
 			},
-			message: "Python token wrapper uses modern annotations and must work under the declared Python 3.8+ floor",
+			message: "Python token wrapper uses modern annotations and must work under the declared Python 3.10+ floor",
 		},
 		{
 			path: "pkg/templates/python/types/exceptions.py.tmpl",

@@ -81,8 +81,8 @@ func TestJavaHandlerOmitsGeneratedRecordC2SGetterAndSMBindsIt(t *testing.T) {
 }
 
 // On a plane routed by tenant (#207) the handler routes each read to its own
-// caller's tenant, the tid of the namespace claim, and refuses a caller of no
-// tenant; the client never names it.
+// caller's tenant, the token's tid claim (never its namespace, which names the
+// tenant, #284), and refuses a caller of no tenant; the client never names it.
 func TestJavaRecordC2SHandlerRoutedReadsTheCallersTenant(t *testing.T) {
 	f := javaRecordC2SFixture()
 	f.Routed = true
@@ -93,16 +93,23 @@ func TestJavaRecordC2SHandlerRoutedReadsTheCallersTenant(t *testing.T) {
 	src := string(out)
 	for _, want := range []string{
 		"import com.example.chassis.serviceconnection.RouteTenant;",
-		"String tenant = RouteTenant.tenantOfCaller(namespace);",
+		"static String requireTenant(String method, Caller caller) throws ProtoException {",
+		"String tenant = caller == null ? \"\" : RouteTenant.callerTenant(caller.getTid());",
 		`throw new ProtoException(ProtoException.PERMISSION_DENIED,
-                    method + ": the caller's namespace belongs to no tenant, and the record store is one instance per tenant");`,
-		`String tenant = requireTenant("GetScottyActivity", namespace);`,
+                    method + ": the caller's token carries no tid claim, and the record store is one instance per tenant");`,
+		`String tenant = requireTenant("GetScottyActivity", caller);`,
 		"sm.scottyActivityRecordReader().list(tenant, filter, 1, \"\")",
-		`String tenant = requireTenant("GetScottyActivityPage", namespace);`,
+		`String tenant = requireTenant("GetScottyActivityPage", caller);`,
 		"sm.scottyActivityRecordReader().list(tenant, filter.build(), request.getPageSize(), request.getPageToken())",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("routed plane handler missing %q:\n%s", want, src)
+		}
+	}
+	// No tid is ever derived from the namespace, which names the tenant.
+	for _, notWant := range []string{"tenantOfCaller", "requireTenant(\"GetScottyActivity\", namespace)", "tid of the\n     * caller's namespace"} {
+		if strings.Contains(src, notWant) {
+			t.Errorf("routed plane handler derives the tenant from the namespace (%q):\n%s", notWant, src)
 		}
 	}
 	plain, err := renderJavaRecordC2SPlane(javaRecordC2SFixture())

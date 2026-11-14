@@ -1250,25 +1250,27 @@ func goMcpRowFilterBlock(prefix, method string, f goMcpRowField, idx int, isName
 // a session's tenant and the carrier's frame ingress.
 //
 // The model must never be able to set the tenant. A session is opened in the
-// caller's own tenant, read off the verified token's namespace claim; every
+// caller's own tenant, read off the verified token's tid claim (never off its
+// namespace claim, which names the tenant and is not its tid, #284); every
 // inbound frame is stamped with it (the generated per-frame routing backstop
 // then checks it against this instance's tenant), and every tool call is
 // directed at it. Nothing the client or the model sends chooses it.
 func goMcpSessionTenant(serviceName, frameIn string) string {
 	return fmt.Sprintf(`
 // %[1]sSessionTenant is the tenant an MCP session of %[2]s is opened in: the
-// tenant of the verified caller's namespace claim. A caller whose namespace
-// belongs to no tenant (a /system caller, say) has no session here.
+// verified caller's tid claim. Its namespace claim names the tenant, not its
+// tid, and is never read for one. A caller whose token carries no tid (a
+// /system caller, say) has no session here.
 func %[1]sSessionTenant(caller *servicemanager.Caller) (string, error) {
-	ns := ""
+	tid := ""
 	if caller != nil {
-		ns = caller.Token().GetNamespace()
+		tid = caller.Token().GetTid()
 	}
-	if tid, ok := serviceconnection.NamespaceTenant(ns); ok {
+	if tid, ok := serviceconnection.CallerTenant(tid); ok {
 		return tid, nil
 	}
-	return "", status.Error(codes.PermissionDenied, fmt.Sprintf(
-		"an MCP session of %[2]s is opened in the caller's own tenant, and the caller's namespace %%q belongs to none", ns))
+	return "", status.Error(codes.PermissionDenied,
+		"an MCP session of %[2]s is opened in the caller's own tenant, and the caller's token carries no tid claim")
 }
 
 // %[1]sStampFrameTenant is the carrier's frame ingress: an inbound frame's

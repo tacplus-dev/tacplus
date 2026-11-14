@@ -26,9 +26,10 @@
 // the store, or this generator is broken.
 //
 // On a plane hosted by a tenant-owned record store the reads go to the
-// caller's own tenant's instance: the tid of its namespace claim, the same
-// tenant the namespace pin holds the rows to (#207). A caller of no tenant has
-// no instance to read from and is refused.
+// caller's own tenant's instance (#207): its token's tid claim, which kernel
+// stamps for the tenant its namespace names. The namespace claim names the
+// tenant (/tenants/<name>), not its tid, and is never read for one (#284). A
+// caller without the claim has no instance to read from and is refused.
 //
 // The data path is the ALREADY-GENERATED typed reader (record_readers.go), not
 // a second client. Its Create/List/Delete handle lifecycle releases the handle
@@ -77,11 +78,12 @@ func recordC2SPins(method string, caller *servicemanager.Caller) (namespace, pri
 {{- if .Routed}}
 
 // recordC2STenant is the tenant whose record store instance a read goes to:
-// the tid of the caller's namespace claim, never a client-supplied value.
-func recordC2STenant(method, namespace string) (string, error) {
-	tenant, ok := serviceconnection.NamespaceTenant(namespace)
+// the caller's tid claim, never a client-supplied value, and never a tid read
+// off its namespace, which names the tenant (#284).
+func recordC2STenant(method string, caller *servicemanager.Caller) (string, error) {
+	tenant, ok := serviceconnection.CallerTenant(caller.Token().GetTid())
 	if !ok {
-		return "", status.Error(codes.PermissionDenied, method+": the caller's namespace belongs to no tenant, and the record store is one instance per tenant")
+		return "", status.Error(codes.PermissionDenied, method+": the caller's token carries no tid claim, and the record store is one instance per tenant")
 	}
 	return tenant, nil
 }
@@ -99,7 +101,7 @@ func (g *{{$.StructName}}) {{.GetMethodName}}(ctx context.Context, caller *servi
 		return nil, err
 	}
 {{- if $.Routed}}
-	tenant, err := recordC2STenant("{{.GetMethodName}}", namespace)
+	tenant, err := recordC2STenant("{{.GetMethodName}}", caller)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +133,7 @@ func (g *{{$.StructName}}) {{.ListMethodName}}(ctx context.Context, caller *serv
 		return nil, err
 	}
 {{- if $.Routed}}
-	tenant, err := recordC2STenant("{{.ListMethodName}}", namespace)
+	tenant, err := recordC2STenant("{{.ListMethodName}}", caller)
 	if err != nil {
 		return nil, err
 	}

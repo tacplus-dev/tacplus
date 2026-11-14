@@ -67,7 +67,7 @@ edition = "2021"
 collection = { path = "$MODEL_DIR/model/chassis/collection" }
 contractclient-model = { path = "$MODEL_DIR/model" }
 servicemanager = { path = "$MODEL_DIR/model/chassis/servicemanager" }
-tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+tokio = { version = "1.51.6", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 tokio-stream = { version = "0.1.17", features = ["net"] }
 tonic = "0.14.0"
 EOF

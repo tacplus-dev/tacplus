@@ -45,8 +45,8 @@ the looper then marks it `promoted` or `declined` here with the date.
   needs a model of every check of the message, which #196's kitchensink is the place for.
 - **A floor check over every version tacplus emits, and template manifests that take versions from one place**
   (2026-11-06, nightly scan, #338): four nights of scans found advisories in floors the generated manifests declare
-  (#264, #309, #312, #338). No scanner sees them: a lockfile resolve, including the proposed `just generated`
-  recipe, picks the newest compatible release, so `cargo audit`/`npm audit`/OSV-Scanner on it pass while the
+  (#264, #309, #312, #338). No scanner sees them: a lockfile resolve, including `just generated`
+  (#376), picks the newest compatible release, so `cargo audit`/`npm audit`/OSV-Scanner on it pass while the
   manifest still promises a vulnerable floor. Two parts: (1) a check (soundness or a gate) that generates the
   cross-test models, collects every declared floor (`Cargo.toml`, `package.json`, `pyproject.toml`, the Go/Java
   inventory) and fails on an OSV advisory at the floor itself, with its database fetched at run time like
@@ -84,13 +84,28 @@ the looper then marks it `promoted` or `declined` here with the date.
   `RedactMode`'s egress modes, `Sanitize<T>`, `<T>Entitlement`, `Build<T>Entitlement`, `sys/entitlement.proto`'s
   `EntitlementLevel` and the pseudonymize helpers are deprecated in 2.6 (generation warns); 3.0 removes them. The
   record store's egress (Sample/Pull/Watch) would then apply `Redact<T>` or nothing, a decision for the store.
-- **A `just generated <dir>` recipe, so the build's security checks scan what tacplus emits** (2026-11-03, nightly
-  scan): the build pipeline scans a repository's generated code only through a `generated` recipe (looper README,
-  Security checks; looper#49, which notes "tacplus has no `generated` recipe yet"). tacplus has none, and
-  `dependencies.yaml` is not a lockfile, so no scanner reads the versions the generated manifests declare. Tonight's
-  scan found advisories in exactly those: #312 (TypeScript, Rust, Go), #309 (Python build/dev floors), #308
-  (rustls-pemfile), after #264. A recipe that generates the cross-test models for every language into `<dir>`, with a
-  lock-resolved manifest per language, would make OSV-Scanner and cargo-deny catch the next one in the build.
+- **Path-scoped security exceptions, so accepting a rule in the generated code does not accept it in the compiler**
+  (2026-11-14, #376): `security-exceptions.yaml` matches a finding by id alone, across both trees the build scans
+  (the checkout and `generated/`). Accepting G115, G404, G703 or G704 for the generated Go (#359's Also list) also
+  accepts them in tacplus's own source, where nobody reviewed them. A `where` prefix on an exception (say
+  `generated/`) would scope it; that is a looper change (looper-scan's `read_exceptions` and policy), to propose
+  there.
+- **Make the generated tree cheaper to scan** (2026-11-14, #376): `just generated` writes 21 proto sets, 57 trees,
+  about 1.5 GB, most of it the same chassis and sys types again in each set. On a loaded runner the generation took
+  about 25 minutes with 3 sets at once, and `looper-scan local` spent 66 minutes in Semgrep alone (4.4 GB resident). #196's kitchensink (one proto set reaching every emitter) replaces the list; until then, a
+  set could keep only the files no earlier set generated identically, at the price of trees that no longer build.
+- **Compile every fixture in every language** (2026-11-14, #376): the current-generation gate compiles c2sonly in Go
+  only, healthonly and zerorpc in Rust only and eventbus-backpressure in Java only, so `just generated` scans them in
+  those languages only. eventbus-backpressure's Go output does not compile (#454); the others are untested.
+- **SpotBugs per directory in looper-scan** (2026-11-14, #376): looper-scan runs SpotBugs once over every
+  `target/classes` of a tree, in its default 768 MB heap. Four sets of generated Java bytecode run it out of memory
+  (and the tool error fails the scan), so `just generated` compiles one set's (requiresdevice). One run per
+  directory, as gosec and govulncheck do, or a `-maxHeap`, would let every set's bytecode be read: a looper change.
+- **clippy-clean generated Rust** (2026-11-14, #376): the security scan of `just generated` runs clippy with
+  `-D clippy::correctness -D clippy::suspicious` and finds `absurd_extreme_comparisons` (the validator checks an
+  unsigned field's `assert_ge: 0` as `x < 0`), `empty_docs` and `empty_line_after_doc_comments`, accepted in
+  `security-exceptions.yaml` until 2027-02-14. Skip the comparison for unsigned fields, emit no empty doc comment,
+  and add a clippy run with those lints to the current-generation gate so they stay out.
 - **Run outbound-deadline in the gates** (2026-11-03, #310): `cross-test/outbound-deadline/run.sh` (the issue #38
   deadline and lifetime facts, and with #310 the trace fact) has no recipe and runs in no gate or workflow, so a
   regression there is invisible. #310 adds the recipe; joining the mandatory `gates` set is a cost decision (one
@@ -378,5 +393,7 @@ the looper then marks it `promoted` or `declined` here with the date.
   move as a `bug` instead of leaving it to judgment.
 
 ## Promoted / declined
+- **`just generated <dir>`: tacplus's security checks scan its generated output** (2026-11-09, #376): promoted
+  2026-11-09, ROADMAP.md's line for #376 (Jody, hub). Built by #376.
 - **Member port onto gRPC with make-before-break session rotation (Java)** (2026-11-06, #321): promoted 2026-11-05,
   ROADMAP.md's line for #321 (Jody, #259's split).

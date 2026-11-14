@@ -504,6 +504,33 @@ reaches runs a verifier. The build pipeline (tacplus-dev/looper#74) runs
 a toolchain pin) goes into the `depends` list of `scripts/verify-changed.sh` too.
 The kitchensink release gate (#196) follows the same split.
 
+### The generated code's security checks
+
+What tacplus emits is what every service ships, and a service's own security
+checks skip its generated tree (tacplus.yaml's `output-dir`,
+tacplus-dev/looper#108), so tacplus scans it here, once (#376).
+`just generated DIR` (`scripts/generated.sh`) generates each proto set the
+current-generation gate builds into `DIR/<set>/<language>/`: Go, Rust and Java
+as full services (the chassis included) in the languages the gate compiles each
+set in, Python and TypeScript as clients, each made loadable by its scanners (a
+`go.mod` and `go.sum`, a `Cargo.lock`, a `pom.xml`, an npm lock; compiled
+`target/classes` for one set, as many as SpotBugs' heap holds), and gitleaks
+reads it with `scripts/generated.gitleaks.toml`, the root `.gitleaks.toml`'s
+allowlist for what those templates generate. After `just gates` passes, the build
+pipeline's gates job runs it and keeps `DIR` as its artifact `generated/`; the
+security job scans that as a second tree, its findings' `where` starting with
+`generated/`. It is not a gate (`scripts/generated_test.go`) and changes no
+tracked file. `looper-scan local` runs the same checks on a checkout, with
+`DIR` at `$BUILD_OUT/generated` (default `./generated`).
+
+A finding there is fixed in the generator, or accepted in
+`security-exceptions.yaml` at the root with its reason, who decided and an
+expiry date. An exception matches a rule or advisory id across both trees, so
+accepting a rule for the generated code accepts it in the compiler's own source
+too: say why it holds for both. A new fixture that reaches an emitter no other
+one does goes into `SETS` in `scripts/generated.sh` as well; #196's kitchensink
+replaces that list.
+
 Open soundness work belongs in `../roadmap/README.md` or the local
 `todo/` ledger, not in standalone report files.
 Examples include runtime proof for streaming/error-path trace/accounting

@@ -28,6 +28,7 @@ func TestGoDependencyPinsMeetTheirFloors(t *testing.T) {
 	var files []string
 	for _, pattern := range []string{
 		"../cross-test/*/run.sh",
+		"../cross-test/lib/*.sh",
 		"../cross-test/*/proto/dependencies.yaml",
 		"../example/run.sh",
 		"../example/proto/dependencies.yaml",

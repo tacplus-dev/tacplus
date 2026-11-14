@@ -72,6 +72,11 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   `go run ./cmd/sitegen -check-links`, gitleaks, `just test`: about a minute); `images/` runs `just test`, `just images`
   and `just tacplus-script`; `pkg/**`, `cmd/**`, `docs/embed.go`, `docs/*.tmpl`, the justfile, any path the map does
   not name and a change to the map run `just gates`, as do the nightly gates and every release.
+  The generated code is scanned at the source (#376, tacplus-dev/looper#108): `just generated DIR` writes every proto
+  set the current-generation gate builds, in Go, Rust and Java (services) and Python and TypeScript (clients), as
+  trees the build's security checks load; the gates job keeps it as `generated/` and the security job scans it with
+  `security-exceptions.yaml` (docs/DEVELOPMENT.md). Gap: until #196's kitchensink, an emitter no fixture reaches is
+  not scanned; Swift and C# lite clients are not generated into it.
   The build image's docker-buildx is built from the v0.38.1 source with moby/go-archive 0.3.3 and golang.org/x/net
   0.62.0 (CVE-2026-17106, CVE-2026-78669, CVE-2026-78661, CVE-2026-97045; `tacplus-smoke` checks the floors)
   (#190; backported to release/2.0 through release/2.5 by pull request, as v2.0.13, v2.1.6, v2.2.3, v2.3.5, v2.4.4

@@ -265,6 +265,16 @@ verify *LANGUAGES:
 verify-changed SHA="":
   @bash scripts/verify-changed.sh {{ if SHA == "" { "" } else { quote(SHA) } }}
 
+# The code tacplus generates, for the build pipeline's security checks (#376,
+# tacplus-dev/looper#108): every proto set the current-generation gate builds,
+# in each language, written into DIR (empty or absent; outside the checkout
+# unless git ignores it; relative to the checkout's root) as trees its
+# scanners load. The gates job runs it after `just gates` and the security job
+# scans DIR as generated/, with security-exceptions.yaml. NOT a gate
+# (scripts/generated_test.go); all of it lives in scripts/generated.sh.
+generated DIR:
+  {{lock}} bash scripts/generated.sh {{quote(DIR)}}
+
 # The build image's tacplus (images/tacplus.sh, #193) against a fake release
 # forge: a pin runs exactly; a checksum mismatch, a missing pin and a line
 # mismatch are refused; a cached version runs offline; and the same pinned

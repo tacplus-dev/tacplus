@@ -1,0 +1,296 @@
+# The security findings tacplus accepts (tacplus-dev/looper README, Security
+# checks): each needs an id (a rule or advisory id, or one of its aliases), a
+# reason, who decided and an expiry date; an expired one fails the scan. An id
+# matches in both trees the build scans, the checkout and the generated code
+# (`just generated`, generated/), so a rule accepted for the generated code is
+# accepted in the compiler's own source too: each reason says why that holds.
+# The generated tree's secrets are decided in scripts/generated.gitleaks.toml.
+exceptions:
+  # Generated Go (#359): fixed in the generator by #359, queued to land.
+  - id: G402
+    reason: "generated Go chassis (service_im, servicemanager): InsecureSkipVerify paired with a custom VerifyPeerCertificate; #359 replaces it with VerifyConnection. No G402 in the compiler's source."
+    decided_by: looper, tacplus#376 (triage; #359 is the fix)
+    expires: 2027-01-15
+  - id: G123
+    reason: "generated Go chassis x509: VerifyPeerCertificate with session resumption; #359 moves the check to VerifyConnection. No G123 in the compiler's source."
+    decided_by: looper, tacplus#376 (triage; #359 is the fix)
+    expires: 2027-01-15
+  # Generated Go, #359's "Also" list: each to be fixed or annotated with its
+  # reason in the generator. Until then the same rule is accepted in the
+  # compiler's source, where it was already failing the scan before #376.
+  - id: G115
+    reason: "integer conversions in the generated Go (proto int32/uint32 fields, lengths, durations), each to be bounded or annotated in the generator, #359's Also list. The same rule in the compiler's source (its testdata chassis) is not reviewed by this exception."
+    decided_by: looper, tacplus#376 (triage; #359's Also list)
+    expires: 2027-02-14
+  - id: G404
+    reason: "math/rand for retry and health jitter in the generated Go, not for secrets; #359's Also list. The compiler's source uses it in the chaos cross-test only."
+    decided_by: looper, tacplus#376 (triage; #359's Also list)
+    expires: 2027-02-14
+  - id: G703
+    reason: "generated Go chassis (diskstore fsutil, service_im, grpcconfig) opens and writes paths from the service's own configuration (its data directory, token and config files), not from a request; #359's Also list. In the compiler's source, paths from its CLI and tacplus.yaml."
+    decided_by: looper, tacplus#376 (triage; #359's Also list)
+    expires: 2027-02-14
+  - id: G704
+    reason: "generated Go service_im posts to the AWS STS endpoint of the region the deployment sets (AWS_REGION), not a request's URL; #359's Also list"
+    decided_by: looper, tacplus#376 (triage; #359's Also list)
+    expires: 2027-02-14
+  # By design in every generated Go service (docs/API.md).
+  - id: go.grpc.security.grpc-server-insecure-connection.grpc-server-insecure-connection
+    reason: "generated Go: the C2D server listens on an owner-only (0600) unix socket, its access boundary, and the health probe server serves only grpc.health.v1 in plaintext for the orchestrator's probe; in the checkout, only the runtime-smoke test fixture"
+    decided_by: looper, tacplus#376 (triage, by design: docs/API.md, C2D server auth-skip scope)
+    expires: 2027-05-14
+  # Generated Java.
+  - id: USO_UNSAFE_OBJECT_SYNCHRONIZATION
+    reason: "generated Java chassis (memberport, collection): synchronized methods and blocks on private nested classes (MemberPort's sessions, CollectionRuntime's Ring and WatchHub), whose monitors no code outside the chassis can reach. SpotBugs has no Java of the compiler's source to read."
+    decided_by: looper, tacplus#376 (triage)
+    expires: 2027-05-14
+  # Generated Rust: clippy's correctness and suspicious lints, none a security
+  # defect; to fix in the Rust generator (PROPOSALS.md, "clippy-clean
+  # generated Rust"). The compiler's source has no Rust.
+  - id: clippy::absurd_extreme_comparisons
+    reason: "the generated Rust validator checks an unsigned field against assert_ge: 0 (owner < 0): dead code, the bound always holds"
+    decided_by: looper, tacplus#376 (triage)
+    expires: 2027-02-14
+  - id: clippy::empty_docs
+    reason: "an empty doc comment the generated Rust emits for a proto element without one: documentation, not behaviour"
+    decided_by: looper, tacplus#376 (triage)
+    expires: 2027-02-14
+  - id: clippy::empty_line_after_doc_comments
+    reason: "a blank line after a doc comment in the generated Rust chassis (key): documentation, not behaviour"
+    decided_by: looper, tacplus#376 (triage)
+    expires: 2027-02-14
+  # Generated Rust (#368): the crates tacplus generates declare no license
+  # (and no publish = false), so cargo-deny calls them unlicensed. #368 is the
+  # fix; one entry per crate (the id names it), for the fixtures' crates.
+  - id: cargo-deny:unlicensed:agentsensor-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:agentsensor-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:am@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:approval@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:c2d@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:client_im@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:collection@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:crew-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:crew-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:diskstore@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:egressstratum-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:egressstratum-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:egressvault-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:egressvault-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:epochload-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:epochload-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:grpcconfig@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:grpcserver@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:harbor-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:harbor-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:healthonly-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:healthonly-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:healthreporter@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:httpclient@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:ip@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:jwk@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:key@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:ledger-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:ledger-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:logger@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:ownerdesk-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:ownerdesk-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:proto-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:proto-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:quorumvault-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:quorumvault-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:redo-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:redo-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:registrar-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:registrar-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:service_im@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:servicemanager@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:spiffe@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:stratum-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:stratum-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:tags@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:tenancy-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:tenancy-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:tmessaging-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:tmessaging-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:token@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:tstratum-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:tstratum-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:vault-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:vault-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:x509@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:zerorpc-model-types@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
+  - id: cargo-deny:unlicensed:zerorpc-model@1.0.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15

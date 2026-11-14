@@ -1079,7 +1079,7 @@ build-backend = "setuptools.build_meta"
 name = "%s"
 version = "%s"
 description = "Protocol Buffer types for %s.%s"
-requires-python = ">=3.8"
+requires-python = "%s"
 dependencies = [
 %s
 ]
@@ -1092,7 +1092,7 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-`, packageName, version, typeDir, protoPackage, deps)
+`, packageName, version, typeDir, protoPackage, pythonRequiresPython, deps)
 
 	if err := os.WriteFile(pyprojectPath, []byte(content), 0644); err != nil {
 		return fmt.Errorf("failed to write pyproject.toml: %w", err)

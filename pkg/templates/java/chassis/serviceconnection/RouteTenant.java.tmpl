@@ -136,24 +136,18 @@ public final class RouteTenant {
     }
 
     /**
-     * The tid of the tenant a caller belongs to, read from its verified
-     * namespace claim: {@code /tenants/<tid>} or any namespace below it
-     * ({@code /tenants/<tid>/...}). "" for a caller of no tenant (the
-     * platform's {@code /system}, a malformed claim).
+     * The tid of the tenant a caller belongs to, read from its verified token's
+     * {@code tid} claim, which kernel stamps on every token whose namespace is
+     * in a tenant: tidClaim when it is a tid, and "" otherwise. The caller's
+     * tenant is that claim, never its namespace: the namespace names the
+     * tenant ({@code /tenants/<name>}, kernel#23, tacplus#284), and a name is
+     * not a tid even when it looks like one. No claim, or a malformed one, is
+     * no tenant; a caller is never given one derived from anything else.
+     *
+     * @param tidClaim the caller's tid claim ("" or null when absent)
      */
-    public static String tenantOfCaller(String namespace) {
-        if (namespace == null || !namespace.startsWith(TENANTS_PREFIX)) {
-            return "";
-        }
-        String rest = namespace.substring(TENANTS_PREFIX.length());
-        int slash = rest.indexOf('/');
-        if (slash < 0) {
-            return tenantOfNamespace(namespace);
-        }
-        if (slash == rest.length() - 1) {
-            return "";
-        }
-        return tenantOfNamespace(TENANTS_PREFIX + rest.substring(0, slash));
+    public static String callerTenant(String tidClaim) {
+        return validTenantId(tidClaim) ? tidClaim : "";
     }
 
     /**

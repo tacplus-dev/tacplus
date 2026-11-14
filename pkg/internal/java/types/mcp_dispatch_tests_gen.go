@@ -57,6 +57,12 @@ const (
 	// tid a model-supplied argument or a forged frame names instead.
 	javaMcpTestTenant      = "mcptest1"
 	javaMcpTestOtherTenant = "othertn1"
+
+	// javaMcpTestTenantName is the NAME of javaMcpTestTenant, which its
+	// members' namespace /tenants/<name> carries. Not a tid, so a session that
+	// took its tenant from the namespace instead of the token's tid claim
+	// (#284) could not pass.
+	javaMcpTestTenantName = "mcptest"
 )
 
 // javaMcpTestRouted reports whether svc's MCP session is tenant-routed: its
@@ -66,14 +72,26 @@ func javaMcpTestRouted(svc *parser.ServiceInfo) bool {
 	return c != nil && c.RouteField != nil
 }
 
-// javaMcpTestCallerNamespace is the namespace claim of the gate's caller: a
-// namespace of javaMcpTestTenant on a tenant-routed service, so the session has
-// a tenant, and javaMcpTestNamespace on any other.
+// javaMcpTestCallerNamespace is the namespace claim of the gate's caller: the
+// namespace of javaMcpTestTenant, by its name, on a tenant-routed service, and
+// javaMcpTestNamespace on any other.
 func javaMcpTestCallerNamespace(svc *parser.ServiceInfo) string {
 	if javaMcpTestRouted(svc) {
-		return "/tenants/" + javaMcpTestTenant
+		return "/tenants/" + javaMcpTestTenantName
 	}
 	return javaMcpTestNamespace
+}
+
+// javaMcpTestCallerClaims is the claims of the gate's caller as the body of a
+// Java string literal of a token payload JSON (without the braces): its
+// subject and namespace, and on a tenant-routed service the tid claim kernel
+// stamps, javaMcpTestTenant, which is the only source of the session's tenant.
+func javaMcpTestCallerClaims(svc *parser.ServiceInfo) string {
+	claims := fmt.Sprintf(`\"sub\":\"%s\",\"namespace\":\"%s\"`, javaMcpTestSubject, javaMcpTestCallerNamespace(svc))
+	if javaMcpTestRouted(svc) {
+		claims += fmt.Sprintf(`,\"tid\":\"%s\"`, javaMcpTestTenant)
+	}
+	return claims
 }
 
 func generateJavaMcpDispatchTest(svc *parser.ServiceInfo, tools []javaMcpTool, p javaMcpFileParams) string {
@@ -122,7 +140,7 @@ public final class %[2]s {
 
     /** A Caller built from a verified-token payload, exactly as Auth.callerFromContext does. */
     private static Caller testCaller() {
-        return new Caller("{\"sub\":\"%[6]s\",\"namespace\":\"%[7]s\"}", "mcp-test-request");
+        return new Caller("{%[6]s}", "mcp-test-request");
     }
 
     /** The text a tool result carries, whether it succeeded or failed. */
@@ -139,7 +157,7 @@ public final class %[2]s {
     private static boolean isError(McpSchema.CallToolResult result) {
         return Boolean.TRUE.equals(result.isError());
     }
-`, svc.Name, cls, p.JavaPackage, p.ProtoFile, p.Imports, javaMcpTestSubject, javaMcpTestCallerNamespace(svc))
+`, svc.Name, cls, p.JavaPackage, p.ProtoFile, p.Imports, javaMcpTestCallerClaims(svc))
 
 	b.WriteString(javaMcpTestStubHandler(svc, tools, p))
 	b.WriteString(javaMcpTestToolSetCase(svc, tools))
@@ -464,13 +482,41 @@ func javaMcpTestSessionTenantCases(svc *parser.ServiceInfo, p javaMcpFileParams)
         }
     }
 
-    /** The session's tenant is the tid of the caller's namespace claim, and a caller of none has no session. */
+    /**
+    * The session's tenant is the tid claim kernel stamps on the caller's token,
+    * never one derived from its namespace, which names the tenant
+    * (/tenants/&lt;name&gt;, #284). A caller with no tid claim, or a malformed
+    * one, has no session, however tid-shaped its namespace's name.
+    */
     private static void sessionTenantIsTheCallersTenant() {
-        check(%[1]s.sessionTenant(testCaller()).equals(%[3]s), "a caller in /tenants/%[6]s has session tenant %[6]s");
-        check(%[1]s.sessionTenant(new Caller("{\"sub\":\"%[5]s\",\"namespace\":\"/tenants/%[6]s/team\"}", "mcp-test-request")).equals(%[3]s),
-        "a caller below /tenants/%[6]s has session tenant %[6]s");
+        check(%[1]s.sessionTenant(testCaller()).equals(%[3]s), "a caller whose tid claim is %[6]s has session tenant %[6]s");
+        check(%[1]s.sessionTenant(new Caller("{\"sub\":\"%[5]s\",\"namespace\":\"/tenants/%[8]s/team\",\"tid\":\"%[6]s\"}", "mcp-test-request")).equals(%[3]s),
+        "a caller below /tenants/%[8]s whose tid claim is %[6]s has session tenant %[6]s");
+
+        // The namespace's name looks like another tenant's tid: the session is
+        // still the tid claim's, and a frame naming the look-alike is refused.
+        Caller lookalike = new Caller("{\"sub\":\"%[5]s\",\"namespace\":\"/tenants/%[9]s\",\"tid\":\"%[6]s\"}", "mcp-test-request");
+        check(%[1]s.sessionTenant(lookalike).equals(%[3]s),
+        "a caller in /tenants/%[9]s whose tid claim is %[6]s has session tenant %[6]s");
+        check(!%[1]s.sessionTenant(lookalike).equals(%[4]s),
+        "a caller in /tenants/%[9]s is never given session tenant %[9]s off its namespace");
+        checkPermissionDenied(() -> %[1]s.stampTenant(%[1]s.sessionTenant(lookalike), %[2]s.newBuilder().setPayload("{}").set%[7]s(%[4]s).build()),
+        "a frame naming the tenant a caller's namespace name looks like");
+
+        // No tid claim is no tenant: nothing is derived from the namespace.
+        checkPermissionDenied(() -> %[1]s.sessionTenant(new Caller("{\"sub\":\"%[5]s\",\"namespace\":\"/tenants/%[6]s\"}", "mcp-test-request")),
+        "a session for a caller in /tenants/%[6]s whose token carries no tid claim");
         checkPermissionDenied(() -> %[1]s.sessionTenant(new Caller("{\"sub\":\"%[5]s\",\"namespace\":\"/system\"}", "mcp-test-request")),
         "a session for a /system caller");
+        checkPermissionDenied(() -> %[1]s.sessionTenant(null), "a session for no caller");
+
+        // A malformed tid claim is no tenant either.
+        checkPermissionDenied(() -> %[1]s.sessionTenant(new Caller("{\"sub\":\"%[5]s\",\"namespace\":\"/tenants/%[8]s\",\"tid\":\"MCPTEST1\"}", "mcp-test-request")),
+        "a session for a caller whose tid claim is MCPTEST1");
+        checkPermissionDenied(() -> %[1]s.sessionTenant(new Caller("{\"sub\":\"%[5]s\",\"namespace\":\"/tenants/%[8]s\",\"tid\":\"/tenants/%[6]s\"}", "mcp-test-request")),
+        "a session for a caller whose tid claim is a namespace");
+        checkPermissionDenied(() -> %[1]s.sessionTenant(new Caller("{\"sub\":\"%[5]s\",\"namespace\":\"/tenants/%[8]s\",\"tid\":\"\"}", "mcp-test-request")),
+        "a session for a caller whose tid claim is empty");
     }
 
     /** A frame with no tenant is stamped with the session's; one naming it already passes unchanged. */
@@ -487,7 +533,8 @@ func javaMcpTestSessionTenantCases(svc *parser.ServiceInfo, p javaMcpFileParams)
         "a frame naming another tenant");
     }
 `, javaMcpClassName(svc.Name), p.FrameRequestType, javaQuote(javaMcpTestTenant), javaQuote(javaMcpTestOtherTenant),
-		javaMcpTestSubject, javaMcpTestTenant, javaPascalField(javaMcpCarrierMethod(svc).RouteField.Field))
+		javaMcpTestSubject, javaMcpTestTenant, javaPascalField(javaMcpCarrierMethod(svc).RouteField.Field),
+		javaMcpTestTenantName, javaMcpTestOtherTenant)
 }
 
 // javaMcpTestOwnerDefaultCases renders the two cases of a tool whose
@@ -513,7 +560,7 @@ func javaMcpTestOwnerDefaultCases(svc *parser.ServiceInfo, t javaMcpTool) string
     /** The same "%[1]s" call from a caller granted a wider (spec.principal_scope) reaches %[7]s. */
     private static void %[2]sAdmitsAWiderPrincipalScope() {
         StubHandler stub = new StubHandler();
-        Caller wide = new Caller("{\"sub\":\"%[8]s\",\"namespace\":\"%[9]s\","
+        Caller wide = new Caller("{%[8]s,"
                 + "\"service_entitlements\":{\"principal_scope\":\"PRINCIPAL_SCOPE_ANY\"}}", "mcp-test-request");
         %[3]s.Surface surface = new %[3]s.Surface(stub, wide);
         McpSchema.CallToolResult result = surface.%[4]s(
@@ -522,7 +569,7 @@ func javaMcpTestOwnerDefaultCases(svc *parser.ServiceInfo, t javaMcpTool) string
         check("%[7]s".equals(stub.lastMethod), "%[1]s reached %[7]s, got: " + stub.lastMethod);
     }
 `, t.ToolName, methodNameLowerCamel(t.Method.Name), javaMcpClassName(svc.Name), javaMcpDispatchMethodName(t),
-		javaQuote(t.ToolName), javaMcpTestArgumentMap(t, ""), t.Method.Name, javaMcpTestSubject, javaMcpTestCallerNamespace(svc))
+		javaQuote(t.ToolName), javaMcpTestArgumentMap(t, ""), t.Method.Name, javaMcpTestCallerClaims(svc))
 }
 
 // javaMcpTestArgumentMap renders the arguments map for a generated tool call:

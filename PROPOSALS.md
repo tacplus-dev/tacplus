@@ -11,6 +11,16 @@ the looper then marks it `promoted` or `declined` here with the date.
   v2.0.20 passed, so `build:2.0.20` carries main's SDKs instead of 2.0's pins. Once the weekly line rebuild has pushed every `base:X.Y`, the fallback is unreachable for a supported
   line (the line rebuilds of 2026-11-09 pushed them, and the 2.1–2.5 tags cut since pass). Still, the plan step should rebuild `base` from the tag when `base:X.Y` is missing, not fall back. That change
   goes in `images.yml` on main and on each `release/*`.
+- **Python generation mangles a proto line whose trailing comment holds `[`...`]`** (2026-11-09, #284): an enum value
+  with a field option and a comment containing `[/...]` (#284's first `JWT_PAYLOAD_TYPE_TID` comment) came out of the
+  Python generator's proto copy cut from the option's `[` to the comment's `]`, so protoc refused `sys/token.proto` and
+  the determinism gate failed. The comment was reworded; the option stripping should stop at the option's own `]`
+  (not found by name in `pkg/internal/python` in the time this run had). A `bug` to file.
+- **Run every generated Java MCP gate in current-generation** (2026-11-04, #284): `<Service>McpTest.java` (the
+  main-method gate `mcp_dispatch_tests_gen.go` emits beside each Java MCP dispatch) ran nowhere: no gate executed
+  it, so its tool-reach and stamped-field cases were compile-checked only. #284 runs the tenant-routed ones (the
+  session tenant from the `tid` claim); running all of them (`run_java_generated_self_tests`) is the rest, after
+  checking each fixture's gate passes today.
 - **Per-language gate sets, and more of the map** (2026-11-08, #266): `gates.yaml` runs the full gates (~3h) for any
   change under `pkg/**`, `cmd/**` or `.github/`. Next: `pkg/internal/<lang>/**` and `pkg/templates/<lang>/**` to that
   language's `current-generation-<lang>`, `determinism-<lang>` and `-<lang>` cross-tests (with `just test`), once each

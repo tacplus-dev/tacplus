@@ -103,6 +103,25 @@ public final class AccountingSinkDurableTest {
         }
     }
 
+    // waitForLines polls the spool log until it holds want records.
+    private static void waitForLines(Path dir, int want) throws Exception {
+        long deadline = System.currentTimeMillis() + EMIT_BOUND_MS;
+        Path log = dir.resolve("accounting-spool").resolve("records.log");
+        while (true) {
+            long lines = 0;
+            for (byte b : Files.exists(log) ? Files.readAllBytes(log) : new byte[0]) {
+                if (b == '\n') {
+                    lines++;
+                }
+            }
+            if (lines == want) {
+                return;
+            }
+            check(System.currentTimeMillis() < deadline, "spool log did not reach " + want + " records (has " + lines + ")");
+            Thread.sleep(10);
+        }
+    }
+
     // The publisher acknowledges three of five records, then the process stops. A new
     // sink over the same dir replays exactly the two unacknowledged records, in order.
     private static void checkReplaysUnacknowledgedAfterRestart() throws Exception {
@@ -111,6 +130,10 @@ public final class AccountingSinkDurableTest {
         BlockingQueue<Accountingrecord.AccountingRecord> q1 = new ArrayBlockingQueue<>(1);
         AccountingManager.EventBusSink sink1 = durable(q1, dir, stop1);
         emitAll(sink1, 5);
+        // Emit only queues: wait until all five are in the log before acknowledging any.
+        // An ack that catches up with the log compacts it, and the records after it
+        // start a new log with its own cursor (#339).
+        waitForLines(dir, 5);
         check(receive(sink1, q1, 3).equals(List.of("r0", "r1", "r2")), "first run did not deliver r0,r1,r2 in order");
         stop1.set(true);
         waitForCursor(dir, 3);

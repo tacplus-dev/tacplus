@@ -22,8 +22,8 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   checks, and compile handwritten downstream consumers. Runs per-language in the
   `consumer-*-contract-mr` CI jobs and in the nightly matrix.
 - `current-generation` (`cross-test/current-generation/run.sh`): generate and
-  compile the migrated broad service fixture in Go, Java, and Rust into ignored
-  `target/` output. Runs in the nightly matrix.
+  compile the migrated broad service fixture in Go, Java, and Rust, and its
+  TypeScript model (`tsc`, #464), into ignored `target/` output. Runs in the nightly matrix.
 - `smb` (`cross-test/smb/run.sh`) and `cert-stream`
   (`cross-test/cert-stream/run.sh`): service-mesh-boundary and certificate-stream
   runtime gates for Go, Java, and Rust. Run in the nightly matrix.
@@ -130,6 +130,23 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   verdict (required, placeholders, entropy floor), naming the field and the
   rule and never the value; a CSPRNG 32-byte key passes. Local (`just redact`,
   part of `just gates`); not yet in CI.
+- `flock` (`cross-test/flock/run.sh`): flock state (#206) in the generated Go,
+  Java and Rust. Every leg generates the people table of
+  `cross-test/flock/proto` (every merge rule, a nested message, sets of
+  scalars and messages, a map of messages, a unique set, a table replaced
+  whole) and runs against its generated merge: property tests (merge is
+  commutative, associative and idempotent over whole entries plus marks;
+  merge_entries picks the same survivor in either order) and the panel's
+  scenarios (re-add after remove, concurrent add/remove under each set rule, a
+  revoked device, a mark over a later write, an IMMUTABLE conflict, a
+  far-future clock held, a local unique conflict refused, the partition race
+  merged and a later overlap quarantined); a deterministic simulation of four
+  copies (random delivery order, partitions, a far-ahead clock, quiet spells,
+  a long absence, acks and purges, then heal), which must converge, never bring
+  back an entry a copy saw marked, and never make a redirect cycle, and which
+  must exercise each of those paths; and a fixed scenario whose digests must
+  equal `cross-test/fixtures/flock_vectors.txt` byte for byte. Local
+  (`just flock`, part of `just gates`); not yet in CI.
 - `trace-carry` (`cross-test/trace-carry/run.sh`): `trace_id` across
   projections and stores (#313) in the generated Go, Java and Rust. Every leg
   drives its generated code over the same model: a transformation's
@@ -235,6 +252,7 @@ just -f cross-test/justfile current-generation
 just -f cross-test/justfile current-generation-go
 just -f cross-test/justfile current-generation-java
 just -f cross-test/justfile current-generation-rust
+just -f cross-test/justfile current-generation-typescript
 ```
 
 This gate uses `cross-test/proto`, which covers the larger 80-type fixture and
@@ -242,7 +260,11 @@ the Inventory and Analytics service shapes. It asserts that generated output
 contains the current `sys/spec.proto` model and no legacy checked-in
 `special` fixture outputs. It then compiles the generated output with Go
 `go test`, Java Maven, and Rust `cargo check`, with warning/error output
-treated as a failure. Python and TypeScript are full-client targets; their
+treated as a failure. The same run generates and compiles the smaller fixture
+sets beside it (`cross-test/proto-*`), each for the one shape it is the only
+gate of: `cross-test/proto-statequeue`, for instance, is a state root with a
+queue and a priority queue boundary (#456), whose Go and Java state clients
+must carry the offer/consume/peek/size accessors. Python and TypeScript are full-client targets; their
 positive client-surface (C2D/C2S/W2S/REST) and service-side rejection coverage
 lives in `consumer-build`.
 

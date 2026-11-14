@@ -2393,6 +2393,11 @@ extend google.protobuf.FieldOptions {
   //
   // NOT (spec.epoch_expiration) either (above, statedb per-entry TTL). Different
   // clocks; only this one is store-owned and durable.
+  //
+  // ON A FLOCK ENTRY (tacplus#206) the store epoch is a hybrid logical clock: a
+  // flock.Hlc field, the time of the entry's last write, merged by MAX. A remote
+  // time far ahead of the local clock never moves it: the write is held until
+  // local time catches up (see docs/USER.md, "flock state").
   bool store_epoch = 60086;
 
   // ----- Namespace isolation annotations (the generated tenant backstop) -----
@@ -2469,6 +2474,13 @@ extend google.protobuf.FieldOptions {
   //
   // Example:
   //   bool deleted = 7 [(spec.deleted_flag) = true];
+  //
+  // ON A FLOCK ENTRY (tacplus#206) the deletion mark is a flock.DeletionMark
+  // field: a reason (MERGED, USER, EXPIRED), for MERGED the survivor it
+  // redirects to (merged_into), and the copies that acknowledged it. A mark wins
+  // every merge, two marks are ordered deterministically, and a marked entry is
+  // refused at once. It is purged once every copy has acknowledged it.
+  //   flock.DeletionMark deleted = 4 [(spec.deleted_flag) = true];
   bool deleted_flag = 60091;
 
   // visibility: on a field of a (spec.public_view) message, whether the field
@@ -2488,6 +2500,67 @@ extend google.protobuf.FieldOptions {
   // are in canonical lock order, to pin its tenant, and to resolve the Apply's
   // durability.
   RecordEntryBinding record_op = 60094;
+
+  // ----- flock state (tacplus#206) -----
+  // A flock table is a (spec.service_state) root whose label includes
+  // "flock": fleet-wide state that copies merge with no locks. Each boundary
+  // is a repeated entry field; each entry is keyed by its (spec.store_key)
+  // (created by flock, never the caller), stamped by its (spec.store_epoch)
+  // (a flock.Hlc, the hybrid clock of its last write), marked deleted by its
+  // (spec.deleted_flag) (a flock.DeletionMark), and ranked by its creation
+  // stamp (its one flock.Hlc field with (spec.merge) = MERGE_RULE_IMMUTABLE).
+  // tacplus adds the merge metadata (flock.Meta flock_meta) to each entry and
+  // generates merge, merge_entries, the writers and the unique check in Go,
+  // Rust and Java. See docs/USER.md, "flock state".
+
+  // merge: how two copies of a flock entry combine this field. Every field of
+  // a flock entry needs one, except a singular message field (merged field by
+  // field), the store key, the store epoch, the deletion mark and the identity
+  // fields of a set element; generation refuses a flock root with a field that
+  // has none. A rule never changes once released: the copies of an older
+  // build would merge the field differently.
+  //   On a boundary field (the repeated entries of the root),
+  //   MERGE_RULE_LAST_WRITE replaces the whole entry: the newer store epoch
+  //   wins, and the entry's own fields need no rules.
+  // Example:
+  //   uint64 generation = 5 [(spec.merge) = MERGE_RULE_MAX];
+  MergeRule merge = 60098;
+
+  // identity: this field of a set element's message is part of the element's
+  // identity: two elements with equal identity fields are the same element,
+  // which a SET_* field adds and removes. A message used as a set element
+  // needs at least one.
+  // Example:
+  //   string idp = 1 [(spec.identity) = true];
+  bool identity = 60099;
+
+  // unique: on a SET_* field of a flock entry: no two live entries share an
+  // element of it. The generated unique check refuses a local write that
+  // would, merges the partition race (both entries created with the element,
+  // within the window) with merge_entries, and quarantines any other overlap.
+  // Example:
+  //   repeated Link links = 6 [(spec.merge) = MERGE_RULE_SET_REMOVE_WINS, (spec.unique) = true];
+  bool unique = 60100;
+}
+
+// MergeRule is a flock field's (spec.merge) rule. Every rule is commutative,
+// associative and idempotent, so copies converge whatever the order.
+enum MergeRule {
+  MERGE_RULE_UNSPECIFIED = 0;
+  // IMMUTABLE: set once. Two copies that set it differently are a conflict,
+  // recorded in the entry's flock_meta.conflicts, which fails closed.
+  MERGE_RULE_IMMUTABLE = 1;
+  // MIN / MAX: the smallest / largest value set (an unset value takes no part).
+  MERGE_RULE_MIN = 2;
+  MERGE_RULE_MAX = 3;
+  // LAST_WRITE: the value of the newest write, by hybrid clock.
+  MERGE_RULE_LAST_WRITE = 4;
+  // SET_ADD_WINS / SET_REMOVE_WINS: a set of elements (a repeated field, or a
+  // map of messages keyed by its key) with causal metadata: an add concurrent
+  // with a remove wins under ADD_WINS and loses under REMOVE_WINS; a re-add
+  // after a remove it saw always wins.
+  MERGE_RULE_SET_ADD_WINS = 5;
+  MERGE_RULE_SET_REMOVE_WINS = 6;
 }
 
 // RecordEntryBinding is the (spec.record_entry) stamp on a write-surface RPC

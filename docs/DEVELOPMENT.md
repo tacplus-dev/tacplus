@@ -542,6 +542,31 @@ so Go, Rust and Java cannot drift:
   `pkg/internal/<lang>/types/`. `cross-test/redact` checks all three against one
   hand-built fixture.
 
+### flock state (spec.merge)
+
+Flock state (tacplus#206; USER.md, flock state) is generated from one plan, so
+Go, Rust and Java cannot drift:
+
+- **Plan and refusals** — `pkg/internal/common/parser/flock.go`: `IsFlockRoot`
+  (the one predicate that reads the `flock` label), `NewFlockIndex` (each entry's
+  system fields, each field's rule and path, set elements and their identity),
+  `ValidateFlockAnnotations` (run in `builder.validateSemanticAnnotations`), and
+  `FlockRules`, which `builder.pinFlockRules` pins in the source's
+  `registry.yaml` (`registry.PinFlockRules`): a released merge rule never
+  changes. The timing constants (`FlockMaxSkewMs`, `FlockRebuildAfterMs`,
+  `FlockMaxMessageAgeMs`) live there too, and every language emits them.
+- **Proto** — `sys/flock.proto` holds the clock, the mark and the merge
+  metadata; `proto.InjectFlockMetaFields` adds `flock.Meta flock_meta = 100000`
+  to every entry in every generator, so the wire type is the same everywhere.
+- **Emitters** — Go `pkg/internal/go/types/flock_gen.go` with the
+  schema-independent `flock_runtime.go`; Rust and Java in their
+  `pkg/internal/<lang>/types/flock_gen.go`. They carry the same algorithm: change
+  one, change all three. `cross-test/flock` (`just flock`, in the gates) runs
+  the property tests and the simulation in each, and pins the digests of one
+  scenario byte for byte (`cross-test/fixtures/flock_vectors.txt`); regenerate
+  that fixture only for an intended change of encoding or rule, which a released
+  rule may not have.
+
 ### Data entitlement (spec.redact) — legacy
 
 Deprecated in 2.6, removed in 3.0 (`parser.LegacyRedactWarning` warns at

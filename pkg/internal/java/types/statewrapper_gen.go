@@ -81,6 +81,17 @@ type javaTopicBoundary struct {
 	SubscribeRecordType string // Qualified generated envelope: "Baseball.StateFieldSubscribeRecord"
 }
 
+// javaQueueBoundary describes a (spec.queue) or (spec.priority_queue) field in
+// the state root. Both are backed by the OfferTo*/ConsumeFrom*/Peek*/Size*
+// state RPCs (proto/state.go), never by a singleton's Get*/Watch*.
+type javaQueueBoundary struct {
+	FieldName     string // camelCase: "tasks"
+	FieldPascal   string // PascalCase: "Tasks"
+	TypeName      string // Simple: "Task"
+	JavaType      string // Qualified: "Helper.Task"
+	PriorityField string // the (spec.priority_queue) field: "severity"; empty for a FIFO queue
+}
+
 // javaCommandBoundary describes a command RPC field in the state root.
 type javaCommandBoundary struct {
 	FieldName   string // camelCase: "reloadConfig"
@@ -127,6 +138,7 @@ type javaStateWrapperData struct {
 	Singletons        []javaSingletonBoundary
 	Collections       []javaCollectionBoundary
 	Topics            []javaTopicBoundary
+	Queues            []javaQueueBoundary
 	StateImports      []javaStateImportField
 	Commands          []javaCommandBoundary
 	Views             []javaViewBoundary
@@ -276,6 +288,7 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 	var singletons []javaSingletonBoundary
 	var collections []javaCollectionBoundary
 	var topics []javaTopicBoundary
+	var queues []javaQueueBoundary
 	var stateImports []javaStateImportField
 	var commands []javaCommandBoundary
 	var views []javaViewBoundary
@@ -390,6 +403,39 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 				TypeName:            typeName,
 				JavaType:            javaType,
 				SubscribeRecordType: outerClass + "." + proto.TopicSubscribeRecordName(stateRoot.Name, strutil.ToPascalCase(field.Name)),
+			})
+			continue
+		}
+
+		// Queue / priority queue: delivered through OfferTo*/ConsumeFrom*/
+		// Peek*/Size*, so it is neither a singleton nor a collection. A private
+		// queue has no RPCs (proto/state.go) and no accessors.
+		queueAnn := field.Annotations["queue"]
+		pqAnn := field.Annotations["priority_queue"]
+		if queueAnn.BoolValue || pqAnn.StringValue != "" {
+			if privAnn, ok := field.Annotations["private"]; ok && privAnn.BoolValue {
+				continue
+			}
+			typeName := extractSimpleTypeName(field.Type)
+			javaType := outerClass + "." + typeName
+			if parts := strings.SplitN(field.Type, ".", 2); len(parts) == 2 && parts[0] != fileDesc.Package {
+				crossPkg := parts[0]
+				crossOuter := resolveCrossOuterClass(dp, crossPkg)
+				javaType = crossOuter + "." + typeName
+				crossDir := resolveProtoDir(dp, crossPkg)
+				crossImport := fmt.Sprintf("%s.types.%s.%s.%s", basePackage, crossDir, crossPkg, crossOuter)
+				imports = append(imports, crossImport)
+			}
+			priorityField := ""
+			if !queueAnn.BoolValue {
+				priorityField = pqAnn.StringValue
+			}
+			queues = append(queues, javaQueueBoundary{
+				FieldName:     strutil.ToLowerCamelCase(field.Name),
+				FieldPascal:   strutil.ToPascalCase(field.Name),
+				TypeName:      typeName,
+				JavaType:      javaType,
+				PriorityField: priorityField,
 			})
 			continue
 		}
@@ -533,6 +579,7 @@ func generateJavaStateWrapper(config *tactype.Config, svc ServiceInfo, fileDesc 
 		Singletons:                singletons,
 		Collections:               collections,
 		Topics:                    topics,
+		Queues:                    queues,
 		StateImports:              stateImports,
 		Commands:                  commands,
 		Views:                     views,

@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by looper (#266).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-10 by looper (#359).
 
 - **Version / line:** v2.6.2 (latest release, 2026-11-07, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -23,6 +23,10 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   The fetch layer authenticates `https://github.com` clones (`src`, `depends`, the private registry) with `GH_TOKEN`
   (else `GITHUB_TOKEN`) and no other host; `CI_JOB_TOKEN` still goes only to `CI_SERVER_HOST` (#191; released as
   v2.4.2 and v2.5.1).
+  A `(spec.config_slice)`'s `TenantConfig` / `ProjectConfig` field is registered in an authority like an id
+  (`tacplus registry register NAME --tenant-slice|--project-slice`; global from 1, private from 1024; a union refuses
+  a field in two registries) and synced into locks; a build whose registry is a lock refuses a slice with no
+  registered field instead of assigning max+1, and a legacy registry assigns in file order (#352; v2.6.2).
   The generated Rust chassis signs and verifies RSA and ECDSA with aws-lc-rs: the `rsa` crate (RUSTSEC-2023-0071,
   Marvin) and the elliptic-curve 0.13 stack (crypto-bigint 0.5, RUSTSEC-2026-0387) are gone from the generated
   lockfile, which current-generation checks (#186; backported to release/2.0 through release/2.5 by pull request, as
@@ -56,7 +60,8 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   2.6 gets none); `build:X.Y` per line, rebuilt on every release as an immutable `build:X.Y.Z`, carries Kani and
   cargo-fuzz too, and its `tacplus` is `images/tacplus.sh`, which runs exactly the pinned binary, checked against
   `checksums.txt`, and refuses a repository with no pin or a pin of another line. `tacplus verify` reports Go as
-  skipped.
+  skipped. This repository, the compiler and no tacplus project, pins its own gates' build image by digest in
+  `build.lock` (#340), which the build pipeline (tacplus-dev/build) plans from.
   `registry.json`'s layout is tacplus's own (#307): before, protojson chose one or two spaces after each `:` from a
   hash of the binary, so it flipped between patches and between amd64 and arm64. Now it is always two (2.5.8's
   format), pinned by a golden test on every supported line.
@@ -105,6 +110,13 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   beside the MCP Java SDK, `tools.jackson.*` 3.1.8 (nine GHSAs in the SDK's 3.1.4); docs/USER.md tells Java
   consumers to pin the same. `scripts/java_dependency_floor_test.go` refuses a lower or missing pin (#200;
   backported to release/2.0 through release/2.5 by pull request, each line's next patch once it merges).
+  Every checked-in dependencies.yaml (example/proto's included) pins the TypeScript and Rust floors the generated
+  manifests declare past their advisories: axios ^1.20.0, js-yaml ^4.3.2, zod ^4.6.6, rustls 0.23.46, tokio 1.51.6,
+  webpki-roots 0.26.11, anyhow 1.0.103, jsonwebtoken 10.3.0 (also the harness Cargo.tomls' tokio), and the fixtures
+  and harness go.mods that pin golang.org/x/crypto pin v0.58.1-0.20261009181718-2f1f834330b2 (GO-2026-5932 is fixed
+  only after v0.58.0, the newest tag). `scripts/dependency_floor_test.go` and `scripts/go_dependency_floor_test.go`
+  refuse a lower pin (#312; backported to release/2.0 through release/2.6 by pull request, each line's next patch
+  once it merges).
   Generated member port (#212): `option (spec.member_port) = {}` makes the Java ServiceManager own a member port
   for the service's black-box member traffic (Hazelcast in Stratum). Since #321 it is a gRPC bidi stream of byte
   chunks (`/memberport.MemberTunnel/Open`, `sys/memberport.proto`) on its own TLS 1.3 listener with the auto-TLS
@@ -140,6 +152,34 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   `cross-test/redact` (`just redact`, in the gates) against a hand-built fixture. The legacy egress redaction
   (`(spec.redact)`, `(spec.data_entitlement)`, `Sanitize<T>`, `<T>Entitlement`) is deprecated (generation warns),
   removed in 3.0. Gaps: no cross-package sensitive tree, no oneof leaves, no client-only target (PROPOSALS.md).
+  flock state (#206, the merge half; ships in 2.7): a `(spec.service_state)` root labelled `flock` (a well-known
+  label, like `kernel`) holds fleet-wide convergent tables. Every entry field merges by its `(spec.merge)` rule
+  (IMMUTABLE, MIN, MAX, LAST_WRITE, SET_ADD_WINS, SET_REMOVE_WINS; a nested message field by field; LAST_WRITE on a
+  boundary replaces the whole entry), set elements by `(spec.identity)`, and generation refuses a flock root with a
+  field that has no rule. The entry's `(spec.store_epoch)` is a hybrid clock (`flock.Hlc`) and its
+  `(spec.deleted_flag)` a `flock.DeletionMark` (MERGED/USER/EXPIRED, `merged_into`); `sys/flock.proto` holds the
+  types and tacplus adds `flock.Meta flock_meta` (stamps, causal set ops, conflicts) to each entry. Go, Rust and
+  Java generate two-argument merge, merge_entries (the older entry survives and absorbs the other, removals
+  included), the writers, the unique check (a local conflict refused, the partition race merged, any other overlap
+  quarantined), the marks (deterministic order, purged once every copy acknowledged, a copy away 30 days rebuilt),
+  the clock (a far-future time held) and a canonical digest. Merge rules are pinned in the source's
+  `registry.yaml`: a released rule cannot change. `cross-test/flock` (`just flock`, in the gates) runs property
+  tests, a multi-copy simulation (convergence, no resurrection, no redirect cycles) and a cross-language digest
+  vector in all three. Gaps: no flock service yet (copies, gossip over #204, membership, catch-up), no compaction of
+  set ops, and the `scope: FLEET` spelling the design note later chose (PROPOSALS.md).
+  The generated Go chassis pins a TLS peer on every handshake, a resumed one too (#359): `x509.TLSConfig` verifies
+  in `VerifyConnection` (crypto/tls skips `VerifyPeerCertificate` on resumption, gosec G123), and the mesh and
+  bootstrap clients (servicemanager, service_im) share `x509.SpiffeClientTLSConfig`, whose `InsecureSkipVerify` is
+  justified in place (`#nosec G402`: its chain check runs in `VerifyConnection`); `x509_resumption_test.go` refuses a
+  resumed session to a peer that no longer passes. gosec 2.30 on the generated example service reports no G402, G123,
+  G115, G404, G703 or G704: each was fixed (enum parse bounded to int32, gRPC codes, IP packing via encoding/binary,
+  JWK exponent, the AWS STS region validated) or annotated with its reason (wire two's complement, retry jitter,
+  operator-named paths). Backported to release/2.0 through release/2.6 by pull request, each line's next patch.
+  On main for 2.7 (#320): the generated Rust model and grpcserver config read and write YAML with `serde-saphyr`
+  (pure Rust, on granit-parser), off the deprecated serde_yaml and its unsafe-libyaml (RUSTSEC-2024-0449), which
+  current-generation refuses in the generated lockfile; a Rust `dependencies.yaml` must pin `serde-saphyr`. YAML is
+  read as YAML 1.2 Core as before; the model's YAML output changed (double quotes, YAML 1.1 bool/number spellings
+  quoted), so it is not backported.
 - **Released / deployed:** v2.6.0 is the newest release: the binaries and `checksums.txt`, and
   `ghcr.io/tacplus-dev/tacplus/build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c`
   (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.
@@ -158,7 +198,7 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   nightly is tacplus-dev/looper#74, its nightly off until #257 passes. The new build image (Kani, cargo-fuzz, the launcher) is verified by
   images.yml once pushed; the launcher and `tacplus pin` by the gates. The fleet build's image lookup on a private package is
   verified against a fake registry only: the looper's token has no `read:packages` (a public image resolves live).
-  `depends`/`src` at a line can take a pre-release (#214). The record plane's tenant checks assume a tenant's
+  The record plane's tenant checks assume a tenant's
   namespace is `/tenants/<tid>`; kernel#23's `/tenants/<name>` namespaces need #202 first (PROPOSALS.md).
   The record write surface stamps no `(spec.identity_spiffe_subject)` (PROPOSALS.md). A fleet's service images must be on ghcr.io from a
   github.com repo (PROPOSALS.md).

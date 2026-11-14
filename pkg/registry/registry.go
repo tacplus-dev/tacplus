@@ -106,10 +106,51 @@ type Registry struct {
 	Registries []string         `yaml:"registries,omitempty"`
 	Services   []*ServiceEntry  `yaml:"services"`
 	VServices  []*VServiceEntry `yaml:"vservices"`
-	inputDir   string
-	dirty      bool
-	byName     map[string]*ServiceEntry
-	vsByName   map[string]*VServiceEntry
+	// Flock pins the merge rule of every flock field this registry's protos
+	// have generated (tacplus#206), sorted by field. A merge rule never changes
+	// once released: copies built before the change would merge the field
+	// differently and never converge, so PinFlockRules refuses it.
+	Flock    []*FlockRuleEntry `yaml:"flock,omitempty"`
+	inputDir string
+	dirty    bool
+	byName   map[string]*ServiceEntry
+	vsByName map[string]*VServiceEntry
+}
+
+// FlockRuleEntry is one pinned flock merge rule: field is the field's path
+// from its entry ("people.Person.links[].added_ms"), rule the rule's name.
+type FlockRuleEntry struct {
+	Field string `yaml:"field"`
+	Rule  string `yaml:"rule"`
+}
+
+// PinFlockRules records rules (field path -> rule) in the registry and refuses
+// any that differs from the rule already pinned for its field. A field no
+// longer declared keeps its pin, so a removed field cannot come back under
+// another rule.
+func (r *Registry) PinFlockRules(rules map[string]string) error {
+	pinned := map[string]*FlockRuleEntry{}
+	for _, e := range r.Flock {
+		pinned[e.Field] = e
+	}
+	var changed []string
+	for field, rule := range rules {
+		e, ok := pinned[field]
+		switch {
+		case !ok:
+			r.Flock = append(r.Flock, &FlockRuleEntry{Field: field, Rule: rule})
+			r.dirty = true
+		case e.Rule != rule:
+			changed = append(changed, fmt.Sprintf("%s: %s, released as %s", field, rule, e.Rule))
+		}
+	}
+	if len(changed) > 0 {
+		sort.Strings(changed)
+		return fmt.Errorf("flock merge rules never change once released (registry.yaml pins them), but these did:\n  %s",
+			strings.Join(changed, "\n  "))
+	}
+	sort.Slice(r.Flock, func(i, j int) bool { return r.Flock[i].Field < r.Flock[j].Field })
+	return nil
 }
 
 // Load loads registry.yaml from inputDir.
@@ -225,7 +266,9 @@ func (r *Registry) VServiceFieldID(name string) (int32, error) {
 }
 
 // AssignTenantSliceField ensures serviceName has a tenant_slice_field.
-// ServiceID must have been called for this name first.
+// ServiceID must have been called for this name first. A lock never assigns
+// one: the field is a TenantConfig wire number its authority registers, and
+// max+1 over whatever a build loaded is not stable across builds.
 func (r *Registry) AssignTenantSliceField(name string) (int32, error) {
 	e, ok := r.byName[name]
 	if !ok {
@@ -233,6 +276,9 @@ func (r *Registry) AssignTenantSliceField(name string) (int32, error) {
 	}
 	if e.TenantSliceField != 0 {
 		return e.TenantSliceField, nil
+	}
+	if r.IsLock() {
+		return 0, r.sliceNotInLock(SliceTenant, name)
 	}
 	e.TenantSliceField = r.nextTenantSliceField()
 	r.dirty = true
@@ -256,7 +302,8 @@ func (r *Registry) TenantSlices() []*ServiceEntry {
 }
 
 // AssignProjectSliceField ensures serviceName has a project_slice_field.
-// ServiceID must have been called for this name first.
+// ServiceID must have been called for this name first. A lock never assigns
+// one, as for AssignTenantSliceField.
 func (r *Registry) AssignProjectSliceField(name string) (int32, error) {
 	e, ok := r.byName[name]
 	if !ok {
@@ -264,6 +311,9 @@ func (r *Registry) AssignProjectSliceField(name string) (int32, error) {
 	}
 	if e.ProjectSliceField != 0 {
 		return e.ProjectSliceField, nil
+	}
+	if r.IsLock() {
+		return 0, r.sliceNotInLock(SliceProject, name)
 	}
 	e.ProjectSliceField = r.nextProjectSliceField()
 	r.dirty = true
@@ -303,13 +353,14 @@ func (r *Registry) Save() error {
 	// IDMin is omitempty because zero is exactly how Load spells "no floor":
 	// a registry that never had one must not gain `id_min: 0` on save.
 	type registryFile struct {
-		IDMin      int32            `yaml:"id_min,omitempty"`
-		Scope      string           `yaml:"scope,omitempty"`
-		Registries []string         `yaml:"registries,omitempty"`
-		Services   []*ServiceEntry  `yaml:"services"`
-		VServices  []*VServiceEntry `yaml:"vservices,omitempty"`
+		IDMin      int32             `yaml:"id_min,omitempty"`
+		Scope      string            `yaml:"scope,omitempty"`
+		Registries []string          `yaml:"registries,omitempty"`
+		Services   []*ServiceEntry   `yaml:"services"`
+		VServices  []*VServiceEntry  `yaml:"vservices,omitempty"`
+		Flock      []*FlockRuleEntry `yaml:"flock,omitempty"`
 	}
-	data, err := yaml.Marshal(&registryFile{IDMin: r.IDMin, Scope: r.Scope, Registries: r.Registries, Services: r.Services, VServices: r.VServices})
+	data, err := yaml.Marshal(&registryFile{IDMin: r.IDMin, Scope: r.Scope, Registries: r.Registries, Services: r.Services, VServices: r.VServices, Flock: r.Flock})
 	if err != nil {
 		return fmt.Errorf("marshaling registry.yaml: %w", err)
 	}

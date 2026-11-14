@@ -17,6 +17,10 @@ import (
 // "Well-Known Names" and https://github.com/tacplus-dev/tacplus/issues/1.
 const WellKnownStateHostLabel = "kernel"
 
+// FlockLabel (flock.go) is well known for the same reason: every flock state
+// root routes to it, and the fleet's flock service, which spans its clusters,
+// serves it (tacplus#206).
+
 // CollectServingLabels returns every routing label served by the loaded proto
 // set, plus WellKnownStateHostLabel: a service's own identity (GrpcName, the proto package), the physical host
 // a vservice declares through (spec.service_s2s).label, and the file-level
@@ -25,7 +29,7 @@ const WellKnownStateHostLabel = "kernel"
 // routing label is late-bound — it names a service by label, not by import — so
 // this set is the only thing that can tell a declared destination from a typo.
 func CollectServingLabels(fds []*FileDescriptor) map[string]bool {
-	labels := map[string]bool{WellKnownStateHostLabel: true}
+	labels := map[string]bool{WellKnownStateHostLabel: true, FlockLabel: true}
 	for _, fd := range fds {
 		if fd.ServiceStore {
 			if fd.ServiceName != "" {

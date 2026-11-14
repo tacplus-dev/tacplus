@@ -103,6 +103,9 @@ current-generation-java:
 current-generation-rust:
   {{lock}} bash cross-test/current-generation/run.sh --language rust
 
+current-generation-typescript:
+  {{lock}} bash cross-test/current-generation/run.sh --language typescript
+
 determinism:
   {{lock}} bash cross-test/determinism/run.sh
 
@@ -188,7 +191,7 @@ gates:
     echo "=== OVERALL fail=1 (protoc preflight) ==="
     exit 1
   fi
-  for g in soundness test current-generation determinism cert-stream stream-expiry memberport claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg redact trace-carry tacplus-script; do
+  for g in soundness test current-generation determinism cert-stream stream-expiry memberport claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg redact trace-carry flock tacplus-script; do
     echo "=== $g ==="
     just "$g"
     rc=$?
@@ -410,6 +413,23 @@ trace-carry-java:
 
 trace-carry-rust:
   {{lock}} bash cross-test/trace-carry/run.sh --language rust
+
+# Flock state (tacplus#206): go, java and rust each generate the people table
+# of cross-test/flock/proto and run, against their generated merge, the
+# per-schema property tests (commutative, associative, idempotent over whole
+# entries plus marks), the multi-copy simulation (convergence, no resurrection,
+# no redirect cycles) and the cross-language vector
+# (cross-test/fixtures/flock_vectors.txt, byte for byte).
+flock: flock-go flock-java flock-rust
+
+flock-go:
+  {{lock}} bash cross-test/flock/run.sh --language go
+
+flock-java:
+  {{lock}} bash cross-test/flock/run.sh --language java
+
+flock-rust:
+  {{lock}} bash cross-test/flock/run.sh --language rust
 
 # Generation gate against the REAL platform + app proto repos (not the
 # cross-test/proto fixtures every other gate uses). This is the check that

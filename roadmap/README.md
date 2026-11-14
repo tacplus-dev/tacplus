@@ -13,6 +13,11 @@ tacplus behavior yet. Current behavior lives in [../docs/](../docs/).
   over annotated `.proto`: five block keywords (`config`/`state`/`s2s`/`c2s`/`c2d`)
   plus a schema-driven bare-`spec`-option rule, transpiled to `.proto` in front of
   the existing single code-generation path. Ships with `lower`/`raise`/`fmt`/`lint`.
+- [Product layer `/products/<name>`](PRODUCTS_LAYER.md) — the approved design
+  (#475, Jody 2026-11-09) for a fleet's product code between `/system` and the
+  tenants: `(spec.service).product`, the five S2S edges enforced at every door
+  in Go, Java and Rust, custodian rows bound to the token's tid with
+  `(spec.caller_tid)`, and the kernel, operator and registry parts.
 - [Data entitlement architecture](DATA_ENTITLEMENT.md) — broader platform
   design notes for async data-returning RPCs, sealed candidate results, release
   processors, tenant cells, and downstream handoff boundaries. This is not a

@@ -1,0 +1,102 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+// Package flock holds the types of flock state (tacplus#206): fleet-wide
+// convergent state, declared in proto. A flock table is a state root whose
+// (spec.service_state).label includes "flock"; each entry of its boundaries is
+// merged field by field by the rule its (spec.merge) names, with no locks.
+//
+// The generated merge code owns every value of these types. A service never
+// writes one by hand: it calls the generated helpers (merge, merge_entries,
+// the set and register writers, the unique check), so two copies always reach
+// the same entry. Field numbers are frozen, and so is every merge rule: the
+// digest copies compare is taken over these encodings.
+syntax = "proto3";
+
+package flock;
+
+// Hlc is a hybrid logical clock time: wall-clock milliseconds, a counter for
+// writes within one millisecond, and the id of the copy that made it, which
+// breaks ties. Times are totally ordered by (wall_ms, counter, node). A copy's
+// clock never moves past its own wall clock plus the generated skew bound: a
+// remote time further ahead is held until local time catches up.
+message Hlc {
+  int64 wall_ms = 1;
+  uint32 counter = 2;
+  string node = 3;
+}
+
+// DeleteReason is why an entry carries a deletion mark.
+enum DeleteReason {
+  DELETE_REASON_UNSPECIFIED = 0;
+  // MERGED: the entry is a duplicate absorbed into merged_into, which reads
+  // of it follow.
+  DELETE_REASON_MERGED = 1;
+  // USER: deleted at a person's request; reads refuse it.
+  DELETE_REASON_USER = 2;
+  // EXPIRED: aged out; reads refuse it.
+  DELETE_REASON_EXPIRED = 3;
+}
+
+// MarkAck records that a copy holds the entry's mark.
+message MarkAck {
+  string copy = 1;
+  Hlc at = 2;
+}
+
+// DeletionMark is a flock entry's (spec.deleted_flag): unset (reason
+// UNSPECIFIED) while the entry is live. A mark wins every merge and is never
+// undone. Two different marks are ordered deterministically (USER over MERGED
+// over EXPIRED; for MERGED, the oldest target, then the target key; then the
+// earliest at), so every copy keeps the same one. acks lists the copies that
+// hold this mark; it is purged once every copy has acknowledged it.
+message DeletionMark {
+  DeleteReason reason = 1;
+  // merged_into is the survivor's (spec.store_key), for MERGED.
+  string merged_into = 2;
+  // merged_into_created is the survivor's creation stamp, for MERGED: a
+  // redirect only ever points to an older entry, so a chain has no cycle.
+  Hlc merged_into_created = 3;
+  Hlc at = 4;
+  repeated MarkAck acks = 5;
+}
+
+// SetOp is one add or remove of an element of a SET_ADD_WINS or
+// SET_REMOVE_WINS field (a repeated field or a map of messages). An op is
+// immutable once made, identified by its dot, and carries the element's
+// identity and, for an add, the element's encoding. A remove names the add
+// dots it observed; an add names the remove dots it observed, so a re-add
+// after a remove, and a remove of a device, both survive any delivery order.
+message SetOp {
+  // element is the canonical encoding of the element's identity.
+  string element = 1;
+  bool remove = 2;
+  Hlc dot = 3;
+  repeated Hlc observed = 4;
+  bytes payload = 5;
+}
+
+// FieldStamp is the clock of the last write of one LAST_WRITE field.
+message FieldStamp {
+  string path = 1;
+  Hlc at = 2;
+}
+
+// FieldOps is the op set of one SET_* field.
+message FieldOps {
+  string path = 1;
+  repeated SetOp ops = 2;
+}
+
+// Meta is the merge metadata of a flock entry, kept beside its fields and
+// replicated with them. tacplus adds it to every flock entry message as the
+// field flock_meta; nothing else writes it.
+message Meta {
+  // stamps, sorted by path: one per LAST_WRITE field that was written.
+  repeated FieldStamp stamps = 1;
+  // sets, sorted by path, ops sorted by dot: one per SET_* field.
+  repeated FieldOps sets = 2;
+  // conflicts, sorted: the IMMUTABLE fields that two copies set differently.
+  // A conflict is never resolved by the merge; it fails closed.
+  repeated string conflicts = 3;
+}

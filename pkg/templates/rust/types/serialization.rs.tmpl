@@ -167,7 +167,7 @@ pub fn {{.SnakeName}}_to_yaml(msg: &{{.TypeName}}) -> Result<Vec<u8>, String> {
 let json_data = {{.SnakeName}}_to_json(msg)?;
 let v: serde_json::Value = serde_json::from_slice(&json_data)
 .map_err(|e| format!("Failed to convert to YAML: {}", e))?;
-serde_yaml::to_string(&v)
+serde_saphyr::to_string(&v)
 .map(|s| s.into_bytes())
 .map_err(|e| format!("Failed to serialize to YAML: {}", e))
 }
@@ -239,7 +239,7 @@ serde_json::from_slice(data)
 }
 /// Creates {{.TypeName}} from YAML bytes.
 pub fn {{.SnakeName}}_from_yaml(data: &[u8]) -> Result<{{.TypeName}}, String> {
-let mut v: serde_json::Value = serde_yaml::from_slice(data)
+let mut v: serde_json::Value = serde_saphyr::from_slice_with_options(data, yaml_read_options())
 .map_err(|e| format!("Failed to parse YAML: {}", e))?;
 normalize_yaml_numbers(&mut v);
 {{- if .NeedsNormalization}}

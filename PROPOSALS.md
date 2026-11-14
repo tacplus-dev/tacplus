@@ -11,6 +11,32 @@ the looper then marks it `promoted` or `declined` here with the date.
   stay full); `cmd/sitegen/**` and `site/**` to `just docs` plus `just site`; `.github/workflows/**` to a workflow
   lint. Also for `just docs`: it checks relative links but not their anchors (GitHub's heading slugs) nor external
   URLs, and does not build the site (`site/docs/*.md` link to site paths; `just site` checks them, needing a venv).
+- **Product layer: a product's owner tenant reads across tenants' custodian data** (2026-11-10, #475; option B of
+  roadmap/PRODUCTS_LAYER.md section 5, which Jody chose as the follow-up to A on 2026-11-09): `fleet.yaml` names, per
+  product, the tenant that owns it (`products: [{name: ledger, owner_tenant: <tid>}]`); an rpc flagged
+  `RPC_FLAG_ACROSS_TENANTS` on a product service admits only **users** of that tenant holding an entitlement to it
+  (C2S, run-time policy within build-time entitlements), its `caller_tid` binding is lifted on that rpc only, and
+  every call is audited with the owner user's identity. No service principal ever reads across tenants. Why: a
+  product owner's billing view over per-tenant usage. Needs its own design and a ROADMAP.md line; after #475.
+- **gosec on the generated Go in tacplus's own gates** (2026-11-08, #359): #359 cleared G402, G123, G115, G404,
+  G703 and G704 from the generated example service (fixed or `#nosec`-annotated with a reason in the templates),
+  but nothing here keeps them out: tacplus-dev/looper#108's scan sees a regression only after a release. A gate
+  (or a step of `current-generation`) that runs a pinned gosec over the generated Go of cross-test/proto and the
+  example, failing on those rules, would catch it at land. The other rules gosec reports there (G103 in protoc's
+  gencode, G104, G304, G101, G117, G301/G302) need a decision on each before they join it.
+- **Release-line Python floors that need no interpreter drop** (2026-11-08, #264): release/2.0–2.5 keep Python 3.8,
+  so their cryptography/requests/urllib3 floors stop at the newest 3.8 releases (47.0.0, 2.32.4, 2.2.3) and 13
+  advisories stay accepted in their USER.md. A floor keyed by `python_version` marker (`"urllib3>=2.8.0;
+  python_version>='3.10'"` beside the 3.8 floor) would give 3.10+ consumers on those lines the clean floors with no
+  interpreter drop; the generator writes one floor per name today. Also: the build image's venv pins
+  `cryptography>=49.0.0` (images/build.Dockerfile); PYSEC-2026-3552 now needs 50.0.0.
+- **CI's own jobs read `build.lock` instead of floating `build:latest`** (2026-11-12, #340): the build pipeline
+  (tacplus-dev/build) runs this repository's gates in the image `build.lock` pins by digest, but
+  `.github/workflows/nightly-gates.yml`, `nightly-security.yml`, `nightly-fixes.yml`, `site.yml` and
+  `just gates-container` still run in `build:latest`, which moves on every release and every main push of
+  `images/`. Reading the pin instead makes every gate run in the same image, and moving it one reviewed commit;
+  the cost is a pin to bump after each release (a pin older than `images/` on main gates against an image that does
+  not match the Dockerfile in the tree).
 - **Images on Google Artifact Registry through WIF, ghcr.io deprecated from 2.6** (2026-11-07, #223; parked by
   the hub 2026-11-07): publish `base`, `build` and the services' release images to the public
   `us-docker.pkg.dev/jody1-328023/tacplus`, pushed by the GitLab publish job with a short-lived GCP token from its
@@ -22,6 +48,67 @@ the looper then marks it `promoted` or `declined` here with the date.
   tag form, and how build:2.6.0 gets there. Parked: Jody chose ghcr.io release images pushed by GitHub Actions with
   `GITHUB_TOKEN` for now (tacplus-dev/roadmap decisions/ci-on-gitlab-2026-10-27.md, addendum); revisited with
   tacplus-dev/looper#17, the GitLab build pipeline.
+- **A release tag never builds on another line's base** (2026-11-08, #283): a release tag's Images run starts its fresh
+  `build` from its line's `base:X.Y`, else `base:latest` (main's). Before any line rebuild had pushed a `base:X.Y`, the
+  v2.1.13–v2.5.13 runs took main's base (Swift 6.4.2) under their lines' Swift 6.1.3 plugins and failed the smoke test
+  (`protoc-gen-swift: undefined symbol`, run 42428041155), and so did every 2.1–2.5 tag cut since (v2.1.14–v2.5.15).
+  v2.0.20 passed, so `build:2.0.20` carries main's SDKs instead of 2.0's pins. Once the weekly line rebuild has pushed every `base:X.Y`, the fallback is unreachable for a supported
+  line. Still, the plan step should rebuild `base` from the tag when `base:X.Y` is missing, not fall back. That change
+  goes in `images.yml` on main and on each `release/*`.
+- **`just generated <dir>`: tacplus's security checks scan its generated output** (2026-11-09, #376): the other
+  half of tacplus-dev/looper#108 (services' scans skip their `output-dir`, so generated code is scanned nowhere until
+  tacplus scans it). A recipe generating Go/Rust/Java (chassis included) and Python/TypeScript into `<dir>/<set>/<lang>/`,
+  each loadable by its scanners (`go.sum`, `Cargo.lock`, compiled `target/classes` for SpotBugs, npm lock), touching no
+  tracked file; the `current-generation` fixtures until #196's kitchensink replaces the list. First scan's findings
+  (#359, #368) fixed in the generator or accepted in a new `security-exceptions.yaml`. Open: exceptions match by id
+  repo-wide (a path scope is a looper change), lite clients (Swift, C#), backport to 2.6.x. Approved at hub triage
+  2026-11-08; needs a ROADMAP.md line citing #376.
+- **One version resolver for `depends`/`src` and the fleet build** (2026-11-06, #214): `pkg/protosrc/resolve.go`
+  (`findLatestPatchTag`, `compareSemverTags`, `exactVersionRe`) and `pkg/fleet/version.go` (`parseVersion`,
+  `highest`, `resolveVersion`) each parse and rank `vMAJOR.MINOR.PATCH[-pre]` tags. #214 was the protosrc copy
+  disagreeing with the fleet one on pre-releases. A small shared package (parse, compare, latest release of a line)
+  used by both would keep "a line is its latest patch release, pre-releases only when named" in one place.
+- **The flock service, and its gossip between clusters** (2026-11-06, #206): tacplus now generates the merge, the
+  unique check, the marks and the clock of a flock table, but nothing runs copies yet. The service needs: the
+  explicit, versioned membership list that purge counts (not health state); gossip of whole entries over generated
+  S2S clients to a peer in another cluster (#204, the ROADMAP entry shared with redo#1); catch-up by comparing the
+  generated digests (a Merkle tree over them); serving nothing until a returning copy has caught up; quarantine
+  alerts for the overlaps `overlap` refuses to merge; and the panel's rate breaker (stop and quarantine if merges
+  exceed N per window). The issue names it a separate follow-up; it needs Jody's design OK, and
+  tacplus-dev/people#1 builds on it.
+- **flock: `scope: FLEET` instead of the `flock` label** (2026-11-06, #206): the design note's 2026-10-29 *Decided*
+  section replaces the flock service with an annotation-driven replication capability (`scope: FLEET` / `CLUSTER` on
+  a `(spec.service_state)` root) hosted by kernel. #206 built what the issue and ROADMAP.md say (`label: ["flock"]`),
+  behind the single predicate `parser.IsFlockRoot`; moving to `scope` is that predicate plus the annotation, the
+  generated merge unchanged. Needs Jody's decision.
+- **flock: compaction of set ops** (2026-11-06, #206): every add and remove of a SET_* element is kept as an op in
+  `flock_meta`, so an entry's metadata only grows (a device updated daily adds an op a day). The panel asked for
+  tombstone cleanup of the causal metadata: an op every copy has acknowledged, and that no live op names, can be
+  folded away, with the same every-copy rule as marks. Needs the membership list (the service, above).
+- **flock: what the generator refuses today** (2026-11-06, #206): a map of scalars, `oneof` and proto3 `optional`
+  fields, IMMUTABLE or nested messages inside a set element, and a map anywhere in a value stored whole (no
+  canonical encoding). Each could merge with more design; none is needed by the people table.
+- **flock: the consistency contract in the generated type, and new fields** (2026-11-06, #206): the panel's point 10
+  (a caller that reads, checks and writes against a table that moved to flock compiles and silently loses the
+  guarantee) is still open for Jody; and a new field should take no writes until the whole fleet runs a build that
+  knows its rule, which needs the service's membership and versions. Rules are pinned in `registry.yaml` so a
+  released rule cannot change.
+- **TypeScript: `required_if_eq` on an enum sibling declared in another file** (2026-11-09, #464): the fix resolves
+  the protobuf-es member against the enums of the message's own file, and for an enum declared elsewhere drops the
+  `UPPER_SNAKE(EnumName)_` prefix when the value carries it, which is wrong for an enum whose values do not all share
+  it. `helpers.ts` also imports only its own file's enums (`getEnumNames(pf.Enums)`), so such a check may not compile
+  at all. Not verified: no fixture has the case. When the kitchensink (#196) lands, give it one, compiled with `tsc`.
+- **The generated TypeScript model's `npm install` warns** (2026-11-09, #464): npm 11 reports `protobufjs`'s
+  postinstall as an install script not yet covered by `allowScripts`, so every consumer's install of a generated
+  model prints `npm warn install-scripts`. `current-generation` now holds only the `tsc` build to a clean log. Either
+  the generated `package.json` names the script it allows, or the dependency on `protobufjs` goes, if nothing needs it.
+- **Java state client topics: read which RPCs the state service declares** (2026-11-09, #454): the Go state client now
+  calls only the topic RPCs `proto.StateTopicRPCSurface` says the state service declares. The Java one
+  (`pkg/internal/java/types/statewrapper_gen.go`, the topic case) classifies a topic before its private check and calls
+  both `publishTo<F>` and `subscribeTo<F>` unconditionally, so a private topic, or an event-C2S state service (a
+  record/event topic with a `c2s` surface, or an exported root) that omits one of them, would not compile. Unverified
+  by a build: no fixture declares those shapes. Read the same surface there and add the shape to the
+  eventbus-backpressure fixture (or #196's kitchensink).
 - **trace_id in 2.7: field 200 on every sys wire message, additive traced helper forms** (2026-11-06, #313 → #327):
   the hub's split of #313. Every request-building generated helper (state clients' `Fetch`/`Delete`/`Query`, record
   readers, record-plane and kernel state helpers) gets a form that takes `trace_id`, beside today's, and every sys
@@ -35,6 +122,18 @@ the looper then marks it `promoted` or `declined` here with the date.
   stored (state `Put`/`Set`, store-derived subscriptions, store wrappers, disk helpers) and leaves it on topic
   publishes, queue offers and commands, which deliver a message to a consumer that propagates it. If a queue is to
   count as storage (its items persist until taken), the consumer loses the trace; that is a decision, not a fix.
+- **State client parity for queues and commands in Rust and Java** (2026-11-09, #456): #456 gave the Java
+  `StateClient` the queue accessors Go has (`offerTo<F>`, `consumeFrom<F>`, `peek<F>`, `size<F>` for a `(spec.queue)`
+  and a `(spec.priority_queue)`). The Rust state client (`pkg/templates/rust/types/statewrapper.rs.tmpl`) still has
+  none: it compiles, but a Rust service reaches its queues only through the raw tonic stub. And the Java generator
+  collects `(spec.command)` boundaries (`javaCommandBoundary`) but its template renders none, where Go has one method per
+  command. `cross-test/proto-statequeue` is where the Rust queue leg would be asserted.
+- **release/2.0: a Go service that is its own store does not compile** (2026-11-09, #456): on 2.0, a service declared
+  `{name: "helper", store: true}` with no gRPC service and its own `ServiceHealth` root gets a Go
+  `chassis/service_im/service_im.go` whose `audienceFromMethod` switch repeats `case "grpcconfig"` (the fixed
+  infrastructure case, then the state-store mapping of `ServiceConfigState`), so `go build` fails. 2.1 and later
+  generate the same proto cleanly. #456's 2.0 backport gives its fixture a gRPC service instead. If 2.0 is to get
+  the fix, it is a `bug` against that line.
 - **Kani harnesses beyond integer bounds** (2026-11-06, #211): the generated Rust harnesses now prove only that
   `validate()` refuses each integer/enum bound, and skip a message whose `validate()` reaches the regex crate (Kani
   0.68 panics compiling it), a nested message, a map field (prost's `HashMap` default makes a syscall Kani does not
@@ -91,6 +190,10 @@ the looper then marks it `promoted` or `declined` here with the date.
   scan found advisories in exactly those: #312 (TypeScript, Rust, Go), #309 (Python build/dev floors), #308
   (rustls-pemfile), after #264. A recipe that generates the cross-test models for every language into `<dir>`, with a
   lock-resolved manifest per language, would make OSV-Scanner and cargo-deny catch the next one in the build.
+- **golang.org/x/crypto back on a tag** (2026-11-09, #312): GO-2026-5932 (openpgp, unmaintained) is fixed only in
+  v0.58.1-0.20261009181718-2f1f834330b2, after v0.58.0, the newest tag, so five fixture dependencies.yaml and eight
+  harness go.mods pin that pseudo-version, and `scripts/go_dependency_floor_test.go` floors it. Nothing generated
+  imports openpgp. When x/crypto tags v0.59.0, move the pins and the floor to it.
 - **Run outbound-deadline in the gates** (2026-11-03, #310): `cross-test/outbound-deadline/run.sh` (the issue #38
   deadline and lifetime facts, and with #310 the trace fact) has no recipe and runs in no gate or workflow, so a
   regression there is invisible. #310 adds the recipe; joining the mandatory `gates` set is a cost decision (one
@@ -228,8 +331,9 @@ the looper then marks it `promoted` or `declined` here with the date.
 - **cargo audit of a generated sample, nightly** (2026-10-29, #186): current-generation now refuses the two crates of
   #186 by name in the generated lockfile, but a new advisory on any other crate the chassis locks is found only by
   each service's own scan. A nightly `cargo audit` of a generated sample (cargo-audit in the build image, the
-  advisory database fetched at run time) would find it first. It also reports four unmaintained crates today
-  (`rustls-pemfile`, `backoff`, `instant`, `unsafe-libyaml`) worth replacing. GitHub-only advisories (no RUSTSEC id,
+  advisory database fetched at run time) would find it first. It also reported four unmaintained crates
+  (`rustls-pemfile`, `backoff`, `instant`, `unsafe-libyaml`); `backoff` and `instant` left in #319, `unsafe-libyaml`
+  with serde_yaml in #320, `rustls-pemfile` is #308. GitHub-only advisories (no RUSTSEC id,
   like #215's block-buffer) need OSV, not cargo-audit.
 - **Refuse a W2S `tokio-tungstenite` pin below 0.30** (2026-10-30, #215): the generated W2S client takes
   `tokio-tungstenite` from the consumer's dependencies.yaml, and 0.28 locks sha1 0.10, so digest 0.10 and
@@ -376,6 +480,14 @@ the looper then marks it `promoted` or `declined` here with the date.
   .NET 10.0 current, which reads as "newest LTS". Writing that down beside the pins (JDK and .NET the newest LTS,
   Maven the newest non-rc release, Docker the newest major, Rust stable via `1`) would let the scan file a missed
   move as a `bug` instead of leaving it to judgment.
+- **`tacplus registry` checks declared config slices against their registered fields** (2026-11-07, #352): since
+  #352 a build whose registry is a lock refuses a `(spec.config_slice)` with no registered `TenantConfig` /
+  `ProjectConfig` field, but the lock sync (`tacplus registry --proto-dir .`) scans only service and vservice
+  declarations, so it reports a missing slice registration only at build time. Scanning the tree's own slices
+  (`configSliceOwner`, today in `pkg/internal/proto`, out of `cmd/`'s reach) in the sync would name it with the
+  service ids. A legacy per-repo registry's `tacplus registry` likewise never records slice fields: the build still
+  assigns them (now in file order), into whichever registry.yaml the build reads (a merged or fetched build's is a
+  temporary copy).
 
 ## Promoted / declined
 - **Member port onto gRPC with make-before-break session rotation (Java)** (2026-11-06, #321): promoted 2026-11-05,

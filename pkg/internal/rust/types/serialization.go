@@ -121,6 +121,16 @@ fn normalize_yaml_numbers(v: &mut serde_json::Value) {
         _ => {}
     }
 }
+
+/// YAML is read as YAML 1.2 Core: only true and false are booleans, and a plain
+/// number with leading zeros or underscores stays a string (as serde_yaml read it).
+fn yaml_read_options() -> serde_saphyr::Options {
+    serde_saphyr::options! {
+        strict_booleans: true,
+        leading_zero_numbers_as_strings: true,
+        underscored_numbers_as_strings: true,
+    }
+}
 `)
 
 	// Generate serialization functions for each message

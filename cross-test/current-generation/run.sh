@@ -16,6 +16,7 @@ HEALTHONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-healthonly"
 ZERORPC_PROTO_SRC="$ROOT_DIR/cross-test/proto-zerorpc"
 C2SONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-c2sonly"
 REQUIRESDEVICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-requiresdevice"
+STATEQUEUE_PROTO_SRC="$ROOT_DIR/cross-test/proto-statequeue"
 # testdata/, not a plain directory: the go tool ignores directories named
 # testdata, and this tree is Go source written against the GENERATED module
 # (gitlab.com/example/dummy/vault/...), which `go vet ./...` in this repo cannot
@@ -43,7 +44,8 @@ Usage:
   cross-test/current-generation/run.sh [options]
 
 Options:
-  --language LANG   Run one service language: go, java, rust
+  --language LANG   Run one language: go, java, rust, or typescript (the main
+                    fixture's model only)
   --workdir DIR     Use a specific generated-output work directory
   --tacplus BIN     Use an existing tacplus binary
   --keep            Keep generated outputs after success
@@ -101,9 +103,13 @@ done
 [[ -d "$PROTO_SRC" ]] || die "cross-test proto fixture not found: $PROTO_SRC"
 
 all_languages=(go java rust)
+# Model-only languages generate and compile the main fixture alone (#464: a
+# TypeScript model of cross-test/proto that tsc refused went unnoticed).
+model_languages=(typescript)
 case "$LANG_FILTER" in
   "" ) languages=("${all_languages[@]}") ;;
-  go|java|rust ) languages=("$LANG_FILTER") ;;
+  go|java|rust ) languages=("$LANG_FILTER"); model_languages=() ;;
+  typescript ) languages=(); model_languages=("$LANG_FILTER") ;;
   * ) die "unsupported language: $LANG_FILTER" ;;
 esac
 
@@ -186,6 +192,19 @@ write_requiresdevice_config() {
 language: "$language"
 pkg: "com.gitlab.example.dummy.vault"
 src: "$REQUIRESDEVICE_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+}
+
+write_statequeue_config() {
+  local dir="$1"
+  local language="$2"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.helper"
+src: "$STATEQUEUE_PROTO_SRC"
 output-dir: "tacplus"
 EOF
 }
@@ -748,6 +767,12 @@ for name, ver in re.findall(r'\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"
         bad.append(f"backoff {ver} (unmaintained, RUSTSEC-2025-0012)")
     elif name == "instant":
         bad.append(f"instant {ver} (unmaintained, RUSTSEC-2024-0384)")
+    # Issue #320: serde_yaml is deprecated and locks unsafe-libyaml, unmaintained
+    # with no fixed release; the chassis and model read YAML with serde-saphyr.
+    elif name == "unsafe-libyaml":
+        bad.append(f"unsafe-libyaml {ver} (RUSTSEC-2024-0449)")
+    elif name == "serde_yaml":
+        bad.append(f"serde_yaml {ver} (deprecated, locks unsafe-libyaml, RUSTSEC-2024-0449)")
 for b in bad:
     print(f"advised crate in the generated lock: {b}", file=sys.stderr)
 sys.exit(1 if bad else 0)
@@ -861,6 +886,15 @@ run_rust_spiffe_self_tests() {
         return 1
       }
     assert_clean_log "$log_dir/rust-json-key-test.log"
+  fi
+
+  # The main fixture's YAML self-test (#320), copied in beside it.
+  if [[ -f "$output/tests/yaml_test.rs" ]]; then
+    (cd "$output" && cargo test --test yaml_test) >"$log_dir/rust-yaml-test.log" 2>&1 || {
+        dump_step_log "$log_dir/rust-yaml-test.log"
+        return 1
+      }
+    assert_clean_log "$log_dir/rust-yaml-test.log"
   fi
 
   # The record-egress HOST fixture's record write surface self-test (#163),
@@ -985,7 +1019,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/soheilhy/cmux v0.1.5
 	go.uber.org/zap v1.27.1
-	golang.org/x/crypto v0.47.0
+	golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2
 	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.19.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa
@@ -1075,7 +1109,14 @@ compile_current_output() {
       ;;
     typescript)
       if [[ -f "$output/package.json" ]]; then
-        (cd "$output" && npm install && npm run build) >"$log_dir/npm-build.log" 2>&1 || {
+        # Only the compile is held to a clean log: npm install warns about the
+        # registry's packages (an install script not yet allowed), not the
+        # generated code.
+        (cd "$output" && npm install) >"$log_dir/npm-install.log" 2>&1 || {
+          dump_step_log "$log_dir/npm-install.log"
+          return 1
+        }
+        (cd "$output" && npm run build) >"$log_dir/npm-build.log" 2>&1 || {
           dump_step_log "$log_dir/npm-build.log"
           return 1
         }
@@ -1456,24 +1497,33 @@ assert_extraction_output() {
   esac
 }
 
-# install_json_key_selftest copies the Rust runtime self-test for
-# common2.JsonKeyProbe into the generated crate's tests/ directory.
+# install_json_key_selftest copies the Rust runtime self-tests for
+# common2.JsonKeyProbe (its JSON keys, and the model and config YAML of #320)
+# into the generated crate's tests/ directory.
 install_json_key_selftest() {
   local output="$1"
   local language="$2"
   [[ "$language" == "rust" ]] || return 0
   [[ -f "$output/Cargo.toml" ]] || die "main fixture (rust): generated crate not found under $output"
   mkdir -p "$output/tests"
-  cp "$SELFTESTS_SRC/rust/json_key_test.rs" "$output/tests/"
+  cp "$SELFTESTS_SRC/rust/json_key_test.rs" "$SELFTESTS_SRC/rust/yaml_test.rs" "$output/tests/"
 }
 
-# install_backpressure_selftests copies the two Java backpressure self-tests into
-# the generated packages they drive: the subscribe test beside the AgentState
+# install_backpressure_selftests copies the fixture's self-tests into the
+# generated packages they drive. Java: the subscribe test beside the AgentState
 # StateClient (its topic iterator), the W2S test beside the AgentUploadApi W2S
-# client (its WebSocket listener).
+# client (its WebSocket listener). Go: the state topic test (#454) beside the
+# AgentState state client (its Publish and Subscribe).
 install_backpressure_selftests() {
   local output="$1"
+  local language="${2:-java}"
   local state_client w2s_client
+  if [[ "$language" == go ]]; then
+    state_client="$(find "$output" -type f -path '*/s2sm/state/services/agent_state/state.go' -print -quit)"
+    [[ -n "$state_client" ]] || die "event-bus backpressure fixture (go): AgentState state client not generated under $output"
+    cp "$SELFTESTS_SRC/go/state_topic_test.go" "$(dirname "$state_client")/"
+    return 0
+  fi
   state_client="$(find "$output/src/main/java" -type f -path '*/s2sm/internal/state/services/agentsensor/agentstate/StateClient.java' -print -quit)"
   [[ -n "$state_client" ]] || die "event-bus backpressure fixture (java): AgentState StateClient not generated under $output"
   cp "$SELFTESTS_SRC/java/SubscribeBackpressureTest.java" "$(dirname "$state_client")/"
@@ -1793,6 +1843,51 @@ install_ownerdefault_selftest() {
 #   - the broker's S2S client not being auto-injected at all.
 # The ungated sibling rpc (GetSecret) is here for the same reason: a gate spliced
 # onto every unary method instead of the declared one also compiles.
+# assert_statequeue_output checks the state-queue fixture (#456): the state
+# client of a state root with a (spec.queue) and a (spec.priority_queue)
+# boundary has the queue accessors (offer, consume, peek, size) in Go and Java,
+# and the Java one none of a singleton's Get/Watch, whose RPCs the state service
+# does not declare. Compiling catches a call to a missing RPC; this catches the
+# accessors going missing, which compiles. Rust's state client has no queue
+# accessors yet (PROPOSALS.md); its leg only compiles.
+assert_statequeue_output() {
+  local output="$1"
+  local language="$2"
+  local client="" want=()
+
+  case "$language" in
+    go)
+      client="$(find "$output" -type f -path '*/s2sm/state/services/helper_state/state.go' -print -quit)"
+      want=(
+        "stateStub.OfferToTasks(" "stateStub.ConsumeFromTasks(" "stateStub.PeekTasks(" "stateStub.SizeTasks("
+        "stateStub.OfferToAlerts(" "stateStub.ConsumeFromAlerts(" "stateStub.PeekAlerts(" "stateStub.SizeAlerts("
+      )
+      ;;
+    java)
+      client="$(find "$output" -type f -path '*/internal/state/services/helper/helperstate/StateClient.java' -print -quit)"
+      want=(
+        "stateStub.offerToTasks(" "stateStub.consumeFromTasks(" "stateStub.peekTasks(" "stateStub.sizeTasks("
+        "stateStub.offerToAlerts(" "stateStub.consumeFromAlerts(" "stateStub.peekAlerts(" "stateStub.sizeAlerts("
+      )
+      ;;
+    rust)
+      return 0
+      ;;
+    *)
+      die "state-queue fixture: unsupported language: $language"
+      ;;
+  esac
+
+  [[ -n "$client" ]] || die "state-queue fixture ($language): generated HelperState state client not found under $output"
+  local needle
+  for needle in "${want[@]}"; do
+    grep -qF "$needle" "$client" || die "state-queue fixture ($language): $client does not call $needle"
+  done
+  if [[ "$language" == "java" ]] && grep -qE '(get|watch)(Tasks|Alerts)\(' "$client"; then
+    die "state-queue fixture (java): $client treats a queue as a singleton (get/watch of Tasks or Alerts)"
+  fi
+}
+
 assert_requiresdevice_output() {
   local output="$1"
   local language="$2"
@@ -2339,6 +2434,26 @@ for language in "${languages[@]}"; do
   prune_fixture "$dir" "$output_root" keep-sources
 done
 
+for language in "${model_languages[@]}"; do
+  command -v npm >/dev/null || die "npm is required for the $language model"
+  dir="$WORK_ROOT/$language"
+  log="$WORK_ROOT/$language.log"
+  rm -rf "$dir"
+  write_config "$dir" "$language"
+
+  echo "==> Generating $language cross-test model"
+  if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$PROTO_SRC" >"$log" 2>&1); then
+    tail -120 "$log" >&2 || true
+    die "$language generation failed; log: $log"
+  fi
+  output_root="$(resolve_output_root "$dir/tacplus")"
+  assert_current_output "$output_root" "$language" "$dir/tacplus"
+  echo "==> Compiling $language cross-test model"
+  compile_current_output "$output_root" "$language" "$dir/tacplus"
+  echo "    PASS $language"
+  prune_fixture "$dir" "$output_root"
+done
+
 # Config-defaults cross-language parity: for every proto message that has
 # spec.default_int / spec.default_string / etc. annotations, verify that
 # ALL three full-service languages generated the exact same set of DEFAULT_*
@@ -2741,6 +2856,32 @@ if [[ -d "$REQUIRESDEVICE_PROTO_SRC" ]]; then
   done
 fi
 
+# state-queue fixture (#456): the only standing gate that generates a state
+# root with a (spec.queue) and a (spec.priority_queue) boundary, and compiles
+# it. The Java StateClient took both for singletons and called Get/Watch RPCs
+# the state service does not declare, so the model did not compile.
+if [[ -d "$STATEQUEUE_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    dir="$WORK_ROOT/statequeue-$language"
+    log="$WORK_ROOT/statequeue-$language.log"
+    rm -rf "$dir"
+    write_statequeue_config "$dir" "$language"
+
+    echo "==> Generating $language state-queue fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$STATEQUEUE_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language state-queue generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_statequeue_output "$output_root" "$language"
+    echo "==> Compiling $language state-queue fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/helper"
+    echo "    PASS $language state-queue"
+    prune_fixture "$dir" "$output_root"
+  done
+fi
+
 
 # record-egress fixture: the ONLY place the (spec.store_namespace) /
 # (spec.store_principal) / (spec.record).private egress ROW FILTERS are generated
@@ -2812,13 +2953,13 @@ if [[ -d "$RECORDEGRESS_PROTO_SRC" ]]; then
 fi
 
 # event-bus backpressure fixture: the ONLY place a store-hosted state's topic
-# iterator (the generated AgentState StateClient) and a client-streaming W2S
-# WebSocket listener are compiled and driven by a standing gate. Java only: both
-# self-tests pin Java runtime code, and no other language emits these surfaces
-# with the same defect.
+# (the generated AgentState state client) and a client-streaming W2S WebSocket
+# listener are compiled and driven by a standing gate. Java drives the topic
+# iterator's and the W2S listener's backpressure; Go drives the state topic's
+# Publish and Subscribe (#454: its state client did not compile).
 if [[ -d "$EVENTBUS_BACKPRESSURE_PROTO_SRC" ]]; then
   for language in "${languages[@]}"; do
-    [[ "$language" == java ]] || continue
+    [[ "$language" == java || "$language" == go ]] || continue
     dir="$WORK_ROOT/eventbus-backpressure-$language"
     log="$WORK_ROOT/eventbus-backpressure-$language.log"
     rm -rf "$dir"
@@ -2831,7 +2972,7 @@ if [[ -d "$EVENTBUS_BACKPRESSURE_PROTO_SRC" ]]; then
     fi
     output_root="$(resolve_output_root "$dir/tacplus")"
     assert_spiffe_soundness "$dir/tacplus"
-    install_backpressure_selftests "$output_root"
+    install_backpressure_selftests "$output_root" "$language"
     echo "==> Compiling $language event-bus backpressure fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor"
     echo "    PASS $language event-bus backpressure"

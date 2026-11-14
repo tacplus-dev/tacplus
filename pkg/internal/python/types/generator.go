@@ -516,6 +516,10 @@ func Generate(config *tactype.Config) error {
 	if err := proto.InjectRedactIndicatorFields(protoSrcDir, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to inject redact indicator fields: %w", err)
 	}
+	// flock state (tacplus#206): every flock entry carries its merge metadata.
+	if err := proto.InjectFlockMetaFields(protoSrcDir); err != nil {
+		return fmt.Errorf("failed to inject flock meta fields: %w", err)
+	}
 	// <T>Public for every (spec.public_view) message: its SHOW fields only.
 	if err := proto.AppendPublicViewMessagesToProtos(protoSrcDir); err != nil {
 		return fmt.Errorf("failed to append public view messages: %w", err)
@@ -1079,7 +1083,7 @@ build-backend = "setuptools.build_meta"
 name = "%s"
 version = "%s"
 description = "Protocol Buffer types for %s.%s"
-requires-python = ">=3.8"
+requires-python = "%s"
 dependencies = [
 %s
 ]
@@ -1092,7 +1096,7 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-`, packageName, version, typeDir, protoPackage, deps)
+`, packageName, version, typeDir, protoPackage, pythonRequiresPython, deps)
 
 	if err := os.WriteFile(pyprojectPath, []byte(content), 0644); err != nil {
 		return fmt.Errorf("failed to write pyproject.toml: %w", err)

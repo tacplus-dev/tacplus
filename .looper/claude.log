@@ -1,0 +1,400 @@
+> Bash cd /builds/looper/tacplus/issues/690/cross-test/current-generation/testdata/go; python3 - <<'EOF' p='accounting_sink_durable_test.go' s=open(p).read() s=s.replace('''	// Wait for the spool goroutine to reach the bound. Nothing reads tx yet, so only 	// the disk bound can free the queue. ''','''	// W...
+<  .../testdata/go/accounting_sink_durable_test.go    | 39 +++++++++++++---------  .../testdata/go/accounting_sink_spool_test.go      | 22 +++++++++---  2 files changed, 42 insertions(+), 19 deletions(-)
+Now the Java tests.
+> Bash cd /builds/looper/tacplus/issues/690/cross-test/current-generation/testdata/java; python3 - <<'EOF' decl_old='''    private static final long EMIT_BOUND_MS = 1000; ''' decl_new='''    private static final long EMIT_BOUND_MS = 1000;     // PROGRESS_BOUND_MS is how long a wait for the sink's own threa...
+< diff --git a/cross-test/current-generation/testdata/java/AccountingSinkDurableTest.java b/cross-test/current-generation/testdata/java/AccountingSinkDurableTest.java index 3d46b532..cc04d1b7 100644 --- a/cross-test/current-generation/testdata/java/AccountingSinkDurableTest.java +++ b/cross-test/curre...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/690/cross-test/current-generation/testdata/java; python3 - <<'EOF' p='AccountingSinkSpoolTest.java' s=open(p).read() old='''                        + (AccountingManager.EventBusSink.SPOOL_DEPTH + 2) + ", and fewer than emitted"); ''' new=old+'''        check(delivere...
+<     // The publisher is blocked and the spool depth is exceeded. Records are dropped,     // never held, and every record is either delivered or dropped. The queue and the     // drain thread hold a few records in flight, so the delivered count is checked     // against that window rather than an ex...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Now Rust: the spool replay test runs under the 1s emit bound even though it waits for the drain task.
+> Bash cd /builds/looper/tacplus/issues/690/cross-test/current-generation/testdata/rust; python3 - <<'EOF' p='accounting_sink_spool.rs' s=open(p).read() s=s.replace('''const EMIT_BOUND: Duration = Duration::from_secs(1); ''','''const EMIT_BOUND: Duration = Duration::from_secs(1); // PROGRESS_BOUND bounds a...
+<  .../testdata/go/accounting_sink_durable_test.go    | 39 +++++++++++++---------  .../testdata/go/accounting_sink_spool_test.go      | 22 +++++++++---  .../testdata/java/AccountingSinkDurableTest.java   | 39 ++++++++++++++++------  .../testdata/java/AccountingSinkSpoolTest.java     | 27 +++++++++++++...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/690; grep -n "current-generation" justfile | head; grep -n "go test\|accounting_sink\|docker\|tacplus " cross-test/current-generation/run.sh | head -30; nproc; uptime
+< 19:#   cross-test/current-generation/run.sh  write_java_compile_pom() 94:current-generation: 95:  {{lock}} bash cross-test/current-generation/run.sh 97:current-generation-go: 98:  {{lock}} bash cross-test/current-generation/run.sh --language go 100:current-generation-java: 101:  {{lock}} bash cross-...
+Running the Go current-generation gate first (the language that failed), detached.
+> Bash cd /builds/looper/tacplus/issues/690; nohup just current-generation-go > /tmp/cg-go-690.log 2>&1 & echo $!
+< 776
+> Bash sleep 240; tail -5 /tmp/cg-go-690.log
+< <tool_use_error>Blocked: sleep 240 followed by: tail -5 /tmp/cg-go-690.log. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain shorter sleeps to work around this block.</tool_u...
+> Bash while kill -0 776 2>/dev/null; do sleep 10; done; tail -8 /tmp/cg-go-690.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bfe62gymg). Output is being written to: /builds/looper/tacplus/homes/looper-690/tmp/claude-61000/-builds-looper-tacplus-issues-690/e7617753-0475-4f62-919d-fb611f4c3ee4/tasks/bfe62gymg.output. You will be notified w...
+> Bash tail -5 /tmp/cg-go-690.log; uptime
+< ==> Compiling go requires-device fixture     PASS go requires-device     Removed 11M fixture tree requiresdevice-go ==> Generating go record-egress fixture ==> Compiling go record-egress fixture  20:45:24 up  4:29,  0 users,  load average: 7.45, 8.13, 7.68
+Meanwhile, I'll checkpoint the work so far.
+> Bash cd /builds/looper/tacplus/issues/690; /usr/local/bin/repo-looper --repo tacplus --issue 690 --checkpoint "Go/Java/Rust spool tests: progress waits moved off emitBound to a 30s progressBound; drop tests drain until delivered+dropped==emitted. Left: run current-generation (go/java/rust), just gates, c...
+= task_started
+= task_notification
+< remote:      https://github.com/tacplus-dev/tacplus/pull/new/looper/tacplus-690         remote:  [2026-11-13T20:45:33Z] checkpoint of #690 (a step) pushed to looper/tacplus-690:  7 files changed, 322 insertions(+), 33 deletions(-)
+> Bash cd /builds/looper/tacplus/issues/690; git status --short; git log --oneline -2; git show --stat HEAD | tail -10
+<  M cross-test/current-generation/testdata/go/accounting_sink_durable_test.go  M cross-test/current-generation/testdata/go/accounting_sink_spool_test.go  M cross-test/current-generation/testdata/java/AccountingSinkDurableTest.java  M cross-test/current-generation/testdata/java/AccountingSinkSpoolTest...
+= thinking_tokens
+= thinking_tokens
+While the Go gate runs, I'll check the release state.
+> Bash cd /builds/looper/tacplus/issues/690; git fetch -q --tags origin; git log --oneline v2.6.1..origin/main | head -40; git branch -r | grep release; for b in $(git branch -r | grep release/); do echo $b; git tag --list "v${b#origin/release/}.0" --format='%(refname:short) %(creatordate:short)'; done; gr...
+< 4205075d Gate map: gates.yaml and a docs recipe, so a docs-only land runs minutes, not the full gates (#266) 0d66c1bb Gates: refuse a committed merge conflict marker in any tracked file (#329) 5380efab images: declare each image's Debian packages; drop buildpack-deps (OpenEXR) (#554) 822e15f0 curren...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/690; git merge-base --is-ancestor v2.6.1 origin/main && echo onmain; git tag --list 'v2.*' --sort=-v:refname | head -12; sed -n 40,95p CONTRIBUTING.md; for v in 0 1 2 3 4 5 6; do echo "2.$v: $(git ls-tree -r --name-only origin/release/2.$v cross-test/current-generati...
+< onmain v2.6.11 v2.6.10 v2.6.9 v2.6.8 v2.6.7 v2.6.6 v2.6.5 v2.6.4 v2.6.3 v2.6.2 v2.6.1 v2.6.0   generated surface, annotation, flag, option or a parity port.  The **fix looper** takes the oldest open request and triages it first, whatever its label: anything that adds or changes a generated surface, ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Main has taken features since v2.6.1 (e.g. #321, #266), so the patch goes to the release branches as backports, not a tag on main. Waiting on the Go gate.
+> Bash until ! kill -0 776 2>/dev/null; do sleep 15; done; tail -8 /tmp/cg-go-690.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b94w0yvdk). Output is being written to: /builds/looper/tacplus/homes/looper-690/tmp/claude-61000/-builds-looper-tacplus-issues-690/e7617753-0475-4f62-919d-fb611f4c3ee4/tasks/b94w0yvdk.output. You will be notified w...
+> Bash tail -4 /tmp/cg-go-690.log; grep -n "accounting\|FAIL" /tmp/cg-go-690.log | head
+<     PASS go owner-default     Removed 10M fixture tree ownerdefault-go ==> Generating go quorum-write fixture ==> Compiling go quorum-write fixture 32:==> Generating go accounting-sink fixture 33:==> Compiling go accounting-sink fixture 34:    PASS go accounting sink 35:    Removed 11M fixture tree ...
+= thinking_tokens
+= thinking_tokens
+Go accounting-sink fixture passed. I'll wait for the rest of the Go gate in the background.
+> Bash until ! kill -0 776 2>/dev/null; do sleep 15; done; tail -6 /tmp/cg-go-690.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bcckfe543. Output is being written to: /builds/looper/tacplus/homes/looper-690/tmp/claude-61000/-builds-looper-tacplus-issues-690/e7617753-0475-4f62-919d-fb611f4c3ee4/tasks/bcckfe543.output. You will be notified when it completes. To check interim output, use R...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/690; for v in 1 2 3 4 5 6; do b=origin/release/2.$v; echo "2.$v: latest $(git tag --merged $b --list "v2.$v.*" --sort=-v:refname | head -1); java: $(git ls-tree -r --name-only $b cross-test/current-generation/testdata/java | grep AccountingSink | tr '\n' ' ')"; for f...
+< 2.1: latest v2.1.23; java: cross-test/current-generation/testdata/java/AccountingSinkDurableTest.java cross-test/current-generation/testdata/java/AccountingSinkSpoolTest.java     DIFF go/accounting_sink_durable_test.go    DIFF go/accounting_sink_spool_test.go    DIFF java/AccountingSinkDurableTest.j...
+> Bash cd /builds/looper/tacplus/issues/690; git diff origin/main origin/release/2.1 --stat -- cross-test/current-generation/testdata/ | grep -i accounting; git diff origin/main origin/release/2.1 -- cross-test/current-generation/testdata/go/accounting_sink_durable_test.go | head -60
+<  .../testdata/go/accounting_sink_durable_test.go    |   2 +-  .../testdata/go/accounting_sink_spool_test.go      |   2 +-  .../testdata/java/AccountingSinkDurableTest.java   |   2 +-  .../testdata/java/AccountingSinkSpoolTest.java     |   2 +-  .../testdata/rust/accounting_sink_durable.rs       |   ...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/690; grep -n "^lock\|lock :=" justfile; sed -n 150,200p justfile; cat gates.yaml | head -60
+< 13:lock := "bash scripts/with-tree-lock.sh"       echo "  A mismatch does NOT surface as a version error: it surfaces as a Java"       echo "  ExceptionInInitializerError from the protobuf runtime check, several"       echo "  layers below anything that names a version."       echo "  Fix: install p...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash tail -3 /tmp/cg-go-690.log; grep -c "PASS" /tmp/cg-go-690.log; grep -n "==> Generating go" /builds/looper/tacplus/issues/690/cross-test/current-generation/run.sh | wc -l
+<     Removed 10M fixture tree ownerdefault-go ==> Generating go quorum-write fixture ==> Compiling go quorum-write fixture 7 0
+= thinking_tokens
+= thinking_tokens
+The full gate set covers Go again, so I'm stopping the Go-only run (its accounting-sink fixture already passed) and starting `just gates`.
+> Bash desc(){ for c in $(ps -o pid= --ppid $1); do desc $c; echo $c; done; }; pids="$(desc 776) 776"; echo $pids; kill $pids 2>/dev/null; sleep 3; ps -o pid,cmd -p $(echo $pids | tr ' ' ',') 2>/dev/null; docker ps --format '{{.ID}} {{.Names}} {{.Status}}' 2>/dev/null | head
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_started
+= task_notification
+< 30039 30039 30039 30039 30039 776     PID CMD
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash cd /builds/looper/tacplus/issues/690; ps -u $(id -u) -o pid,etime,cmd | grep -v "ps -u" | head; nohup just gates > /tmp/gates-690.log 2>&1 & echo $!
+<     PID     ELAPSED CMD     539       22:54 timeout -k 30 13785 claude --print --verbose --output-format stream-json --model claude-opus-5-5 --permission-mode acceptEdits --allowedTools Bash,Read,Edit,Write,Grep,Glob,Task,Agent,TodoWrite,WebFetch,WebSearch     544       22:54 claude --print --verbos...
+= thinking_tokens
+= thinking_tokens
+Full gates started (PID 30565). Committing the change meanwhile; committing doesn't touch the working tree the gates read.
+> Bash cd /builds/looper/tacplus/issues/690; git add -A cross-test/current-generation/testdata; git commit -q -F - <<'EOF' current-generation: spool tests wait for the sink's progress on a 30s bound, not emitBound (#690)  The Go durable-spool tests waited for the spool writer goroutine (cursor, log lines, ...
+< 608b914a current-generation: spool tests wait for the sink's progress on a 30s bound, not emitBound (#690)
+= thinking_tokens
+= thinking_tokens
+While the gates run, I'll prepare the backport branches in a separate worktree.
+> Bash cd /builds/looper/tacplus/issues/690; wt=$HOME/bp690; git worktree add -q --detach $wt origin/release/2.6 && cd $wt && for v in 1 2 3 4 5 6; do git checkout -q -B backport/690-release-2.$v origin/release/2.$v && git cherry-pick -x 608b914a >/dev/null 2>&1 && echo "2.$v ok $(git log --oneline -1 | cu...
+< 2.1 ok 043afc85  2.2 ok 568aca62  2.3 ok 9c562c16  2.4 ok b1fd2441  2.5 ok 60470317  2.6 ok 8fd7beba Shell cwd was reset to /builds/looper/tacplus/issues/690
+= thinking_tokens
+= thinking_tokens
+Cherry-picks apply cleanly on all six lines. Let me look at how earlier backport PRs were written.
+> Bash gh pr list --repo tacplus-dev/tacplus --state all --head backport/665-release-2.6 --json number,title,body,state,labels | head -c 2500
+< [{"body":"Backport of the fix for #665 from main (\"MCP-6: python is a client target, not an MCP host\"). Its hash on main follows the land, and this pull request stays a draft until then. **Once this merges, cut the line's next free patch tag on `release/2.6` at the merge commit: `v2.6.12` today**,...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Next free patch tag on release/2.6 is v2.6.12, unless another backport takes it first. I'll wait for the local gates, starting with `current-generation`, the gate this change touches.
+> Bash until grep -q "=== current-generation rc=" /tmp/gates-690.log || ! kill -0 30565 2>/dev/null; do sleep 20; done; grep "rc=" /tmp/gates-690.log; tail -3 /tmp/gates-690.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: brursb180. Output is being written to: /builds/looper/tacplus/homes/looper-690/tmp/claude-61000/-builds-looper-tacplus-issues-690/e7617753-0475-4f62-919d-fb611f4c3ee4/tasks/brursb180.output. You will be notified when it completes. To check interim output, use R...
+> Bash cd /builds/looper/tacplus/issues/690; /usr/local/bin/repo-looper --repo tacplus --issue 690 --checkpoint "Fix committed (608b914a): Go/Java/Rust spool tests use a 30s progress bound for sink progress; drop tests drain to delivered+dropped==emitted. just gates running (/tmp/gates-690.log). Left: gate...
+< [2026-11-13T20:56:57Z] checkpoint of #690 (a step) pushed to looper/tacplus-690:  7 files changed, 419 insertions(+), 33 deletions(-)
+> Bash grep "^===" /tmp/gates-690.log; tail -3 /tmp/gates-690.log
+< === protoc-check === === protoc-check rc=0 === === soundness === === soundness rc=0 === === test === - ✓ no forbidden backend-store vendor names or store-query directives found bash scripts/with-tree-lock.sh go test ./... go: downloading golang.org/x/sys v0.47.0
+I'll wait for the `current-generation` notification.
+> Bash until grep -q "=== current-generation rc=" /tmp/gates-690.log || ! kill -0 30565 2>/dev/null; do sleep 20; done; grep "rc=" /tmp/gates-690.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b6e3xad58). Output is being written to: /builds/looper/tacplus/homes/looper-690/tmp/claude-61000/-builds-looper-tacplus-issues-690/e7617753-0475-4f62-919d-fb611f4c3ee4/tasks/b6e3xad58.output. You will be notified w...
+> Bash grep "rc=\|accounting\|FAIL" /tmp/gates-690.log | tail; tail -2 /tmp/gates-690.log; uptime
+< === protoc-check rc=0 === | accounting (server pipeline) | ✓ | ✓ | ✓ | ✓ | ✓ | 5/5 | - streaming/error-path trace and accounting completeness is covered by consumer-contract runtime cases. === soundness rc=0 === | accounting (server pipeline) | ✓ | ✓ | ✓ | ✓ | ✓ | 5/5 | - streaming/error-path trace ...
+`test` passed; `current-generation` is running under load average ~23, which is a good stress test for this fix. Waiting for the notification.
+> Bash until grep -q "=== current-generation rc=" /tmp/gates-690.log || ! kill -0 30565 2>/dev/null; do sleep 20; done; grep "rc=" /tmp/gates-690.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b39k3i4si). Output is being written to: /builds/looper/tacplus/homes/looper-690/tmp/claude-61000/-builds-looper-tacplus-issues-690/e7617753-0475-4f62-919d-fb611f4c3ee4/tasks/b39k3i4si.output. You will be notified w...
+> Bash grep -n "accounting sink\|accounting-sink\|FAIL" /tmp/gates-690.log | tail; tail -2 /tmp/gates-690.log
+< ==> Generating rust health-only fixture ==> Compiling rust health-only fixture
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 58); do grep -q "=== current-generation rc=" /tmp/gates-690.log && break; sleep 10; done; grep -n "accounting sink\|FAIL\|rc=" /tmp/gates-690.log | tail -5; tail -1 /tmp/gates-690.log
+= task_started
+= task_notification
+< 3:=== protoc-check rc=0 === 182:=== soundness rc=0 === 441:=== test rc=0 === ==> Compiling rust requires-device fixture
+> Bash for i in $(seq 58); do grep -q "=== current-generation rc=" /tmp/gates-690.log && break; sleep 10; done; grep -n "accounting sink\|FAIL\|rc=" /tmp/gates-690.log | tail -5; tail -1 /tmp/gates-690.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< 3:=== protoc-check rc=0 === 182:=== soundness rc=0 === 441:=== test rc=0 === ==> Compiling rust record-egress fixture
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/690; nohup /usr/local/bin/repo-looper --repo tacplus --issue 690 --land > /tmp/land-690.log 2>&1 & echo $!
+< 71681
+> Bash for i in $(seq 58); do grep -q "=== current-generation rc=" /tmp/gates-690.log && break; sleep 10; done; grep -n "accounting sink\|FAIL\|rc=" /tmp/gates-690.log | tail -5; tail -1 /tmp/gates-690.log; tail -3 /tmp/land-690.log
+= task_started
+= task_notification
+< 3:=== protoc-check rc=0 === 182:=== soundness rc=0 === 441:=== test rc=0 === ==> Compiling rust record-egress HOST fixture [2026-11-13T21:36:50Z] checkpoint of #690 (land queued) pushed to looper/tacplus-690:  8 files changed, 477 insertions(+), 33 deletions(-) [2026-11-13T21:36:52Z] queued: the man...
+> Bash for i in $(seq 58); do grep -q "=== current-generation rc=" /tmp/gates-690.log && break; sleep 10; done; grep -n "accounting\|FAIL\|rc=" /tmp/gates-690.log | tail -5; tail -1 /tmp/gates-690.log; tail -1 /tmp/land-690.log
+= task_started
+= task_notification
+< 524:==> Compiling java accounting-sink fixture 525:    PASS java accounting sink 526:    Removed 49M fixture tree accountingsink-java 527:==> Generating rust accounting-sink fixture 528:==> Compiling rust accounting-sink fixture ==> Compiling rust accounting-sink fixture [2026-11-13T21:36:52Z] queue...
+Java accounting sink passed under load; Rust's is compiling.
+> Bash for i in $(seq 58); do grep -q "=== current-generation rc=" /tmp/gates-690.log && break; sleep 10; done; grep -n "accounting\|FAIL\|rc=" /tmp/gates-690.log | tail -4; tail -1 /tmp/gates-690.log; tail -1 /tmp/land-690.log
+= task_started
+= task_notification
+< 527:==> Generating rust accounting-sink fixture 528:==> Compiling rust accounting-sink fixture 529:    PASS rust accounting sink 531:    Removed 13M fixture tree accountingsink-rust ==> Compiling go quorum-write fixture [2026-11-13T21:36:52Z] queued: the manager of tacplus merges looper/tacplus-690 ...
+All three accounting-sink fixtures (Go, Java, Rust) pass under load. I'll keep polling the gates and the land.
+> Bash for i in $(seq 58); do grep -q "OVERALL" /tmp/gates-690.log && break; [ "$(tail -1 /tmp/land-690.log | cut -c1-40)" != "$(cat /tmp/land-690.last 2>/dev/null)" ] && break; sleep 10; done; tail -1 /tmp/land-690.log | cut -c1-40 > /tmp/land-690.last; grep "rc=\|FAIL" /tmp/gates-690.log | tail -4; tail ...
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling go quorum-write fixture [2026-11-13T21:36:50Z] checkpoint of #690 (land queued) pushed to looper/tacplus-690:  8 files changed, 477 insertions(+), 33 deletions(-) [2026-11-13T21:36:52Z] queued: the manager of tacplus me...
+> Bash for i in $(seq 58); do grep -q "OVERALL" /tmp/gates-690.log && break; [ "$(tail -1 /tmp/land-690.log | cut -c1-40)" != "$(cat /tmp/land-690.last)" ] && break; sleep 10; done; grep "rc=\|FAIL" /tmp/gates-690.log | tail -4; tail -1 /tmp/gates-690.log; tail -2 /tmp/land-690.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling go epoch-load fixture [2026-11-13T21:36:50Z] checkpoint of #690 (land queued) pushed to looper/tacplus-690:  8 files changed, 477 insertions(+), 33 deletions(-) [2026-11-13T21:36:52Z] queued: the manager of tacplus merg...
+> Bash for i in $(seq 58); do grep -q "OVERALL" /tmp/gates-690.log && break; [ "$(tail -1 /tmp/land-690.log | cut -c1-40)" != "$(cat /tmp/land-690.last)" ] && break; sleep 10; done; grep "rc=\|FAIL" /tmp/gates-690.log | tail -4; tail -1 /tmp/gates-690.log; tail -2 /tmp/land-690.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating go tenant-route fixture (crew) [2026-11-13T21:36:50Z] checkpoint of #690 (land queued) pushed to looper/tacplus-690:  8 files changed, 477 insertions(+), 33 deletions(-) [2026-11-13T21:36:52Z] queued: the manager of ta...
+> Bash for i in $(seq 58); do grep -q "OVERALL" /tmp/gates-690.log && break; [ "$(tail -1 /tmp/land-690.log | cut -c1-40)" != "$(cat /tmp/land-690.last)" ] && break; sleep 10; done; grep "rc=\|FAIL" /tmp/gates-690.log | tail -4; tail -1 /tmp/gates-690.log; tail -2 /tmp/land-690.log; date -u
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust tenant-route fixture (harbor) [2026-11-13T21:36:50Z] checkpoint of #690 (land queued) pushed to looper/tacplus-690:  8 files changed, 477 insertions(+), 33 deletions(-) [2026-11-13T21:36:52Z] queued: the manager of...
+= thinking_tokens
+= thinking_tokens
+About 2h of my 4h used; the land is still queued behind others. Checkpointing the plan for the next run, then polling on.
+> Bash cd /builds/looper/tacplus/issues/690; /usr/local/bin/repo-looper --repo tacplus --issue 690 --checkpoint "Fix 608b914a queued to land (repo-looper --land, waiting). Local just gates: soundness/test pass; current-generation accounting sink go/java/rust PASS under load 23, rest still running. Left: la...
+< [2026-11-13T22:35:13Z] checkpoint of #690 (a step) pushed to looper/tacplus-690:  8 files changed, 508 insertions(+), 33 deletions(-)
+> Bash for i in $(seq 58); do grep -q "OVERALL" /tmp/gates-690.log && break; [ "$(tail -1 /tmp/land-690.log | cut -c1-40)" != "$(cat /tmp/land-690.last)" ] && break; sleep 10; done; grep "rc=\|FAIL" /tmp/gates-690.log | tail -4; tail -1 /tmp/gates-690.log; tail -2 /tmp/land-690.log; date -u
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling go redo-contract fixture (redo) [2026-11-13T21:36:50Z] checkpoint of #690 (land queued) pushed to looper/tacplus-690:  8 files changed, 477 insertions(+), 33 deletions(-) [2026-11-13T21:36:52Z] queued: the manager of ta...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/bp690 && for v in 1 2 3 4 5 6; do git checkout -q -B backport/690-release-2.$v origin/release/2.$v && git cherry-pick 608b914a >/dev/null 2>&1 && echo "2.$v ok" || { echo "2.$v FAIL"; git cherry-pick --abort; }; done; git push -q origin $(for v in 1 2 3 4 5 6; do echo backport/690-release-2...
+= task_started
+= task_notification
+= vcs_state_changed
+< 2.1 ok 2.2 ok 2.3 ok 2.4 ok 2.5 ok 2.6 ok Shell cwd was reset to /builds/looper/tacplus/issues/690
+> Bash cd /builds/looper/tacplus/issues/690; git ls-remote origin 'refs/heads/backport/690-*' | wc -l; for v in 1 2 3 4 5 6; do n=$(git tag --merged origin/release/2.$v --list "v2.$v.*" --sort=-v:refname | head -1 | awk -F. '{print $3+1}'); tag="v2.$v.$n"; body=$(cat <<EOF Backport of the fix for #690 from...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+< 6 https://github.com/tacplus-dev/tacplus/pull/705 https://github.com/tacplus-dev/tacplus/pull/706 https://github.com/tacplus-dev/tacplus/pull/707 https://github.com/tacplus-dev/tacplus/pull/708 https://github.com/tacplus-dev/tacplus/pull/709 https://github.com/tacplus-dev/tacplus/pull/710
+= code_change_published
+> Bash for p in 705 706 707 708 709 710; do gh pr view $p --repo tacplus-dev/tacplus --json baseRefName,body -q '.baseRefName + " " + (.body | capture("`(?<t>v2\\.[0-9]+\\.[0-9]+)` today").t)'; done
+= task_started
+= task_notification
+< release/2.1 v2.1.24 release/2.2 v2.2.21 release/2.3 v2.3.23 release/2.4 v2.4.23 release/2.5 v2.5.24 release/2.6 v2.6.12
+Draft backports are open: #705–#710. Back to polling the gates and the land.
+> Bash for i in $(seq 58); do grep -q "OVERALL" /tmp/gates-690.log && break; [ "$(tail -1 /tmp/land-690.log | cut -c1-40)" != "$(cat /tmp/land-690.last)" ] && break; sleep 10; done; grep "rc=\|FAIL" /tmp/gates-690.log | tail -4; tail -1 /tmp/gates-690.log; tail -2 /tmp/land-690.log; date -u
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust redo-contract fixture (stratum) [2026-11-13T21:36:50Z] checkpoint of #690 (land queued) pushed to looper/tacplus-690:  8 files changed, 477 insertions(+), 33 deletions(-) [2026-11-13T21:36:52Z] queued: the manager ...
+> Bash for i in $(seq 58); do grep -q "OVERALL" /tmp/gates-690.log && break; [ "$(tail -1 /tmp/land-690.log | cut -c1-40)" != "$(cat /tmp/land-690.last)" ] && break; sleep 10; done; grep "rc=\|FAIL" /tmp/gates-690.log | tail -4; tail -1 /tmp/gates-690.log; tail -2 /tmp/land-690.log; date -u
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling go tenant-record fixture (tstratum) [2026-11-13T21:36:50Z] checkpoint of #690 (land queued) pushed to looper/tacplus-690:  8 files changed, 477 insertions(+), 33 deletions(-) [2026-11-13T21:36:52Z] queued: the manager o...
+> Bash for i in $(seq 58); do grep -q "OVERALL" /tmp/gates-690.log && break; [ "$(tail -1 /tmp/land-690.log | cut -c1-40)" != "$(cat /tmp/land-690.last)" ] && break; sleep 10; done; grep "rc=\|FAIL" /tmp/gates-690.log | tail -4; tail -1 /tmp/gates-690.log; tail -2 /tmp/land-690.log; date -u
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust tenant-record fixture (tstratum) [2026-11-13T21:36:50Z] checkpoint of #690 (land queued) pushed to looper/tacplus-690:  8 files changed, 477 insertions(+), 33 deletions(-) [2026-11-13T21:36:52Z] queued: the manager...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/690; /usr/local/bin/repo-looper --repo tacplus --issue 690 --checkpoint "Fix 608b914a queued to land (waiting on the manager). Draft backport PRs open: #705 (2.1, v2.1.24) #706 (2.2, v2.2.21) #707 (2.3, v2.3.23) #708 (2.4, v2.4.23) #709 (2.5, v2.5.24) #710 (2.6, v2.6...
+= task_started
+= task_notification
+< [2026-11-13T23:15:05Z] checkpoint of #690 (a step) pushed to looper/tacplus-690:  8 files changed, 567 insertions(+), 33 deletions(-)
+> Bash for i in $(seq 58); do grep -q "OVERALL" /tmp/gates-690.log && break; [ "$(tail -1 /tmp/land-690.log | cut -c1-40)" != "$(cat /tmp/land-690.last)" ] && break; sleep 10; done; grep "rc=\|FAIL" /tmp/gates-690.log | tail -4; tail -1 /tmp/gates-690.log; tail -2 /tmp/land-690.log; date -u
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust tenant-record fixture (tmessaging) [2026-11-13T21:36:50Z] checkpoint of #690 (land queued) pushed to looper/tacplus-690:  8 files changed, 477 insertions(+), 33 deletions(-) [2026-11-13T21:36:52Z] queued: the manag...
+> Bash for i in $(seq 58); do grep -q "OVERALL" /tmp/gates-690.log && break; [ "$(tail -1 /tmp/land-690.log | cut -c1-40)" != "$(cat /tmp/land-690.last)" ] && break; sleep 10; done; grep "rc=\|FAIL" /tmp/gates-690.log | tail -4; tail -1 /tmp/gates-690.log; tail -2 /tmp/land-690.log; date -u
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust tenant-slice fixture [2026-11-13T21:36:50Z] checkpoint of #690 (land queued) pushed to looper/tacplus-690:  8 files changed, 477 insertions(+), 33 deletions(-) [2026-11-13T21:36:52Z] queued: the manager of tacplus ...
+Still waiting: the local full gates are midway through `current-generation`, and the land is queued behind other lands. Polling continues.
+> Bash for i in $(seq 58); do grep -q "OVERALL" /tmp/gates-690.log && break; [ "$(tail -1 /tmp/land-690.log | cut -c1-40)" != "$(cat /tmp/land-690.last)" ] && break; sleep 10; done; grep "rc=\|FAIL" /tmp/gates-690.log | tail -4; tail -1 /tmp/gates-690.log; tail -2 /tmp/land-690.log; date -u
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust tenant-slice owner fixture [2026-11-13T21:36:50Z] checkpoint of #690 (land queued) pushed to looper/tacplus-690:  8 files changed, 477 insertions(+), 33 deletions(-) [2026-11-13T21:36:52Z] queued: the manager of ta...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 58); do grep -q "OVERALL" /tmp/gates-690.log && break; [ "$(tail -1 /tmp/land-690.log | cut -c1-40)" != "$(cat /tmp/land-690.last)" ] && break; sleep 10; done; grep "rc=\|FAIL" /tmp/gates-690.log | tail -4; tail -1 /tmp/gates-690.log; tail -2 /tmp/land-690.log; date -u
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Compiling rust tenant-slice config owner fixture [2026-11-13T21:36:50Z] checkpoint of #690 (land queued) pushed to looper/tacplus-690:  8 files changed, 477 insertions(+), 33 deletions(-) [2026-11-13T21:36:52Z] queued: the manage...
+> Bash for i in $(seq 50); do grep -q "OVERALL" /tmp/gates-690.log && break; [ "$(tail -1 /tmp/land-690.log | cut -c1-40)" != "$(cat /tmp/land-690.last)" ] && break; sleep 10; done; grep "rc=\|FAIL" /tmp/gates-690.log | tail -4; tail -1 /tmp/gates-690.log; tail -2 /tmp/land-690.log; gh issue view 690 --rep...
+= task_started
+= task_notification
+< === soundness rc=0 === === test rc=0 === === current-generation rc=0 === === determinism rc=0 === 2026-11-14T00:02:27.076Z	INFO	Appended state service to proto	{"state": "ServiceHealth", "file": "sys/servicehealth.proto", "singletons": 0, "collections": 1, "queues": 0, "priorityQueues": 0, "topics":...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash desc(){ for c in $(ps -o pid= --ppid $1); do desc $c; echo $c; done; }; pids="$(desc 30565) 30565"; kill $pids 2>/dev/null; sleep 5; ps -o pid=,cmd= -p $(echo $pids | tr ' ' ',') 2>/dev/null | head -3; grep "rc=" /tmp/gates-690.log; cd /builds/looper/tacplus/issues/690; git status --short; /usr/loca...
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=0 === === determinism rc=0 === === cert-stream rc=1 === [2026-11-14T00:02:44Z] checkpoint of #690 (a step) pushed to looper/tacplus-690:  8 files changed, 615 insertions(+), 33 deletions(-)
+= thinking_tokens
+= thinking_tokens
+`cert-stream` shows rc=1. I'll check whether that is my kill or a real failure.
+> Bash sed -n '/=== cert-stream ===/,$p' /tmp/gates-690.log | grep -v "INFO" | tail -8
+< 2026-11-14T00:02:46.339Z	DEBUG	Running protoc-gen-go-grpc	{"cmd": "/usr/local/bin/protoc", "args": ["--go-grpc_out=/builds/looper/tacplus/homes/looper-690/tmp/tmp.4sI7xqA6Qw/tacplus/model/types/sys/redolog", "--go-grpc_opt=paths=source_relative", "--go-grpc_opt=Msys/redo.proto=example.com/streamexpi...
+= thinking_tokens
+= thinking_tokens
+The log kept growing after the kill, so I'm checking whether anything is still running.
+> Bash ps -u $(id -u) -o pid,ppid,etime,cmd --forest | grep -v "ps -u\|grep" | cut -c1-150 | head -20; grep -n "^=== " /tmp/gates-690.log | tail -4; grep -n -i "error\|fail" <(sed -n '/=== cert-stream ===/,/=== cert-stream rc/p' /tmp/gates-690.log) | grep -v DEBUG | tail -5
+<     PID    PPID     ELAPSED CMD     539      12    03:29:19 timeout -k 30 13785 claude --print --verbose --output-format stream-json --model claude-opus-5-5 --permission-mode acceptE     544     539    03:29:19  \_ claude --print --verbose --output-format stream-json --model claude-opus-5-5 --permis...
+= thinking_tokens
+= thinking_tokens
+The `cert-stream` failure came from my kill (`protoc failed: signal: terminated`). The suite's real root is PID 30571, because the lock wrapper exec'd under a different PID. Stopping that tree now.
+> Bash desc(){ for c in $(ps -o pid= --ppid $1); do desc $c; echo $c; done; }; pids="$(desc 30571) 30571"; kill $pids 2>/dev/null; sleep 5; ps -u $(id -u) -o pid,ppid,cmd --forest | grep -v "ps -u\|grep\|claude" | cut -c1-120; docker ps -q 2>/dev/null | head
+= task_started
+= task_notification
+<     PID    PPID CMD  169729  168854          \_ cut -c1-120   71681       1 bash /usr/local/bin/repo-looper --repo tacplus --issue 690 --land  166046   71681  \_ sleep 30
+= thinking_tokens
+= thinking_tokens
+Local gates are stopped; only the land waiter remains, which is expected. One more look at the land, then a final checkpoint.
+> Bash for i in $(seq 50); do [ "$(tail -1 /tmp/land-690.log | cut -c1-40)" != "$(cat /tmp/land-690.last)" ] && break; sleep 10; done; tail -2 /tmp/land-690.log; date -u
+= task_started
+= task_notification
+< [2026-11-13T21:36:50Z] checkpoint of #690 (land queued) pushed to looper/tacplus-690:  8 files changed, 477 insertions(+), 33 deletions(-) [2026-11-13T21:36:52Z] queued: the manager of tacplus merges looper/tacplus-690 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash cd /builds/looper/tacplus/issues/690; /usr/local/bin/repo-looper --repo tacplus --issue 690 --checkpoint "Fix 608b914a queued to land (the manager lands it after this run; its verdict will be a comment on #690). Local just gates, stopped at the time limit: protoc-check, soundness, test, current-gene...
+< [2026-11-14T00:11:33Z] checkpoint of #690 (a step) pushed to looper/tacplus-690:  8 files changed, 631 insertions(+), 33 deletions(-)
+= thinking_tokens
+= thinking_tokens
+The fix for #690 is committed and queued to land, but it hasn't merged yet. I ran out of time waiting in the queue, so the issue stays open: the manager merges it after this run and the next run finishes the issue.
+
+**What changed** (commit `608b914a`, test files only, no generated output changes):
+- **Go:** both durable-spool tests and the in-memory spool tests now wait for the spool writer on a new 30-second `progressBound` instead of the 1-second `emitBound`. The waits return as soon as their condition holds, so a passing run is no slower. `emitBound` is still used for the "Emit does not block" checks.
+- **Drop tests:** these no longer treat a quiet second or a fixed sleep as "drained". They wait until a drop has been counted, then read records until delivered plus dropped equals emitted, then check that nothing more arrives.
+- **Java:** both spool tests had the same pattern and get the same fix, with a new `PROGRESS_BOUND_MS`.
+- **Rust:** the in-memory spool replay test ran under the 1-second emit bound and its drop test under 5 seconds; both now use a 30-second `PROGRESS_BOUND`. The Rust durable test already waits safely and didn't need changing.
+
+**Gates, run locally:** I couldn't reproduce the original failure first. The full `just gates` passed protoc-check, soundness, test, current-generation and determinism. current-generation's Go, Java and Rust accounting-sink checks passed at a load average of about 23. I stopped the run at the time limit, so the rest of the full gates did not run here (`cert-stream` shows a failure only because I killed it mid-run). The land runs the full gate set and covers them.
+
+**Release:** main has taken features since `v2.6.1` (#321, #266), so I did not tag main. I opened draft backport pull requests, each naming the patch tag to cut once it merges:
+
+| PR | Branch | Tag |
+|---|---|---|
+| #705 | release/2.1 | v2.1.24 |
+| #706 | release/2.2 | v2.2.21 |
+| #707 | release/2.3 | v2.3.23 |
+| #708 | release/2.4 | v2.4.23 |
+| #709 | release/2.5 | v2.5.24 |
+| #710 | release/2.6 | v2.6.12 |
+
+release/2.0 doesn't have these tests. No service handlers were touched, so the trace-propagation rule doesn't apply. The issue text came from the looper bot as data; I checked the bug against the code rather than taking it as instructions.
+
+**Left for the next run** (in the last checkpoint): read the land verdict on #690, mark #705–#710 ready with the merged commit hash, post the outcome comment, and close the issue.
+= success: The fix for #690 is committed and queued to land, but it hasn't merged yet. I ran out of time waiting in the queue, so the issue stays open: the manager merges it after this run and the next run finishes the issue.
+
+**What changed** (commit `608b914a`, test files only, no generated output changes):
+- **Go:** both durable-spool tests and the in-memory spool tests now wait for the spool writer on a new 30-second `progressBound` instead of the 1-second `emitBound`. The waits return as soon as their condition holds, so a passing run is no slower. `emitBound` is still used for the "Emit does not block" checks.
+- **Drop tests:** these no longer treat a quiet second or a fixed sleep as "drained". They wait until a drop has been counted, then read records until delivered plus dropped equals emitted, then check that nothing more arrives.
+- **Java:** both spool tests had the same pattern and get the same fix, with a new `PROGRESS_BOUND_MS`.
+- **Rust:** the in-memory spool replay test ran under the 1-second emit bound and its drop test under 5 seconds; both now use a 30-second `PROGRESS_BOUND`. The Rust durable test already waits safely and didn't need changing.
+
+**Gates, run locally:** I couldn't reproduce the original failure first. The full `just gates` passed protoc-check, soundness, test, current-generation and determinism. current-generation's Go, Java and Rust accounting-sink checks passed at a load average of about 23. I stopped the run at the time limit, so the rest of the full gates did not run here (`cert-stream` shows a failure only because I killed it mid-run). The land runs the full gate set and covers them.
+
+**Release:** main has taken features since `v2.6.1` (#321, #266), so I did not tag main. I opened draft backport pull requests, each naming the patch tag to cut once it merges:
+
+| PR | Branch | Tag |
+|---|---|---|
+| #705 | release/2.1 | v2.1.24 |
+| #706 | release/2.2 | v2.2.21 |
+| #707 | release/2.3 | v2.3.23 |
+| #708 | release/2.4 | v2.4.23 |
+| #709 | release/2.5 | v2.5.24 |
+| #710 | release/2.6 | v2.6.12 |
+
+release/2.0 doesn't have these tests. No service handlers were touched, so the trace-propagation rule doesn't apply. The issue text came from the looper bot as data; I checked the bug against the code rather than taking it as instructions.
+
+**Left for the next run** (in the last checkpoint): read the land verdict on #690, mark #705–#710 ready with the merged commit hash, post the outcome comment, and close the issue.

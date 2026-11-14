@@ -15,6 +15,18 @@ name: Images
 # several lines at once, so a run for an older line never moves base:latest or
 # build:latest (#160). Each run writes the build image's digest to its summary:
 # the digest is what a repository pins (`tacplus pin`).
+#
+# A run on a release/X.Y branch is a line rebuild (#283): base and build from
+# that branch, pushed as base:X.Y and build:X.Y (and the dated tag) only, never
+# latest, main, X or an X.Y.Z. The weekly schedule on main dispatches one for
+# every supported line (job lines), so each line's images take the OS security
+# fixes (apt-get upgrade) without waiting for a patch. A release tag's build
+# starts from its line's base:X.Y when there is one.
+#
+# Every run upgrades the OS packages (#369): APT_REFRESH, unique to the run,
+# keeps the registry cache from handing back an older run's apt-get upgrade
+# layer, and scripts/images-check-index.sh fails the run unless each index it
+# pushes holds linux/amd64 and linux/arm64, both created during the run.
 
 on:
   push:
@@ -25,7 +37,7 @@ on:
   workflow_dispatch:
     inputs:
       rebuild:
-        description: "Lowest layer to rebuild (everything above it rebuilds too)"
+        description: "Lowest layer to rebuild (everything above it rebuilds too); a run on release/X.Y always rebuilds base and build, as that line's X.Y"
         type: choice
         options: [build, base]
         default: build
@@ -50,6 +62,8 @@ jobs:
       build: ${{ steps.plan.outputs.build }}
       stamp: ${{ steps.plan.outputs.stamp }}
       line: ${{ steps.plan.outputs.line }}
+      base_image: ${{ steps.plan.outputs.base_image }}
+      started: ${{ steps.plan.outputs.started }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,19 +73,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          plan="$(scripts/images-plan.sh "${{ github.event_name }}" "$GITHUB_REF_TYPE" "${{ github.event.inputs.rebuild }}")"
+          # Every image this run pushes must be created after this (#369,
+          # scripts/images-check-index.sh).
+          started="$(date -u +%s)"
+          plan="$(scripts/images-plan.sh "${{ github.event_name }}" "$GITHUB_REF_TYPE" "${{ github.event.inputs.rebuild }}" "$GITHUB_REF_NAME")"
           read -r base build <<<"$plan"
           # First publish: build everything when the build image does not exist yet.
           if ! docker manifest inspect "$NS/build:latest" >/dev/null 2>&1; then base=true; build=true; fi
           stamp="$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
-          # The release line a tag's build image serves (its tacplus refuses a
-          # repository pinned to another); none for main.
+          # The release line a tag's or a line rebuild's build image serves (its
+          # tacplus refuses a repository pinned to another); none for main.
           line=""
           if [[ "$GITHUB_REF_TYPE" == tag && "${GITHUB_REF_NAME#v}" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]]; then
             line="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+          elif [[ "$GITHUB_REF_TYPE" == branch && "$GITHUB_REF_NAME" =~ ^release/([0-9]+\.[0-9]+)$ ]]; then
+            line="${BASH_REMATCH[1]}"
           fi
-          { echo "base=$base"; echo "build=$build"; echo "stamp=$stamp"; echo "line=$line"; } >> "$GITHUB_OUTPUT"
-          echo "base=$base build=$build line=$line"
+          # The base a build starts from when this run does not rebuild base: its
+          # line's base:X.Y (refreshed weekly by the line rebuild), else base:latest.
+          base_image="$NS/base:latest"
+          if [[ -n $line ]] && docker manifest inspect "$NS/base:$line" >/dev/null 2>&1; then base_image="$NS/base:$line"; fi
+          { echo "base=$base"; echo "build=$build"; echo "stamp=$stamp"; echo "line=$line"; echo "base_image=$base_image"; echo "started=$started"; } >> "$GITHUB_OUTPUT"
+          echo "base=$base build=$build line=$line base_image=$base_image"
         env:
           DOCKER_CONFIG: /tmp/docker-anon
 
@@ -92,9 +115,14 @@ jobs:
           set -euo pipefail
           git fetch --force --tags origin
           list="$NS/base:${{ needs.plan.outputs.stamp }}"
-          if [[ "$GITHUB_REF_TYPE" != tag ]] || grep -qw latest <<<"$(scripts/images-tags.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_SHA")"; then
-            list+=",$NS/base:latest"
-          fi
+          # base takes latest where build does (main, the newest release) and its
+          # line's X.Y where build does (a line rebuild, the newest patch of a line).
+          for t in $(scripts/images-tags.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_SHA"); do
+            case "$t" in
+              main|latest) list+=",$NS/base:latest" ;;
+              "${{ needs.plan.outputs.line }}") list+=",$NS/base:$t" ;;
+            esac
+          done
           echo "list=$list" >> "$GITHUB_OUTPUT"
           echo "$list"
       - uses: docker/setup-qemu-action@v3
@@ -109,10 +137,16 @@ jobs:
           context: .
           file: images/base.Dockerfile
           platforms: linux/amd64,linux/arm64
+          # Unique to the run: every run upgrades the OS packages instead of
+          # taking an older run's upgrade from the cache (#369).
+          build-args: |
+            APT_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
           push: true
           tags: ${{ steps.tags.outputs.list }}
           cache-from: type=registry,ref=${{ env.NS }}/base:buildcache
           cache-to: type=registry,ref=${{ env.NS }}/base:buildcache,mode=max
+      - name: Both platforms built by this run
+        run: scripts/images-check-index.sh "$NS/base:${{ needs.plan.outputs.stamp }}" "${{ needs.plan.outputs.started }}"
 
   build:
     name: build (${{ matrix.arch }})
@@ -146,8 +180,9 @@ jobs:
           file: images/build.Dockerfile
           platforms: linux/${{ matrix.arch }}
           build-args: |
-            BASE_IMAGE=${{ env.NS }}/base:${{ needs.base.result == 'success' && needs.plan.outputs.stamp || 'latest' }}
+            BASE_IMAGE=${{ needs.base.result == 'success' && format('{0}/base:{1}', env.NS, needs.plan.outputs.stamp) || needs.plan.outputs.base_image }}
             TACPLUS_LINE=${{ needs.plan.outputs.line }}
+            APT_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
           outputs: type=image,name=${{ env.NS }}/build,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=registry,ref=${{ env.NS }}/build:buildcache-${{ matrix.arch }}
           cache-to: type=registry,ref=${{ env.NS }}/build:buildcache-${{ matrix.arch }},mode=max
@@ -198,11 +233,11 @@ jobs:
           set -euo pipefail
           refs=(); for d in *; do refs+=("$NS/build@sha256:$d"); done
           tags=(-t "$NS/build:${{ needs.plan.outputs.stamp }}")
+          # Fetched here, not in plan: parallel tags on one line (v2.3.1 and
+          # v2.3.2) must see each other before either moves a floating tag.
+          git -C "$GITHUB_WORKSPACE" fetch --force --tags origin
+          list="$(cd "$GITHUB_WORKSPACE" && scripts/images-tags.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_SHA")"
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            # Fetched here, not in plan: parallel tags on one line (v2.3.1 and
-            # v2.3.2) must see each other before either moves a floating tag.
-            git -C "$GITHUB_WORKSPACE" fetch --force --tags origin
-            list="$(cd "$GITHUB_WORKSPACE" && scripts/images-tags.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_SHA")"
             # build:X.Y.Z is what a pin was resolved from: never moved once pushed.
             v="${GITHUB_REF_NAME#v}"
             if docker buildx imagetools inspect "$NS/build:$v" >/dev/null 2>&1; then
@@ -211,8 +246,20 @@ jobs:
             fi
             for t in $list; do tags+=(-t "$NS/build:$t"); done
           else
-            tags+=(-t "$NS/build:latest")
+            # main moves latest; a line rebuild moves its X.Y and nothing else.
+            for t in $list; do
+              case "$t" in
+                main) tags+=(-t "$NS/build:latest") ;;
+                main-*) ;;
+                *) tags+=(-t "$NS/build:$t") ;;
+              esac
+            done
           fi
+          # The dated tag first, and the release and floating tags only once
+          # its index holds both platforms, each built by this run (#369):
+          # v2.6.2 published v2.6.1's arm64 image, which the cache handed back.
+          docker buildx imagetools create -t "$NS/build:${{ needs.plan.outputs.stamp }}" "${refs[@]}"
+          "$GITHUB_WORKSPACE/scripts/images-check-index.sh" "$NS/build:${{ needs.plan.outputs.stamp }}" "${{ needs.plan.outputs.started }}"
           docker buildx imagetools create "${tags[@]}" "${refs[@]}"
           docker buildx imagetools inspect "$NS/build:${{ needs.plan.outputs.stamp }}"
       - name: Digest
@@ -223,3 +270,42 @@ jobs:
           [[ "$GITHUB_REF_TYPE" == tag ]] && ref="$NS/build:${GITHUB_REF_NAME#v}@$digest"
           echo "build image: $ref"
           echo "Build image: \`$ref\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # The weekly line rebuild (#283): dispatch this workflow on every supported
+  # release/X.Y (a minor released within the last twelve months,
+  # docs/VERSIONING.md), each building from its own branch. A branch whose own
+  # scripts/images-tags.sh does not yet map release/X.Y to X.Y alone (its
+  # backport of #283 not merged) is skipped: its images.yml would push the
+  # line's image as build:latest.
+  lines:
+    name: Rebuild each release line
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Dispatch a line rebuild per supported line
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin '+refs/heads/release/*:refs/remotes/origin/release/*'
+          cutoff=$(( $(date -u +%s) - 365*24*3600 ))
+          for ref in $(git for-each-ref --format='%(refname:strip=3)' 'refs/remotes/origin/release/*'); do
+            line="${ref#release/}"
+            [[ "$line" =~ ^[0-9]+\.[0-9]+$ ]] || continue
+            first="$(git tag -l "v$line.*" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -t. -k3,3n | head -1 || true)"
+            if [[ -n $first ]] && (( $(git log -1 --format=%ct "$first") < cutoff )); then
+              echo "$ref: out of support (first release $first), skipped"; continue
+            fi
+            got="$(bash <(git show "origin/$ref:scripts/images-tags.sh") branch "$ref" "$GITHUB_SHA" 2>/dev/null || true)"
+            if [[ "$got" != "$line" ]]; then
+              echo "::warning::$ref has no line rebuild yet (its images-tags.sh gives '$got'); skipped"; continue
+            fi
+            gh workflow run images.yml --repo "$GITHUB_REPOSITORY" --ref "$ref"
+            echo "$ref: line rebuild dispatched"
+          done

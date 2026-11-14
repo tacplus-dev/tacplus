@@ -74,12 +74,6 @@ the looper then marks it `promoted` or `declined` here with the date.
   worktree's `.git` is a file pointing at the main checkout's `.git/worktrees/<name>`, so the first git call in the
   gates fails (`fatal: not a git repository`, exit 128). Mounting `$(git rev-parse --git-common-dir)` at its own path
   (and marking it a safe directory) would let loopers, which each work in a worktree, run it as written.
-- **Bound the gates' `target/` on a shared runner** (2026-11-01, #255): one `just gates` run in the build image
-  grew the worktree's `target/` to 87G (the per-fixture cargo/Go/Java builds under `target/cross-test`) and filled
-  the runner's 193G disk at the last `current-generation` fixture, failing every gate after it with `No space left
-  on device`. Pruning each fixture's build output once it passes, or a `CARGO_TARGET_DIR` per gate cleaned at its
-  end, would keep a looper's gates inside its share of the disk; current-generation alone also takes ~2h15m in the
-  image, which leaves little of a 4h run for the rest.
 - **Memberport's stalled-mint expiry check is wall-clock bound** (2026-11-01, #255): `MemberPortBehaviorTest.
   stalledMintDropsTheConnectionAtExpiry` (`cross-test/memberport/testdata`) asserts the drop within 8s of real time.
   With two gate runs on one 8-CPU runner it took 10010ms and failed `memberport-java`; the same image, uncontended,
@@ -163,7 +157,9 @@ the looper then marks it `promoted` or `declined` here with the date.
   nightly scan after it lands. Running `osv-scanner scan source` over the poms the gates write (osv-scanner in the
   build image) would fail on the first one, and one pom template the scripts and fixtures derive from would turn
   the next bump into one edit. The `google-cloud-storage` dependency `add_java_gcs_archive_dependency` splices in
-  for the GCS archive build is outside every scan today (it is not in any pom on disk).
+  for the GCS archive build is outside every scan today (it is not in any pom on disk): since #263
+  `TestJavaGcsArchivePomMeetsItsFloors` holds the floors already named for it (the SDK, guava -jre,
+  opentelemetry), and a new advisory on anything else it resolves is again found only by the nightly scan.
 - **govulncheck of the generated Go modules in the gates** (2026-10-30, #199): the harnesses pin the generated
   chassis's Go dependencies by hand, and `scripts/go_dependency_floor_test.go` holds only the floors already named
   (golang.org/x/net). A new advisory on any other module the chassis reaches (grpc, x/crypto, gin) is found by the
@@ -181,11 +177,6 @@ the looper then marks it `promoted` or `declined` here with the date.
   block-buffer 0.10 (GHSA-qwgh-2vcv-g2f7) through the consumer's own pin. The fixtures and the example pin 0.30;
   the generator could refuse an older pin (as it refuses a missing one) or pin it in the template, as it now pins
   x509-cert.
-- **Bound the shared cross-test cargo target** (2026-10-29, #186): `target/cross-test/cargo` (`CROSS_TEST_CARGO_TARGET`,
-  shared by current-generation, server-runtime and wire-corpus) is never pruned; on a looper host it had reached
-  108G and filled the disk mid-gate (`No space left on device` in current-generation-rust). Each fixture's
-  differently-named crates add artifacts that later runs never reuse. Pruning it when it passes a size (or `cargo
-  clean` per fixture after its check) would keep gates from failing on space.
 - **A fleet service whose image is not ghcr.io/<owner>/<repo>** (2026-10-29, #180): the fleet build names a
   service's release image from its repo, `github.com/<owner>/<repo>` → `ghcr.io/<owner>/<repo>`, and refuses any
   other forge. A fleet running its own implementation from GitLab (the private-registry case docs/USER.md shows), or
@@ -253,12 +244,6 @@ the looper then marks it `promoted` or `declined` here with the date.
   gRPC/REST twin reaches any tenant. Deliberate (the model must never set the tenant); a cross-tenant MCP path
   would need the platform to choose the target, e.g. from a user-confirmed selection outside the model. Needs
   design if SeaBeam's "talk to another tenant's crew" should work through an assistant.
-- **The nightly gates outgrow the runner's disk** (2026-10-28, #198): the 2026-10-28 nightly run on 5adf7846
-  (run 40694076433) passed every gate through c2d-server, then failed zero-rpc-s2s and jwk-alg with "No space left on
-  device" in target/cross-test (the current-generation cargo/maven trees alone take two hours to build and stay on
-  disk). Nightly is red for infrastructure, not code. Either free disk on the runner before `docker run` (drop the
-  preinstalled SDKs the build image already carries), or have each gate clean its own scratch tree; the GitLab move
-  (#194) is the moment to size the runner for it.
 - **Kernel's linked-claim tests on the 2.6 floor** (2026-10-28, #171): 2.6 generates no `linked` accessor in any
   language (`TokenWrapper.getLinked` and friends are gone; `JwtPayloadType` 29 is reserved). tacplus-dev/kernel's
   `TenantUserLinkTest` (lines 176 and 200 on its main today) asserts `token.getLinked().isEmpty()` and will not

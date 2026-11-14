@@ -188,7 +188,7 @@ gates:
     echo "=== OVERALL fail=1 (protoc preflight) ==="
     exit 1
   fi
-  for g in soundness test current-generation determinism cert-stream stream-expiry memberport claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg redact tacplus-script; do
+  for g in soundness test current-generation determinism cert-stream stream-expiry memberport claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg redact trace-carry tacplus-script; do
     echo "=== $g ==="
     just "$g"
     rc=$?
@@ -287,6 +287,13 @@ subscriber-clean-close:
 endpoint-latency:
   {{lock}} bash cross-test/endpoint-latency/run.sh
 
+# Three-hop chain of generated Rust ContractApi servers and clients (issue #38):
+# leaf receives no more than the root's budget, its handler stops at the root's
+# deadline, and it receives the root's trace_id through mid (#310). Not in
+# `gates` yet (PROPOSALS.md).
+outbound-deadline: generate
+  {{lock}} bash cross-test/outbound-deadline/run.sh
+
 # Fault-injection coverage of the generated unary client retry path (issue #57):
 # retries are jittered, capped by a retry budget, and never start past the
 # caller's deadline.
@@ -350,6 +357,20 @@ redact-java:
 
 redact-rust:
   {{lock}} bash cross-test/redact/run.sh --language rust
+
+# trace_id across projections and stores (#313): a projection carries its
+# source's trace_id; the record dispatch and the service_store disk helpers
+# persist with field 200 empty, read back raw.
+trace-carry: trace-carry-go trace-carry-java trace-carry-rust
+
+trace-carry-go:
+  {{lock}} bash cross-test/trace-carry/run.sh --language go
+
+trace-carry-java:
+  {{lock}} bash cross-test/trace-carry/run.sh --language java
+
+trace-carry-rust:
+  {{lock}} bash cross-test/trace-carry/run.sh --language rust
 
 # Generation gate against the REAL platform + app proto repos (not the
 # cross-test/proto fixtures every other gate uses). This is the check that

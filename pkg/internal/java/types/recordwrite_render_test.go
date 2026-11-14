@@ -333,3 +333,103 @@ func TestJavaRecordWrite_ApplyRoutePin(t *testing.T) {
 		t.Fatalf("the route pin must not spell the routed tid as a namespace\n%s", got)
 	}
 }
+
+// A stored row never keeps a trace (#313): the wrapper rebuilds the request
+// with the injected trace_id cleared off every row it carries — item, and
+// ReplaceIfUnchanged's expected_item, whose compare value would otherwise
+// mismatch the stored (traceless) row — before the handler, and leaves the
+// request's own trace_id, the call's, alone.
+func TestJavaRecordWrite_ClearsRowTrace(t *testing.T) {
+	put := putVaultRowMethod()
+	put.RecordEntry.RowFields = []string{"item"}
+	got := renderRecordWrite(put, false)
+	mustInOrder(t, got,
+		`request = request.toBuilder().setDurabilityValue(3).build();`,
+		`// A stored row never keeps a trace (#313).`,
+		`if (request.hasItem()) {`,
+		`request = request.toBuilder().setItem(request.getItem().toBuilder().clearTraceId()).build();`,
+		`handler.putVaultRow(caller, request)`)
+	if strings.Contains(got, "request.toBuilder().clearTraceId()") {
+		t.Errorf("the request's own trace_id is the call's and stays:\n%s", got)
+	}
+
+	replace := &parser.MethodInfo{
+		Name: "ReplaceIfUnchangedVaultRow", InputType: "ReplaceIfUnchangedVaultRowRequest", OutputType: "RecordWriteResult",
+		FullInputType: "egressquery.ReplaceIfUnchangedVaultRowRequest", FullOutputType: "egressquery.RecordWriteResult",
+		RecordEntry: &parser.RecordEntry{Record: "egressvault.VaultRow", Durability: spec.Durability_DURABILITY_REMOTE,
+			KeyPath: []string{"item", "row_id"}, KeyKind: "string", RowFields: []string{"item", "expected_item"}},
+	}
+	mustInOrder(t, renderRecordWrite(replace, false),
+		`request = request.toBuilder().setItem(request.getItem().toBuilder().clearTraceId()).build();`,
+		`if (request.hasExpectedItem()) {`,
+		`request = request.toBuilder().setExpectedItem(request.getExpectedItem().toBuilder().clearTraceId()).build();`,
+		`handler.replaceIfUnchangedVaultRow(caller, request)`)
+
+	// A record type without the injected trace_id generates exactly as before.
+	skipped := generateJavaGRPCWrapper(replace, "EgressRecordMap", "egressquery", "Egressquery."+replace.InputType,
+		"Egressquery."+replace.OutputType, "Helpers", "Helpers", false, false, map[string]service.AccountingInfo{},
+		"egressquery", "vservices", map[string]string{}, proto.SkippedTraceTypes{"egressvault.VaultRow": true},
+		newJavaEgressSanitizer(nil), nil, nil)
+	if strings.Contains(skipped, "clearTraceId") || strings.Contains(skipped, "#313") {
+		t.Errorf("a record type without the injected trace_id clears nothing:\n%s", skipped)
+	}
+
+	apply := applyMethod()
+	for i := range apply.RecordApplyOps {
+		if apply.RecordApplyOps[i].CaseField != "delete_vault_row" {
+			apply.RecordApplyOps[i].RowFields = []string{"item"}
+		}
+	}
+	apply.RecordApplyOps[3].KeyPath = []string{"item", "id"}
+	apply.RecordApplyOps = append(apply.RecordApplyOps, parser.RecordEntry{
+		OpsField: "ops", OpType: "egressquery.RecordOp", OneofName: "op", CaseField: "replace_if_unchanged_vault_row",
+		CaseType: "egressquery.ReplaceIfUnchangedVaultRowRequest", Record: "egressvault.VaultRow", RPC: "ReplaceIfUnchangedVaultRow",
+		Durability: spec.Durability_DURABILITY_REMOTE, KeyPath: []string{"item", "row_id"}, KeyKind: "string",
+		RowFields: []string{"item", "expected_item"},
+	})
+	got = renderRecordWrite(apply, false)
+	// put_counter carries no tenant: its case gains the clear and the op rebuild.
+	mustInOrder(t, got,
+		`case PUT_COUNTER: {`,
+		`__c = __c.toBuilder().setItem(__c.getItem().toBuilder().clearTraceId()).build();`,
+		`__op = __op.toBuilder().setPutCounter(__c).build();`,
+		`case REPLACE_IF_UNCHANGED_VAULT_ROW: {`,
+		`__c = __c.toBuilder().setItem(__c.getItem().toBuilder().clearTraceId()).build();`,
+		`__c = __c.toBuilder().setExpectedItem(__c.getExpectedItem().toBuilder().clearTraceId()).build();`,
+		`__op = __op.toBuilder().setReplaceIfUnchangedVaultRow(__c).build();`,
+		`__applyB.setOps(__i, __op);`,
+		`handler.apply(caller, request)`)
+	if n := strings.Count(got, "clearTraceId()"); n != 5 {
+		t.Errorf("Apply must clear exactly the five op rows, got %d:\n%s", n, got)
+	}
+}
+
+// A (spec.service_store) <T>StoreService's Put stores its request as the row
+// (#313): the wrapper clears the request's trace_id just before the handler —
+// after the request trace event has read it — and the trace events after the
+// handler carry the trace the call arrived with.
+func TestJavaStoreServicePut_ClearsRowTrace(t *testing.T) {
+	put := &parser.MethodInfo{
+		Name: "Put", InputType: "Task", OutputType: "Empty",
+		FullInputType: "tasks.Task", FullOutputType: "google.protobuf.Empty",
+	}
+	render := func(store bool) string {
+		return generateJavaGRPCWrapperSurface(put, "TaskStoreService", "tasks", "Tasks.Task", "com.google.protobuf.Empty",
+			"Helpers", "", false, false, map[string]service.AccountingInfo{}, "tasks", "vservices", map[string]string{},
+			proto.SkippedTraceTypes{}, newJavaEgressSanitizer(nil), nil, nil, false, false, store)
+	}
+	got := render(true)
+	mustInOrder(t, got,
+		`.setTraceId(request.getTraceId())`,
+		`final String __traceId = request.getTraceId();`,
+		`request = request.toBuilder().clearTraceId().build();`,
+		`handler.put(caller, request);`,
+		`.setTraceId(__traceId)`)
+	call := strings.Index(got, "handler.put(caller, request);")
+	if strings.Count(got, ".setTraceId(__traceId)") != 2 || strings.Contains(got[call:], "request.getTraceId()") {
+		t.Errorf("both post-handler trace events must carry the saved trace:\n%s", got)
+	}
+	if plain := render(false); strings.Contains(plain, "__traceId") || strings.Contains(plain, "#313") {
+		t.Errorf("a hand-written Put stores nothing the wrapper knows of:\n%s", plain)
+	}
+}

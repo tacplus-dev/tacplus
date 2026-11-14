@@ -1,0 +1,1 @@
+- 2026-11-14 looper issue Swift C2DClient's default socket ignores socket_path: it dials ~/.<package>/daemon.sock, where no daemon listens (#494)

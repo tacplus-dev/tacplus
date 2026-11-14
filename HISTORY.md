@@ -97,3 +97,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-11 looper release v2.5.19 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.5.19)
 - 2026-11-11 looper release v2.6.7 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.6.7)
 - 2026-11-11 looper release v2.6.8 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.6.8)
+- 2026-11-09 looper issue release/2.6: cross-test/trace-carry/run.sh never prunes its cargo workspace, so TestCrossTestLegsPruneTheirCargoWorkspace fails (#398)

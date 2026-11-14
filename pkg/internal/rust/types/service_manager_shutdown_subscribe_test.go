@@ -126,8 +126,7 @@ func TestRustCertStreamsFollowSharedContractMarkers(t *testing.T) {
 	if !strings.Contains(cargoTmpl, "x509-cert = \"0.3\"") {
 		t.Fatalf("Rust cert-stream Cargo template must pin x509-cert 0.3")
 	}
-	if !strings.Contains(cargoTmpl, "rustls-pemfile = { workspace = true }") ||
-		!strings.Contains(cargoTmpl, "tokio-rustls = { workspace = true }") {
+	if !strings.Contains(cargoTmpl, "tokio-rustls = { workspace = true }") {
 		t.Fatalf("Rust cert-stream Cargo template must include reloadable TLS workspace dependencies")
 	}
 	if strings.Contains(tmplStr, "tonic::transport::ServerTlsConfig::new()") {

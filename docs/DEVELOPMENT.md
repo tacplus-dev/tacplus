@@ -453,8 +453,23 @@ grep -rn '"\^[0-9]\+\.[0-9]\+' pkg/internal/ --include='*.go'
   wrappers must fail closed before handler dispatch when stream-open identity
   is missing or invalid. Bidi send handles validate/enqueue/forward messages
   only; they must not mint, fetch, or refresh tokens per message because gRPC
-  metadata is not updated after stream open. Mid-stream token expiry or
-  rotation must be represented by stream teardown and re-open. Per-message
+  metadata is not updated after stream open. Mid-stream token rotation is
+  re-open before teardown (tacplus#322): a new leg of the `<Svc>Rotating`
+  sibling with the new token, `last` on the old leg each way, the old leg read
+  to its `last` before the new one; a leg that ends without `last` ends the
+  logical stream, never splices it. Go's machinery is
+  `chassis/rotation/rotation.go.tmpl` (registered by the server wrapper, the
+  client's connection wrapped by `rotation.NewConn`); the sibling is authorized
+  with the original method's policy (`rotationAdmit`, rotation_gen.go). Java's
+  is `chassis/rotation/StreamRotation.java.tmpl` (the wrapper's
+  `registerServices` adds the sibling; the S2S client's stub sits on
+  `StreamRotation.channel`, its legs pinned to one channel). Rust's is the
+  `chassis/rotation` crate (the wrapper's `rotating_sibling`, served by the
+  ServiceManager with `ROTATING_RPC_PATHS` under the expiry layer; the client's
+  `RotatingChannel` on the endpoint the stream resolved at open). Every language
+  must follow the same wire (`sys/rotation.proto`) and its message
+  rule: an envelope with none of `last`, `fin`, `session_id` set is exactly one
+  message, even an empty one. Per-message
   namespace authorization may reuse the opening metadata, but it is not a
   server-visible token refresh.
 - Prefer generation-time errors for contradictory proto shapes. Tacplus should
@@ -588,8 +603,9 @@ the archived SPIFFE_IDENTITY_NORMALIZATION_PLAN (not in this repository)):
 - Member port (`(spec.member_port)`, tacplus#212, on gRPC since #321): server
   TLS plus kernel tokens, never mTLS. It is `/memberport.MemberTunnel/Open`, a
   bidi stream of `sys/memberport.proto`'s `MemberChunk` on its own listener; the
-  Java template (`chassis/memberport/MemberPort.java.tmpl`) builds the method
-  descriptor itself, since the tunnel is no rpc of the service's API and carries
+  templates (`chassis/memberport/` in Java, Go and Rust; Go and Rust since
+  #322, ported from the Java one behaviour for behaviour) build the method
+  descriptor themselves, since the tunnel is no rpc of the service's API and carries
   no `(spec.rpc)` policy. A token is checked only at a stream's open (metadata,
   never a chunk), the receiver's too, so each side ends a stream at the earlier
   `exp` of its two tokens and a rotation is how either side's renewal reaches the
@@ -601,11 +617,12 @@ the archived SPIFFE_IDENTITY_NORMALIZATION_PLAN (not in this repository)):
   description; a stream that ends without `last` drops its session, never
   splices it; a dropped session resets its loopback connection (`SO_LINGER` 0);
   the target and local forward addresses are loopback only; tokens are never
-  logged. The ordering rule of a cutover is flow control: no `request()` on the
-  new stream until the old one's `last` has been read, each way. A language that
-  does not generate the member port must refuse the annotation at generation
-  (`parser.RefuseMemberPort`), never emit a service without it; Go and Rust
-  port this version in #322.
+  logged. The ordering rule of a cutover is flow control: no `request()` (Java)
+  or receive (Go, Rust) on the new stream until the old one's `last` has been
+  read, each way. A change to the member port changes all three templates and
+  their legs of `cross-test/memberport`. A new server language must generate the
+  member port, or refuse the annotation at generation, never emit a service
+  without it.
 - Every language's generated SPIFFE tests load the shared vector corpus
   (`cross-test/fixtures/spiffe_vectors.json`) so identity behavior cannot
   drift per language.

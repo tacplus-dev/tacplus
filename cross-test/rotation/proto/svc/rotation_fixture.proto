@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// Rotation fixture (tacplus#322): an S2S service with one rpc of each streaming
+// shape, and a declared S2S client of it, so that the generated server and the
+// generated client meet. Nothing here mentions rotation: the generated server
+// serves the <Svc>Rotating sibling and the generated client uses it.
+
+syntax = "proto3";
+
+package rotationfixture;
+
+import "sys/spec.proto";
+
+option (spec.grpc_s2s_client) = {service: "rotationfixture.TickerService"};
+
+message Tick {
+  int64 seq = 1;
+  string m = 2;
+}
+
+service TickerService {
+  option (spec.service_s2s) = {label: "TickerService"};
+  rpc SendTicks(stream Tick) returns (Tick) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["caller-svc", "other-svc"]};
+  }
+  rpc GenerateTicks(Tick) returns (stream Tick) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["caller-svc", "other-svc"]};
+  }
+  rpc AssistTicks(stream Tick) returns (stream Tick) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["caller-svc", "other-svc"]};
+  }
+}

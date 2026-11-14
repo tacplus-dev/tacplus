@@ -188,7 +188,11 @@ gates:
     echo "=== OVERALL fail=1 (protoc preflight) ==="
     exit 1
   fi
+<<<<<<< HEAD
+  for g in soundness test current-generation determinism cert-stream stream-expiry rotation memberport claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg redact trace-carry tacplus-script; do
+=======
   for g in soundness test current-generation determinism cert-stream stream-expiry memberport claims-provenance accounting-identity w2s-validate c2d-server zero-rpc-s2s jwk-alg redact trace-carry tacplus-script; do
+>>>>>>> origin/main
     echo "=== $g ==="
     just "$g"
     rc=$?
@@ -273,20 +277,19 @@ verify-changed SHA="":
 tacplus-script: generate
   {{lock}} bash images/tacplus_test.sh
 
-# The generated member port (tacplus#212, on gRPC since #321): Java's
-# memberport-peer, stream-expiry and Hazelcast tests over real sockets; Go and
-# Rust must refuse (spec.member_port) until they generate it (#322).
-# MEMBERPORT_SOAK=1 adds the soak.
+# The generated member port (tacplus#212, on gRPC since #321, Go and Rust since
+# #322): each language's memberport-peer and stream-expiry tests over real
+# sockets, and Java's Hazelcast test. MEMBERPORT_SOAK=1 adds the soak.
 memberport: memberport-java memberport-go memberport-rust
 
 memberport-java:
   {{lock}} bash cross-test/memberport/run.sh --language java
 
 memberport-go:
-  {{lock}} bash cross-test/memberport/run.sh --language go
+  {{lock}} bash cross-test/memberport/run.sh --language go --interop
 
 memberport-rust:
-  {{lock}} bash cross-test/memberport/run.sh --language rust
+  {{lock}} bash cross-test/memberport/run.sh --language rust --interop
 
 # Behavioral coverage of the generated TLS/SMB cert-stream loops.
 cert-stream: cert-stream-go cert-stream-java cert-stream-rust
@@ -299,6 +302,21 @@ cert-stream-java:
 
 cert-stream-rust:
   {{lock}} bash cross-test/cert-stream/run.sh --language rust
+
+# Make-before-break stream rotation (tacplus#322): the generated Go, Java and
+# Rust server and client carry each stream shape across several 3 s token lifetimes with no
+# loss, duplication or reordering, and fail closed (mint failure, revocation,
+# another subject, a leg cut without `last`, fallback to the plain method).
+rotation: rotation-go rotation-java rotation-rust
+
+rotation-go:
+  {{lock}} bash cross-test/rotation/run.sh --language go
+
+rotation-java:
+  {{lock}} bash cross-test/rotation/run.sh --language java
+
+rotation-rust:
+  {{lock}} bash cross-test/rotation/run.sh --language rust
 
 # Server-side stream credential expiry (issue #260): a client-streaming, a
 # server-streaming and a bidi stream opened with a short-lived token that is

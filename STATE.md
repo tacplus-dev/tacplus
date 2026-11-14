@@ -1,6 +1,10 @@
 # State: tacplus
 
+<<<<<<< HEAD
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-10 by looper (#322).
+=======
 Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by looper (#266).
+>>>>>>> origin/main
 
 - **Version / line:** v2.6.2 (latest release, 2026-11-07, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -105,22 +109,31 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   beside the MCP Java SDK, `tools.jackson.*` 3.1.8 (nine GHSAs in the SDK's 3.1.4); docs/USER.md tells Java
   consumers to pin the same. `scripts/java_dependency_floor_test.go` refuses a lower or missing pin (#200;
   backported to release/2.0 through release/2.5 by pull request, each line's next patch once it merges).
-  Generated member port (#212): `option (spec.member_port) = {}` makes the Java ServiceManager own a member port
-  for the service's black-box member traffic (Hazelcast in Stratum). Since #321 it is a gRPC bidi stream of byte
+  Generated member port (#212): `option (spec.member_port) = {}` makes the ServiceManager own a member port (Java;
+  Go and Rust since #322, one wire) for the service's black-box member traffic (Hazelcast in Stratum). Since #321 it is a gRPC bidi stream of byte
   chunks (`/memberport.MemberTunnel/Open`, `sys/memberport.proto`) on its own TLS 1.3 listener with the auto-TLS
   certificate: kernel tokens for `member:<svc>` checked at each stream's open, both ways (the receiver's in a
   response header), same service and namespace only; make-before-break session rotation at 75% of a token's
   lifetime with an in-band `last` each way and same-subject session binding; `UNAUTHENTICATED`/`PERMISSION_DENIED`
+<<<<<<< HEAD
+  with no reason text; streams closed at `exp` (#260); a stream ending without `last` drops the session; a dropped
+  session resets its loopback connection (RST); nothing dialled before admission, no plaintext.
+  `grpcconfig.member_port` places it (loopback target only); `sm.getMemberPort().forward(remote)` (Go
+  `sm.MemberPort().Forward`, Rust `sm.member_port()`) tunnels outbound. registry.json carries `member_port`.
+=======
   with no reason text; streams closed at the earlier `exp` of the client's and the receiver's token (#260, #465), so
   a lapsed member loses the sessions it accepted as well as those it opened; a stream ending without `last` drops
   the session; a dropped session resets its loopback connection (RST); nothing dialled before admission, no
   plaintext.
   `grpcconfig.member_port` places it (loopback target only); `sm.getMemberPort().forward(remote)` tunnels outbound.
   registry.json carries `member_port`. Go and Rust refuse the annotation until #322 ports this version.
+>>>>>>> origin/main
   `(spec.smb)`/`(spec.smb_authority)`/`SmbCertService` are deprecated (removed in 3.0) and exclusive with it.
-  Pinned by `cross-test/memberport` (`just memberport`, in the gates): the memberport-peer tests (rotation across
-  several token lifetimes both ways, no-splice faults, refusals, resets) and two tenants' Hazelcast 5.7 members;
-  `just stream-expiry` runs its expiry leg.
+  Pinned by `cross-test/memberport` (`just memberport`, in the gates): per language, the memberport-peer tests
+  (rotation across several token lifetimes both ways, no-splice faults, refusals, resets); two tenants'
+  Hazelcast 5.7 members through each language's ports; `just stream-expiry` runs each language's expiry leg. Make-before-break rotation of every
+  generated S2S stream (#322, `sys/rotation.proto`, the `<Svc>Rotating` sibling): Go, Java and Rust server and
+  client (`chassis/rotation`, `just rotation`); a client falls back to the plain method on a server without the sibling.
   Fleets pin services by release line (#180): `fleet.yaml` names a `version: "MAJOR.MINOR"` for every service (or
   an explicit `MAJOR.MINOR.PATCH-pre`), and `tacplus fleet build` resolves it to the line's highest released tag,
   pre-releases excluded, and to that release's image on ghcr.io by digest; `fleet.lock` records version, commit and

@@ -1043,7 +1043,8 @@ public class ServiceConnection implements AutoCloseable {
      * manager's one channel to the gateway, which routes by the request's
      * route field itself) never routes by tenant.
      */
-    public static class ChannelProvider extends io.grpc.Channel {
+    public static class ChannelProvider extends io.grpc.Channel
+            implements {{.ChassisBase}}.rotation.StreamRotation.Pinner {
         private final ServiceConnection conn;
         private final TenantConnections tenants;
 
@@ -1088,6 +1089,21 @@ public class ServiceConnection implements AutoCloseable {
         public <ReqT, RespT> ClientCall<ReqT, RespT> newCall(
                 MethodDescriptor<ReqT, RespT> methodDescriptor, CallOptions callOptions) {
             return resolve(callOptions).newCall(methodDescriptor, callOptions);
+        }
+
+        /**
+         * The one channel a call with these options would use now: the active
+         * endpoint's (the tenant's, for a tenant-routed target). A rotating
+         * stream (chassis/rotation, tacplus#322) opens every leg of its
+         * session on it, so a rebalance that changes the active endpoint
+         * cannot move a rotation to another instance, which would not know
+         * the session. If that endpoint's channel is closed (gone from
+         * health), its rotations fail and the stream ends at its token's
+         * exp: fail closed.
+         */
+        @Override
+        public io.grpc.Channel pin(CallOptions callOptions) {
+            return resolve(callOptions);
         }
 
         @Override

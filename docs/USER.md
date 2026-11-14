@@ -479,8 +479,10 @@ service GridService {
   that certificate, and generation fails without it.
 - `(spec.member_port)` and the deprecated `(spec.smb)` may not be declared on the
   same service.
-- Generated for **Java**. Go and Rust refuse the annotation at generation until
-  they generate it (tacplus#322).
+- Generated for **Java**, **Go** and **Rust** (Go and Rust since tacplus#322),
+  one wire for all three: a member in one language tunnels to a member in
+  another. The accessor is `getMemberPort()` (Java), `GetMemberPort()` (Go) or
+  `member_port()` (Rust).
 - Addresses are runtime config, `grpcconfig.member_port`:
   `listen_address` is the pod's member port; `target_address` is where the
   black-box protocol binds, and must be loopback (startup refuses anything else).
@@ -1724,6 +1726,8 @@ For services running in cloud environments (AWS, GCP, Azure), cloud-native ident
 ### Streams End At Their Token's Expiry
 
 A streaming RPC (client-, server- or bidi-streaming) carries the one token it opened with, and the generated server ends it at that token's `exp` with `UNAUTHENTICATED` (Go, Java and Rust; see API.md, Client Send Contract). A handler sees the stream end as it would any other end: its stream context is cancelled (Go `stream.Context()`, Java `Context.current()`, Rust the response stream is dropped) and further sends and receives fail. A handler that loops on a stream must watch for that, not run on after it. A client that needs a stream longer than one token lifetime reopens it with a fresh token; the generated reconnect paths do.
+
+Between generated services (Go, Java and Rust, in any pairing: one wire) the stream does not end at all (tacplus#322): the generated server also serves a `<Svc>Rotating` sibling of each service with streaming rpcs, and the generated S2S client carries the stream across tokens on it, make-before-break, with nothing lost, duplicated or reordered. The handler keeps one stream and one context, the caller one stream; nothing in your code changes or mentions it. A caller that can no longer get a token (revoked, its identity gone) is still cut off within one token lifetime, and a broken connection still ends the stream: the handler's context is cancelled and the caller gets the status, as on any stream. Against a server that does not serve the sibling (one generated before 2.6) the client falls back to the plain method, which ends at `exp` as above. See API.md, Client Send Contract.
 
 ---
 

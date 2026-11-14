@@ -49,4 +49,5 @@ run cross-test/runtime-smoke/run.sh
 run_language_matrix cross-test/smb/run.sh go rust java
 run_language_matrix cross-test/cert-stream/run.sh go rust java
 run_language_matrix cross-test/stream-expiry/run.sh go rust java
+run_language_matrix cross-test/rotation/run.sh go java rust
 run_language_matrix cross-test/memberport/run.sh go rust java

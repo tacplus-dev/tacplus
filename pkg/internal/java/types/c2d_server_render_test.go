@@ -34,7 +34,7 @@ func TestJavaServiceManagerHostsC2DOnItsOwnSocket(t *testing.T) {
 
 	tlsImpl := sm[strings.Index(sm, "ServiceImplementation multiImpl = new ServiceImplementation() {"):]
 	tlsImpl = tlsImpl[:strings.Index(tlsImpl, "handler.additionalServices()")]
-	if !strings.Contains(tlsImpl, "grpcServerBuilder.addService(wrapperMixedApi);") || strings.Contains(tlsImpl, "wrapperMixedDaemon") {
+	if !strings.Contains(tlsImpl, "wrapperMixedApi.registerServices(grpcServerBuilder);") || strings.Contains(tlsImpl, "wrapperMixedDaemon") {
 		t.Fatalf("TLS server must host MixedApi and not the c2d service:\n%s", tlsImpl)
 	}
 	for _, want := range []string{

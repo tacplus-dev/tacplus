@@ -20,6 +20,10 @@ import (
 {{- end}}
 "syscall"
 "time"
+{{- if .HasMemberPort}}
+"net"
+"{{.ModuleBasePath}}/chassis/memberport"
+{{- end}}
 {{if or .HasAutoTls .HasSmb}}
 "bytes"
 {{- if eq .AutoTlsKeyType "ecdsa"}}
@@ -157,6 +161,10 @@ s2sTenantConnections map[string]*serviceconnection.TenantConnection
 {{if .HasSmb}}
 smbAuthorityConn *serviceconnection.ServiceConnection
 {{end}}
+{{- if .HasMemberPort}}
+// memberPort is the member port (spec.member_port, tacplus#212), listening from New().
+memberPort *memberport.MemberPort
+{{- end}}
 auth             grpcserver.Authorizer
 authorizeFunc    func(ctx context.Context, fullMethod string, req any) (*wrapperToken.TokenWrapper, error)
 authenticateFunc func(ctx context.Context) (*wrapperToken.TokenWrapper, error)
@@ -362,6 +370,13 @@ return nil, fmt.Errorf("config: %w", err)
 // load, before ANY field is read — guarantees every annotated default is
 // in effect on every path, including the state authority's.
 grpcconfig_pb.ConfigDefaults(cfg)
+{{- if .HasMemberPort}}
+// A missing or non-loopback member port is a permanent misconfiguration:
+// refuse it before any retry loop (fail-closed, never a plaintext port).
+if _, _, err := memberPortAddresses(cfg); err != nil {
+	return nil, err
+}
+{{- end}}
 
 ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 
@@ -591,7 +606,7 @@ identity.Close()
 	zap.String("proto_sha", "{{.ProtoSourceGitSha}}"),
 )
 
-return &ServiceManager{
+sm := &ServiceManager{
 cfg:      cfg,
 ctx:      ctx,
 stop:     stop,
@@ -619,7 +634,16 @@ grpcPkg: grpcPkg,
 authorizeFunc:    auth.Authorize,
 authenticateFunc: auth.Authenticate,
 authenticateAtOrBelowFunc: auth.AuthenticateAtOrBelow,
-}, nil
+}
+{{- if .HasMemberPort}}
+// The member port serves the X509Mint certificate obtained above, so it
+// starts only now; a failure fails startup closed.
+if err := sm.startMemberPort(); err != nil {
+	sm.Close()
+	return nil, err
+}
+{{- end}}
+return sm, nil
 }
 
 // Config returns the loaded gRPC config.
@@ -680,6 +704,90 @@ return sm.sc.TLSCertChain()
 func (sm *ServiceManager) TLSPrivateKey() crypto.PrivateKey {
 return sm.sc.TLSPrivateKey()
 }
+{{- if .HasMemberPort}}
+
+// MemberPort returns the member port (spec.member_port): already listening
+// on grpcconfig.member_port.listen_address and delivering to its loopback
+// target_address. Call Forward on it for each remote member to get the
+// loopback address the black-box protocol dials instead.
+func (sm *ServiceManager) MemberPort() *memberport.MemberPort {
+	return sm.memberPort
+}
+
+// memberPortListenRetries bounds the attempts to bind the member port's listener.
+const memberPortListenRetries = 30
+
+// memberPortAddresses returns grpcconfig.member_port's listen and target
+// addresses; the target must be loopback.
+func memberPortAddresses(cfg *grpcconfig_pb.Config) (string, string, error) {
+	mp := cfg.GetMemberPort()
+	if mp.GetListenAddress() == nil || mp.GetTargetAddress() == nil {
+		return "", "", fmt.Errorf("grpcconfig.member_port.listen_address and target_address are required: {{.ServiceLabel}} declares (spec.member_port)")
+	}
+	listen := net.JoinHostPort(mp.GetListenAddress().GetHost(), fmt.Sprint(mp.GetListenAddress().GetPort()))
+	target := net.JoinHostPort(mp.GetTargetAddress().GetHost(), fmt.Sprint(mp.GetTargetAddress().GetPort()))
+	if _, err := memberport.RequireLoopback("grpcconfig.member_port.target_address", target); err != nil {
+		return "", "", err
+	}
+	if cfg.GetSpiffeTrustDomain() == "" || len(cfg.GetTrustedCas()) == 0 {
+		return "", "", fmt.Errorf("grpcconfig.spiffe_trust_domain and trusted_cas are required: the member port verifies peer members against them")
+	}
+	return listen, target, nil
+}
+
+// startMemberPort starts the member port: its token is this instance's,
+// minted for audience member:{{.ServiceLabel}} and refreshed by the identity
+// manager; its JWKS is the authorizer's watched view; it serves the auto-TLS
+// certificate (a renewal applies from the next handshake). A listener that
+// cannot bind is retried like the rest of startup.
+func (sm *ServiceManager) startMemberPort() error {
+	listen, target, err := memberPortAddresses(sm.cfg)
+	if err != nil {
+		return err
+	}
+	cas, err := memberport.Certificates(sm.cfg.GetTrustedCas())
+	if err != nil {
+		return fmt.Errorf("member port: trusted_cas: %w", err)
+	}
+	memberAudience := memberport.AudienceFor("{{.ServiceLabel}}")
+	port, err := memberport.New(
+		"{{.ServiceLabel}}",
+		sm.cfg.GetSpiffeTrustDomain(),
+		cas,
+		func() (string, error) { return sm.identity.GetTokenFor(memberAudience) },
+		sm.auth.JwkCache().Get,
+		memberport.ServingCertFrom(sm.sc.TLSCertMaterial, sm.reportTLSDegraded),
+	)
+	if err != nil {
+		return err
+	}
+	for attempt := 1; ; attempt++ {
+		bound, err := port.Listen(listen, target)
+		if err == nil {
+			sm.memberPort = port
+			zap.L().Info("member port listening",
+				zap.String("address", bound.String()),
+				zap.String("target", target))
+			return nil
+		}
+		if attempt >= memberPortListenRetries {
+			port.Close()
+			return fmt.Errorf("member port failed after %d attempts: %w", attempt, err)
+		}
+		delay := time.Duration(min(1<<min(attempt, 5), 30)) * time.Second
+		zap.L().Warn("ServiceManager init: member port not listening, retrying",
+			zap.Int("attempt", attempt),
+			zap.Duration("delay", delay),
+			zap.Error(err))
+		select {
+		case <-time.After(delay):
+		case <-sm.ctx.Done():
+			port.Close()
+			return sm.ctx.Err()
+		}
+	}
+}
+{{- end}}
 
 {{range .TimeseriesInserts}}
 // {{.SetterName}} sets the insert callback for the {{.TypeName}} timeseries
@@ -882,6 +990,11 @@ return
 if sm.stop != nil {
 sm.stop()
 }
+{{- if .HasMemberPort}}
+if sm.memberPort != nil {
+	sm.memberPort.Close()
+}
+{{- end}}
 	if sm.tasks != nil {
 	sm.tasks.Cancel()
 	sm.tasks.Wait()
@@ -1172,6 +1285,13 @@ if sm.stop != nil {
 sm.stop()
 }
 }()
+{{- if .HasMemberPort}}
+defer func() {
+if sm.memberPort != nil {
+sm.memberPort.Close()
+}
+}()
+{{- end}}
 
 // Subscribe to shared runtime config (listen address, logger, timeouts).
 // Runtime config from the cluster merges into the boot config.

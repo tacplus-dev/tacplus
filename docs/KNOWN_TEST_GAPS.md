@@ -292,7 +292,10 @@ ServiceManager's wiring of it (`memberPortAddresses`, `startMemberPort`: the
 state-store channel, the auto-TLS certificate as the serving certificate) is
 compiled and grep-asserted by that gate, not run: no fixture runs a whole
 ServiceManager against a kernel, and no kernel mints `member:<service>` yet
-(tacplus-dev/kernel#30).
+(tacplus-dev/kernel#30). The same holds for the Go and Rust ServiceManagers
+(#322): their wiring is pinned by render tests and the gate's greps. Rust's
+branch for a member port service with no TLS gRPC service (it builds its own
+JWKS cache) is not compiled by any fixture.
 
 To close it: a gate leg that brings up two generated ServiceManagers of a
 `(spec.member_port)` service against a fake kernel (minter, JWK view, ManageCert)
@@ -337,6 +340,51 @@ regression against #212's raw TLS framing would not fail a gate.
 To close it: a clock seam in the member port (an injectable `now`) and a leg
 that skews one member by most of a quarter lifetime; and a soak floor (say, a
 fraction of the direct rate) once the nightly runners' numbers are known.
+
+---
+
+## MP-4 — Go and Rust member ports: interop on the happy path only
+
+**Status:** open.
+
+`cross-test/memberport` runs the Go and Rust member ports (#322) through the
+same peer and expiry tests as Java's, each against itself, and interop legs
+where a Java member port and a Go one, and a Java one and a Rust one, tunnel to
+each other both ways across token rotations. Its Hazelcast cases also run with Go and with Rust member ports (the members
+are Java; the ports run in the Go or Rust process). Not run: the interop of
+refusals, faults
+and expiry across languages, the Go and Rust soak, and the 256-stream admission
+cap (in any language). The Go and Rust slow-reader legs bound the bytes written,
+not the memory held.
+
+To close it: the interop leg extended to a refused rotation and a stream cut
+off without `last`.
+
+---
+
+## RT-1 — make-before-break stream rotation: no cross-language leg
+
+**Status:** open (tacplus#322).
+
+`cross-test/rotation` drives the generated Go, Java and Rust servers and S2S
+clients, each language against itself. Not yet: a cross-language rotation leg
+(the three share the wire, untested across); Rust's per-message namespace
+check on a client stream (`target_namespace_field`) reads the opening leg's
+token for the stream's life (Go and Java read the current leg's; every
+rotation is still admitted by the method's full check), and Rust drops a
+handler's trailers on an OK end; the member ports
+keep their own rotation code rather than the rotation chassis; the Go gateway
+proxy is not checked against the sibling. Not gated in Go: a cap on legs
+awaiting their first envelope (only the 10 s first-envelope timeout bounds
+them), a slow consumer stalling a cutover until `exp` (inherent to draining in
+order, as in the member port), rotation under clock skew, a rotation that
+reaches another instance after a rebalance (the client pins every leg to the
+connection the stream opened on; a refusal there ends the stream, fail-closed,
+but no test moves an endpoint), and C2S or auth-disabled streams (they have no
+sibling by design).
+
+To close it: the Java and Rust ports with their legs of `cross-test/rotation`,
+a Go↔Java and Go↔Rust leg, and the member port moved onto the shared chassis.
 
 ---
 

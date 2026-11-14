@@ -8,9 +8,9 @@
 # seconds out and is never rotated, while the handler keeps the stream open.
 # The server must end each one at the token's exp with UNAUTHENTICATED; a server
 # that checks the token only at open leaves all three open and the leg fails.
-# Java also runs the member port's leg (tacplus#321): a member tunnel stream that
-# is not rotated ends at exp with UNAUTHENTICATED and a reset of its local
-# connection.
+# Java, Go and Rust also run the member port's leg (tacplus#321, #322): a member
+# tunnel stream that is not rotated ends at exp with UNAUTHENTICATED and a reset
+# of its local connection.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -99,6 +99,13 @@ EOF
     (cd "$OUT" && go mod tidy && go vet ./s2sm/grpc/servers/svc/streamexpiry ./chassis/grpcserver \
       && go test -race -count=1 -timeout 300s ./s2sm/grpc/servers/svc/streamexpiry -run '^TestGo' -v) \
       || die "generated Go stream-expiry behavior tests failed"
+
+    # The member port's tunnel streams close at exp too (tacplus#321, #322):
+    # its Go leg runs in the member port fixture.
+    echo "==> Running the member port's stream-expiry leg"
+    TACPLUS_BIN="$TACPLUS_BIN" TACPLUS_BIN_PREBUILT=1 \
+      bash "$ROOT_DIR/cross-test/memberport/run.sh" --language go --test '^TestMemberPortStreamExpiry' \
+      || die "the member port's stream-expiry leg failed"
     ;;
   rust)
     grep -q "StreamCredentialExpiryLayer" "$OUT/chassis/grpcserver/src/authorizer.rs" \
@@ -111,6 +118,13 @@ EOF
     (cd "$OUT" && CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET" cargo test -p streamexpiry-model rust_stream_expiry -- --nocapture) \
       || die "generated Rust stream-expiry behavior tests failed"
     prune_cargo_workspace "$OUT"
+
+    # The member port's tunnel streams close at exp too (tacplus#321, #322):
+    # its Rust leg runs in the member port fixture.
+    echo "==> Running the member port's stream-expiry leg"
+    TACPLUS_BIN="$TACPLUS_BIN" TACPLUS_BIN_PREBUILT=1 \
+      bash "$ROOT_DIR/cross-test/memberport/run.sh" --language rust --test memberport_stream_expiry \
+      || die "the member port's stream-expiry leg failed"
     ;;
   java)
     command -v mvn >/dev/null || die "mvn is required to test generated Java output"

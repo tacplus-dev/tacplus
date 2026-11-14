@@ -322,6 +322,10 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		// call made through Approval.callWithApproval carries the two metadata
 		// keys, and every other call through this client carries nothing new.
 		HasRequiresDevice bool
+		// Rotates: the client's streams rotate across token lifetimes
+		// (tacplus#322) through RotationFQN's channel.
+		Rotates     bool
+		RotationFQN string
 	}{
 		Header:       header.GeneratedHeader(consts.LangJava, svc.ProtoFile),
 		FullPackage:  fullPackage,
@@ -335,6 +339,11 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		HasCursor:    hasCursor,
 
 		HasRequiresDevice: hasRequiresDevice,
+
+		// An S2S client's streams go to the <Svc>Rotating sibling, falling
+		// back to the plain method on a server without it.
+		Rotates:     hasStreaming && svc.Config.GetSmPrefix() == "s2sm" && javaServesRotatingSibling(targetService),
+		RotationFQN: svc.Config.JavaPackageBase + ".chassis.rotation.StreamRotation",
 	}
 
 	tmplStr, err := loadTemplate("grpcclient.java.tmpl")

@@ -168,8 +168,9 @@ it.
 ### Member Port
 
 A `(spec.member_port)` service's ServiceManager owns a member port
-(tacplus#212, on gRPC since #321), reached through `sm.getMemberPort()` (Java;
-Go and Rust refuse the annotation until tacplus#322). It is the only path for
+(tacplus#212, on gRPC since #321), reached through `sm.getMemberPort()` (Java),
+`sm.GetMemberPort()` (Go) or `sm.member_port()` (Rust; Go and Rust since
+tacplus#322). The three speak the same wire below. It is the only path for
 the service's black-box member traffic, and it fails closed.
 
 - **Startup.** `create()` reads `grpcconfig.member_port` before anything else
@@ -419,6 +420,36 @@ shape:
   preflight: it would mint a token the server never sees while still being
   able to fail a legitimate send. The generated reconnect paths (e.g.
   EventBus subscribers) obtain a fresh token per reconnect attempt.
+
+A stream outlives its token by **re-open before teardown** (make-before-break
+rotation, tacplus#322; generated in Go, Java and Rust). For
+every service-to-service service with streaming rpcs, the generated server also
+serves the sibling `<pkg>.<Svc>Rotating`, same method names, every method bidi
+of `sys/rotation.proto`'s `Envelope{payload, last, session_id, cursor, fin}`;
+the original method is unchanged on the wire. The generated S2S client opens the
+sibling (and falls back to the original method on `UNIMPLEMENTED`, where the
+stream ends at its token's `exp` as below). At about 75% of the token's lifetime
+it acquires a new token, opens a new leg on the same connection presenting the
+session id, sends `last` on the old leg once the new one is attached, and the
+server answers with its own `last` and moves its sends; each side reads the old
+leg to its `last` before the new one, so nothing is lost, duplicated or
+reordered. The handler sees one stream (one context, one stream value) for its
+whole life, and the caller one stream: no user code mentions rotation.
+
+- A rotation is attached only when its token names the same subject (subject
+  type, service, namespace, delegate) and passes the method's own
+  `(spec.rpc)` policy; the session id alone authorizes nothing
+  (`PERMISSION_DENIED`).
+- `UNAUTHENTICATED` on an open or a rotation is retried once with a fresh
+  token; `PERMISSION_DENIED` never. On the sibling, neither carries a
+  description: the reason is logged by the server.
+- A mint that fails, or gives no newer token, is retried every second while the
+  old leg lasts; the server still ends every leg at its own token's `exp`, so a
+  caller that cannot renew (revoked) is cut off within one lifetime.
+- A leg that ends without `last` ends the logical stream (the handler's context
+  is cancelled, the caller gets the status); it is never spliced onto another.
+- Streams with a cursor of their own (state `Watch` revisions, EventBus
+  subscriptions) keep their reconnect paths on the original method.
 
 Servers terminate streams carrying expired credentials. The generated Go,
 Java and Rust servers end every streaming RPC (client-, server- or

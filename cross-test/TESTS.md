@@ -34,10 +34,31 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   stream opened with a token about 3 s from `exp` that is never rotated, while
   the handler holds every stream open; each must be ended by the server at the
   token's `exp` with `UNAUTHENTICATED`. A control stream with an hour-long token
-  stays open past that window. Java also runs the member port's leg
-  (`cross-test/memberport`'s `MemberPortStreamExpiryTest`, tacplus#321): a member
+  stays open past that window. Each language also runs the member port's leg
+  (`cross-test/memberport`'s `MemberPortStreamExpiryTest`, tacplus#321, and its
+  Go and Rust ports, #322): a member
   tunnel stream that is not rotated ends at `exp` with `UNAUTHENTICATED`, no
   reason text, and the loopback connection behind it is reset.
+- `rotation` (`cross-test/rotation/run.sh`, `just rotation`, in `just gates`
+  and the nightly matrix): make-before-break stream rotation (tacplus#322), Go,
+  Java and Rust (`--language java`: `RotationBehaviorTest` under mvn, the
+  same legs; `--language rust`: the generated wrapper and its
+  `rotating_sibling` behind the ServiceManager's AuthEnforcingLayer and
+  StreamCredentialExpiryLayer, plaintext; the generated client's
+  `RotatingChannel`; one handler call stands for Go's one context). The real
+  generated server (wrapper, Authorizer, grpcserver with #260's expiry
+  interceptor) and the real generated S2S client, with 3 s tokens:
+  a bidi, a server-streaming and a client-streaming stream each run across
+  several token lifetimes (bidi both ways at once) with no loss, duplication or
+  reordering, one handler call and one context, by handler and caller code that
+  never mentions rotation; a mint failure ends the stream at `exp`; a caller
+  revoked mid-stream is cut off within one lifetime; a rotation onto another
+  subject's token ends the stream `PERMISSION_DENIED`; on the wire, another
+  subject's token or an unknown session id is refused with no description, a
+  hand-driven cutover with `last` both ways loses nothing, and a cut connection
+  ends the logical stream (caller gets the status, handler cancelled), never
+  spliced; against a server without the sibling the client falls back to the
+  plain method, which ends at `exp`.
 - `memberport` (`cross-test/memberport/run.sh`, `just memberport`, in `just gates`):
   the generated `(spec.member_port)` member port (tacplus#212, on gRPC since
   #321). Java runs the `memberport-peer` fixture (seeded streams checked byte for
@@ -65,8 +86,14 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   member whose token lapses losing every connection, whichever member opened
   it, then removed within Hazelcast's no-heartbeat bound.
   `MEMBERPORT_SOAK=1` adds a soak that prints throughput and latency against a
-  direct connection. Go and Rust must refuse the annotation at generation until
-  #322.
+  direct connection. Go and Rust (since #322) run the same peer and expiry tests
+  against their own generated member ports (`testdata/go`, `testdata/rust`), and
+  each runs an interop leg (`--interop`, in the gate): a Java member port and a
+  Go (or Rust) one tunnel to each other both ways at once, across token
+  rotations, bytes checked byte for byte; then the Hazelcast cases with every
+  member port a Go (or Rust) one: two tenants' Hazelcast 5.7 members (Java)
+  whose member traffic crosses only the Go or Rust ports, which a Java driver
+  sets up through command files.
 - `external-token` (`cross-test/external-token/run.sh`): behavioral gate for the
   generated external-audience token accessor (`token_for_external` /
   `TokenForExternal` / `tokenForExternal`) in Go, Java, and Rust. A mock token

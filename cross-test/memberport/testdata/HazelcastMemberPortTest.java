@@ -191,6 +191,9 @@ class HazelcastMemberPortTest {
          * before Hazelcast binds it: then it picks another and tries again.
          */
         void start(List<InetSocketAddress> seeds) {
+<<<<<<< HEAD
+            hz = startHazelcast(hzPort, publicAddress, removed, seeds);
+=======
             for (int attempt = 1; ; attempt++) {
                 try {
                     startOn(seeds);
@@ -264,12 +267,76 @@ class HazelcastMemberPortTest {
                     removal.countDown();
                 }
             });
+>>>>>>> origin/main
             closers.add(hz::shutdown);
         }
 
         int clusterSize() {
             return hz.getCluster().getMembers().size();
         }
+    }
+
+    /**
+     * Starts a Hazelcast member bound to loopback {@code hzPort}, advertising
+     * {@code publicAddress} once set (else its bind address), joining
+     * {@code seeds} and counting removed members into {@code removed}.
+     */
+    static HazelcastInstance startHazelcast(int hzPort, AtomicReference<InetSocketAddress> publicAddress,
+            AtomicInteger removed, List<InetSocketAddress> seeds) {
+        Config c = new Config();
+        c.setClusterName("grid");
+        Properties p = c.getProperties();
+        p.setProperty("hazelcast.logging.type", "none");
+        p.setProperty("hazelcast.phone.home.enabled", "false");
+        p.setProperty("hazelcast.max.no.heartbeat.seconds", "8");
+        p.setProperty("hazelcast.max.join.seconds", "10");
+        p.setProperty("hazelcast.heartbeat.interval.seconds", "1");
+        p.setProperty("hazelcast.merge.first.run.delay.seconds", "5");
+        p.setProperty("hazelcast.merge.next.run.delay.seconds", "5");
+        NetworkConfig n = c.getNetworkConfig();
+        n.setPort(hzPort).setPortAutoIncrement(false);
+        MemberAddressProviderConfig map = n.getMemberAddressProviderConfig();
+        map.setEnabled(true);
+        map.setImplementation(new MemberAddressProvider() {
+            @Override
+            public InetSocketAddress getBindAddress() {
+                return new InetSocketAddress(InetAddress.getLoopbackAddress(), hzPort);
+            }
+
+            @Override
+            public InetSocketAddress getBindAddress(com.hazelcast.instance.EndpointQualifier q) {
+                return getBindAddress();
+            }
+
+            @Override
+            public InetSocketAddress getPublicAddress() {
+                InetSocketAddress pub = publicAddress.get();
+                return pub != null ? pub : getBindAddress();
+            }
+
+            @Override
+            public InetSocketAddress getPublicAddress(com.hazelcast.instance.EndpointQualifier q) {
+                return getPublicAddress();
+            }
+        });
+        JoinConfig j = n.getJoin();
+        j.getMulticastConfig().setEnabled(false);
+        j.getAutoDetectionConfig().setEnabled(false);
+        j.getTcpIpConfig().setEnabled(true).setConnectionTimeoutSeconds(3);
+        for (InetSocketAddress s : seeds) {
+            j.getTcpIpConfig().addMember(s.getHostString() + ":" + s.getPort());
+        }
+        HazelcastInstance hz = Hazelcast.newHazelcastInstance(c);
+        hz.getCluster().addMembershipListener(new MembershipListener() {
+            @Override
+            public void memberAdded(MembershipEvent e) {}
+
+            @Override
+            public void memberRemoved(MembershipEvent e) {
+                removed.incrementAndGet();
+            }
+        });
+        return hz;
     }
 
     /** Starts two members at once: each one's join waits for the other. */

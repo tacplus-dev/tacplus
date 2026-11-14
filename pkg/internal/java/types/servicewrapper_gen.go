@@ -1018,6 +1018,16 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 
 	serviceManagerImport := svc.Config.JavaPackageBase + ".chassis.servicemanager"
 
+	// The <Svc>Rotating sibling (tacplus#322): served beside the plain
+	// service, admitted by rotationAdmit with each method's own open-time
+	// policy. Only a token-auth wrapper has the Authorizer it needs.
+	rotationAdmit := ""
+	if javaServesRotatingSibling(targetService) && (svc.IsS2S || svc.IsC2S) && !svc.AuthDisabled {
+		base := svc.Config.JavaPackageBase + ".chassis."
+		rotationAdmit = javaRotationAdmit(targetService, info.Package, svc.ParentDir,
+			base+"grpcserver.Authorizer", base+"rotation.StreamRotation", base+"token.TokenWrapper")
+	}
+
 	data := struct {
 		Header               string
 		FullPackage          string
@@ -1040,6 +1050,9 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		HasRouteTenant       bool
 		HasAnyTenant         bool
 		RouteTenantFQN       string
+		// RotationAdmit is the wrapper's rotatingService and rotationAdmit,
+		// "" when the service serves no <Svc>Rotating sibling (tacplus#322).
+		RotationAdmit string
 	}{
 		Header:               header.GeneratedHeader(consts.LangJava, svc.ProtoFile),
 		FullPackage:          fullPackage,
@@ -1068,6 +1081,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		HasRouteTenant: hasRouteTenant,
 		HasAnyTenant:   hasAnyTenant,
 		RouteTenantFQN: svc.Config.JavaPackageBase + ".chassis.serviceconnection.RouteTenant",
+		RotationAdmit:  rotationAdmit,
 	}
 
 	t, err := template.New("servicewrapper").Parse(tmpl)

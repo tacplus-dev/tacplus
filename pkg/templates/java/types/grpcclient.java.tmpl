@@ -76,7 +76,14 @@ public class {{.ClientName}} {
 {{- if .HasUnary}}
         this.blockingStub = {{.ServiceName}}Grpc.newBlockingStub(channel);
 {{- end}}
-{{- if .HasStreaming}}
+{{- if .Rotates}}
+        // Its streams outlive their tokens (tacplus#322): each is carried on
+        // {{.ServiceName}}Rotating, re-opened with a fresh token from tokenProvider
+        // before the current one expires (make-before-break, on the same
+        // channel), and returned as one stream. A server without the sibling
+        // gets the plain method, whose stream ends at its token's exp.
+        this.asyncStub = {{.ServiceName}}Grpc.newStub({{.RotationFQN}}.channel(channel, tokenProvider));
+{{- else if .HasStreaming}}
         this.asyncStub = {{.ServiceName}}Grpc.newStub(channel);
 {{- end}}
         this.tokenProvider = tokenProvider;

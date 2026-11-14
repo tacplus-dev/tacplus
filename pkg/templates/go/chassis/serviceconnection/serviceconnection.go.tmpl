@@ -635,6 +635,17 @@ func (cp *ChannelProvider) currentConn(ctx context.Context) (grpc.ClientConnInte
 	return c, nil
 }
 
+// Pin returns the one connection a call on ctx would use now: the active
+// endpoint's (the tenant's, for a tenant-routed target). A rotating stream
+// (chassis/rotation, tacplus#322) opens every leg of its session on it, so
+// a rebalance that changes the active endpoint cannot move a rotation to
+// another instance, which would not know the session. If that endpoint is
+// closed (gone from health for 30s), its rotations fail and the stream ends
+// at its token's exp: fail closed.
+func (cp *ChannelProvider) Pin(ctx context.Context) (grpc.ClientConnInterface, error) {
+	return cp.currentConn(ctx)
+}
+
 // Invoke implements grpc.ClientConnInterface.
 func (cp *ChannelProvider) Invoke(ctx context.Context, method string, args, reply interface{}, opts ...grpc.CallOption) error {
 	c, err := cp.currentConn(ctx)

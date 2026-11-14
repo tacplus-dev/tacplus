@@ -149,7 +149,12 @@ the looper then marks it `promoted` or `declined` here with the date.
 - **Cap the member port's established tunnels** (2026-10-30, #212): admission is bounded (a 10-second deadline and at
   most 256 connections proving themselves), but authenticated tunnels are not counted: a member of the same service
   and tenant can open as many as it likes, each with two threads. A configurable cap would bound a misbehaving or
-  compromised member. Same design for Go/Rust (#236, #237).
+  compromised member. Same design in all three languages (Go and Rust since #322).
+- **Check Java's reading of an Ed25519 PKCS#8 v2 key** (2026-11-08, #322): building the Rust↔Java member port
+  interop leg, a kernel key that Rust wrote as PKCS#8 v2 (seed plus public key) signed tokens the Java chassis could
+  not verify; written as v1 (seed only, as Go writes it) they verify. Unconfirmed: if Java's `ImmutableKey` mishandles
+  a v2 key, a consumer holding one gets "failed to verify token". A Java key test with a v2 PEM would settle it (file a
+  `bug` if it fails).
 - **Run the generated ServiceManager's member port end to end** (2026-10-30, #212; docs/KNOWN_TEST_GAPS.md MP-1):
   `cross-test/memberport` drives `MemberPort` with a fake kernel; the ServiceManager wiring (the `member:<svc>` token,
   the JWKS watch, the auto-TLS certificate) is compiled and grep-asserted only, until a fake-kernel ServiceManager leg

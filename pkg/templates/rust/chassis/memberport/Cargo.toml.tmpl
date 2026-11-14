@@ -1,0 +1,36 @@
+[package]
+name = "memberport"
+version = "0.1.0"
+edition = "2021"
+description = "The member port of a (spec.member_port) service: black-box member traffic over gRPC"
+
+[dependencies]
+{{.CrateBasePath}}-types = { path = "../../types" }
+token = { path = "../token" }
+jwk = { path = "../jwk" }
+spiffe = { path = "../spiffe" }
+# SpiffeServerCertVerifier: the chain check (no hostname) the sender's own
+# receiver check builds on.
+servicemanager = { path = "../servicemanager" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+tower = { workspace = true }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+base64 = { workspace = true }
+# Not in dependencies.yaml: the versions the other chassis crates use
+# (grpcserver/c2d hyper-util, servicemanager x509-parser, x509 rand).
+hyper-util = { version = "0.1", features = ["tokio"] }
+x509-parser = "0.16"
+rand = "0.8"
+tracing = { workspace = true }
+
+[dev-dependencies]
+# The behaviour tests (cross-test/memberport) fake the fleet: a kernel signing
+# key and its JWK, a CA and serving certificates with SPIFFE SANs.
+key = { path = "../key" }
+x509 = { path = "../x509" }

@@ -438,6 +438,13 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 		return err
 	}
 
+	// The <Svc>Rotating sibling (tacplus#322): admitted with each method's own
+	// open-time policy, served by the ServiceManager beside the plain service.
+	rotationSibling := ""
+	if svc.IsGrpc {
+		rotationSibling = rustRotationSibling(targetService, info.Package, svc.ParentDir, info.CrossPackageTypes)
+	}
+
 	accountingImports := "use am;\n"
 	if hasAccounting {
 		accountingImports += `use crate::types::generated::accounting_method::accounting_method::AccountingMethod;
@@ -468,6 +475,9 @@ use crate::types::generated::services::services as services_pb;
 		AccountingImports    string
 		RegisterMethodAuth   string
 		McpDispatch          string
+		// RotationSibling is the wrapper's half of the <Svc>Rotating sibling
+		// (tacplus#322), "" when the service serves none.
+		RotationSibling string
 	}{
 		Header:               header.GeneratedHeader(consts.LangRust, svc.ProtoFile),
 		ServiceName:          serviceName,
@@ -491,6 +501,7 @@ use crate::types::generated::services::services as services_pb;
 		AccountingImports:    accountingImports,
 		RegisterMethodAuth:   registerMethodAuth,
 		McpDispatch:          mcpDispatch,
+		RotationSibling:      rotationSibling,
 	}
 
 	t, err := template.New("servicewrapper").Parse(tmpl)

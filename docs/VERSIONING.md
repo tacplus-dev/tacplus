@@ -139,6 +139,18 @@ weekly on each supported release line. Each run
 writes the build image's digest to its summary. `just images` builds the set
 natively for one machine.
 
+The build image builds images itself, with `tacplus-image-build`: rootless
+BuildKit, with no host Docker socket in the container (#315;
+tacplus-dev/roadmap: decisions/builds-in-containers-2026-11-03.md).
+images.yml still builds them with buildx on the runner until its change lands
+(tacplus-dev/looper#115: a looper's token cannot push `.github/workflows/`).
+The build cache comes from the build's configuration (`TACPLUS_CACHE_REGISTRY`,
+`TACPLUS_CACHE_BUCKET`, `TACPLUS_CACHE_DIR`; [install](INSTALL.md#image-builds-and-the-build-cache)),
+never from the image. With none configured, the build is cold.
+`images/cache-determinism.sh`, which `just images` runs in the image it builds,
+requires that compilers and an image built cold and then warm give the same
+verdict and the same digests.
+
 The first release tag is `v2.0.0`: the public tacplus-dev/tacplus line is a
 new major over the private v1.2.x line it was forked from (new module path,
 regenerated consumers).

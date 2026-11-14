@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by looper (#266).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-14 by looper (#315).
 
 - **Version / line:** v2.6.2 (latest release, 2026-11-07, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -85,6 +85,14 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   The base and build images carry Go 1.27, Node 26 (LTS) and Swift 6.4.2 (#255; main only, from 2.6: the
   supported `build:X.Y` lines keep their toolchains). The rule beside the pins: Go follows the newest release, Node
   the newest LTS, Swift the newest release.
+  On main (2.7): the build image builds images itself, with rootless BuildKit 0.34.2 under RootlessKit 3.3.0 as the
+  user `build` (`tacplus-image-build`; no host Docker socket; multi-arch through BuildKit's QEMU helpers), and carries
+  sccache 0.19.0. BuildKit, its runc 1.5.2 and RootlessKit are built from their release tags, each checked against
+  a pinned commit, with go-archive and x/net past the advisories of their release binaries (`tacplus-smoke` checks
+  the floors); sccache and BuildKit's QEMU helpers are release archives checked against their sha256. The caches come from the build's
+  configuration (`TACPLUS_CACHE_REGISTRY`, `TACPLUS_CACHE_BUCKET`, `TACPLUS_CACHE_DIR`; `tacplus-cache env|restore|
+  save`, snapshots keyed by content), and a build with none configured is cold. `images/cache-determinism.sh`
+  requires that a cold and a warm build give the same verdict and the same digests; `just images` runs it (#315).
   Line rebuild (#283): the weekly Images run on main dispatches images.yml on each supported `release/X.Y`, which
   rebuilds `base:X.Y` and `build:X.Y` from that branch (apt-get upgrade) and moves nothing else; a patch tag builds
   its `build` fresh. A line takes part once its backport of #283 merges (the dispatch skips a branch without it).
@@ -158,6 +166,14 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-08 by lo
   nightly is tacplus-dev/looper#74, its nightly off until #257 passes. The new build image (Kani, cargo-fuzz, the launcher) is verified by
   images.yml once pushed; the launcher and `tacplus pin` by the gates. The fleet build's image lookup on a private package is
   verified against a fake registry only: the looper's token has no `read:packages` (a public image resolves live).
+  Rootless BuildKit (#315) has not run yet: it needs a user namespace (`--security-opt seccomp=unconfined
+  --security-opt apparmor=unconfined`), which no looper container may have. images.yml still builds with buildx on
+  the runner: its half of #315 (build base and build with `tacplus-image-build` in `build:latest`, run
+  `images/cache-determinism.sh` in each new build image) waits on tacplus-dev/looper#115, as a report's token
+  cannot push `.github/workflows/`; its first run on main is where both are proven.
+  The compiler half of `images/cache-determinism.sh` passed in a build:2.5-derived image. The build jobs in the
+  `ci` project (tacplus-dev/looper, tacplus-dev/cloud) do not set the cache variables or the two security options
+  yet (PROPOSALS.md).
   `depends`/`src` at a line can take a pre-release (#214). The record plane's tenant checks assume a tenant's
   namespace is `/tenants/<tid>`; kernel#23's `/tenants/<name>` namespaces need #202 first (PROPOSALS.md).
   The record write surface stamps no `(spec.identity_spiffe_subject)` (PROPOSALS.md). A fleet's service images must be on ghcr.io from a

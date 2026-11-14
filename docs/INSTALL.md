@@ -177,6 +177,59 @@ curl -fsSL -o /usr/local/bin/tacplus \
 chmod +x /usr/local/bin/tacplus
 ```
 
+### Image builds and the build cache
+
+From 2.7 the build image builds container images itself, with rootless
+BuildKit: no Docker daemon on the host, and no host Docker socket in the
+container. BuildKit, its runc and RootlessKit are built from their release
+tags, each checked against a pinned commit. sccache and BuildKit's QEMU
+helpers are release archives, checked against their sha256.
+`tacplus-image-build` runs `buildctl` against a
+`buildkitd` it starts as the unprivileged user `build`:
+
+```bash
+docker run --rm --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+  -v "$PWD:/src:ro" ghcr.io/tacplus-dev/tacplus/build:2.7 \
+  tacplus-image-build -f /src/Dockerfile --platform linux/amd64,linux/arm64 \
+    --output type=oci,dest=/tmp/image.tar /src
+```
+
+- **The two `--security-opt`** give the container a user namespace, which
+  rootless BuildKit needs. Never `--privileged`, and never a socket.
+- **`--platform`** with several values builds a multi-arch image. A platform
+  other than the machine's runs under BuildKit's own QEMU helpers, so the
+  host needs no binfmt registration.
+- **`--output`** is `buildctl`'s, for example
+  `type=image,name=<ref>,push=true`. With none, the image is built and cached
+  only.
+- **The image is reproducible.** Its timestamps are rewritten to
+  `SOURCE_DATE_EPOCH`, or else to the commit's time.
+
+**The caches come from the build's configuration**, never from the image. With
+none configured, a build runs cold, which is what you get building from source:
+
+| Variable | Used for |
+|---|---|
+| `TACPLUS_CACHE_REGISTRY` | `<registry>/<repository>`: BuildKit's registry cache, at `<it>/<name>:buildcache-<platforms>` |
+| `TACPLUS_CACHE_BUCKET` | `gs://<bucket>[/<prefix>]` (or `file:///<dir>`): sccache's storage, and the Go and Maven snapshots |
+| `TACPLUS_CACHE_DIR` | the local cache directory: `GOCACHE`, `GOMODCACHE`, the Maven repository, and sccache's when there is no bucket |
+
+`eval "$(tacplus-cache env)"` exports the compiler settings:
+
+- `GOCACHE` and `GOMODCACHE`;
+- `MAVEN_ARGS=-Dmaven.repo.local=…`;
+- `RUSTC_WRAPPER=sccache` and sccache's storage.
+
+`tacplus-cache restore` and `tacplus-cache save` fetch and store the Go and
+Maven snapshots. Each snapshot is keyed by its content: the toolchain version
+and every `go.sum` or `pom.xml` in the checkout. Neither command ever fails a
+build: a missing entry or credential means a cold cache, and a stored entry is
+never overwritten.
+
+**A cache only makes a build faster: it never changes the result.** The same
+commit built cold and warm gives the same verdict and the same artifacts, byte
+for byte. `images/cache-determinism.sh` proves it (`just images` runs it on the image it builds).
+
 ### The tacplus image (deprecated)
 
 `ghcr.io/tacplus-dev/tacplus/tacplus` is deprecated and no longer built: its

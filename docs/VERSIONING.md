@@ -103,6 +103,10 @@ cut after `2.3.1` moves `2.0` and leaves `2` and `latest` alone.
 release image is built with its line (`TACPLUS_LINE=X.Y`), and its `tacplus`
 refuses a repository pinned to another line. A release job runs in
 `build:X.Y` of its own line, never in `build:latest`.
+The GitHub release is marked Latest by the same rule: only the newest
+release of the newest line (`scripts/release-latest.sh`); a patch on an older
+line is published with `--latest=false`, never taking Latest from the newest
+line by being published last (#337).
 
 A line's images are rebuilt every week from its own branch (#283), so they
 take every Debian security fix (`apt-get upgrade`) without waiting for a

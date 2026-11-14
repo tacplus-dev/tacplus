@@ -1,0 +1,124 @@
+= init
+> Bash git status | head -50 && git log --oneline -5 && git diff --name-only --diff-filter=U; grep -n '^<<<<<<<\|^=======\|^>>>>>>>' PROPOSALS.md STATE.md cross-test/current-generation/run.sh
+< On branch looper/tacplus-284 Your branch is up to date with 'origin/main'.  Changes not staged for commit:   (use "git add <file>..." to update what will be committed)   (use "git restore <file>..." to discard changes in working directory) 	modified:   PROPOSALS.md 	modified:   STATE.md 	modified:  ...
+> Bash gh issue view 284 --repo tacplus-dev/tacplus --comments | tail -30
+< -- author:	tacplus-looper association:	none edited:	false status:	none -- The run ended before finishing (exit 0). Its commits are queued with the manager of tacplus, which merges them after the run and gives its verdict here. Its work in progress is on [`looper/tacplus-284`](https://github.com/tacp...
+> Bash sed -n 1,40p PROPOSALS.md; echo ----; sed -n 1,10p STATE.md; echo ----; sed -n 2260,2300p cross-test/current-generation/run.sh
+< # Proposals: tacplus  Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones into ROADMAP.md (via an agent); the looper then marks it `promoted` or `declined` here with the date.  ## Open <<<<<<< HEAD - **Python generation mangles a proto line whose trailing comment holds `...
+= thinking_tokens
+= thinking_tokens
+> Bash cat cross-test/lib/retired-claims.sh | head -60; git fetch -q origin --tags; git tag --sort=-v:refname | head -8; git log --oneline origin/main -3; git rev-parse HEAD
+< #!/usr/bin/env bash # Copyright (c) 2026 Jody Scott # SPDX-License-Identifier: Apache-2.0 # # The retired `linked` claim (#171): no generated code reads it, in any # language. Source this file; it defines functions only. # # linked_claim_readers OUTPUT prints every line of generated Go, Java or Rust...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash python3 - <<'EOF' import re def res(path, f):     s=open(path).read()     s=re.sub(r'<<<<<<< HEAD\n(.*?)=======\n(.*?)>>>>>>> origin/main\n', lambda m: f(m.group(1),m.group(2)), s, flags=re.S)     open(path,'w').write(s) res('PROPOSALS.md', lambda a,b: a+b) res('STATE.md', lambda a,b: "Overwritten t...
+< PROPOSALS.md:0 STATE.md:0 cross-test/current-generation/run.sh:0 diff --git a/cross-test/current-generation/run.sh b/cross-test/current-generation/run.sh index 9557dfa3..ab8f2123 100755 --- a/cross-test/current-generation/run.sh +++ b/cross-test/current-generation/run.sh @@ -607,6 +607,33 @@ run_jav...
+= thinking_tokens
+= thinking_tokens
+> Bash gh pr view 326 --repo tacplus-dev/tacplus --json state,mergeable,title,baseRefName,body | head -c 3000; echo; gh pr view 316 --repo tacplus-dev/tacplus --json state,mergeable,title,baseRefName | head -c 500; echo; git tag --sort=-v:refname | grep v2.5 | head -3; git log -1 --format=%ci v2.5.0 v2.6.0...
+< {"baseRefName":"release/2.6","body":"Backport of #284 to release/2.6. This is a security fix: Jody's decision on the issue (2026-11-02) says it ships as a patch on every supported line that has #170 and #207. That means release/2.6 and release/2.5 (#316).\n\n**Patch to cut once this merges: the next...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash bash -n cross-test/current-generation/run.sh && go build ./... && go vet ./pkg/... 2>&1 | tail -3 && go test ./pkg/... 2>&1 | grep -v '^ok\|no test files' | tail -20; echo rc=$?
+< go: downloading github.com/spf13/cobra v1.10.2 go: downloading gopkg.in/yaml.v3 v3.0.1 go: downloading go.uber.org/zap v1.27.1 go: downloading google.golang.org/protobuf v1.36.11 go: downloading golang.org/x/tools v0.49.0 go: downloading github.com/BurntSushi/toml v1.6.0 go: downloading golang.org/x...
+> Bash grep -n '^[a-z][a-z-]*:' justfile | head -60
+< 33:default: install 35:generate: 38:build: generate 42:install: generate 54:test: generate soundness 58:soundness: 61:vet: 66:example: 74:site: site-venv 81:site-serve: site-venv 85:site-venv: 94:current-generation: 97:current-generation-go: 100:current-generation-java: 103:current-generation-rust: ...
+> Bash just test > /tmp/t284.log 2>&1; echo rc=$?; grep -v '^ok\|no test files' /tmp/t284.log | tail -20
+= task_started
+= task_notification
+< rc=0 - `csharp W2S client template` ✓ (pkg/templates/csharp/types/W2SClient.cs.tmpl) - `csharp W2S streaming method stub` ✓ (pkg/templates/csharp/types/W2SClient.cs.tmpl) - `swift W2S structured errors` ✓ (pkg/templates/swift/types/W2SClient.swift.tmpl) - `csharp W2S structured errors` ✓ (pkg/templa...
+= thinking_tokens
+= thinking_tokens
+`just test` passes. Committing and landing.
+> Bash git add -A && git commit -q -F - <<'EOF' A caller's tid is its token's tid claim, never its namespace (#284)  The MCP session tenant of a tenant-owned service (#170) and the client-facing record reader (#207) took the caller's tid from its namespace claim, which holds the tenant's name (/tenants/<na...
+= task_started
+= task_notification
+< 0638e8c6 A caller's tid is its token's tid claim, never its namespace (#284) [2026-11-14T00:30:36Z] checkpoint of #284 (a step) pushed to looper/tacplus-284:  36 files changed, 1367 insertions(+), 207 deletions(-)
+> Bash nohup /usr/local/bin/repo-looper --repo tacplus --issue 284 --land > /tmp/land284.log 2>&1 & echo $!
+< 16549
+= thinking_tokens
+= thinking_tokens
+While the land is queued, I'm checking the backport PRs against their current release branches.
+> Bash sleep 5; for p in 326 316; do gh pr view $p --repo tacplus-dev/tacplus --json mergeable,mergeStateStatus,headRefName,statusCheckRollup --jq '{mergeable,mergeStateStatus,headRefName,checks:[.statusCheckRollup[]?|{name:(.name//.context),c:(.conclusion//.state)}]}'; done; git tag --sort=-v:refname | gr...
+= task_started
+= task_notification
+< {"checks":[{"c":"FAILURE","name":"Unit tests and soundness"},{"c":"SUCCESS","name":"planning-files / check"},{"c":"SUCCESS","name":"Secrets scan"},{"c":"SUCCESS","name":"Example (Go server, TypeScript client)"},{"c":"SUCCESS","name":"Go cross-test gates"},{"c":"SUCCESS","name":"Java W2S dispatch gat...
+= thinking_tokens
+= thinking_tokens
+Both backports need work: #326 conflicts with release/2.6, and both fail "Unit tests and soundness". I'll fix them in separate worktrees.
+> Bash git fetch -q origin backport/284-release-2.6 backport/284-release-2.5 && for b in 2.6 2.5; do echo "== $b"; git log --oneline origin/release/$b..origin/backport/284-release-$b; done; gh pr checks 316 --repo tacplus-dev/tacplus 2>&1 | grep -i fail
+< == 2.6 7d508852 token.proto: keep brackets out of the tid claim's comment (#284) 75cab731 A caller's tid is its token's tid claim, never its namespace (#284) == 2.5 04bcee6e token.proto: keep brackets out of the tid claim's comment (#284) 31d051d9 [release/2.5] A caller's tid is its token's tid clai...
+> Bash gh run view 42565491181 --repo tacplus-dev/tacplus --log-failed 2>&1 | grep -E 'FAIL|Error|error|---' | head -30
+< Unit tests and soundness	UNKNOWN STEP	2026-11-09T05:09:33.5774723Z | --- | --- | --- | --- | --- | --- | --- | Unit tests and soundness	UNKNOWN STEP	2026-11-09T05:09:33.5800898Z | --- | --- | --- | --- | --- | --- | --- | Unit tests and soundness	UNKNOWN STEP	2026-11-09T05:09:33.5882977Z | --- | ---...
+= thinking_tokens
+= thinking_tokens
+> Bash W=$HOME/wt; mkdir -p $W; git worktree add -q $W/b25 origin/backport/284-release-2.5 2>&1|tail -1; git worktree add -q $W/r25 origin/release/2.5 2>&1|tail -1; for d in b25 r25; do (cd $W/$d && echo "== $d" && go test ./scripts/ -run TestCrossTestLegsPruneTheirCargoWorkspace 2>&1 | tail -15); done
+< == b25 ok  	github.com/tacplus-dev/tacplus/scripts	0.005s [no tests to run] == r25 ok  	github.com/tacplus-dev/tacplus/scripts	0.030s
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/b25 && git checkout -q -b backport/284-release-2.5 && git merge -q --no-edit origin/release/2.5 2>&1 | tail -3; git status --short | head; go test ./scripts/ -run TestCrossTestLegsPruneTheirCargoWorkspace 2>&1 | tail -15
+< Auto-merging cross-test/current-generation/run.sh Auto-merging docs/USER.md ok  	github.com/tacplus-dev/tacplus/scripts	0.028s Shell cwd was reset to /builds/looper/tacplus/issues/284
+= thinking_tokens
+= thinking_tokens
+With current release/2.5 merged in, the failing test passes. Running the whole `just test` on the merged 2.5 backport, and in parallel merging release/2.6 into the 2.6 backport.
+> Bash cd $HOME/wt/b25 && (nohup just test > /tmp/b25test.log 2>&1 & echo $! > /tmp/b25.pid); cd /builds/looper/tacplus/issues/284 && git worktree add -q $HOME/wt/b26 -b backport/284-release-2.6 origin/backport/284-release-2.6 && cd $HOME/wt/b26 && git merge --no-edit origin/release/2.6 2>&1 | tail -5; git...
+< Auto-merging cross-test/current-generation/run.sh CONFLICT (content): Merge conflict in cross-test/current-generation/run.sh Auto-merging docs/USER.md Automatic merge failed; fix conflicts and then commit the result. cross-test/current-generation/run.sh Shell cwd was reset to /builds/looper/tacplus/...
+> Bash cd $HOME/wt/b26 && grep -n '^<<<<<<<\|^=======\|^>>>>>>>' cross-test/current-generation/run.sh; ls cross-test/lib/retired-claims.sh
+< 2276:<<<<<<< HEAD 2285:======= 2291:>>>>>>> origin/release/2.6 cross-test/lib/retired-claims.sh Shell cwd was reset to /builds/looper/tacplus/issues/284
+Same conflict as on main; release/2.6's `linked_claim_readers` already excludes descriptor string literals, so its side wins.
+> Bash cd $HOME/wt/b26 && python3 - <<'EOF' import re p='cross-test/current-generation/run.sh' s=open(p).read() s=re.sub(r'<<<<<<< HEAD\n(.*?)=======\n(.*?)>>>>>>> origin/release/2.6\n', lambda m: m.group(2), s, flags=re.S) open(p,'w').write(s) EOF bash -n cross-test/current-generation/run.sh && diff <(git...
+< 1,15c1,25 <     [[ -n "$java_c2s" ]] || die "record-egress fixture (java): EgressvaultRecordsGeneratedHandler.java was not generated under $output" <     ! grep -q 'getEgressvaultRecordsGrpcImpl()' "$(dirname "$java_c2s")/Handler.java" \ <       || die "record-egress fixture (java): the author's Han...
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/b26 && (nohup just test > /tmp/b26test.log 2>&1 & echo $! > /tmp/b26.pid); cat /tmp/b25.pid /tmp/b26.pid
+< 17083 17217 Shell cwd was reset to /builds/looper/tacplus/issues/284
+> Monitor until ! kill -0 17083 2>/dev/null && ! kill -0 17217 2>/dev/null; do sleep 20; done; tail -3 /tmp/b25test.log /tmp/b26test.log; tail -2 /tmp/land284.log
+< <tool_use_error>InputValidationError: Monitor failed due to the following issue: The required parameter `description` is missing  This tool's schema was not sent to the API — it was not in the discovered-tool set derived from message history. Without the schema in your prompt, typed parameters (arra...
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Bash until ! kill -0 17083 2>/dev/null && ! kill -0 17217 2>/dev/null; do sleep 15; done; for f in /tmp/b25test.log /tmp/b26test.log; do echo "== $f"; grep -E '^(FAIL|---)|error:' $f | head; tail -2 $f; done
+= background_tasks_changed
+= task_started
+< Command running in background with ID: b2vdyzh09. Output is being written to: /builds/looper/tacplus/homes/looper-284/tmp/claude-61000/-builds-looper-tacplus-issues-284/ede6d6ef-4a2b-4229-b156-2d40debbf36f/tasks/b2vdyzh09.output. You will be notified when it completes. To check interim output, use R...
+Both backport test runs are going in the background, and the land is queued. Meanwhile I'm running the trace check that rule 13 requires.
+> Bash /usr/local/bin/looper-trace check 2>&1 | tail -15
+= task_started
+= task_notification
+<   causal cross-test/server-runtime/client/go/main.go:89 ListEvents: DROPS the inbound trace_id handler cross-test/server-runtime/client/go/main.go:112 checkPage (inbound: api)   causal cross-test/server-runtime/client/go/main.go:114 ListEventsPaged: DROPS the inbound trace_id handler cross-test/serv...
+> Bash /usr/local/bin/looper-trace check 2>&1 | grep FINDING | grep -vc server-runtime; gh issue view 311 --repo tacplus-dev/tacplus --json state,title --jq '.state+" "+.title'
+= task_started
+= task_notification
+< 0 OPEN server-runtime Go driver: four calls with no inbound request lack their `// trace: unrelated:` marker, so looper-trace check fails on main
+Every trace finding is the one already filed as #311; this change adds none. Waiting for the backport tests.
+> Bash until ! kill -0 17083 2>/dev/null && ! kill -0 17217 2>/dev/null; do sleep 15; done; for f in /tmp/b25test.log /tmp/b26test.log; do echo "== $f"; grep -E '^(FAIL|---)|error:' $f | head; tail -2 $f; done; tail -3 /tmp/land284.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< == /tmp/b25test.log ok  	github.com/tacplus-dev/tacplus/scripts	16.600s ?   	github.com/tacplus-dev/tacplus/target/proto/spec/sys	[no test files] == /tmp/b26test.log ok  	github.com/tacplus-dev/tacplus/scripts	14.597s ?   	github.com/tacplus-dev/tacplus/target/proto/spec/sys	[no test files] [2026-11...
+= thinking_tokens
+= thinking_tokens
+`just test` passes on both merged backports. Pushing the merge commits (fast-forward, no force) and updating the patch tags the PRs name.
+> Bash cd $HOME/wt/b25 && git push -q origin HEAD:backport/284-release-2.5 2>&1|tail -2; cd $HOME/wt/b26 && git push -q origin HEAD:backport/284-release-2.6 2>&1|tail -2; cd /builds/looper/tacplus/issues/284; git fetch -q --tags; git tag --sort=-v:refname | grep -E '^v2\.6\.' | head -1; git tag --sort=-v:r...
+= task_started
+= task_notification
+= vcs_state_changed
+< v2.6.11 v2.5.23 3:**Patch to cut once this merges: the next 2.5 patch, `v2.5.16`** at this writing (v2.5.15 is the newest 2.5 tag; if another patch is cut first, the one after it). Kernel pins it for tacplus-dev/kernel#32.
+= code_change_published
+> Bash for p in 316:2.5:24:23 326:2.6:12:11; do IFS=: read n l nx cur <<<"$p"; gh pr view $n --repo tacplus-dev/tacplus --json body --jq .body > /tmp/body$n.md; python3 - "$n" "$l" "$nx" "$cur" <<'EOF' import re,sys n,l,nx,cur=sys.argv[1:] p=f'/tmp/body{n}.md'; s=open(p).read() s=re.sub(r"\*\*Patch to cut ...
+= task_started
+= task_notification
+< **Patch to cut once this merges: the next 2.5 patch, `v2.5.24`** at this writing (v2.5.23 is the newest 2.5 tag; if another patch is cut first, the one after it). Kernel pins it for tacplus-dev/kernel#32. **Patch to cut once this merges: the next 2.6 patch, `v2.6.12`** at this writing (v2.6.11 is th...
+= thinking_tokens
+= thinking_tokens
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 284 --checkpoint "Fix 0638e8c6 (on main 81da6989) queued for land 00:30Z. Backports: merged release/2.5 and release/2.6 into #316/#326 (2.6 run.sh conflict: took release's linked_claim_readers), just test passes on both, pushed; bodies name v2.5.24/v...

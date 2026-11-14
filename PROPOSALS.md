@@ -91,6 +91,16 @@ the looper then marks it `promoted` or `declined` here with the date.
   scan found advisories in exactly those: #312 (TypeScript, Rust, Go), #309 (Python build/dev floors), #308
   (rustls-pemfile), after #264. A recipe that generates the cross-test models for every language into `<dir>`, with a
   lock-resolved manifest per language, would make OSV-Scanner and cargo-deny catch the next one in the build.
+- **SpotBugs over the rendered Java chassis, in the `generated` recipe (#376)** (2026-11-14, #712): no gate runs
+  SpotBugs on the Java chassis templates, so kernel's security job found `USO_UNSAFE_OBJECT_SYNCHRONIZATION` in the
+  generated `CollectionRuntime` (HIGH, failing the fleet's policy) in a consumer's build, not here. #712 fixes it and
+  pins the shape with a Go test over the template text, which is a floor, not SpotBugs. When #376's recipe scans the
+  kitchensink, it should run `spotbugs -effort:max -low` on the compiled Java chassis; today's remaining findings on
+  `CollectionRuntime` are low priority (`DE` on the drain's `changeIter.close()` catch, `THROWS` on its rethrow), so the
+  recipe would start green at the fleet's HIGH threshold. Checking for a monitor on `this` in every Java template
+  (`synchronized` methods, `synchronized (this)`, `X.this`) under `cmd/soundness` would catch the next one before any
+  scanner: `grep -n 'synchronized (\(\w*\.\)\?this)\|^\s*\(public\|private\|protected\)\?\s*synchronized ' pkg/templates/java -r`
+  lists the candidates: 15 templates on 2026-11-14 (ServiceConnection, the minters, the subscriber), a sweep of its own.
 - **Run outbound-deadline in the gates** (2026-11-03, #310): `cross-test/outbound-deadline/run.sh` (the issue #38
   deadline and lifetime facts, and with #310 the trace fact) has no recipe and runs in no gate or workflow, so a
   regression there is invisible. #310 adds the recipe; joining the mandatory `gates` set is a cost decision (one

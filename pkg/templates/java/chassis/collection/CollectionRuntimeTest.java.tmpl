@@ -4,14 +4,23 @@
 
 package {{.ChassisBase}}.collection;
 
+import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 // Behavioral self-test for the PAGE token codec (PC-C-2): the token must be
 // BYTE-IDENTICAL across the go/rust/java server backends — a token minted by
 // one backend decodes on any other. The golden vectors below are pinned
 // verbatim in the go page_behavior_test and the rust collection page_tests.
-// Run as a plain main-method self-test by the cross-test gates (like
-// ServiceConnectionTest / AuthorizerBehaviorTest).
+// Also the WATCH replay ring's wake-up, replay, overflow, idle timeout and
+// close (#712). Run as a plain main-method self-test by the cross-test gates
+// (like ServiceConnectionTest / AuthorizerBehaviorTest).
 public class CollectionRuntimeTest {
     private static int failures = 0;
 
@@ -67,10 +76,149 @@ public class CollectionRuntimeTest {
         check(CollectionRuntime.effectivePageSize(999999, 50, 100) == 100, "oversized requested must clamp");
         check(CollectionRuntime.effectivePageSize(20, 50, 10000) == 20, "in-range requested must pass through");
 
+        try {
+            checkWatchHub();
+            checkWatchIdleTimeout();
+        } catch (Exception e) {
+            e.printStackTrace();
+            check(false, "WATCH hub check threw " + e);
+        }
+
         if (failures > 0) {
             System.err.println(failures + " CollectionRuntime check(s) FAILED");
             System.exit(1);
         }
         System.out.println("CollectionRuntimeTest: all checks passed");
+    }
+
+    // A hang guard, not a pace: every wait below returns as soon as its
+    // condition holds, and a passing run never reaches the bound.
+    private static final long HANG_GUARD_SECONDS = 60;
+
+    // A change feed the drain thread pulls from: a blocking queue of revisions
+    // (the change IS its revision), ended by END. A drain interrupted while it
+    // blocks on the queue (the last watcher released the ring) ends quietly.
+    private static final Long END = -1L;
+
+    private static Supplier<Iterator<Long>> feedOf(BlockingQueue<Long> feed) {
+        return () -> new Iterator<Long>() {
+            private Long head;
+
+            @Override
+            public boolean hasNext() {
+                if (head == null) {
+                    try {
+                        head = feed.take();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                }
+                return !END.equals(head);
+            }
+
+            @Override
+            public Long next() {
+                Long change = head;
+                head = null;
+                return change;
+            }
+        };
+    }
+
+    private static Long firstOf(Iterator<Long> watcher) {
+        return watcher.hasNext() ? watcher.next() : null;
+    }
+
+    private static void close(Iterator<Long> watcher) throws Exception {
+        ((AutoCloseable) watcher).close();
+    }
+
+    // WATCH replay ring (#712): watchers of one scope share one ring and one
+    // monitor. A watcher blocked in hasNext() is woken by a publish; a second
+    // watcher sees the same change; a watcher resuming from a revision replays
+    // what the ring still holds, and one resuming from before the ring's oldest
+    // entry gets OUT_OF_RANGE; the feed's end closes the ring and ends every
+    // watcher. The ring's monitor is its own private lock, so this is what
+    // SpotBugs' USO fix must keep working.
+    private static void checkWatchHub() throws Exception {
+        BlockingQueue<Long> feed = new LinkedBlockingQueue<>();
+        CollectionRuntime.WatchHub<Long> hub = new CollectionRuntime.WatchHub<>(4, 0);
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            Iterator<Long> a = hub.watch("scope", 0, feedOf(feed), Long::longValue);
+            Iterator<Long> b = hub.watch("scope", 0, feedOf(feed), Long::longValue);
+
+            // Blocked in hasNext() with nothing published; the publish wakes it.
+            Future<Long> blocked = pool.submit(() -> firstOf(a));
+            feed.put(1L);
+            check(Long.valueOf(1L).equals(blocked.get(HANG_GUARD_SECONDS, TimeUnit.SECONDS)),
+                "a watcher blocked in hasNext must be woken by a publish");
+            check(Long.valueOf(1L).equals(firstOf(b)), "a second watcher of the scope must see the same change");
+
+            feed.put(2L);
+            feed.put(3L);
+            check(Long.valueOf(2L).equals(firstOf(a)) && Long.valueOf(3L).equals(firstOf(a)),
+                "changes must arrive in revision order");
+            check(Long.valueOf(2L).equals(firstOf(b)) && Long.valueOf(3L).equals(firstOf(b)),
+                "every watcher of the scope must see every change");
+
+            // Resume from revision 1: the ring (depth 4) still holds 1..3, so 2 and 3 replay.
+            Iterator<Long> late = hub.watch("scope", 1, feedOf(feed), Long::longValue);
+            check(Long.valueOf(2L).equals(firstOf(late)) && Long.valueOf(3L).equals(firstOf(late)),
+                "a watcher resuming from a revision must replay the ring after it");
+            close(late);
+
+            // Overflow the ring: after 4, 5, 6 it holds 3..6, so a resume from
+            // revision 1 (wanting 2) is older than the ring and must be refused.
+            // Watcher a consumes 4..6 first, so they are published before the resume.
+            feed.put(4L);
+            feed.put(5L);
+            feed.put(6L);
+            check(Long.valueOf(4L).equals(firstOf(a)) && Long.valueOf(5L).equals(firstOf(a))
+                && Long.valueOf(6L).equals(firstOf(a)), "changes 4..6 must arrive");
+            Iterator<Long> stale = hub.watch("scope", 1, feedOf(feed), Long::longValue);
+            try {
+                stale.hasNext();
+                check(false, "a resume older than the replay ring must be refused");
+            } catch (io.grpc.StatusRuntimeException expected) {
+                check(expected.getStatus().getCode() == io.grpc.Status.Code.OUT_OF_RANGE,
+                    "a resume older than the replay ring must be OUT_OF_RANGE, got " + expected.getStatus());
+            }
+            close(stale);
+
+            // The feed ends: the drain closes the ring, and a watcher blocked in
+            // hasNext() is woken to find it closed.
+            Future<Boolean> ended = pool.submit(() -> a.hasNext());
+            feed.put(END);
+            check(!ended.get(HANG_GUARD_SECONDS, TimeUnit.SECONDS), "closing the ring must end a blocked watcher");
+            // b lags at revision 3: it drains 4..6 from the closed ring, then ends.
+            int replayed = 0;
+            while (b.hasNext()) {
+                b.next();
+                replayed++;
+            }
+            check(replayed == 3, "a lagging watcher must drain the ring before it ends, got " + replayed);
+            close(a);
+            close(b);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    // A watcher that sees no change for idle_secs is ended with DEADLINE_EXCEEDED
+    // (the timed wait on the ring's monitor).
+    private static void checkWatchIdleTimeout() throws Exception {
+        BlockingQueue<Long> feed = new LinkedBlockingQueue<>();
+        CollectionRuntime.WatchHub<Long> hub = new CollectionRuntime.WatchHub<>(4, 1);
+        Iterator<Long> idle = hub.watch("idle", 0, feedOf(feed), Long::longValue);
+        try {
+            idle.hasNext();
+            check(false, "an idle watcher must time out");
+        } catch (io.grpc.StatusRuntimeException expected) {
+            check(expected.getStatus().getCode() == io.grpc.Status.Code.DEADLINE_EXCEEDED,
+                "an idle watcher must end DEADLINE_EXCEEDED, got " + expected.getStatus());
+        }
+        close(idle);
     }
 }

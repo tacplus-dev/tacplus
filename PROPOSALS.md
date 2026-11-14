@@ -358,6 +358,16 @@ the looper then marks it `promoted` or `declined` here with the date.
   `tacplus pin` list all releases), but the release page and `/releases/latest` send people to 2.2. Passing
   `--latest=false` unless the tag is the newest `v*` (the rule `scripts/images-tags.sh` already applies to
   `build:latest`, #160) would fix it.
+<<<<<<< HEAD
+- **`tacplus registry` checks declared config slices against their registered fields** (2026-11-07, #352): since
+  #352 a build whose registry is a lock refuses a `(spec.config_slice)` with no registered `TenantConfig` /
+  `ProjectConfig` field, but the lock sync (`tacplus registry --proto-dir .`) scans only service and vservice
+  declarations, so it reports a missing slice registration only at build time. Scanning the tree's own slices
+  (`configSliceOwner`, today in `pkg/internal/proto`, out of `cmd/`'s reach) in the sync would name it with the
+  service ids. A legacy per-repo registry's `tacplus registry` likewise never records slice fields: the build still
+  assigns them (now in file order), into whichever registry.yaml the build reads (a merged or fetched build's is a
+  temporary copy).
+=======
 - **A gate that refuses protojson/prototext layout in generators, and a cross-binary determinism check** (2026-11-08,
   #307): `registry.json` flipped between one and two spaces after `:` from release to release, and between amd64 and
   arm64 builds of one release, because protojson's `Multiline` layout adds a space when a hash of the binary is odd
@@ -376,6 +386,7 @@ the looper then marks it `promoted` or `declined` here with the date.
   .NET 10.0 current, which reads as "newest LTS". Writing that down beside the pins (JDK and .NET the newest LTS,
   Maven the newest non-rc release, Docker the newest major, Rust stable via `1`) would let the scan file a missed
   move as a `bug` instead of leaving it to judgment.
+>>>>>>> origin/main
 
 ## Promoted / declined
 - **Member port onto gRPC with make-before-break session rotation (Java)** (2026-11-06, #321): promoted 2026-11-05,

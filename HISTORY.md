@@ -99,3 +99,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-11 looper release v2.6.8 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.6.8)
 - 2026-11-09 looper issue release/2.6: cross-test/trace-carry/run.sh never prunes its cargo workspace, so TestCrossTestLegsPruneTheirCargoWorkspace fails (#398)
 - 2026-11-10 looper issue release/2.0 Go: service_im audienceFromMethod emits a duplicate case when a virtual service package is also a default-audience package (#495)
+- 2026-11-10 looper issue trace_id on every generated message and helper, copied across projections and transformations, cleared on every store (#313)

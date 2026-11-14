@@ -62,7 +62,9 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   requests and constraint-breaking responses are rejected server-side, server
   streaming works, the socket is 0600, a stale file at the path is replaced,
   and on stop the socket is removed and the handler's shutdown runs once.
-  Does not run `Run()` itself (`docs/KNOWN_TEST_GAPS.md` C2D-1). Local
+  Its swift leg builds a consumer of the generated Swift package whose
+  `C2DClient()`, with no argument, calls the generated Go daemon over its
+  declared socket (#494). Does not run `Run()` itself (`docs/KNOWN_TEST_GAPS.md` C2D-1). Local
   (`just c2d-server`, part of `just gates`); not yet in CI.
 - `trace-carry` (`cross-test/trace-carry/run.sh`): `trace_id` across
   projections and stores (#313) in the generated Go, Java and Rust. Every leg

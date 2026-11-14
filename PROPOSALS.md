@@ -366,6 +366,15 @@ the looper then marks it `promoted` or `declined` here with the date.
   `prototext.Format`) into a generated file: a soundness rule could refuse it under `pkg/internal`. `cross-test/determinism`
   compares two runs of one binary, which agree even with the defect; it could also run a second binary of the same
   source that differs only in a padded `-X` string, so the hash differs.
+<<<<<<< HEAD
+- **Self-tests wait on state, not the clock, wherever the work fsyncs** (2026-11-07, #341): the durable accounting
+  spool's Go and Java self-tests waited a fixed 1s (or slept 300ms) for fsync'd appends, and main went red when a
+  loaded runner disk was slower. #341 fixed those two. Other hand-written fixture self-tests and generated
+  `_test` templates that sleep or poll against an RPC-sized bound for disk work (redo log, append log, cursor and
+  snapshot writes) have the same exposure. Audit them: wait on the observable state, with a generous hang bound
+  separate from any timing assertion. A cheap way to find them is #341's reproduction: a 100ms sleep before each
+  fsync in a scratch copy of the generated diskstore, then run the self-tests.
+=======
 - **Name the line every image pin follows, not only Go, Node and Swift** (2026-11-11, nightly scan): the rule
   written beside the pins in `images/base.Dockerfile` and `images/build.Dockerfile` (#255: Go the newest release,
   Node the newest LTS, Swift the newest release) is what the nightly scan checks drift against. `JDK_VERSION=25`,
@@ -376,6 +385,7 @@ the looper then marks it `promoted` or `declined` here with the date.
   .NET 10.0 current, which reads as "newest LTS". Writing that down beside the pins (JDK and .NET the newest LTS,
   Maven the newest non-rc release, Docker the newest major, Rust stable via `1`) would let the scan file a missed
   move as a `bug` instead of leaving it to judgment.
+>>>>>>> origin/main
 
 ## Promoted / declined
 - **Member port onto gRPC with make-before-break session rotation (Java)** (2026-11-06, #321): promoted 2026-11-05,

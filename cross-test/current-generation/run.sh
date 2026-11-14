@@ -9,8 +9,13 @@ source "$ROOT_DIR/cross-test/lib/tree-guard.sh"
 tree_guard_begin "$ROOT_DIR"
 # shellcheck source=../lib/java-compile.sh
 source "$ROOT_DIR/cross-test/lib/java-compile.sh"
+<<<<<<< HEAD
+# shellcheck source=../lib/jobs.sh
+source "$ROOT_DIR/cross-test/lib/jobs.sh"
+=======
 # shellcheck source=../lib/retired-claims.sh
 source "$ROOT_DIR/cross-test/lib/retired-claims.sh"
+>>>>>>> origin/main
 PROTO_SRC="$ROOT_DIR/cross-test/proto"
 HEALTHONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-healthonly"
 ZERORPC_PROTO_SRC="$ROOT_DIR/cross-test/proto-zerorpc"
@@ -52,6 +57,7 @@ Options:
 Environment:
   TACPLUS_BIN                         Existing tacplus binary to use
   TACPLUS_CURRENT_GENERATION_WORKDIR  Work directory for generated outputs
+  CROSS_TEST_JOBS                     Fixtures run at once (default: half the CPUs)
   TACPLUS_PYTHON                      Python interpreter for grpc_tools.protoc
 USAGE
 }
@@ -2315,29 +2321,31 @@ READERS_PY
   assert_no_legacy_fixture_output "$output"
 }
 
-for language in "${languages[@]}"; do
-  dir="$WORK_ROOT/$language"
-  log="$WORK_ROOT/$language.log"
-  rm -rf "$dir"
-  write_config "$dir" "$language"
+fixture_main() {
+  for language in "${languages[@]}"; do
+    dir="$WORK_ROOT/$language"
+    log="$WORK_ROOT/$language.log"
+    rm -rf "$dir"
+    write_config "$dir" "$language"
 
-  echo "==> Generating $language cross-test fixture"
-  if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$PROTO_SRC" >"$log" 2>&1); then
-    tail -120 "$log" >&2 || true
-    die "$language generation failed; log: $log"
-  fi
-  output_root="$(resolve_output_root "$dir/tacplus")"
-  assert_no_legacy_fixture_output "$dir/tacplus"
-  assert_spiffe_soundness "$dir/tacplus"
-  assert_current_output "$output_root" "$language" "$dir/tacplus"
-  assert_extraction_output "$output_root" "$language"
-  install_extraction_selftest "$output_root" "$language"
-  install_json_key_selftest "$output_root" "$language"
-  echo "==> Compiling $language cross-test fixture"
-  compile_current_output "$output_root" "$language" "$dir/tacplus"
-  echo "    PASS $language"
-  prune_fixture "$dir" "$output_root" keep-sources
-done
+    echo "==> Generating $language cross-test fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_no_legacy_fixture_output "$dir/tacplus"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_current_output "$output_root" "$language" "$dir/tacplus"
+    assert_extraction_output "$output_root" "$language"
+    install_extraction_selftest "$output_root" "$language"
+    install_json_key_selftest "$output_root" "$language"
+    echo "==> Compiling $language cross-test fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus"
+    echo "    PASS $language"
+    prune_fixture "$dir" "$output_root" keep-sources
+  done
+}
 
 # Config-defaults cross-language parity: for every proto message that has
 # spec.default_int / spec.default_string / etc. annotations, verify that
@@ -2611,11 +2619,13 @@ assert_tls_degrade_parity() {
 }
 
 # Run parity check only when all three full-service languages were generated.
-if [[ ${#languages[@]} -eq 3 ]]; then
-  assert_config_defaults_parity "$WORK_ROOT"
-  assert_config_defaults_behavioral "$WORK_ROOT"
-  assert_tls_degrade_parity "$WORK_ROOT"
-fi
+fixture_parity() {
+  if [[ ${#languages[@]} -eq 3 ]]; then
+    assert_config_defaults_parity "$WORK_ROOT"
+    assert_config_defaults_behavioral "$WORK_ROOT"
+    assert_tls_degrade_parity "$WORK_ROOT"
+  fi
+}
 
 # C2S-only fixture: the whole server surface is non-S2S. It used to select the
 # NO-token-exchanger variants of chassis/service_im and chassis/servicemanager
@@ -2623,28 +2633,30 @@ fi
 # minter.Minter in every run no proto set selects them any more, and the fixture
 # now pins the exchanger variant for a server surface with no S2S rpc (see
 # assert_c2sonly_output). Go only, as before.
-if [[ -d "$C2SONLY_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    [[ "$language" == "go" ]] || continue
-    dir="$WORK_ROOT/c2sonly-$language"
-    log="$WORK_ROOT/c2sonly-$language.log"
-    rm -rf "$dir"
-    write_c2sonly_config "$dir" "$language"
+fixture_c2sonly() {
+  if [[ -d "$C2SONLY_PROTO_SRC" ]]; then
+    for language in "${languages[@]}"; do
+      [[ "$language" == "go" ]] || continue
+      dir="$WORK_ROOT/c2sonly-$language"
+      log="$WORK_ROOT/c2sonly-$language.log"
+      rm -rf "$dir"
+      write_c2sonly_config "$dir" "$language"
 
-    echo "==> Generating $language c2s-only fixture"
-    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$C2SONLY_PROTO_SRC" >"$log" 2>&1); then
-      tail -120 "$log" >&2 || true
-      die "$language c2s-only generation failed; log: $log"
-    fi
-    output_root="$(resolve_output_root "$dir/tacplus")"
-    assert_spiffe_soundness "$dir/tacplus"
-    assert_c2sonly_output "$output_root" "$language"
-    echo "==> Compiling $language c2s-only fixture"
-    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/c2sonly"
-    echo "    PASS $language c2s-only"
-    prune_fixture "$dir" "$output_root"
-  done
-fi
+      echo "==> Generating $language c2s-only fixture"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$C2SONLY_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language c2s-only generation failed; log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      assert_c2sonly_output "$output_root" "$language"
+      echo "==> Compiling $language c2s-only fixture"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/c2sonly"
+      echo "    PASS $language c2s-only"
+      prune_fixture "$dir" "$output_root"
+    done
+  fi
+}
 
 # Health-only fixture: exercises the {{else}} server branch in
 # service_manager.rs.tmpl (HasTlsGrpc=false, HasC2DGrpc=false).
@@ -2653,28 +2665,30 @@ fi
 # TLS listener. pkg uses "healthonly" as SelfPackage so own-states are detected.
 # This fixture tests a Rust-specific branch; other generators reject a proto with
 # no token_minter, so we only run it for Rust.
-if [[ -d "$HEALTHONLY_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    [[ "$language" == "rust" ]] || continue
-    dir="$WORK_ROOT/healthonly-$language"
-    log="$WORK_ROOT/healthonly-$language.log"
-    rm -rf "$dir"
-    write_healthonly_config "$dir" "$language"
+fixture_healthonly() {
+  if [[ -d "$HEALTHONLY_PROTO_SRC" ]]; then
+    for language in "${languages[@]}"; do
+      [[ "$language" == "rust" ]] || continue
+      dir="$WORK_ROOT/healthonly-$language"
+      log="$WORK_ROOT/healthonly-$language.log"
+      rm -rf "$dir"
+      write_healthonly_config "$dir" "$language"
 
-    echo "==> Generating $language health-only fixture"
-    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$HEALTHONLY_PROTO_SRC" >"$log" 2>&1); then
-      tail -120 "$log" >&2 || true
-      die "$language health-only generation failed; log: $log"
-    fi
-    output_root="$(resolve_output_root "$dir/tacplus")"
-    assert_spiffe_soundness "$dir/tacplus"
-    assert_healthonly_output "$output_root" "$language"
-    echo "==> Compiling $language health-only fixture"
-    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/healthonly"
-    echo "    PASS $language health-only"
-    prune_fixture "$dir" "$output_root"
-  done
-fi
+      echo "==> Generating $language health-only fixture"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$HEALTHONLY_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language health-only generation failed; log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      assert_healthonly_output "$output_root" "$language"
+      echo "==> Compiling $language health-only fixture"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/healthonly"
+      echo "    PASS $language health-only"
+      prune_fixture "$dir" "$output_root"
+    done
+  fi
+}
 
 # zero-rpc fixture: a service with a state and an s2s client edge, no gRPC
 # service, and no auto_tls on any state. Its service manager takes the
@@ -2682,28 +2696,30 @@ fi
 # items (HasAutoTls) even though no state declares auto_tls. Before that
 # widening the generated s2sm did not compile (E0425/E0609). Rust only: the
 # branch is in service_manager.rs.tmpl.
-if [[ -d "$ZERORPC_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    [[ "$language" == "rust" ]] || continue
-    dir="$WORK_ROOT/zerorpc-$language"
-    log="$WORK_ROOT/zerorpc-$language.log"
-    rm -rf "$dir"
-    write_zerorpc_config "$dir" "$language"
+fixture_zerorpc() {
+  if [[ -d "$ZERORPC_PROTO_SRC" ]]; then
+    for language in "${languages[@]}"; do
+      [[ "$language" == "rust" ]] || continue
+      dir="$WORK_ROOT/zerorpc-$language"
+      log="$WORK_ROOT/zerorpc-$language.log"
+      rm -rf "$dir"
+      write_zerorpc_config "$dir" "$language"
 
-    echo "==> Generating $language zero-rpc fixture"
-    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$ZERORPC_PROTO_SRC" >"$log" 2>&1); then
-      tail -120 "$log" >&2 || true
-      die "$language zero-rpc generation failed; log: $log"
-    fi
-    output_root="$(resolve_output_root "$dir/tacplus")"
-    assert_spiffe_soundness "$dir/tacplus"
-    assert_zerorpc_output "$output_root" "$language"
-    echo "==> Compiling $language zero-rpc fixture"
-    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/zerorpc"
-    echo "    PASS $language zero-rpc"
-    prune_fixture "$dir" "$output_root"
-  done
-fi
+      echo "==> Generating $language zero-rpc fixture"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$ZERORPC_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language zero-rpc generation failed; log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      assert_zerorpc_output "$output_root" "$language"
+      echo "==> Compiling $language zero-rpc fixture"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/zerorpc"
+      echo "    PASS $language zero-rpc"
+      prune_fixture "$dir" "$output_root"
+    done
+  fi
+}
 
 # requires-device fixture: the ONLY place (spec.rpc).requires_device is generated
 # and compiled by a standing gate. cross-test/proto declares no (spec.service), so
@@ -2715,31 +2731,33 @@ fi
 # minter is the sys minter.Minter), and ledger is a third package vault
 # holds a client to, so the caller-side helpers are compiled too. All three
 # languages, because all three implement the gate independently.
-if [[ -d "$REQUIRESDEVICE_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    dir="$WORK_ROOT/requiresdevice-$language"
-    log="$WORK_ROOT/requiresdevice-$language.log"
-    rm -rf "$dir"
-    write_requiresdevice_config "$dir" "$language"
+fixture_requiresdevice() {
+  if [[ -d "$REQUIRESDEVICE_PROTO_SRC" ]]; then
+    for language in "${languages[@]}"; do
+      dir="$WORK_ROOT/requiresdevice-$language"
+      log="$WORK_ROOT/requiresdevice-$language.log"
+      rm -rf "$dir"
+      write_requiresdevice_config "$dir" "$language"
 
-    echo "==> Generating $language requires-device fixture"
-    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$REQUIRESDEVICE_PROTO_SRC" >"$log" 2>&1); then
-      tail -120 "$log" >&2 || true
-      die "$language requires-device generation failed; log: $log"
-    fi
-    output_root="$(resolve_output_root "$dir/tacplus")"
-    assert_spiffe_soundness "$dir/tacplus"
-    assert_requiresdevice_output "$output_root" "$language"
-    assert_requiresdevice_singleton_state "$output_root" "$language"
-    if [[ "$language" == "go" ]]; then
-      install_go_state_singleton_selftest "$output_root"
-    fi
-    echo "==> Compiling $language requires-device fixture"
-    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/vault"
-    echo "    PASS $language requires-device"
-    prune_fixture "$dir" "$output_root"
-  done
-fi
+      echo "==> Generating $language requires-device fixture"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$REQUIRESDEVICE_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language requires-device generation failed; log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      assert_requiresdevice_output "$output_root" "$language"
+      assert_requiresdevice_singleton_state "$output_root" "$language"
+      if [[ "$language" == "go" ]]; then
+        install_go_state_singleton_selftest "$output_root"
+      fi
+      echo "==> Compiling $language requires-device fixture"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/vault"
+      echo "    PASS $language requires-device"
+      prune_fixture "$dir" "$output_root"
+    done
+  fi
+}
 
 
 # record-egress fixture: the ONLY place the (spec.store_namespace) /
@@ -2758,245 +2776,260 @@ fi
 # server stream. goStreamEgressRefusal and its Rust twin refuse those by design
 # (no per-item hook to ride), so a fixture that carried one would assert the
 # refusal is a bug.
-if [[ -d "$RECORDEGRESS_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    dir="$WORK_ROOT/recordegress-$language"
-    log="$WORK_ROOT/recordegress-$language.log"
-    rm -rf "$dir"
-    write_recordegress_config "$dir" "$language"
+fixture_recordegress() {
+  if [[ -d "$RECORDEGRESS_PROTO_SRC" ]]; then
+    for language in "${languages[@]}"; do
+      dir="$WORK_ROOT/recordegress-$language"
+      log="$WORK_ROOT/recordegress-$language.log"
+      rm -rf "$dir"
+      write_recordegress_config "$dir" "$language"
 
-    echo "==> Generating $language record-egress fixture"
-    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$RECORDEGRESS_PROTO_SRC" >"$log" 2>&1); then
-      tail -120 "$log" >&2 || true
-      die "$language record-egress generation failed; log: $log"
-    fi
-    output_root="$(resolve_output_root "$dir/tacplus")"
-    assert_spiffe_soundness "$dir/tacplus"
-    assert_recordegress_output "$output_root" "$language"
-    install_user_and_listed_service_selftest "$output_root" "$language"
-    echo "==> Compiling $language record-egress fixture"
-    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/egressvault"
-    echo "    PASS $language record-egress"
-    prune_fixture "$dir" "$output_root"
-  done
+      echo "==> Generating $language record-egress fixture"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$RECORDEGRESS_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language record-egress generation failed; log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      assert_recordegress_output "$output_root" "$language"
+      install_user_and_listed_service_selftest "$output_root" "$language"
+      echo "==> Compiling $language record-egress fixture"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/egressvault"
+      echo "    PASS $language record-egress"
+      prune_fixture "$dir" "$output_root"
+    done
 
-  # The HOST leg: the same protos built as egressstratum, the (spec.record_store)
-  # the trait names. The plane's two services are defined in the trait's own
-  # package and labeled onto this one, so they are hosted VSERVICES — the half of
-  # server resolution Go did not implement. Generating them as SERVERS is the
-  # assertion; compiling the result is what proves the wrapper is real, and is
-  # how the three latent defects that half had never exercised (a WATCH seam
-  # reading from_revision off a handle that declares none, an `optional string`
-  # predicate pin assigned a bare string, and a Handle<T> projection dispatch
-  # emitted for a source that has none) were found in the first place.
-  for language in "${languages[@]}"; do
-    dir="$WORK_ROOT/recordegress-host-$language"
-    log="$WORK_ROOT/recordegress-host-$language.log"
-    rm -rf "$dir"
-    write_recordegress_host_config "$dir" "$language"
+    # The HOST leg: the same protos built as egressstratum, the (spec.record_store)
+    # the trait names. The plane's two services are defined in the trait's own
+    # package and labeled onto this one, so they are hosted VSERVICES — the half of
+    # server resolution Go did not implement. Generating them as SERVERS is the
+    # assertion; compiling the result is what proves the wrapper is real, and is
+    # how the three latent defects that half had never exercised (a WATCH seam
+    # reading from_revision off a handle that declares none, an `optional string`
+    # predicate pin assigned a bare string, and a Handle<T> projection dispatch
+    # emitted for a source that has none) were found in the first place.
+    for language in "${languages[@]}"; do
+      dir="$WORK_ROOT/recordegress-host-$language"
+      log="$WORK_ROOT/recordegress-host-$language.log"
+      rm -rf "$dir"
+      write_recordegress_host_config "$dir" "$language"
 
-    echo "==> Generating $language record-egress HOST fixture"
-    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$RECORDEGRESS_PROTO_SRC" >"$log" 2>&1); then
-      tail -120 "$log" >&2 || true
-      die "$language record-egress host generation failed; log: $log"
-    fi
-    output_root="$(resolve_output_root "$dir/tacplus")"
-    assert_spiffe_soundness "$dir/tacplus"
-    assert_recordegress_host_output "$output_root" "$language"
-    install_record_write_guard_selftest "$output_root" "$language"
-    echo "==> Compiling $language record-egress HOST fixture"
-    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/egressstratum"
-    echo "    PASS $language record-egress host"
-    prune_fixture "$dir" "$output_root"
-  done
-fi
+      echo "==> Generating $language record-egress HOST fixture"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$RECORDEGRESS_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language record-egress host generation failed; log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      assert_recordegress_host_output "$output_root" "$language"
+      install_record_write_guard_selftest "$output_root" "$language"
+      echo "==> Compiling $language record-egress HOST fixture"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/egressstratum"
+      echo "    PASS $language record-egress host"
+      prune_fixture "$dir" "$output_root"
+    done
+  fi
+}
 
 # event-bus backpressure fixture: the ONLY place a store-hosted state's topic
 # iterator (the generated AgentState StateClient) and a client-streaming W2S
 # WebSocket listener are compiled and driven by a standing gate. Java only: both
 # self-tests pin Java runtime code, and no other language emits these surfaces
 # with the same defect.
-if [[ -d "$EVENTBUS_BACKPRESSURE_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    [[ "$language" == java ]] || continue
-    dir="$WORK_ROOT/eventbus-backpressure-$language"
-    log="$WORK_ROOT/eventbus-backpressure-$language.log"
-    rm -rf "$dir"
-    write_eventbus_backpressure_config "$dir" "$language"
+fixture_eventbus_backpressure() {
+  if [[ -d "$EVENTBUS_BACKPRESSURE_PROTO_SRC" ]]; then
+    for language in "${languages[@]}"; do
+      [[ "$language" == java ]] || continue
+      dir="$WORK_ROOT/eventbus-backpressure-$language"
+      log="$WORK_ROOT/eventbus-backpressure-$language.log"
+      rm -rf "$dir"
+      write_eventbus_backpressure_config "$dir" "$language"
 
-    echo "==> Generating $language event-bus backpressure fixture"
-    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$EVENTBUS_BACKPRESSURE_PROTO_SRC" >"$log" 2>&1); then
-      tail -120 "$log" >&2 || true
-      die "$language event-bus backpressure generation failed; log: $log"
-    fi
-    output_root="$(resolve_output_root "$dir/tacplus")"
-    assert_spiffe_soundness "$dir/tacplus"
-    install_backpressure_selftests "$output_root"
-    echo "==> Compiling $language event-bus backpressure fixture"
-    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor"
-    echo "    PASS $language event-bus backpressure"
-    prune_fixture "$dir" "$output_root"
-  done
-fi
+      echo "==> Generating $language event-bus backpressure fixture"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$EVENTBUS_BACKPRESSURE_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language event-bus backpressure generation failed; log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      install_backpressure_selftests "$output_root"
+      echo "==> Compiling $language event-bus backpressure fixture"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor"
+      echo "    PASS $language event-bus backpressure"
+      prune_fixture "$dir" "$output_root"
+    done
+  fi
+}
 
 # accounting-sink fixture (issue #34): the only place a platform accounting record is
 # declared, so the only place the generated durable accounting sink (EventBusSink) is
 # compiled and driven by a standing gate. The self-tests block the event-bus publisher
 # and check that an RPC completion never waits on it, that records replay in order
 # once it resumes, and that a full spool drops and counts. All three languages.
-if [[ -d "$ACCOUNTING_SINK_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    dir="$WORK_ROOT/accountingsink-$language"
-    log="$WORK_ROOT/accountingsink-$language.log"
-    rm -rf "$dir"
-    write_accounting_sink_config "$dir" "$language"
+fixture_accounting_sink() {
+  if [[ -d "$ACCOUNTING_SINK_PROTO_SRC" ]]; then
+    for language in "${languages[@]}"; do
+      dir="$WORK_ROOT/accountingsink-$language"
+      log="$WORK_ROOT/accountingsink-$language.log"
+      rm -rf "$dir"
+      write_accounting_sink_config "$dir" "$language"
 
-    echo "==> Generating $language accounting-sink fixture"
-    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$ACCOUNTING_SINK_PROTO_SRC" >"$log" 2>&1); then
-      tail -120 "$log" >&2 || true
-      die "$language accounting-sink generation failed; log: $log"
-    fi
-    output_root="$(resolve_output_root "$dir/tacplus")"
-    assert_spiffe_soundness "$dir/tacplus"
-    assert_accounting_sink_output "$output_root" "$language"
-    install_accounting_sink_selftests "$output_root" "$language"
-    echo "==> Compiling $language accounting-sink fixture"
-    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor"
-    echo "    PASS $language accounting sink"
-    prune_fixture "$dir" "$output_root"
-  done
-fi
+      echo "==> Generating $language accounting-sink fixture"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$ACCOUNTING_SINK_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language accounting-sink generation failed; log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      assert_accounting_sink_output "$output_root" "$language"
+      install_accounting_sink_selftests "$output_root" "$language"
+      echo "==> Compiling $language accounting-sink fixture"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor"
+      echo "    PASS $language accounting sink"
+      prune_fixture "$dir" "$output_root"
+    done
+  fi
+}
 
 # owner-default fixture: the ONLY place (spec.owner_default) is generated and
 # compiled by a standing gate. cross-test/proto is types-only, so it emits no
 # server wrapper — the one surface the guard lands on. All three languages,
 # because all three render the guard from their own generator; Java's
 # OwnerDefaultTest additionally drives the real wrapper over real signed tokens.
-if [[ -d "$OWNERDEFAULT_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    dir="$WORK_ROOT/ownerdefault-$language"
-    log="$WORK_ROOT/ownerdefault-$language.log"
-    rm -rf "$dir"
-    write_ownerdefault_config "$dir" "$language"
+fixture_ownerdefault() {
+  if [[ -d "$OWNERDEFAULT_PROTO_SRC" ]]; then
+    for language in "${languages[@]}"; do
+      dir="$WORK_ROOT/ownerdefault-$language"
+      log="$WORK_ROOT/ownerdefault-$language.log"
+      rm -rf "$dir"
+      write_ownerdefault_config "$dir" "$language"
 
-    echo "==> Generating $language owner-default fixture"
-    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$OWNERDEFAULT_PROTO_SRC" >"$log" 2>&1); then
-      tail -120 "$log" >&2 || true
-      die "$language owner-default generation failed; log: $log"
-    fi
-    output_root="$(resolve_output_root "$dir/tacplus")"
-    assert_spiffe_soundness "$dir/tacplus"
-    assert_ownerdefault_output "$output_root" "$language"
-    install_ownerdefault_selftest "$output_root" "$language"
-    echo "==> Compiling $language owner-default fixture"
-    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/ownerdesk"
-    echo "    PASS $language owner-default"
-    prune_fixture "$dir" "$output_root"
-  done
-fi
+      echo "==> Generating $language owner-default fixture"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$OWNERDEFAULT_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language owner-default generation failed; log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      assert_ownerdefault_output "$output_root" "$language"
+      install_ownerdefault_selftest "$output_root" "$language"
+      echo "==> Compiling $language owner-default fixture"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/ownerdesk"
+      echo "    PASS $language owner-default"
+      prune_fixture "$dir" "$output_root"
+    done
+  fi
+}
 
 # quorum-write fixture: the only full service build hosting a keyed
 # (spec.service_store), so the only place the generated quorum write gate and the
 # disk-store roll scheduler are compiled. Go also runs quorum_write_test.go
 # against the generated RequireCredPairQuorum; Rust runs store_roll_test.rs.
-if [[ -d "$QUORUMWRITE_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    dir="$WORK_ROOT/quorumwrite-$language"
-    log="$WORK_ROOT/quorumwrite-$language.log"
-    rm -rf "$dir"
-    write_quorumwrite_config "$dir" "$language"
+fixture_quorumwrite() {
+  if [[ -d "$QUORUMWRITE_PROTO_SRC" ]]; then
+    for language in "${languages[@]}"; do
+      dir="$WORK_ROOT/quorumwrite-$language"
+      log="$WORK_ROOT/quorumwrite-$language.log"
+      rm -rf "$dir"
+      write_quorumwrite_config "$dir" "$language"
 
-    echo "==> Generating $language quorum-write fixture"
-    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$QUORUMWRITE_PROTO_SRC" >"$log" 2>&1); then
-      tail -120 "$log" >&2 || true
-      die "$language quorum-write generation failed; log: $log"
-    fi
-    output_root="$(resolve_output_root "$dir/tacplus")"
-    assert_spiffe_soundness "$dir/tacplus"
-    assert_quorumwrite_output "$output_root" "$language"
-    echo "==> Compiling $language quorum-write fixture"
-    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/quorumvault"
-    echo "    PASS $language quorum-write"
-    prune_fixture "$dir" "$output_root"
-  done
-fi
+      echo "==> Generating $language quorum-write fixture"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$QUORUMWRITE_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language quorum-write generation failed; log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      assert_quorumwrite_output "$output_root" "$language"
+      echo "==> Compiling $language quorum-write fixture"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/quorumvault"
+      echo "    PASS $language quorum-write"
+      prune_fixture "$dir" "$output_root"
+    done
+  fi
+}
 
 # epoch-load fixture: a keyed store whose row carries an (spec.epoch_expiration)
 # value. The generated disk loader must accept that row after its exp has
 # passed, and must keep rejecting a non-time violation.
-if [[ -d "$EPOCHLOAD_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    dir="$WORK_ROOT/epochload-$language"
-    log="$WORK_ROOT/epochload-$language.log"
-    rm -rf "$dir"
-    write_epochload_config "$dir" "$language"
+fixture_epochload() {
+  if [[ -d "$EPOCHLOAD_PROTO_SRC" ]]; then
+    for language in "${languages[@]}"; do
+      dir="$WORK_ROOT/epochload-$language"
+      log="$WORK_ROOT/epochload-$language.log"
+      rm -rf "$dir"
+      write_epochload_config "$dir" "$language"
 
-    echo "==> Generating $language epoch-load fixture"
-    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$EPOCHLOAD_PROTO_SRC" >"$log" 2>&1); then
-      tail -120 "$log" >&2 || true
-      die "$language epoch-load generation failed; log: $log"
-    fi
-    output_root="$(resolve_output_root "$dir/tacplus")"
-    assert_spiffe_soundness "$dir/tacplus"
-    assert_epochload_output "$output_root" "$language"
-    echo "==> Compiling $language epoch-load fixture"
-    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/epochload"
-    echo "    PASS $language epoch-load"
-    prune_fixture "$dir" "$output_root"
-  done
-fi
+      echo "==> Generating $language epoch-load fixture"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$EPOCHLOAD_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language epoch-load generation failed; log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      assert_epochload_output "$output_root" "$language"
+      echo "==> Compiling $language epoch-load fixture"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/epochload"
+      echo "    PASS $language epoch-load"
+      prune_fixture "$dir" "$output_root"
+    done
+  fi
+}
 
 # tenant-route fixture (issue #170): every rpc of the tenant-owned crew names
 # its route field; registry.json must carry it, and both builds must compile
 # with the route table, the per-tenant S2S client and the server's route check.
-if [[ -d "$TENANTROUTE_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    for self in harbor crew; do
-      dir="$WORK_ROOT/tenantroute-$self-$language"
-      log="$WORK_ROOT/tenantroute-$self-$language.log"
-      rm -rf "$dir"
-      write_tenantroute_config "$dir" "$language" "$self"
+fixture_tenantroute() {
+  if [[ -d "$TENANTROUTE_PROTO_SRC" ]]; then
+    for language in "${languages[@]}"; do
+      for self in harbor crew; do
+        dir="$WORK_ROOT/tenantroute-$self-$language"
+        log="$WORK_ROOT/tenantroute-$self-$language.log"
+        rm -rf "$dir"
+        write_tenantroute_config "$dir" "$language" "$self"
 
-      echo "==> Generating $language tenant-route fixture ($self)"
-      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$TENANTROUTE_PROTO_SRC" >"$log" 2>&1); then
-        tail -120 "$log" >&2 || true
-        die "$language tenant-route generation failed ($self); log: $log"
-      fi
-      output_root="$(resolve_output_root "$dir/tacplus")"
-      assert_spiffe_soundness "$dir/tacplus"
-      grep -Eq '"route_field": *"target_tenant"' "$output_root/registry.json" \
-        || die "tenant-route fixture ($language, $self): registry.json does not carry crew's route_field"
-      echo "==> Compiling $language tenant-route fixture ($self)"
-      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
-      echo "    PASS $language tenant-route ($self)"
-      prune_fixture "$dir" "$output_root"
+        echo "==> Generating $language tenant-route fixture ($self)"
+        if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$TENANTROUTE_PROTO_SRC" >"$log" 2>&1); then
+          tail -120 "$log" >&2 || true
+          die "$language tenant-route generation failed ($self); log: $log"
+        fi
+        output_root="$(resolve_output_root "$dir/tacplus")"
+        assert_spiffe_soundness "$dir/tacplus"
+        grep -Eq '"route_field": *"target_tenant"' "$output_root/registry.json" \
+          || die "tenant-route fixture ($language, $self): registry.json does not carry crew's route_field"
+        echo "==> Compiling $language tenant-route fixture ($self)"
+        compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
+        echo "    PASS $language tenant-route ($self)"
+        prune_fixture "$dir" "$output_root"
+      done
     done
-  done
-fi
+  fi
+}
 
 # redo-contract fixture (issue #163 D5): the sys contract redolog.Redo is
 # tenant-routed by its host_tenant_owned, so stratum, generated without the
 # host's proto, carries its route field in registry.json and the routed client;
 # redo, which hosts it by label, gets its server wrapper (a sys contract's
 # wrapper was never written in Go) with the route check and the any-tenant door.
-if [[ -d "$REDO_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    for self in stratum redo; do
-      dir="$WORK_ROOT/redo-$self-$language"
-      log="$WORK_ROOT/redo-$self-$language.log"
-      rm -rf "$dir"
-      write_redo_config "$dir" "$language" "$self"
-      side="caller"
-      [[ "$self" == "redo" ]] && side="host"
+fixture_redo() {
+  if [[ -d "$REDO_PROTO_SRC" ]]; then
+    for language in "${languages[@]}"; do
+      for self in stratum redo; do
+        dir="$WORK_ROOT/redo-$self-$language"
+        log="$WORK_ROOT/redo-$self-$language.log"
+        rm -rf "$dir"
+        write_redo_config "$dir" "$language" "$self"
+        side="caller"
+        [[ "$self" == "redo" ]] && side="host"
 
-      echo "==> Generating $language redo-contract fixture ($self)"
-      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$REDO_PROTO_SRC/$side" >"$log" 2>&1); then
-        tail -120 "$log" >&2 || true
-        die "$language redo-contract generation failed ($self); log: $log"
-      fi
-      output_root="$(resolve_output_root "$dir/tacplus")"
-      assert_spiffe_soundness "$dir/tacplus"
-      python3 - "$output_root/registry.json" <<'REDO_PY' || die "redo-contract fixture ($language, $self): registry.json does not route redolog.Redo by tenant"
+        echo "==> Generating $language redo-contract fixture ($self)"
+        if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$REDO_PROTO_SRC/$side" >"$log" 2>&1); then
+          tail -120 "$log" >&2 || true
+          die "$language redo-contract generation failed ($self); log: $log"
+        fi
+        output_root="$(resolve_output_root "$dir/tacplus")"
+        assert_spiffe_soundness "$dir/tacplus"
+        python3 - "$output_root/registry.json" <<'REDO_PY' || die "redo-contract fixture ($language, $self): registry.json does not route redolog.Redo by tenant"
 import json, sys
 want = {"/redolog.Redo/Append", "/redolog.Redo/Replay"}
 seen = set()
@@ -3015,43 +3048,45 @@ walk(json.load(open(sys.argv[1])))
 if seen != want:
     sys.exit("missing rpcs: %s" % sorted(want - seen))
 REDO_PY
-      if [[ "$self" == "redo" ]]; then
-        case "$language" in
-          go) wrapper="$(find "$output_root" -type f -path '*/s2sm/grpc/servers/sys/redolog/redo.go' -print -quit)" ;;
-          java) wrapper="$(find "$output_root" -type f -path '*/s2sm/internal/grpc/servers/sys/redolog/Redo.java' -print -quit)" ;;
-          rust) wrapper="$(find "$output_root" -type f -path '*/s2sm/internal/grpc/servers/sys/redolog/redo.rs' -print -quit)" ;;
-        esac
-        [[ -n "$wrapper" ]] || die "redo-contract fixture ($language): the host has no server wrapper for redolog.Redo"
-      fi
-      echo "==> Compiling $language redo-contract fixture ($self)"
-      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
-      echo "    PASS $language redo-contract ($self)"
-      prune_fixture "$dir" "$output_root"
+        if [[ "$self" == "redo" ]]; then
+          case "$language" in
+            go) wrapper="$(find "$output_root" -type f -path '*/s2sm/grpc/servers/sys/redolog/redo.go' -print -quit)" ;;
+            java) wrapper="$(find "$output_root" -type f -path '*/s2sm/internal/grpc/servers/sys/redolog/Redo.java' -print -quit)" ;;
+            rust) wrapper="$(find "$output_root" -type f -path '*/s2sm/internal/grpc/servers/sys/redolog/redo.rs' -print -quit)" ;;
+          esac
+          [[ -n "$wrapper" ]] || die "redo-contract fixture ($language): the host has no server wrapper for redolog.Redo"
+        fi
+        echo "==> Compiling $language redo-contract fixture ($self)"
+        compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
+        echo "    PASS $language redo-contract ($self)"
+        prune_fixture "$dir" "$output_root"
+      done
     done
-  done
-fi
+  fi
+}
 
 # tenant-record fixture (issue #207): the record plane on a TENANT-OWNED record
 # store is routed by tenant like every other surface of a tenant-owned service.
 # Both builds carry target_tenant as the plane's route field in registry.json;
 # the writer's plane client is pooled per tenant; the store's wrapper refuses a
 # misrouted call (its self-test, run by compile_current_output).
-if [[ -d "$TENANTRECORD_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    for self in tstratum tmessaging; do
-      dir="$WORK_ROOT/tenantrecord-$self-$language"
-      log="$WORK_ROOT/tenantrecord-$self-$language.log"
-      rm -rf "$dir"
-      write_tenantrecord_config "$dir" "$language" "$self"
+fixture_tenantrecord() {
+  if [[ -d "$TENANTRECORD_PROTO_SRC" ]]; then
+    for language in "${languages[@]}"; do
+      for self in tstratum tmessaging; do
+        dir="$WORK_ROOT/tenantrecord-$self-$language"
+        log="$WORK_ROOT/tenantrecord-$self-$language.log"
+        rm -rf "$dir"
+        write_tenantrecord_config "$dir" "$language" "$self"
 
-      echo "==> Generating $language tenant-record fixture ($self)"
-      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$TENANTRECORD_PROTO_SRC" >"$log" 2>&1); then
-        tail -120 "$log" >&2 || true
-        die "$language tenant-record generation failed ($self); log: $log"
-      fi
-      output_root="$(resolve_output_root "$dir/tacplus")"
-      assert_spiffe_soundness "$dir/tacplus"
-      python3 - "$output_root/registry.json" <<'TENANTRECORD_PY' || die "tenant-record fixture ($language, $self): registry.json does not route the record plane by tenant"
+        echo "==> Generating $language tenant-record fixture ($self)"
+        if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$TENANTRECORD_PROTO_SRC" >"$log" 2>&1); then
+          tail -120 "$log" >&2 || true
+          die "$language tenant-record generation failed ($self); log: $log"
+        fi
+        output_root="$(resolve_output_root "$dir/tacplus")"
+        assert_spiffe_soundness "$dir/tacplus"
+        python3 - "$output_root/registry.json" <<'TENANTRECORD_PY' || die "tenant-record fixture ($language, $self): registry.json does not route the record plane by tenant"
 import json, sys
 want = {"/tquery.TenantRecordMap/PutTMessage", "/tquery.TenantRecordMap/Apply", "/tquery.TenantRecordMap/CreateTMessageQuery",
         "/tquery.TenantRecordMap/WatchTMessageChanges", "/tquery.TenantRecordQuery/ListTMessage"}
@@ -3071,95 +3106,137 @@ walk(json.load(open(sys.argv[1])))
 if seen != want:
     sys.exit("missing rpcs: %s" % sorted(want - seen))
 TENANTRECORD_PY
-      if [[ "$self" == "tstratum" ]]; then
-        install_tenant_record_route_selftest "$output_root" "$language"
-      else
-        assert_tenantrecord_client_routed "$output_root" "$language"
-      fi
-      echo "==> Compiling $language tenant-record fixture ($self)"
-      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
-      echo "    PASS $language tenant-record ($self)"
-      prune_fixture "$dir" "$output_root"
+        if [[ "$self" == "tstratum" ]]; then
+          install_tenant_record_route_selftest "$output_root" "$language"
+        else
+          assert_tenantrecord_client_routed "$output_root" "$language"
+        fi
+        echo "==> Compiling $language tenant-record fixture ($self)"
+        compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
+        echo "    PASS $language tenant-record ($self)"
+        prune_fixture "$dir" "$output_root"
+      done
     done
-  done
-fi
+  fi
+}
 
 # tenant-slice fixture: the only build whose per-service config reaches it
 # solely through the generated tenant_config.TenantConfig, so the only place the
 # auto-subscription to that slice is asserted and compiled.
-if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    dir="$WORK_ROOT/tenantslice-$language"
-    log="$WORK_ROOT/tenantslice-$language.log"
-    rm -rf "$dir"
-    write_tenantslice_config "$dir" "$language"
+fixture_tenantslice() {
+  if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
+    for language in "${languages[@]}"; do
+      dir="$WORK_ROOT/tenantslice-$language"
+      log="$WORK_ROOT/tenantslice-$language.log"
+      rm -rf "$dir"
+      write_tenantslice_config "$dir" "$language"
 
-    echo "==> Generating $language tenant-slice fixture"
-    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$TENANTSLICE_PROTO_SRC" >"$log" 2>&1); then
-      tail -120 "$log" >&2 || true
-      die "$language tenant-slice generation failed; log: $log"
-    fi
-    output_root="$(resolve_output_root "$dir/tacplus")"
-    assert_spiffe_soundness "$dir/tacplus"
-    assert_tenantslice_output "$output_root" "$language"
-    echo "==> Compiling $language tenant-slice fixture"
-    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/ledger"
-    echo "    PASS $language tenant-slice"
-    prune_fixture "$dir" "$output_root"
-  done
-fi
+      echo "==> Generating $language tenant-slice fixture"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$TENANTSLICE_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language tenant-slice generation failed; log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      assert_tenantslice_output "$output_root" "$language"
+      echo "==> Compiling $language tenant-slice fixture"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/ledger"
+      echo "    PASS $language tenant-slice"
+      prune_fixture "$dir" "$output_root"
+    done
+  fi
+}
 
 # tenant-slice fixture built as its service_state OWNER (issue #130):
 # registrar hosts RegistrarStateService, whose tenant_configs read RPCs serve a
 # ledger caller its own tenant's entry only, projected to ledger's slice.
-if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    dir="$WORK_ROOT/tenantslice-owner-$language"
-    log="$WORK_ROOT/tenantslice-owner-$language.log"
-    rm -rf "$dir"
-    write_tenantslice_owner_config "$dir" "$language"
+fixture_tenantslice_owner() {
+  if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
+    for language in "${languages[@]}"; do
+      dir="$WORK_ROOT/tenantslice-owner-$language"
+      log="$WORK_ROOT/tenantslice-owner-$language.log"
+      rm -rf "$dir"
+      write_tenantslice_owner_config "$dir" "$language"
 
-    echo "==> Generating $language tenant-slice owner fixture"
-    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$TENANTSLICE_PROTO_SRC" >"$log" 2>&1); then
-      tail -120 "$log" >&2 || true
-      die "$language tenant-slice owner generation failed; log: $log"
-    fi
-    output_root="$(resolve_output_root "$dir/tacplus")"
-    assert_spiffe_soundness "$dir/tacplus"
-    assert_tenantslice_owner_output "$output_root" "$language"
-    echo "==> Compiling $language tenant-slice owner fixture"
-    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/registrar"
-    echo "    PASS $language tenant-slice owner"
-    prune_fixture "$dir" "$output_root"
-  done
-fi
+      echo "==> Generating $language tenant-slice owner fixture"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$TENANTSLICE_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language tenant-slice owner generation failed; log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      assert_tenantslice_owner_output "$output_root" "$language"
+      echo "==> Compiling $language tenant-slice owner fixture"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/registrar"
+      echo "    PASS $language tenant-slice owner"
+      prune_fixture "$dir" "$output_root"
+    done
+  fi
+}
 
 # tenant-slice fixture built as the grpc_config OWNER (issue #135): tenancy hosts
 # TenancyConfigStateService, whose Config read RPCs serve a ledger caller its own
 # tenant's entry of the tenants map only, projected to ledger's slice.
-if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    dir="$WORK_ROOT/tenantslice-config-owner-$language"
-    log="$WORK_ROOT/tenantslice-config-owner-$language.log"
-    rm -rf "$dir"
-    write_tenantslice_owner_config "$dir" "$language" tenancy
+fixture_tenantslice_config_owner() {
+  if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
+    for language in "${languages[@]}"; do
+      dir="$WORK_ROOT/tenantslice-config-owner-$language"
+      log="$WORK_ROOT/tenantslice-config-owner-$language.log"
+      rm -rf "$dir"
+      write_tenantslice_owner_config "$dir" "$language" tenancy
 
-    echo "==> Generating $language tenant-slice config owner fixture"
-    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$TENANTSLICE_PROTO_SRC" >"$log" 2>&1); then
-      tail -120 "$log" >&2 || true
-      die "$language tenant-slice config owner generation failed; log: $log"
-    fi
-    output_root="$(resolve_output_root "$dir/tacplus")"
-    assert_spiffe_soundness "$dir/tacplus"
-    assert_tenantslice_owner_output "$output_root" "$language" tenancy
-    echo "==> Compiling $language tenant-slice config owner fixture"
-    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/tenancy"
-    echo "    PASS $language tenant-slice config owner"
-    prune_fixture "$dir" "$output_root"
+      echo "==> Generating $language tenant-slice config owner fixture"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$TENANTSLICE_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language tenant-slice config owner generation failed; log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      assert_tenantslice_owner_output "$output_root" "$language" tenancy
+      echo "==> Compiling $language tenant-slice config owner fixture"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/tenancy"
+      echo "    PASS $language tenant-slice config owner"
+      prune_fixture "$dir" "$output_root"
+    done
+  fi
+}
+
+# Each fixture above runs once per language as a job of its own
+# (cross-test/lib/jobs.sh, tacplus#300), CROSS_TEST_JOBS of them at once
+# (default: half the CPUs), each building Rust in its job slot's own cargo
+# directory. Their logs print in this order, whatever the order they ran in.
+# The parity checks read every language's main fixture, so they wait for it.
+cg_job() {
+  local language="$1" fixture="$2"
+  [[ "$language" == all ]] || languages=("$language")
+  use_slot_cargo_target
+  "fixture_$fixture"
+}
+
+jobs_init "$WORK_ROOT/.jobs" "${CROSS_TEST_JOBS:-$(jobs_default_cap)}"
+echo "==> Running the fixtures, $JOBS_CAP at once"
+for language in "${languages[@]}"; do
+  jobs_add "main-$language" "" cg_job "$language" main
+done
+jobs_add parity "$(printf 'main-%s ' "${languages[@]}")" cg_job all parity
+for fixture in c2sonly healthonly zerorpc requiresdevice recordegress eventbus_backpressure \
+  accounting_sink ownerdefault quorumwrite epochload tenantroute redo tenantrecord \
+  tenantslice tenantslice_owner tenantslice_config_owner; do
+  for language in "${languages[@]}"; do
+    jobs_add "$fixture-$language" "" cg_job "$language" "$fixture"
   done
+done
+jobs_run
+if [[ "$JOBS_FAILED" -ne 0 ]]; then
+  failed_jobs=""
+  for ((i = 0; i < ${#JOBS_NAMES[@]}; i++)); do
+    [[ "${JOBS_RC[$i]}" -eq 0 ]] || failed_jobs+=" ${JOBS_NAMES[$i]}"
+  done
+  die "$JOBS_FAILED current-generation job(s) failed:$failed_jobs (logs above; trees kept in $WORK_ROOT)"
 fi
 
 if [[ "$KEEP" != true ]]; then
+  remove_slot_cargo_targets
   rm -rf "$WORK_ROOT"
 fi
 

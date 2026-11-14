@@ -4,6 +4,23 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+<<<<<<< HEAD
+- **Concurrent legs inside the other cross-test runners** (2026-11-06, #300): `just gates` runs gates and their
+  language legs concurrently, and current-generation its fixtures, but the runners that run several fixtures or
+  peers one after another inside one leg (memberport, redact, determinism, ...) still do. The gate wall-time table
+  `just gates` prints names the longest; that one would move to `cross-test/lib/jobs.sh` next, with
+  `use_slot_cargo_target` for its jobs.
+- **Ports and timing in cross-tests that now run side by side** (2026-11-06, #300): the first concurrent `just gates`
+  (load ~22 on 8 CPUs) failed stream-expiry twice: the Go test dialled before its server listened, and the Java test
+  minted a 3 s token before its TLS channel was up, so its streams reached the server after exp. #300 fixed both,
+  and the DiskStoreTest flake below as far as a wall-clock bound allows (10 appends, a 60s bound, the writer joined
+  before `close()`); the second run hit that flake, and the third a 1s bound in the Java cert-stream test (widened to
+  20s). Other self-tests share the pattern of picking a free port, releasing it and binding it later (`freePort`),
+  which two concurrent legs can race for; binding port 0 and reading the port back would remove it. And more
+  wall-clock bounds sized for an idle machine may surface as concurrent gates load the runner.
+- **Land time per gate set in the nightly recap** (2026-11-06, #300): `just gates` now prints each gate's wall time
+  and the total; tacplus-dev/looper#57's recap could read them from the land's log to show the gain per gate set.
+=======
 - **Per-language gate sets, and more of the map** (2026-11-08, #266): `gates.yaml` runs the full gates (~3h) for any
   change under `pkg/**`, `cmd/**` or `.github/`. Next: `pkg/internal/<lang>/**` and `pkg/templates/<lang>/**` to that
   language's `current-generation-<lang>`, `determinism-<lang>` and `-<lang>` cross-tests (with `just test`), once each
@@ -11,6 +28,7 @@ the looper then marks it `promoted` or `declined` here with the date.
   stay full); `cmd/sitegen/**` and `site/**` to `just docs` plus `just site`; `.github/workflows/**` to a workflow
   lint. Also for `just docs`: it checks relative links but not their anchors (GitHub's heading slugs) nor external
   URLs, and does not build the site (`site/docs/*.md` link to site paths; `just site` checks them, needing a venv).
+>>>>>>> origin/main
 - **Images on Google Artifact Registry through WIF, ghcr.io deprecated from 2.6** (2026-11-07, #223; parked by
   the hub 2026-11-07): publish `base`, `build` and the services' release images to the public
   `us-docker.pkg.dev/jody1-328023/tacplus`, pushed by the GitLab publish job with a short-lived GCP token from its

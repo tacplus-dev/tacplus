@@ -167,7 +167,13 @@ public final class AccountingSinkDurableTest {
             AccountingManager.EventBusSink sink = durable(queue, tempDir(), stop);
             final int emitted = 40;
             emitAll(sink, emitted);
-            // Let the drain thread take everything in its spool before counting.
+            // Let the drain thread take everything in its spool before counting:
+            // until it has dropped one, then a settle. A loaded runner (the gates
+            // run concurrently, tacplus#300) once took longer than a fixed 300 ms.
+            long settleDeadline = System.currentTimeMillis() + 20_000;
+            while (sink.droppedCount() == 0 && System.currentTimeMillis() < settleDeadline) {
+                Thread.sleep(10);
+            }
             Thread.sleep(300);
             long dropped = sink.droppedCount();
             check(dropped > 0, "emitted " + emitted + " records past a 1024-byte disk bound, none were dropped");

@@ -159,16 +159,33 @@ protoc-check:
   echo "protoc-check: libprotoc ${actual} (pinned ceiling {{protoc_version}})"
 
 # Run the mandatory gate set (soundness, test, current-generation,
-# determinism, cert-stream, ..., tacplus-script) and report a trustworthy overall pass/fail.
-# A naive `for g in ...; do just "$g"; done` loop whose last command per
-# iteration is `echo` always exits 0 regardless of what failed inside —
-# do not write that pattern again; this recipe exists so nobody has to.
+# determinism, cert-stream, ..., tacplus-script) and report a trustworthy overall
+# pass/fail: the last line is `=== OVERALL fail=N ===`, and each gate's output
+# sits between `=== GATE ===` and `=== GATE rc=N ===`. A naive
+# `for g in ...; do just "$g"; done` loop whose last command per iteration is
+# `echo` always exits 0 regardless of what failed inside — do not write that
+# pattern again; this recipe exists so nobody has to.
+#
+# scripts/gates.sh runs the gates, and the language legs of a gate that only
+# names its legs (cert-stream: cert-stream-go ...), concurrently: GATES_JOBS
+# at once, half the CPUs by default (tacplus#300). The output and the verdict
+# are the same whatever the cap; a table of each gate's wall time comes last.
+# A gate added here runs concurrently with every other: it must not write a
+# path another gate writes (each takes its own work directory, its Rust builds
+# in $CARGO_TARGET_DIR, the tacplus binary in $TACPLUS_BIN).
 #
 # Runs against the HOST toolchain, so it starts with protoc-check. If your
 # host protoc is newer than the pinned ceiling and no older build is
 # installable, use `just gates-container` instead: it runs these same gates
 # inside the CI base image, whose protoc is pinned well under the ceiling.
+#
+# The tree lock is held across the WHOLE suite, not once per gate: taking it
+# per gate would let another job interleave a regeneration between two of them.
+# The nested `just` calls re-enter this same lock.
 gates:
+<<<<<<< HEAD
+  {{lock}} bash scripts/gates.sh soundness test current-generation determinism cert-stream stream-expiry memberport claims-provenance w2s-validate c2d-server zero-rpc-s2s jwk-alg redact trace-carry tacplus-script
+=======
   #!/usr/bin/env bash
   set -uo pipefail
   # Hold the tree lock across the WHOLE suite, not once per gate: taking it per
@@ -197,6 +214,7 @@ gates:
   done
   echo "=== OVERALL fail=$fail ==="
   exit $fail
+>>>>>>> origin/main
 
 # Run `just gates` inside the tacplus build image instead of against the
 # host toolchain: every SDK and tool at the pinned versions, with no host
@@ -454,8 +472,7 @@ images:
 fix-looper *ARGS:
   bash scripts/fix-looper/run.sh {{ARGS}}
 
-w2s-validate:
-  {{lock}} bash cross-test/w2s-validate/run.sh
+w2s-validate: w2s-validate-rust w2s-validate-go w2s-validate-java
 
 w2s-validate-go:
   {{lock}} bash cross-test/w2s-validate/run.sh --language go
@@ -468,10 +485,15 @@ w2s-validate-java:
 
 # Behavioral coverage of the generated Go, Java and Rust C2D server: starts a
 # cluster-less daemon through the generated standalone host entry on its
+<<<<<<< HEAD
+# declared unix socket and calls it through the generated c2dm client.
+c2d-server: c2d-server-go c2d-server-java c2d-server-rust
+=======
 # declared unix socket and calls it through the generated c2dm client, and
 # through the generated Swift C2DClient's default socket.
 c2d-server:
   {{lock}} bash cross-test/c2d-server/run.sh
+>>>>>>> origin/main
 
 # Behavioral coverage of a zero-rpc Rust host (#94): the generated ServiceManager
 # of cross-test/proto-zerorpc runs new() + run() against a fake kernel and a fake

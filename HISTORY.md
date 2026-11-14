@@ -100,3 +100,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-09 looper issue release/2.6: cross-test/trace-carry/run.sh never prunes its cargo workspace, so TestCrossTestLegsPruneTheirCargoWorkspace fails (#398)
 - 2026-11-10 looper issue release/2.0 Go: service_im audienceFromMethod emits a duplicate case when a virtual service package is also a default-audience package (#495)
 - 2026-11-10 looper issue trace_id on every generated message and helper, copied across projections and transformations, cleared on every store (#313)
+- 2026-11-10 looper issue build:2.6.2's arm64 image is v2.6.1's (built 2026-11-05): zlib1g CVE-2026-85091 and CVE-2026-76844 (HIGH) unfixed on arm64 (#369)

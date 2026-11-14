@@ -32,6 +32,7 @@ import io.grpc.stub.StreamObserver;
 
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
 public final class Fixture {
 
@@ -137,9 +138,11 @@ public final class Fixture {
             if (!BEARER.equals(header)) {
                 throw ProtoException.newErrUnauthorized(null, "unexpected authorization header");
             }
-            if (!"/".equals(targetNamespace) && !targetNamespace.isEmpty()) {
+            if (targetNamespace != null && !"/".equals(targetNamespace) && !targetNamespace.isEmpty()) {
                 throw ProtoException.newErrPermissionDenied(null, "unexpected target namespace " + targetNamespace);
             }
+            // No identity claims: this gate does not assert accounting.
+            return Map.of();
         });
 
         ServerBuilder<?> builder = ServerBuilder.forPort(0).intercept(Authorizer.headerCaptureInterceptor());

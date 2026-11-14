@@ -1,0 +1,85 @@
+= init
+> Bash git status --short && git diff --name-only --diff-filter=U; grep -n '^<<<<<<<\|^=======\|^>>>>>>>' PROPOSALS.md; git log --oneline -3 origin/main; git log --oneline origin/main..HEAD
+<  M PROPOSALS.md 7:<<<<<<< HEAD 15:======= 34:>>>>>>> origin/main 81da6989 HISTORY.md: #495 (looper) b04de90e HISTORY.md: #398 (looper) 955924cf Swift C2DClient defaults to the services' socket_path (#494)
+> Bash gh issue view 283 --repo tacplus-dev/tacplus --comments | tail -40
+<   - `build:2.0` (= 2.0.21, built on main's base): 4 HIGH in zlib1g/zlib1g-dev (CVE-2026-76844 and CVE-2026-85091), fixed in `1:1.3.dfsg+really1.3.1-1+deb13u1`. The line rebuild's `apt-get upgrade` takes the fix.  **Left for the next run:** 1. Confirm the seven line-rebuild runs pass. 2. Run trivy on...
+> Read /builds/looper/tacplus/issues/283/PROPOSALS.md
+< 1	# Proposals: tacplus 2	 3	Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones into ROADMAP.md (via an agent); 4	the looper then marks it `promoted` or `declined` here with the date. 5	 6	## Open 7	<<<<<<< HEAD 8	- **A release tag never builds on another line's base** (...
+Keep both entries.
+> Bash sed -i -e '/^<<<<<<< HEAD$/d' -e '/^=======$/d' -e '/^>>>>>>> origin\/main$/d' PROPOSALS.md && grep -c '^<<<<<<<\|^>>>>>>>' PROPOSALS.md; git diff origin/main --stat; git log --oneline -1; git rev-parse HEAD origin/main
+< 0  PROPOSALS.md | 7 +++++++  1 file changed, 7 insertions(+) 81da6989 HISTORY.md: #495 (looper) 81da698900d6bfcdb6c40b45a87089c7faef36e9 81da698900d6bfcdb6c40b45a87089c7faef36e9
+= thinking_tokens
+= thinking_tokens
+> Bash gh run list --repo tacplus-dev/tacplus --workflow images.yml --limit 40 --json databaseId,event,headBranch,conclusion,createdAt,status | jq -r '.[]|[.databaseId,.event,.headBranch,.status,.conclusion,.createdAt]|@tsv'
+< 43534202979	push	main	completed	success	2026-11-14T00:26:29Z 43534186881	push	main	completed	success	2026-11-14T00:26:20Z 43534147117	push	main	completed	success	2026-11-14T00:25:59Z 43346894957	push	main	completed	success	2026-11-13T01:42:24Z 43335265428	push	v2.6.11	completed	success	2026-11-13T00...
+= thinking_tokens
+= thinking_tokens
+> Bash for e in workflow_dispatch schedule; do gh run list --repo tacplus-dev/tacplus --workflow images.yml --event $e --limit 30 --json databaseId,headBranch,conclusion,createdAt | jq -r '.[]|[.databaseId,.headBranch,.conclusion,.createdAt]|@tsv'; echo ---; done
+< 42631120514	release/2.6	success	2026-11-09T14:04:33Z 42631115044	release/2.5	success	2026-11-09T14:04:31Z 42631107269	release/2.4	success	2026-11-09T14:04:29Z 42631103987	release/2.3	success	2026-11-09T14:04:27Z 42631099412	release/2.2	success	2026-11-09T14:04:25Z 42631095342	release/2.1	success	202...
+= thinking_tokens
+= thinking_tokens
+All seven line rebuilds ran green on 2026-11-09. Now trivy each line image, and meanwhile commit the PROPOSALS resolution.
+> Bash mkdir -p /tmp/trivy283 && cd /tmp/trivy283 && for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do (/usr/local/bin/trivy image --image-src remote --platform linux/amd64 --severity HIGH,CRITICAL --ignore-unfixed --scanners vuln ghcr.io/tacplus-dev/tacplus/build:$v > /tmp/trivy283/build-$v.txt 2>&1; echo "rc=$?" ...
+< 1160
+> Edit /builds/looper/tacplus/issues/283/PROPOSALS.md
+< The file /builds/looper/tacplus/issues/283/PROPOSALS.md has been updated successfully. (note: the file had been modified on disk since you last read it — the edit applied cleanly, but the file contains other changes not in your context. Read it before edits that depend on surrounding content.)
+> Bash git add PROPOSALS.md && git commit -q -m "PROPOSALS.md: a release tag never builds on another line's base (#283)  The fallback to main's base:latest broke the 2.1-2.5 tag runs before any line rebuild had pushed base:X.Y; it is unreachable now, but the plan step should rebuild base rather than fall b...
+< 4995fd38 PROPOSALS.md: a release tag never builds on another line's base (#283) [2026-11-14T00:28:16Z] checkpoint of #283 (a step) pushed to looper/tacplus-283:  3 files changed, 711 insertions(+)
+= thinking_tokens
+= thinking_tokens
+> Bash git status --short; git show --stat HEAD | tail -3; nohup /usr/local/bin/repo-looper --repo tacplus --issue 283 --land > /tmp/land283.log 2>&1 & echo $!
+<  PROPOSALS.md | 7 +++++++  1 file changed, 7 insertions(+) 1309
+Now the Nightly security runs while trivy works.
+> Bash gh workflow list --repo tacplus-dev/tacplus | grep -i secur; gh run list --repo tacplus-dev/tacplus --workflow "Nightly security" --limit 5 --json databaseId,conclusion,createdAt,headSha | jq -r '.[]|[.databaseId,.conclusion,.createdAt,.headSha[:8]]|@tsv'
+< Nightly security	active	391101351 43465320155	success	2026-11-13T16:41:56Z	4205075d 43265066105	success	2026-11-12T17:01:56Z	0d66c1bb 43059298375	failure	2026-11-11T16:32:20Z	b390c0c5 42855934295	success	2026-11-10T16:34:50Z	b1bde0e1 42679744175	failure	2026-11-09T19:03:59Z	7b690e0b
+> Bash gh run view 43465320155 --repo tacplus-dev/tacplus --json jobs | jq -r '.jobs[]|[.databaseId,.name,.conclusion]|@tsv'
+< 132022775811	Secrets (full history)	success 132022776219	Release lines	success 132022776378	Published images	success 132022834679	Dependencies (release/2.2)	success 132022834726	Dependencies (release/2.0)	success 132022834748	Dependencies (main)	success 132022834772	Dependencies (release/2.3)	succes...
+> Bash gh run view 43465320155 --repo tacplus-dev/tacplus --job 132022776378 --log 2>&1 | sed 's/^[^\t]*\t[^\t]*\t//' | grep -iE 'build:|debian|total|HIGH|CRITICAL|finding' | head -60
+< 2026-11-13T16:42:01.7631363Z ^[[36;1m  ghcr.io/tacplus-dev/tacplus/build:latest^[[0m 2026-11-13T16:42:01.7634054Z ^[[36;1m# Each release line's build image, build:X.Y: what repositories build^[[0m 2026-11-13T16:42:01.7639243Z ^[[36;1m  images+=("ghcr.io/tacplus-dev/tacplus/build:${minor#release/}")^...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The Nightly security run of 2026-11-13 (43465320155) shows "Published images" green with 0 `[debian]` findings on every `build:2.0`…`2.6`. Waiting on my own trivy scans.
+> Bash sleep 100; ls /tmp/trivy283; for f in /tmp/trivy283/build-*.txt; do echo "== $f"; grep -E 'debian|rc=|Total|Clean' $f | head -6; done; tail -3 /tmp/land283.log
+< <tool_use_error>Blocked: sleep 100 followed by: ls /tmp/trivy283 for f in /tmp/trivy283/build-*.txt; do echo "== $f"; grep -E 'debian|rc=|Total|Clean' $f | head -6; done tail -3 /tmp/land283.log. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wai...
+> Bash until [ -f /tmp/trivy283/build-2.6.txt ] && grep -q rc= /tmp/trivy283/build-2.6.txt; do sleep 5; done; for f in /tmp/trivy283/build-*.txt; do echo "== $f"; grep -E '\(debian|rc=|Total' $f | head -8; done; tail -3 /tmp/land283.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b6ztft6st). Output is being written to: /builds/looper/tacplus/homes/looper-283/tmp/claude-61000/-builds-looper-tacplus-issues-283/5619646a-20e4-4143-aba3-494260e76e18/tasks/b6ztft6st.output. You will be notified w...
+> Bash ls -la /tmp/trivy283; for f in /tmp/trivy283/build-*.txt; do echo "== $f"; grep -E '\(debian|rc=|Total' $f | head -8; done; tail -3 /tmp/land283.log
+< total 748 drwxr-xr-x 2 looper-283 looper-283   4096 Nov 14 00:37 . drwxrwxrwt 1 root       root         4096 Nov 14 00:37 .. -rw-r--r-- 1 looper-283 looper-283      0 Nov 14 00:28 all.log -rw-r--r-- 1 looper-283 looper-283 126708 Nov 14 00:29 build-2.0.txt -rw-r--r-- 1 looper-283 looper-283 154064 N...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /tmp/trivy283; for f in build-2.[0-4].txt; do echo "== $f"; grep -E '^│ .*│ +[a-z-]+ +│ +[1-9]' $f | sed 's/  */ /g'; done
+< == build-2.0.txt == build-2.1.txt == build-2.2.txt == build-2.3.txt == build-2.4.txt Shell cwd was reset to /builds/looper/tacplus/issues/283
+> Bash grep -E '│' /tmp/trivy283/build-2.1.txt | grep -vE '│ +0 +│|^│ +Target|─' | head -20
+< │ plugin/package.json                                                              │             │                 │ │ /package.json                                                                    │             │                 │ │ son                                                             ...
+= thinking_tokens
+= thinking_tokens
+> Bash grep -hE 'Total: [1-9]|^[^ ].*\((jar|gobinary|debian)' /tmp/trivy283/build-*.txt | head; grep -c 'Total:' /tmp/trivy283/build-*.txt
+< │ ghcr.io/tacplus-dev/tacplus/build:2.0 (debian 13.7)                              │  debian  │        0        │ │ ghcr.io/tacplus-dev/tacplus/build:2.1 (debian 13.7)                              │   debian    │        0        │ │ ghcr.io/tacplus-dev/tacplus/build:2.2 (debian 13.7)                ...
+So far `build:2.0` through `build:2.4` show 0 Debian findings (and no other findings). I'm waiting for the 2.5 and 2.6 scans and for the land.
+> Bash until grep -q rc= /tmp/trivy283/build-2.6.txt 2>/dev/null; do sleep 5; done; grep -hE '\(debian|rc=|Total: ' /tmp/trivy283/build-2.[56].txt; tail -2 /tmp/land283.log
+= task_started
+= task_notification
+< │ ghcr.io/tacplus-dev/tacplus/build:2.5 (debian 13.7)                              │   debian    │        0        │ rc=0 │ ghcr.io/tacplus-dev/tacplus/build:2.6 (debian 13.7)                              │   debian    │        0        │ rc=0 [2026-11-14T00:28:23Z] checkpoint of #283 (land queued) ...
+= task_updated
+= task_notification
+= background_tasks_changed
+= thinking_tokens
+= thinking_tokens
+All seven lines are clean. Getting each image's digest and creation date for the record.
+> Bash which crane skopeo regctl 2>/dev/null; for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do t=$(curl -s "https://ghcr.io/token?scope=repository:tacplus-dev/tacplus/build:pull" | jq -r .token); d=$(curl -sI -H "Authorization: Bearer $t" -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.d...
+< build:2.0 sha256:7f7822db4a2f555fb5bb22c3fb01832b07a664764e0c5e517be8b11b0591b262 build:2.1 sha256:4855590475928b6a45c0eb2bafef917601fa74218c0e557db50a3506e8ff1660 build:2.2 sha256:cd6977d8c6bc9cf6c2824a89387428c5c89fa6c961e7dba5bc510b9a6000342c build:2.3 sha256:b0cc718a2299fdbe26e2b5055c704492a033c...
+= thinking_tokens
+= thinking_tokens
+> Bash for r in 42428031880 42428033745 42428036637 42428038928 42428041155 42502995632; do gh run view $r --repo tacplus-dev/tacplus --json conclusion,attempt,headBranch | jq -r '[.headBranch,.attempt,.conclusion]|@tsv'; done; grep -n 'build:X.Y\|line rebuild' /builds/looper/tacplus/issues/283/docs/VERSIO...
+= task_started
+= task_notification
+< v2.1.13	1	failure v2.2.10	1	failure v2.3.12	1	failure v2.4.12	1	failure v2.5.13	1	failure v2.5.15	1	failure 105:`build:X.Y` of its own line, never in `build:latest`. 111:builds `base` and `build` from the branch and pushes `base:X.Y`, `build:X.Y` 113:So `build:X.Y` (and `base:X.Y`) may move without ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Acceptance is met: all seven `build:X.Y` images are clean, and the Nightly run confirms it. Checkpointing, then waiting for the PROPOSALS land.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 283 --checkpoint "DONE: PROPOSALS 4995fd38 queued to land 00:28Z. Line rebuilds 11-09 all green (42631091155..42631120514, dispatched by schedule run 42631072073). trivy 00:28-00:40Z build:2.0..2.6 all 0 [debian], 0 total. Nightly security 4346532015...

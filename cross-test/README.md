@@ -81,8 +81,8 @@ generated code interoperates with another language's generated code over the
 wire. It is one cross-language pairing per driving client, not the full N x N
 matrix: python/typescript/swift/csharp against java/rust hosts, java/rust
 against a go host, and W2S against java/rust hosts remain uncovered.
-Local/manual — it needs go + maven + cargo concurrently, so it is not in CI, not
-in the nightly matrix, and not in `just test`. See
+It needs go + maven + cargo concurrently, so it is not in `just test`; it runs in
+`just gates` (and so in the nightly gates) since #455. See
 `cross-test/server-runtime/README.md`.
 
 `wire-corpus` is the serialization-equivalence gate: one `CorpusRecord`

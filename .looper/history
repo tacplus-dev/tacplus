@@ -1,0 +1,1 @@
+- 2026-11-14 looper issue Build images carry linux-libc-dev 6.12.116-1: six HIGH kernel CVEs fixed in Debian 13's 6.12.117-1 (DSA-6628-1) fail every pinned repo's security scan (#711)

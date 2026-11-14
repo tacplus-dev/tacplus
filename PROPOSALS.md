@@ -4,6 +4,13 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **A release tag never builds on another line's base** (2026-11-08, #283): a release tag's Images run starts its fresh
+  `build` from its line's `base:X.Y`, else `base:latest` (main's). Before any line rebuild had pushed a `base:X.Y`, the
+  v2.1.13–v2.5.13 runs took main's base (Swift 6.4.2) under their lines' Swift 6.1.3 plugins and failed the smoke test
+  (`protoc-gen-swift: undefined symbol`, run 42428041155), and so did every 2.1–2.5 tag cut since (v2.1.14–v2.5.15).
+  v2.0.20 passed, so `build:2.0.20` carries main's SDKs instead of 2.0's pins. Once the weekly line rebuild has pushed every `base:X.Y`, the fallback is unreachable for a supported
+  line (the line rebuilds of 2026-11-09 pushed them, and the 2.1–2.5 tags cut since pass). Still, the plan step should rebuild `base` from the tag when `base:X.Y` is missing, not fall back. That change
+  goes in `images.yml` on main and on each `release/*`.
 - **Per-language gate sets, and more of the map** (2026-11-08, #266): `gates.yaml` runs the full gates (~3h) for any
   change under `pkg/**`, `cmd/**` or `.github/`. Next: `pkg/internal/<lang>/**` and `pkg/templates/<lang>/**` to that
   language's `current-generation-<lang>`, `determinism-<lang>` and `-<lang>` cross-tests (with `just test`), once each

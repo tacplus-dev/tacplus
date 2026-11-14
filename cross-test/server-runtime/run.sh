@@ -458,9 +458,10 @@ start_server_for() {
     java)
       build_java_server
       # --sun-misc-unsafe-memory-access=allow: protobuf-java/netty still use
-      # sun.misc.Unsafe; JDK 24+ warns on first use and this gate asserts the
-      # fixture server's stderr stays empty.
-      start_fixture "$JAVA_LOG_DIR" "$JAVA_BIN" --sun-misc-unsafe-memory-access=allow \
+      # sun.misc.Unsafe; --enable-native-access=ALL-UNNAMED: netty loads its
+      # native transport. JDK 24+ warns on first use of either, and this gate
+      # asserts the fixture server's stderr stays empty.
+      start_fixture "$JAVA_LOG_DIR" "$JAVA_BIN" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED \
         -Dlogback.configurationFile="$GATE_DIR/fixture/java/logback.xml" \
         -cp "$JAVA_FIXTURE_CLASSPATH" fixture.Fixture
       SERVER_LOG_DIR="$JAVA_LOG_DIR"
@@ -524,7 +525,7 @@ for client in "${clients[@]:-}"; do
       build_java_client
       start_server_for "$peer"
       run_client_against java "$peer" "$SERVER_LOG_DIR" \
-        "$JAVA_BIN" --sun-misc-unsafe-memory-access=allow \
+        "$JAVA_BIN" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED \
         -Dlogback.configurationFile="$GATE_DIR/fixture/java/logback.xml" \
         -cp "$JAVA_CLIENT_CLASSPATH" client.Client
       ;;

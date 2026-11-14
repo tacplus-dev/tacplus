@@ -19,7 +19,9 @@ ARG DOCKER_VERSION=29
 # 0.2.0 (CVE-2026-17106, HIGH; fixed in 0.3.0) and golang.org/x/net 0.59.0
 # (CVE-2026-78669, HIGH, fixed in 0.60.0; CVE-2026-78661 and CVE-2026-97045,
 # fixed in 0.62.0) (#190). Drop each bump, and then the stage, once a buildx
-# release carries it; images/smoke.sh checks the floors.
+# release carries it; images/smoke.sh checks the floors. gh is built from its
+# release's source the same way, with this X_NET_VERSION: its releases
+# (through 2.103.3) build with golang.org/x/net 0.60.0 (CVE-2026-78661) (#350).
 ARG BUILDX_VERSION=0.38.1
 ARG GO_ARCHIVE_VERSION=0.3.3
 ARG X_NET_VERSION=0.62.0
@@ -37,6 +39,9 @@ ARG GRPC_SWIFT_PROTOBUF_VERSION=2.4.0
 ARG GRPCIO_TOOLS_VERSION=1.76.0
 ARG JUST_VERSION=1.58.0
 ARG GH_VERSION=2.103.2
+# gh 2.103.2 needs Go 1.27; the gh stage builds with it while this line's
+# Go (GO_VERSION) stays where it is (#350).
+ARG GH_GO_VERSION=1.27
 ARG GCLOUD_VERSION=549.0.0
 ARG OPENJML_VERSION=21-0.23
 
@@ -45,7 +50,6 @@ ARG TARGETARCH
 ARG PROTOC_VERSION
 ARG GRPC_JAVA_VERSION
 ARG JUST_VERSION
-ARG GH_VERSION
 ARG GCLOUD_VERSION
 ARG OPENJML_VERSION
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -66,10 +70,6 @@ RUN case "$TARGETARCH" in \
     && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/just.tar.gz \
        "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-${JUST_ARCH}-unknown-linux-musl.tar.gz" \
     && tar -xz -C /opt/just -f /tmp/just.tar.gz just && rm /tmp/just.tar.gz \
-    && mkdir -p /opt/gh \
-    && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/gh.tar.gz \
-       "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz" \
-    && tar -xz --strip-components=2 -C /opt/gh -f /tmp/gh.tar.gz "gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh" && rm /tmp/gh.tar.gz \
     && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/gcloud.tar.gz \
        "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-${GCLOUD_VERSION}-linux-${GCLOUD_ARCH}.tar.gz" \
     && tar -xz -C /opt -f /tmp/gcloud.tar.gz && rm /tmp/gcloud.tar.gz \
@@ -98,6 +98,17 @@ RUN git clone --depth 1 --branch "v${BUILDX_VERSION}" https://github.com/docker/
     && CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -mod=vendor -trimpath \
        -ldflags "-X github.com/docker/buildx/version.Version=v${BUILDX_VERSION} -X github.com/docker/buildx/version.Package=github.com/docker/buildx" \
        -o /out/docker-buildx ./cmd/buildx
+
+FROM --platform=$BUILDPLATFORM golang:${GH_GO_VERSION}-trixie AS gh
+ARG TARGETARCH
+ARG GH_VERSION
+ARG X_NET_VERSION
+RUN git clone --depth 1 --branch "v${GH_VERSION}" https://github.com/cli/cli /src/gh \
+    && cd /src/gh \
+    && go get "golang.org/x/net@v${X_NET_VERSION}" && go mod tidy \
+    && CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath \
+       -ldflags "-X github.com/cli/cli/v2/internal/build.Version=${GH_VERSION}" \
+       -o /out/gh ./cmd/gh
 
 FROM rust:${RUST_VERSION}-trixie AS rust-tools
 ARG PROTOC_GEN_PROST_VERSION
@@ -137,12 +148,23 @@ ARG GRPCIO_TOOLS_VERSION
 LABEL org.opencontainers.image.title="tacplus build" \
       org.opencontainers.image.description="tacplus base plus protoc and every plugin, grpcio-tools, JBMC/OpenJML, just, the docker CLI and gcloud: the image the tacplus gates run in" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus"
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends dnsutils iproute2 jbmc patch ripgrep \
+# The Debian packages it adds are images/build.packages (#554); both lists are
+# copied, as the base it starts from may predate this file's.
+COPY images/base.packages /usr/local/share/tacplus/packages/base
+COPY images/build.packages /usr/local/share/tacplus/packages/build
+COPY images/packages-check.sh /usr/local/bin/tacplus-packages-check
+# A value unique to each images.yml run (#369): it is part of this layer's
+# cache key, so every run upgrades the OS packages. Without it the registry
+# cache hands back the last run's layer, with its packages, for as long as
+# the base image has not moved: v2.6.2's arm64 image was v2.6.1's.
+ARG APT_REFRESH=
+RUN : "${APT_REFRESH}" && apt-get update && apt-get upgrade -y \
+    && sed 's/#.*//' /usr/local/share/tacplus/packages/build | xargs apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=fetch /opt/protoc/bin/protoc /opt/protoc/bin/protoc-gen-grpc-java /usr/local/bin/
 COPY --from=fetch /opt/protoc/include /usr/local/include
 COPY --from=fetch /opt/just/just /usr/local/bin/just
-COPY --from=fetch /opt/gh/gh /usr/local/bin/gh
+COPY --from=gh /out/gh /usr/local/bin/gh
 COPY --from=fetch /opt/google-cloud-sdk /opt/google-cloud-sdk
 COPY --from=fetch /opt/openjml /root/.cache/tacplus/tools/openjml
 COPY --from=go-tools /out/ /usr/local/bin/
@@ -161,6 +183,10 @@ RUN ln -s ../lib/node_modules/@bufbuild/protoc-gen-es/bin/protoc-gen-es /usr/loc
 RUN python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir "grpcio-tools==${GRPCIO_TOOLS_VERSION}" black build twine \
        "cryptography>=49.0.0" "pyOpenSSL>=26.0.0" "jaraco.context>=6.1.0" "wheel>=0.46.2"
+# No Debian package beyond images/base.packages and images/build.packages,
+# Debian's base system and their dependencies (#554): OpenEXR came in
+# through a base image's packages, and the build failed nowhere.
+RUN tacplus-packages-check /usr/local/share/tacplus/packages/base /usr/local/share/tacplus/packages/build
 # gcloud runs on the image's system Python: the SDK's bundled Python and its
 # gcloud-crc32c binary (a Go program) are removed in the fetch stage because
 # they pin cryptography, pyOpenSSL and a Go stdlib that Trivy flags at

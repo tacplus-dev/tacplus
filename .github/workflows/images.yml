@@ -10,6 +10,19 @@ name: Images
 # scripts/images-tags.sh). Releases are cut on several lines at once, so a run
 # for an older line never moves base:latest or build:latest, and it builds with
 # its own line's build image, not whichever image another run last pushed (#160).
+#
+# A release tag builds its build image fresh (apt-get upgrade), from its line's
+# base:X.Y when there is one, so a patch takes every OS security fix. A run on a
+# release/X.Y branch is a line rebuild (#283), dispatched weekly by main's
+# Images workflow: base and build from this branch, pushed as base:X.Y and
+# build:X.Y (and the dated tag) only, never latest, main, X or an X.Y.Z, and no
+# tacplus image.
+
+# Every run upgrades the OS packages (#369): APT_REFRESH, unique to the run,
+# keeps the registry cache from handing back an older run's apt-get upgrade
+# layer, and scripts/images-check-index.sh fails the run unless each base and
+# build index it pushes holds linux/amd64 and linux/arm64, both created during
+# the run.
 
 on:
   push:
@@ -20,7 +33,7 @@ on:
   workflow_dispatch:
     inputs:
       rebuild:
-        description: "Lowest layer to rebuild (everything above it rebuilds too)"
+        description: "Lowest layer to rebuild (everything above it rebuilds too); a run on release/X.Y always rebuilds base and build, as that line's X.Y"
         type: choice
         options: [tacplus, build, base]
         default: tacplus
@@ -45,6 +58,9 @@ jobs:
       build: ${{ steps.plan.outputs.build }}
       stamp: ${{ steps.plan.outputs.stamp }}
       build_image: ${{ steps.plan.outputs.build_image }}
+      line: ${{ steps.plan.outputs.line }}
+      base_image: ${{ steps.plan.outputs.base_image }}
+      started: ${{ steps.plan.outputs.started }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,7 +70,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          plan="$(scripts/images-plan.sh "${{ github.event_name }}" "$GITHUB_REF_TYPE" "${{ github.event.inputs.rebuild }}")"
+          # Every image this run pushes must be created after this (#369,
+          # scripts/images-check-index.sh).
+          started="$(date -u +%s)"
+          plan="$(scripts/images-plan.sh "${{ github.event_name }}" "$GITHUB_REF_TYPE" "${{ github.event.inputs.rebuild }}" "$GITHUB_REF_NAME")"
           read -r base build <<<"$plan"
           # First publish: build everything when the build image does not exist yet.
           if ! docker manifest inspect "$NS/build:latest" >/dev/null 2>&1; then base=true; build=true; fi
@@ -69,8 +88,19 @@ jobs:
             line="$NS/build:${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
             if docker manifest inspect "$line" >/dev/null 2>&1; then image="$line"; fi
           fi
-          { echo "base=$base"; echo "build=$build"; echo "stamp=$stamp"; echo "build_image=$image"; } >> "$GITHUB_OUTPUT"
-          echo "base=$base build=$build build_image=$image"
+          # The release line of a tag or a line rebuild; none for main.
+          line=""
+          if [[ "$GITHUB_REF_TYPE" == tag && "${GITHUB_REF_NAME#v}" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]]; then
+            line="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+          elif [[ "$GITHUB_REF_TYPE" == branch && "$GITHUB_REF_NAME" =~ ^release/([0-9]+\.[0-9]+)$ ]]; then
+            line="${BASH_REMATCH[1]}"
+          fi
+          # The base a build starts from when this run does not rebuild base: its
+          # line's base:X.Y (refreshed weekly by the line rebuild), else base:latest.
+          base_image="$NS/base:latest"
+          if [[ -n $line ]] && docker manifest inspect "$NS/base:$line" >/dev/null 2>&1; then base_image="$NS/base:$line"; fi
+          { echo "base=$base"; echo "build=$build"; echo "stamp=$stamp"; echo "build_image=$image"; echo "line=$line"; echo "base_image=$base_image"; echo "started=$started"; } >> "$GITHUB_OUTPUT"
+          echo "base=$base build=$build build_image=$image line=$line base_image=$base_image"
         env:
           DOCKER_CONFIG: /tmp/docker-anon
 
@@ -91,9 +121,14 @@ jobs:
           set -euo pipefail
           git fetch --force --tags origin
           list="$NS/base:${{ needs.plan.outputs.stamp }}"
-          if [[ "$GITHUB_REF_TYPE" != tag ]] || grep -qw latest <<<"$(scripts/images-tags.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_SHA")"; then
-            list+=",$NS/base:latest"
-          fi
+          # base takes latest where build does (main, the newest release) and its
+          # line's X.Y where build does (a line rebuild, the newest patch of a line).
+          for t in $(scripts/images-tags.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_SHA"); do
+            case "$t" in
+              main|latest) list+=",$NS/base:latest" ;;
+              "${{ needs.plan.outputs.line }}") list+=",$NS/base:$t" ;;
+            esac
+          done
           echo "list=$list" >> "$GITHUB_OUTPUT"
           echo "$list"
       - uses: docker/setup-qemu-action@v3
@@ -108,10 +143,16 @@ jobs:
           context: .
           file: images/base.Dockerfile
           platforms: linux/amd64,linux/arm64
+          # Unique to the run: every run upgrades the OS packages instead of
+          # taking an older run's upgrade from the cache (#369).
+          build-args: |
+            APT_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
           push: true
           tags: ${{ steps.tags.outputs.list }}
           cache-from: type=registry,ref=${{ env.NS }}/base:buildcache
           cache-to: type=registry,ref=${{ env.NS }}/base:buildcache,mode=max
+      - name: Both platforms built by this run
+        run: scripts/images-check-index.sh "$NS/base:${{ needs.plan.outputs.stamp }}" "${{ needs.plan.outputs.started }}"
 
   build:
     name: build (${{ matrix.arch }})
@@ -145,7 +186,8 @@ jobs:
           file: images/build.Dockerfile
           platforms: linux/${{ matrix.arch }}
           build-args: |
-            BASE_IMAGE=${{ env.NS }}/base:${{ needs.base.result == 'success' && needs.plan.outputs.stamp || 'latest' }}
+            BASE_IMAGE=${{ needs.base.result == 'success' && format('{0}/base:{1}', env.NS, needs.plan.outputs.stamp) || needs.plan.outputs.base_image }}
+            APT_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
           outputs: type=image,name=${{ env.NS }}/build,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=registry,ref=${{ env.NS }}/build:buildcache-${{ matrix.arch }}
           cache-to: type=registry,ref=${{ env.NS }}/build:buildcache-${{ matrix.arch }},mode=max
@@ -190,16 +232,27 @@ jobs:
           refs=(); for d in *; do refs+=("$NS/build@sha256:$d"); done
           tags=(-t "$NS/build:${{ needs.plan.outputs.stamp }}")
           git -C "$GITHUB_WORKSPACE" fetch --force --tags origin
-          if [[ "$GITHUB_REF_TYPE" != tag ]] || grep -qw latest <<<"$(cd "$GITHUB_WORKSPACE" && scripts/images-tags.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_SHA")"; then
-            tags+=(-t "$NS/build:latest")
-          fi
+          # main and the newest release move latest; a line rebuild moves its X.Y
+          # and nothing else. A release's X.Y.Z, X.Y and X come in tacplus-manifest.
+          for t in $(cd "$GITHUB_WORKSPACE" && scripts/images-tags.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_SHA"); do
+            case "$t" in
+              main|latest) tags+=(-t "$NS/build:latest") ;;
+              "${{ needs.plan.outputs.line }}") [[ "$GITHUB_REF_TYPE" == branch ]] && tags+=(-t "$NS/build:$t") ;;
+            esac
+          done
+          # The dated tag first, and the other tags only once its index holds
+          # both platforms, each built by this run (#369): v2.6.2 published
+          # v2.6.1's arm64 image, which the cache handed back.
+          docker buildx imagetools create -t "$NS/build:${{ needs.plan.outputs.stamp }}" "${refs[@]}"
+          "$GITHUB_WORKSPACE/scripts/images-check-index.sh" "$NS/build:${{ needs.plan.outputs.stamp }}" "${{ needs.plan.outputs.started }}"
           docker buildx imagetools create "${tags[@]}" "${refs[@]}"
           docker buildx imagetools inspect "$NS/build:${{ needs.plan.outputs.stamp }}"
 
   tacplus:
     name: tacplus (${{ matrix.arch }})
     needs: [plan, base, build, build-manifest]
-    if: always() && needs.plan.result == 'success' && (needs.base.result == 'success' || needs.base.result == 'skipped') && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.build-manifest.result == 'success' || needs.build-manifest.result == 'skipped')
+    # A line rebuild refreshes base and build only: no tacplus image.
+    if: always() && !startsWith(github.ref_name, 'release/') && needs.plan.result == 'success' && (needs.base.result == 'success' || needs.base.result == 'skipped') && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.build-manifest.result == 'success' || needs.build-manifest.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:

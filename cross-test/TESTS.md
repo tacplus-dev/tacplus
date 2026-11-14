@@ -84,6 +84,15 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   does not emit these chassis, so its leg renders them first
   (`pkg/internal/python/pyrender`). Local (`just jwk-alg`, part of
   `just gates`); not yet in CI.
+- `trace-carry` (`cross-test/trace-carry/run.sh`): `trace_id` across
+  projections and stores (#313) in the generated Go, Java and Rust. Every leg
+  drives its generated code over the same model: a transformation's
+  extraction and `<Source>ToProjections` carry the source's `trace_id`; the
+  record dispatch hands its store the row with field 200 empty, read back raw
+  from the bytes (Go, Java) or the row JSON (Rust); a `service_store` write
+  through the generated disk helpers (snapshot and redo record), read back raw
+  from the file and the record, holds no trace, and the caller's message keeps
+  its own. Local (`just trace-carry`, part of `just gates`); not yet in CI.
 - `mcp-floor-version` (`cross-test/mcp-floor-version/run.sh`): rmcp floor gate
   for the generated Rust MCP dispatch — generates a service owning one
   `RPC_PRINCIPAL_MCP` tool, pins `rmcp` to the EXACT version
@@ -131,9 +140,11 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
 - `outbound-deadline` (`cross-test/outbound-deadline/run.sh`): outbound deadline
   regression for the generated RUST server (issue #38). A three-hop chain of
   generated servers and clients (root 5 s -> mid -> leaf) on loopback. The leaf
-  must receive a `grpc-timeout` no larger than the root's budget, and its
-  handler must stop by the root's deadline. Local/manual (`just -f
-  cross-test/justfile outbound-deadline-rust`); cargo-bound, so not in `just test`.
+  must receive a `grpc-timeout` no larger than the root's budget, its
+  handler must stop by the root's deadline, and it must receive the root's
+  `trace_id` through mid (#310). The chain is one Rust test, run with `cargo
+  test`. `just outbound-deadline` (or `just -f cross-test/justfile
+  outbound-deadline-rust`); cargo-bound, so not in `just test` or `gates`.
 - `wire-corpus` (`cross-test/wire-corpus/run.sh`): cross-language
   SERIALIZATION-EQUIVALENCE gate. One `CorpusRecord` message is encoded ONCE by
   go, deterministically, into checked-in golden bytes

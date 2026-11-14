@@ -769,6 +769,10 @@ for name, ver in re.findall(r'\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"
         bad.append(f"elliptic-curve {ver} (crypto-bigint 0.5, RUSTSEC-2026-0387)")
     elif name == "block-buffer" and version(ver) < (0, 12, 1):
         bad.append(f"block-buffer {ver} (GHSA-qwgh-2vcv-g2f7)")
+    elif name == "backoff":
+        bad.append(f"backoff {ver} (unmaintained, RUSTSEC-2025-0012)")
+    elif name == "instant":
+        bad.append(f"instant {ver} (unmaintained, RUSTSEC-2024-0384)")
 for b in bad:
     print(f"advised crate in the generated lock: {b}", file=sys.stderr)
 sys.exit(1 if bad else 0)
@@ -1114,6 +1118,26 @@ compile_current_output() {
       fi
       ;;
   esac
+}
+
+# Once a fixture passed, remove what building it left on disk (tacplus#282):
+# its crates in the shared cargo directory, then the fixture directory with its
+# Go module and Maven tree. Kept whole under --keep. A failing fixture dies
+# before it gets here, so its tree stays for diagnosis. keep_sources keeps the
+# generated sources a later check reads (the cross-language parity checks read
+# the main fixtures) and drops only the Maven build output.
+prune_fixture() {
+  local dir="$1"
+  local output="$2"
+  local keep_sources="${3:-}"
+  [[ "$KEEP" == true ]] && return 0
+  prune_cargo_workspace "$output"
+  if [[ -n "$keep_sources" ]]; then
+    rm -rf "$dir/java-compile/target"
+  else
+    echo "    Removed $(du -sh "$dir" | cut -f1) fixture tree $(basename "$dir")"
+    rm -rf "$dir"
+  fi
 }
 
 resolve_output_root() {
@@ -2397,6 +2421,7 @@ for language in "${languages[@]}"; do
   echo "==> Compiling $language cross-test fixture"
   compile_current_output "$output_root" "$language" "$dir/tacplus"
   echo "    PASS $language"
+  prune_fixture "$dir" "$output_root" keep-sources
 done
 
 # Config-defaults cross-language parity: for every proto message that has
@@ -2702,6 +2727,7 @@ if [[ -d "$C2SONLY_PROTO_SRC" ]]; then
     echo "==> Compiling $language c2s-only fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/c2sonly"
     echo "    PASS $language c2s-only"
+    prune_fixture "$dir" "$output_root"
   done
 fi
 
@@ -2731,6 +2757,7 @@ if [[ -d "$HEALTHONLY_PROTO_SRC" ]]; then
     echo "==> Compiling $language health-only fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/healthonly"
     echo "    PASS $language health-only"
+    prune_fixture "$dir" "$output_root"
   done
 fi
 
@@ -2759,6 +2786,7 @@ if [[ -d "$ZERORPC_PROTO_SRC" ]]; then
     echo "==> Compiling $language zero-rpc fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/zerorpc"
     echo "    PASS $language zero-rpc"
+    prune_fixture "$dir" "$output_root"
   done
 fi
 
@@ -2794,6 +2822,7 @@ if [[ -d "$REQUIRESDEVICE_PROTO_SRC" ]]; then
     echo "==> Compiling $language requires-device fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/vault"
     echo "    PASS $language requires-device"
+    prune_fixture "$dir" "$output_root"
   done
 fi
 
@@ -2833,6 +2862,7 @@ if [[ -d "$RECORDEGRESS_PROTO_SRC" ]]; then
     echo "==> Compiling $language record-egress fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/egressvault"
     echo "    PASS $language record-egress"
+    prune_fixture "$dir" "$output_root"
   done
 
   # The HOST leg: the same protos built as egressstratum, the (spec.record_store)
@@ -2862,6 +2892,7 @@ if [[ -d "$RECORDEGRESS_PROTO_SRC" ]]; then
     echo "==> Compiling $language record-egress HOST fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/egressstratum"
     echo "    PASS $language record-egress host"
+    prune_fixture "$dir" "$output_root"
   done
 fi
 
@@ -2889,6 +2920,7 @@ if [[ -d "$EVENTBUS_BACKPRESSURE_PROTO_SRC" ]]; then
     echo "==> Compiling $language event-bus backpressure fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor"
     echo "    PASS $language event-bus backpressure"
+    prune_fixture "$dir" "$output_root"
   done
 fi
 
@@ -2916,6 +2948,7 @@ if [[ -d "$ACCOUNTING_SINK_PROTO_SRC" ]]; then
     echo "==> Compiling $language accounting-sink fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor"
     echo "    PASS $language accounting sink"
+    prune_fixture "$dir" "$output_root"
   done
 fi
 
@@ -2943,6 +2976,7 @@ if [[ -d "$OWNERDEFAULT_PROTO_SRC" ]]; then
     echo "==> Compiling $language owner-default fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/ownerdesk"
     echo "    PASS $language owner-default"
+    prune_fixture "$dir" "$output_root"
   done
 fi
 
@@ -2968,6 +3002,7 @@ if [[ -d "$QUORUMWRITE_PROTO_SRC" ]]; then
     echo "==> Compiling $language quorum-write fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/quorumvault"
     echo "    PASS $language quorum-write"
+    prune_fixture "$dir" "$output_root"
   done
 fi
 
@@ -2992,6 +3027,7 @@ if [[ -d "$EPOCHLOAD_PROTO_SRC" ]]; then
     echo "==> Compiling $language epoch-load fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/epochload"
     echo "    PASS $language epoch-load"
+    prune_fixture "$dir" "$output_root"
   done
 fi
 
@@ -3018,6 +3054,7 @@ if [[ -d "$TENANTROUTE_PROTO_SRC" ]]; then
       echo "==> Compiling $language tenant-route fixture ($self)"
       compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
       echo "    PASS $language tenant-route ($self)"
+      prune_fixture "$dir" "$output_root"
     done
   done
 fi
@@ -3074,6 +3111,7 @@ REDO_PY
       echo "==> Compiling $language redo-contract fixture ($self)"
       compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
       echo "    PASS $language redo-contract ($self)"
+      prune_fixture "$dir" "$output_root"
     done
   done
 fi
@@ -3127,6 +3165,7 @@ TENANTRECORD_PY
       echo "==> Compiling $language tenant-record fixture ($self)"
       compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
       echo "    PASS $language tenant-record ($self)"
+      prune_fixture "$dir" "$output_root"
     done
   done
 fi
@@ -3152,6 +3191,7 @@ if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
     echo "==> Compiling $language tenant-slice fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/ledger"
     echo "    PASS $language tenant-slice"
+    prune_fixture "$dir" "$output_root"
   done
 fi
 
@@ -3176,6 +3216,7 @@ if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
     echo "==> Compiling $language tenant-slice owner fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/registrar"
     echo "    PASS $language tenant-slice owner"
+    prune_fixture "$dir" "$output_root"
   done
 fi
 
@@ -3200,6 +3241,7 @@ if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
     echo "==> Compiling $language tenant-slice config owner fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/tenancy"
     echo "    PASS $language tenant-slice config owner"
+    prune_fixture "$dir" "$output_root"
   done
 fi
 

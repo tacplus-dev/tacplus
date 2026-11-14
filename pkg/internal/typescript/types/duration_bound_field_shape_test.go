@@ -79,7 +79,7 @@ func TestTypeScriptDurationBoundRejectsNonScalarNumericField(t *testing.T) {
 				msg := model.Message{Name: "ConnConfig", Fields: []model.Field{tc.field}}
 
 				var b strings.Builder
-				err := generateTypeScriptValidationFunction(&b, msg)
+				err := generateTypeScriptValidationFunction(&b, msg, nil)
 				if err == nil {
 					t.Fatalf("%s on a %s field accepted; generated TypeScript silently accepts every value:\n%s", annotation, tc.name, b.String())
 				}
@@ -115,7 +115,7 @@ func TestTypeScriptDurationBoundKeepsSupportedShapes(t *testing.T) {
 	}
 
 	var b strings.Builder
-	if err := generateTypeScriptValidationFunction(&b, msg); err != nil {
+	if err := generateTypeScriptValidationFunction(&b, msg, nil); err != nil {
 		t.Fatalf("generateTypeScriptValidationFunction: %v", err)
 	}
 	rendered := b.String()

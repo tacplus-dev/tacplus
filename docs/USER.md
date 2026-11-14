@@ -1324,6 +1324,19 @@ service Crew {
   the platform (`people` is `00000001`). A tenant's instances carry it in their
   subject, `spiffe://<td>/tenants/<tid>/services/<svc>` (kernel#23); their
   namespace claim names the tenant by name, `/tenants/<name>`.
+- **A caller's tid is its `tid` claim** (`JWT_PAYLOAD_TYPE_TID`, `sys/token.proto`).
+  The namespace claim of a user, session or service token names its tenant,
+  `/tenants/<name>`, never the tid, so kernel stamps the tenant's tid at mint as
+  a claim of its own, on every token whose namespace is in a tenant, and none on
+  a root or `/system` one (tacplus-dev/kernel#32). Where generated code needs
+  the caller's own tenant (the MCP session and the client-facing record reader,
+  below) it reads that claim only, through `TokenWrapper.GetTid`/`getTid`/`tid`
+  and `serviceconnection.CallerTenant` (Go), `RouteTenant.callerTenant` (Java)
+  or `tenant_route::caller_tenant` (Rust). It never derives a tid from the
+  namespace, whatever the namespace spells, so a tenant whose name looks like
+  another tenant's tid is still in its own tenant. A token with no `tid` claim,
+  or one that is not a tid, is in no tenant there: the call is refused,
+  `PERMISSION_DENIED` (#284).
 - **Required.** Generation fails for an rpc of a tenant-owned service that does
   not declare `route_field` (`ValidateTenantRouting`, also run by the fleet
   build). This covers the service's own `service_s2s`/`service_c2s` services and
@@ -1358,9 +1371,9 @@ service Crew {
   takes the tid, and every message on the stream must name it.
 - **MCP: the model never sets the tenant.** The MCP session carrier of a
   tenant-owned service declares `mcp.McpRequest.tenant` as its route field.
-  A session is opened in the caller's own tenant, the tenant of its token's
-  namespace claim (`/tenants/<tid>` or below; a caller of no tenant, such as
-  `/system`, has no MCP session there, `PERMISSION_DENIED`). The carrier stamps
+  A session is opened in the caller's own tenant, its token's `tid` claim
+  (a caller with none, such as a `/system` one, has no MCP session there,
+  `PERMISSION_DENIED`). The carrier stamps
   each inbound frame's `tenant` from the token and refuses a frame that names
   another tenant (`PERMISSION_DENIED`); the MCP proxy stamps it from the token
   too, and never passes a client's value through. A tool's own route field is
@@ -1373,8 +1386,8 @@ service Crew {
   `string target_tenant = 15`, and every rpc declares it as its route field.
   The generated clients pool the store per tenant. The typed record readers
   take the tenant as their first argument. The client-facing reader
-  (`(spec.record_read).c2s`) reads from its caller's own tenant, the tid of the
-  namespace claim. The store's instance refuses, whoever the caller is
+  (`(spec.record_read).c2s`) reads from its caller's own tenant, its token's
+  `tid` claim, and refuses a caller with none (`PERMISSION_DENIED`). The store's instance refuses, whoever the caller is
   (`/system` included), a call routed to another tenant and an entry whose
   `(spec.store_namespace)` value is not in that tenant's namespace or below:
   the instance's own namespace claim, `/tenants/<name>`, since `target_tenant`

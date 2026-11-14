@@ -88,11 +88,15 @@ func generateGoMcpDispatchTests(svc *parser.ServiceInfo, tools []goMcpTool, p go
 	}
 
 	// A tenant-routed service's session is opened in the caller's tenant, so
-	// its test caller's namespace claim names one.
+	// its test caller is in one: its namespace names the tenant, as kernel's
+	// do (/tenants/<name>, never the tid), and its tid claim is the tenant's.
 	routed := carrier.RouteField != nil
 	testNamespace := "/example/tenants/acme"
+	testTidConst, testTidSet := "", ""
 	if routed {
-		testNamespace = "/tenants/" + goMcpTestTenant
+		testNamespace = "/tenants/" + goMcpTestTenantName
+		testTidConst = fmt.Sprintf("\n\t%sTestTid       = %q", prefix, goMcpTestTenant)
+		testTidSet = fmt.Sprintf(".\n\t\tSetTid(%sTestTid)", prefix)
 	}
 
 	var b strings.Builder
@@ -127,17 +131,17 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// The subject and namespace the test caller's token carries. Every
+// The subject, namespace and tid the test caller's token carries. Every
 // server-stamped field below must come out equal to one of them.
 const (
 	%[7]sTestSubject   = "spiffe://example/tenants/acme/users/alice"
-	%[7]sTestNamespace = %[9]s
+	%[7]sTestNamespace = %[9]s%[10]s
 )
 
 func %[7]sTestCaller() *servicemanager.Caller {
 	tok := wrapperToken.NewImmutableToken(nil).
 		SetSubject(%[7]sTestSubject).
-		SetNamespace(%[7]sTestNamespace)
+		SetNamespace(%[7]sTestNamespace)%[11]s
 	return servicemanager.NewCaller(tok, "mcp-test")
 }
 
@@ -154,7 +158,7 @@ type %[7]sReportingHandler struct {
 }
 
 `, svc.Name, p.PackageName, p.TypesModulePath, p.ServiceManagerImportPath,
-		p.ModuleBasePath, crossImports.String(), prefix, goMcpSdkModule, strconv.Quote(testNamespace))
+		p.ModuleBasePath, crossImports.String(), prefix, goMcpSdkModule, strconv.Quote(testNamespace), testTidConst, testTidSet)
 
 	for _, t := range tools {
 		args := "ctx context.Context, _ *servicemanager.Caller, req *" + t.InputType
@@ -390,9 +394,17 @@ func goMcpDrivable(t goMcpTool) bool {
 	return t.EmptyRequest || t.Page != nil || len(t.RequiredScalars) > 0 || t.PrincipalField != "" || t.NamespaceField != "" || t.RouteField != nil
 }
 
-// goMcpTestTenant is the tid of the test caller's namespace claim on a
-// tenant-routed service: the tenant its sessions are opened in.
-const goMcpTestTenant = "acme0001"
+// goMcpTestTenant is the test caller's tid claim on a tenant-routed service:
+// the tenant its sessions are opened in. goMcpTestTenantName is that tenant's
+// name, which its namespace claim carries (/tenants/<name>): not a tid, so a
+// session can only find its tenant in the tid claim (#284).
+// goMcpTestLookalikeTenant is another tenant's tid, which a caller's tenant
+// NAME may spell; that caller is still in its own tid claim's tenant.
+const (
+	goMcpTestTenant          = "acme0001"
+	goMcpTestTenantName      = "acme"
+	goMcpTestLookalikeTenant = "rival001"
+)
 
 // goMcpTestPageSize is the page_size the gate asks a PAGE tool for. Below every
 // resolved default and ceiling, so the clamp passes it through unchanged and the
@@ -418,8 +430,8 @@ func goMcpFrameTenantTest(serviceName, prefix, frameIn string) string {
 	return fmt.Sprintf(`
 // Test%[1]sMcpFrameTenantComesFromTheToken: an inbound frame's tenant is
 // stamped from the session's token when empty, passes when it is that tenant,
-// and is refused when it names another; a caller whose namespace belongs to no
-// tenant opens no session.
+// and is refused when it names another; a caller whose token carries no tid
+// claim opens no session.
 func Test%[1]sMcpFrameTenantComesFromTheToken(t *testing.T) {
 	frame := &%[3]s{Payload: "{}"}
 	if err := %[2]sStampFrameTenant(%[2]sTestCaller(), frame); err != nil || frame.Tenant != %[4]q {
@@ -428,20 +440,39 @@ func Test%[1]sMcpFrameTenantComesFromTheToken(t *testing.T) {
 	if err := %[2]sStampFrameTenant(%[2]sTestCaller(), &%[3]s{Payload: "{}", Tenant: %[4]q}); err != nil {
 		t.Fatalf("a frame naming the session's own tenant was refused: %%v", err)
 	}
-	mismatched := &%[3]s{Payload: "{}", Tenant: "rival001"}
+	mismatched := &%[3]s{Payload: "{}", Tenant: %[5]q}
 	if err := %[2]sStampFrameTenant(%[2]sTestCaller(), mismatched); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("a frame naming another tenant was not refused: %%v", err)
 	}
-	if mismatched.Tenant != "rival001" {
+	if mismatched.Tenant != %[5]q {
 		t.Fatalf("a refused frame was rewritten to %%q", mismatched.Tenant)
 	}
-	system := servicemanager.NewCaller(wrapperToken.NewImmutableToken(nil).
-		SetSubject(%[2]sTestSubject).SetNamespace("/system"), "mcp-test")
-	if err := %[2]sStampFrameTenant(system, &%[3]s{Payload: "{}"}); status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("a caller of no tenant opened a session: %%v", err)
+	// A tenant whose NAME spells another tenant's tid: its session is in its
+	// own tid claim's tenant, and it never reaches the tenant its name spells.
+	lookalike := servicemanager.NewCaller(wrapperToken.NewImmutableToken(nil).
+		SetSubject(%[2]sTestSubject).SetNamespace("/tenants/"+%[5]q).SetTid(%[4]q), "mcp-test")
+	if tid, err := %[2]sSessionTenant(lookalike); err != nil || tid != %[4]q {
+		t.Fatalf("a caller of tenant %[4]s named %[5]s opened its session in %%q: %%v", tid, err)
+	}
+	if err := %[2]sStampFrameTenant(lookalike, &%[3]s{Payload: "{}", Tenant: %[5]q}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("a caller named like tenant %[5]s reached it: %%v", err)
+	}
+	// No tid claim is no tenant, whatever the namespace spells: it is never
+	// read for a tid.
+	for _, ns := range []string{"/system", "/tenants/" + %[4]q, "/tenants/" + %[4]q + "/users/alice"} {
+		noTid := servicemanager.NewCaller(wrapperToken.NewImmutableToken(nil).
+			SetSubject(%[2]sTestSubject).SetNamespace(ns), "mcp-test")
+		if err := %[2]sStampFrameTenant(noTid, &%[3]s{Payload: "{}"}); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("a caller in %%s with no tid claim opened a session: %%v", ns, err)
+		}
+	}
+	malformed := servicemanager.NewCaller(wrapperToken.NewImmutableToken(nil).
+		SetSubject(%[2]sTestSubject).SetNamespace("/tenants/acme").SetTid("ACME0001"), "mcp-test")
+	if err := %[2]sStampFrameTenant(malformed, &%[3]s{Payload: "{}"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("a caller with a malformed tid claim opened a session: %%v", err)
 	}
 }
-`, serviceName, prefix, frameIn, goMcpTestTenant)
+`, serviceName, prefix, frameIn, goMcpTestTenant, goMcpTestLookalikeTenant)
 }
 
 // goMcpSessionTest renders the end-to-end gate: a whole MCP session — the

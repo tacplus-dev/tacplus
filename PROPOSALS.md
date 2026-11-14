@@ -4,6 +4,13 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Product layer: a product's owner tenant reads across tenants' custodian data** (2026-11-10, #475; option B of
+  roadmap/PRODUCTS_LAYER.md section 5, which Jody chose as the follow-up to A on 2026-11-09): `fleet.yaml` names, per
+  product, the tenant that owns it (`products: [{name: ledger, owner_tenant: <tid>}]`); an rpc flagged
+  `RPC_FLAG_ACROSS_TENANTS` on a product service admits only **users** of that tenant holding an entitlement to it
+  (C2S, run-time policy within build-time entitlements), its `caller_tid` binding is lifted on that rpc only, and
+  every call is audited with the owner user's identity. No service principal ever reads across tenants. Why: a
+  product owner's billing view over per-tenant usage. Needs its own design and a ROADMAP.md line; after #475.
 - **Per-language gate sets, and more of the map** (2026-11-08, #266): `gates.yaml` runs the full gates (~3h) for any
   change under `pkg/**`, `cmd/**` or `.github/`. Next: `pkg/internal/<lang>/**` and `pkg/templates/<lang>/**` to that
   language's `current-generation-<lang>`, `determinism-<lang>` and `-<lang>` cross-tests (with `just test`), once each

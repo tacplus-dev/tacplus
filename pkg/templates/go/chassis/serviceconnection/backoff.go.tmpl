@@ -38,5 +38,6 @@ func NextReconnectBackoff(current time.Duration) time.Duration {
 // peer at the same instant share one schedule, so without this they all dial
 // again at the same instants.
 func JitterReconnectBackoff(d time.Duration) time.Duration {
+	// #nosec G404 -- retry jitter only spreads retries apart; it needs no unpredictability.
 	return d + time.Duration(rand.Int63n(int64(d)/4+1))
 }

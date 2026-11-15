@@ -483,8 +483,9 @@ func TestGoMeshDialVerifyConnectionPinsSpiffeIdentity(t *testing.T) {
 		"var ErrMissingTrustDomain = errors.New(",
 		"trustDomain := cfg.GetSpiffeTrustDomain()",
 		"return nil, ErrMissingTrustDomain",
-		// chain validation stays (in the shared spiffeTLSDialOpt helper)
-		"if _, err := cs.PeerCertificates[0].Verify(opts); err != nil {",
+		// chain validation stays (in the shared spiffeTLSDialOpt helper, over
+		// the chassis's SpiffeClientTLSConfig: TestGoSpiffeClientTLSConfigVerifiesEveryHandshake)
+		"tlsCfg := wrapperX509.SpiffeClientTLSConfig(bc.certPool, peerVerify)",
 		// bootstrap/state-store connection: trust-domain pin
 		"return wrapperX509.VerifyPeerInTrustDomain(cert, bc.trustDomain)",
 		// S2S mesh channels: exact-target-service pin (parity with rust/java)
@@ -616,5 +617,43 @@ func TestGoServingCertHotReloads(t *testing.T) {
 	}
 	if !strings.Contains(smlib, "func (bc *ServiceManager) SetTLSCert(") {
 		t.Fatalf("servicemanager lib must expose SetTLSCert for renewal publication (PC-L-10)")
+	}
+}
+
+// #359 (gosec G402/G123): the chassis's SPIFFE client config validates the
+// chain and pins the identity in VerifyConnection, which crypto/tls runs on
+// every handshake including a resumed one; VerifyPeerCertificate, which it
+// skips on resumption, is not used by any Go chassis TLS config. The generated
+// x509_resumption_test.go proves it at runtime.
+func TestGoSpiffeClientTLSConfigVerifiesEveryHandshake(t *testing.T) {
+	tmpl, err := loadChassisTemplate("x509/x509.go.tmpl")
+	if err != nil {
+		t.Fatalf("loadChassisTemplate x509/x509.go.tmpl: %v", err)
+	}
+	for _, want := range []string{
+		"func SpiffeClientTLSConfig(roots *stdx509.CertPool, peerVerify func(*stdx509.Certificate) error) *tls.Config {",
+		"if _, err := cs.PeerCertificates[0].Verify(opts); err != nil {",
+		"return peerVerify(cs.PeerCertificates[0])",
+		"VerifyConnection: verifyPeer,",
+	} {
+		if !strings.Contains(tmpl, want) {
+			t.Fatalf("x509 chassis TLS must verify the peer on every handshake; missing %q", want)
+		}
+	}
+	for _, name := range []string{"x509/x509.go.tmpl", "service_im/service_im.go.tmpl"} {
+		src, err := loadChassisTemplate(name)
+		if err != nil {
+			t.Fatalf("loadChassisTemplate %s: %v", name, err)
+		}
+		if strings.Contains(src, "VerifyPeerCertificate:") {
+			t.Fatalf("%s: VerifyPeerCertificate is skipped on resumed sessions; use VerifyConnection", name)
+		}
+	}
+	sm, err := loadTemplate("servicemanager_lib.go.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate servicemanager_lib.go.tmpl: %v", err)
+	}
+	if strings.Contains(sm, "VerifyPeerCertificate:") {
+		t.Fatalf("servicemanager_lib.go.tmpl: VerifyPeerCertificate is skipped on resumed sessions; use VerifyConnection")
 	}
 }

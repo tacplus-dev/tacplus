@@ -498,6 +498,20 @@ the looper then marks it `promoted` or `declined` here with the date.
   same pressure is behind #539, #721 and #723. A standing fix for all of them: run the fixtures' disk tests on a
   tmpfs (`TMPDIR`, which `t.TempDir` and `Files.createTempDirectory` honour), where fsync is a no-op and the
   self-tests test the code, not the host's disk queue.
+- **Return the Swift clients to grpc-swift's `withGRPCClient` once Swift 6.3.1 is every consumer's floor** (2026-11-15,
+  #803): the generated Swift `C2DClient` and `C2SClient` run each call's `GRPCClient` on a plain `withThrowingTaskGroup`
+  (run the connections, call, `beginGracefulShutdown`, wait) because `withGRPCClient` does the same on a
+  `withThrowingDiscardingTaskGroup`, whose teardown on Swift toolchains before 6.3.1 (swiftlang/swift#75501, fixed by
+  swiftlang/swift#87665) aborts the whole process with "freed pointer was not the last allocation" about once in four
+  hundred teardowns. The lines 2.0–2.5 build with Swift 6.1.3, and a consumer's Xcode is what it is, so the
+  workaround stays while any supported line or consumer runs an older toolchain; when 6.3.1 is the floor everywhere,
+  the ten-line helper can go back to the one-call upstream form.
+- **The looper's gates run on a Swift the main build image left behind** (2026-11-15, #803): main's `build` image
+  carries Swift 6.4.2 (#255), but the runner the looper's gates run in has Swift 6.1.3, so a land's `c2d-server`
+  swift leg compiles the generated package with a toolchain main no longer ships. It is what surfaced #803 (6.4.2
+  has the runtime fix), which argues for keeping a 6.1-era toolchain in some gate while 2.0–2.5 are supported;
+  but a gate on main should also build with main's image (`just gates-container`), or its verdict says nothing about
+  what main's consumers get. A change in tacplus-dev/looper's runner image, or in which image the gates run in.
 
 ## Promoted / declined
 - **`just generated <dir>`: tacplus's security checks scan its generated output** (2026-11-09, #376): promoted

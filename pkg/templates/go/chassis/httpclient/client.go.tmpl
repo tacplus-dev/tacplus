@@ -568,6 +568,7 @@ func calculateBackoffDuration(config *httpclientProto.RetryConfig, attempt int) 
 	}
 	if backoffMs > 1 {
 		half := backoffMs / 2
+		// #nosec G404 -- retry jitter only spreads retries apart; it needs no unpredictability.
 		backoffMs = half + rand.Float64()*half
 	}
 	return time.Duration(backoffMs) * time.Millisecond

@@ -18,7 +18,9 @@
 package ip
 
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
 	"net/netip"
 	"sort"
 	"strings"
@@ -39,7 +41,7 @@ func ParseIPv4(s string) (*protoIp.IPv4, error) {
 	}
 	b := addr.As4()
 	return &protoIp.IPv4{
-		Addr: uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3]),
+		Addr: binary.BigEndian.Uint32(b[:]),
 	}, nil
 }
 
@@ -54,8 +56,8 @@ func ParseIPv6(s string) (*protoIp.IPv6, error) {
 	}
 	b := addr.As16()
 	return &protoIp.IPv6{
-		High: beUint64(b[:8]),
-		Low:  beUint64(b[8:]),
+		High: binary.BigEndian.Uint64(b[:8]),
+		Low:  binary.BigEndian.Uint64(b[8:]),
 	}, nil
 }
 
@@ -88,13 +90,13 @@ func ParseIPPort(s string) (*protoIp.IPPort, error) {
 	if addr.Is4() {
 		b := addr.As4()
 		p.Address = &protoIp.IPPort_Ipv4{Ipv4: &protoIp.IPv4{
-			Addr: uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3]),
+			Addr: binary.BigEndian.Uint32(b[:]),
 		}}
 	} else {
 		b := addr.As16()
 		p.Address = &protoIp.IPPort_Ipv6{Ipv6: &protoIp.IPv6{
-			High: beUint64(b[:8]),
-			Low:  beUint64(b[8:]),
+			High: binary.BigEndian.Uint64(b[:8]),
+			Low:  binary.BigEndian.Uint64(b[8:]),
 		}}
 	}
 	return p, nil
@@ -157,6 +159,10 @@ func FormatIPPort(p *protoIp.IPPort) string {
 	default:
 		return ""
 	}
+	// A port past 65535 is no port: it is not truncated into one.
+	if p.Port > math.MaxUint16 {
+		return ""
+	}
 	ap := netip.AddrPortFrom(addr, uint16(p.Port))
 	return ap.String()
 }
@@ -190,11 +196,8 @@ func BroadcastAddr(n *protoIp.IPNet) *protoIp.IPAddr {
 		if hostBits == 0 {
 			return addrToProto(addr)
 		}
-		mask := uint32((1 << hostBits) - 1)
-		v := uint32(a[0])<<24 | uint32(a[1])<<16 | uint32(a[2])<<8 | uint32(a[3])
-		v |= mask
-		bc := netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
-		return addrToProto(bc)
+		binary.BigEndian.PutUint32(a[:], binary.BigEndian.Uint32(a[:])|^uint32(0)>>bits)
+		return addrToProto(netip.AddrFrom4(a))
 	}
 
 	// IPv6
@@ -311,35 +314,16 @@ func Aggregate(nets *protoIp.IPNets) *protoIp.IPNets {
 
 // --- Internal helpers --------------------------------------------------------
 
-func beUint64(b []byte) uint64 {
-	return uint64(b[0])<<56 | uint64(b[1])<<48 | uint64(b[2])<<40 | uint64(b[3])<<32 |
-		uint64(b[4])<<24 | uint64(b[5])<<16 | uint64(b[6])<<8 | uint64(b[7])
-}
-
 func ipv4ToAddr(v *protoIp.IPv4) netip.Addr {
-	return netip.AddrFrom4([4]byte{
-		byte(v.Addr >> 24), byte(v.Addr >> 16), byte(v.Addr >> 8), byte(v.Addr),
-	})
+	var b [4]byte
+	binary.BigEndian.PutUint32(b[:], v.Addr)
+	return netip.AddrFrom4(b)
 }
 
 func ipv6ToAddr(v *protoIp.IPv6) netip.Addr {
 	var b [16]byte
-	b[0] = byte(v.High >> 56)
-	b[1] = byte(v.High >> 48)
-	b[2] = byte(v.High >> 40)
-	b[3] = byte(v.High >> 32)
-	b[4] = byte(v.High >> 24)
-	b[5] = byte(v.High >> 16)
-	b[6] = byte(v.High >> 8)
-	b[7] = byte(v.High)
-	b[8] = byte(v.Low >> 56)
-	b[9] = byte(v.Low >> 48)
-	b[10] = byte(v.Low >> 40)
-	b[11] = byte(v.Low >> 32)
-	b[12] = byte(v.Low >> 24)
-	b[13] = byte(v.Low >> 16)
-	b[14] = byte(v.Low >> 8)
-	b[15] = byte(v.Low)
+	binary.BigEndian.PutUint64(b[:8], v.High)
+	binary.BigEndian.PutUint64(b[8:], v.Low)
 	return netip.AddrFrom16(b)
 }
 
@@ -348,15 +332,15 @@ func addrToProto(addr netip.Addr) *protoIp.IPAddr {
 		b := addr.As4()
 		return &protoIp.IPAddr{
 			Address: &protoIp.IPAddr_Ipv4{Ipv4: &protoIp.IPv4{
-				Addr: uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3]),
+				Addr: binary.BigEndian.Uint32(b[:]),
 			}},
 		}
 	}
 	b := addr.As16()
 	return &protoIp.IPAddr{
 		Address: &protoIp.IPAddr_Ipv6{Ipv6: &protoIp.IPv6{
-			High: beUint64(b[:8]),
-			Low:  beUint64(b[8:]),
+			High: binary.BigEndian.Uint64(b[:8]),
+			Low:  binary.BigEndian.Uint64(b[8:]),
 		}},
 	}
 }
@@ -388,17 +372,22 @@ func protoToPrefix(n *protoIp.IPNet) netip.Prefix {
 
 func prefixToProto(p netip.Prefix) *protoIp.IPNet {
 	addr := p.Addr()
-	n := &protoIp.IPNet{Mask: uint32(p.Bits())}
+	// Bits is -1 for an invalid prefix, which has no mask: 0, not 2^32-1. A
+	// valid one is at most 128.
+	n := &protoIp.IPNet{}
+	if bits := p.Bits(); bits > 0 && bits <= 128 {
+		n.Mask = uint32(bits)
+	}
 	if addr.Is4() {
 		b := addr.As4()
 		n.Address = &protoIp.IPNet_Ipv4{Ipv4: &protoIp.IPv4{
-			Addr: uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3]),
+			Addr: binary.BigEndian.Uint32(b[:]),
 		}}
 	} else {
 		b := addr.As16()
 		n.Address = &protoIp.IPNet_Ipv6{Ipv6: &protoIp.IPv6{
-			High: beUint64(b[:8]),
-			Low:  beUint64(b[8:]),
+			High: binary.BigEndian.Uint64(b[:8]),
+			Low:  binary.BigEndian.Uint64(b[8:]),
 		}}
 	}
 	return n

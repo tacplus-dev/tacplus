@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
@@ -38,7 +39,7 @@ func AppendPublicViewMessagesToProtos(tempProtoDir string) error {
 			return fmt.Errorf("read %s for public view generation: %w", relPath, err)
 		}
 		out := string(content) + "\n// Auto-generated public views from spec.public_view (tacplus)\n" + views[relPath]
-		if err := os.WriteFile(filePath, []byte(out), 0644); err != nil {
+		if err := fsroot.WriteFile(tempProtoDir, filePath, []byte(out), 0644); err != nil {
 			return fmt.Errorf("write %s after public view generation: %w", relPath, err)
 		}
 	}

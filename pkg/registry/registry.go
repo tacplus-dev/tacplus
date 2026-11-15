@@ -38,6 +38,7 @@ import (
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	pkgproto "github.com/tacplus-dev/tacplus/pkg/proto"
 )
@@ -577,14 +578,14 @@ func copyProtoTree(srcRoot, dstRoot string) error {
 			return err
 		}
 		dstPath := filepath.Join(dstRoot, relPath)
-		if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+		if err := fsroot.MkdirAll(dstRoot, filepath.Dir(dstPath), 0755); err != nil {
 			return err
 		}
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(dstPath, content, 0644)
+		return fsroot.WriteFile(dstRoot, dstPath, content, 0644)
 	})
 }
 

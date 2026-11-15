@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,6 +17,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/tacplusyaml"
 )
 
@@ -78,14 +80,15 @@ func computeSrcHash(projectDir, outputDir, language string) (string, error) {
 	absOutput, _ := filepath.Abs(outputDir)
 
 	var listing []string
-	err := filepath.Walk(projectDir, func(path string, info os.FileInfo, err error) error {
+	err := fsroot.Walk(projectDir, func(_ *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// Surface walk errors (e.g. permission denied) rather than
 			// silently hashing a subset of the source tree.
 			return err
 		}
+		path := filepath.Join(projectDir, rel)
 		base := filepath.Base(path)
-		if info.IsDir() {
+		if d.IsDir() {
 			// Skip excluded dirs and the tacplus output dir.
 			if srcExcludes[base] {
 				return filepath.SkipDir
@@ -95,8 +98,8 @@ func computeSrcHash(projectDir, outputDir, language string) (string, error) {
 			}
 			return nil
 		}
-		if isSrcFile(path, language) {
-			listing = append(listing, path)
+		if isSrcFile(rel, language) {
+			listing = append(listing, rel)
 		}
 		return nil
 	})
@@ -104,13 +107,19 @@ func computeSrcHash(projectDir, outputDir, language string) (string, error) {
 		return "", fmt.Errorf("walk src dir: %w", err)
 	}
 
+	r, err := os.OpenRoot(projectDir)
+	if err != nil {
+		return "", fmt.Errorf("walk src dir: %w", err)
+	}
+	defer r.Close()
+
 	sort.Strings(listing)
 	h := sha256.New()
-	for _, path := range listing {
-		rel, _ := filepath.Rel(projectDir, path)
+	for _, rel := range listing {
+		path := filepath.Join(projectDir, rel)
 		h.Write([]byte(rel))
 		h.Write([]byte{0})
-		fh, err := hashFile(path)
+		fh, err := hashRootFile(r, rel)
 		if err != nil {
 			// A file we listed but cannot hash means the computed digest
 			// would not reflect the true source tree — fail instead of
@@ -168,18 +177,14 @@ func computeBuildHash(protoDir, projectDir, outputDir, language string, cfg *tac
 	// Track every file (not just .proto) so that directory structure and
 	// non-proto file changes (e.g., dependencies.yaml) are detected.
 	var listing []string
-	err = filepath.Walk(protoDir, func(path string, info os.FileInfo, err error) error {
+	err = fsroot.Walk(protoDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// Surface walk errors rather than silently hashing a subset
 			// of the proto tree.
 			return err
 		}
-		rel, err := filepath.Rel(protoDir, path)
-		if err != nil {
-			return nil
-		}
 		// Only include .proto files, dependencies.yaml, and registry files.
-		if info.IsDir() {
+		if d.IsDir() {
 			return nil
 		}
 		base := filepath.Base(rel)
@@ -188,9 +193,9 @@ func computeBuildHash(protoDir, projectDir, outputDir, language string, cfg *tac
 			return nil
 		}
 		listing = append(listing, rel)
-		fh, err := hashFile(path)
+		fh, err := hashRootFile(r, rel)
 		if err != nil {
-			return fmt.Errorf("hash proto file %s: %w", path, err)
+			return fmt.Errorf("hash proto file %s: %w", filepath.Join(protoDir, rel), err)
 		}
 		h.Files[rel] = fh
 		return nil
@@ -345,6 +350,20 @@ func hashFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return hashReader(f)
+}
+
+// hashRootFile is hashFile for the file rel under r, never leaving r.
+func hashRootFile(r *os.Root, rel string) (string, error) {
+	f, err := r.Open(rel)
+	if err != nil {
+		return "", err
+	}
+	return hashReader(f)
+}
+
+// hashReader hashes f's content and closes it.
+func hashReader(f *os.File) (string, error) {
 	defer f.Close()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {

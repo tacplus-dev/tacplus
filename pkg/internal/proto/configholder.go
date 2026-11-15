@@ -5,6 +5,7 @@ package proto
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/eventbus"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
@@ -173,11 +175,11 @@ func AcceptedAudiencesForHost(serviceLabel string, vsEntries []VServiceEntry, de
 // and the declaring service owns getting its own declaration right.
 func ScanAcceptedAudiences(sourceProtoDir, serviceLabel string) ([]string, error) {
 	var declared []string
-	err := filepath.Walk(sourceProtoDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
+	err := fsroot.Walk(sourceProtoDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return err
 		}
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(rel)
 		if err != nil {
 			return err
 		}
@@ -242,13 +244,12 @@ func ScanAndGenerateConfigHolder(sourceProtoDir string, dirs ...string) ([]GrpcC
 
 	var entries []GrpcConfigEntry
 	serviceMap := make(map[string]ServiceIdentityEntry)
-	err = filepath.Walk(servicesDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
+	err = fsroot.Walk(servicesDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return err
 		}
 
-		relPath, _ := filepath.Rel(scanDir, path)
-		relPath = filepath.ToSlash(relPath)
+		relPath := filepath.ToSlash(filepath.Join("services", rel))
 
 		// Skip generated services proto (should not be in services/ dir,
 		// but guard against stale files).
@@ -256,7 +257,7 @@ func ScanAndGenerateConfigHolder(sourceProtoDir string, dirs ...string) ([]GrpcC
 			return nil
 		}
 
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(rel)
 		if err != nil {
 			return err
 		}
@@ -691,12 +692,12 @@ func scanServiceRPCs(servicesDir string, entries []GrpcConfigEntry, reg *Service
 	}
 	accum := make(map[string]*rpcAccum)
 
-	err := filepath.Walk(servicesDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
+	err := fsroot.Walk(servicesDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return err
 		}
 
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(rel)
 		if err != nil {
 			return err
 		}
@@ -828,15 +829,11 @@ func ScanVServiceRPCs(scanDir string, reg *ServiceRegistry) ([]VServiceEntry, er
 	}
 
 	var protoFiles []string
-	if err := filepath.Walk(vservicesDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
+	if err := fsroot.Walk(vservicesDir, func(_ *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return err
 		}
-		relPath, err := filepath.Rel(scanDir, path)
-		if err != nil {
-			return err
-		}
-		protoFiles = append(protoFiles, filepath.ToSlash(relPath))
+		protoFiles = append(protoFiles, filepath.ToSlash(filepath.Join("vservices", rel)))
 		return nil
 	}); err != nil {
 		return nil, fmt.Errorf("finding vservice protos: %w", err)
@@ -2219,15 +2216,14 @@ func hasOwnEventBindings(config *tactype.Config, inputDir string) bool {
 		return false
 	}
 	found := false
-	_ = filepath.Walk(inputDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
+	_ = fsroot.Walk(inputDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
-		relPath, relErr := filepath.Rel(inputDir, path)
-		if relErr == nil && IsInfraProto(relPath) {
+		if IsInfraProto(rel) {
 			return nil
 		}
-		data, readErr := os.ReadFile(path)
+		data, readErr := r.ReadFile(rel)
 		if readErr != nil {
 			return nil
 		}
@@ -2246,15 +2242,14 @@ func hasOwnEventBindings(config *tactype.Config, inputDir string) bool {
 
 func hasOwnGrpcServerText(config *tactype.Config, inputDir string) bool {
 	found := false
-	_ = filepath.Walk(inputDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
+	_ = fsroot.Walk(inputDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
-		relPath, relErr := filepath.Rel(inputDir, path)
-		if relErr == nil && IsInfraProto(relPath) {
+		if IsInfraProto(rel) {
 			return nil
 		}
-		data, readErr := os.ReadFile(path)
+		data, readErr := r.ReadFile(rel)
 		if readErr != nil {
 			return nil
 		}

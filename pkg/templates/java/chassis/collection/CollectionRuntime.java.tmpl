@@ -46,6 +46,11 @@ public final class CollectionRuntime {
     private static final class Ring<Change> {
         private final int cap;
         private final long idleTimeoutMs;
+        // The ring's one monitor: publish, close and every resumed iterator
+        // wait on it. A private lock object, never the Ring itself (SpotBugs
+        // USO_UNSAFE_OBJECT_SYNCHRONIZATION, #712): the ResumeIterator below
+        // would otherwise lock its enclosing instance from a nested class.
+        private final Object lock = new Object();
         private final ArrayList<Entry<Change>> buf = new ArrayList<>();
         private boolean closed = false;
 
@@ -54,24 +59,30 @@ public final class CollectionRuntime {
             this.idleTimeoutMs = idleSecs > 0 ? idleSecs * 1000L : 0L;
         }
 
-        synchronized void publish(long revision, Change change) {
-            if (closed) {
-                return;
+        void publish(long revision, Change change) {
+            synchronized (lock) {
+                if (closed) {
+                    return;
+                }
+                if (buf.size() == cap) {
+                    buf.remove(0);
+                }
+                buf.add(new Entry<>(revision, change));
+                lock.notifyAll();
             }
-            if (buf.size() == cap) {
-                buf.remove(0);
-            }
-            buf.add(new Entry<>(revision, change));
-            notifyAll();
         }
 
-        synchronized void close() {
-            closed = true;
-            notifyAll();
+        void close() {
+            synchronized (lock) {
+                closed = true;
+                lock.notifyAll();
+            }
         }
 
-        synchronized boolean isClosed() {
-            return closed;
+        boolean isClosed() {
+            synchronized (lock) {
+                return closed;
+            }
         }
 
         Iterator<Change> resume(long fromRevision, Runnable release) {
@@ -100,7 +111,7 @@ public final class CollectionRuntime {
 
                 private void fill() {
                     while (pending.isEmpty()) {
-                        synchronized (Ring.this) {
+                        synchronized (lock) {
                             long oldest = buf.isEmpty() ? 0 : buf.get(0).revision;
                             if (nextRevision > 1 && oldest > 0 && nextRevision < oldest) {
                                 throw io.grpc.Status.OUT_OF_RANGE
@@ -128,9 +139,9 @@ public final class CollectionRuntime {
                                                 .withDescription("watch stream idle timeout exceeded")
                                                 .asRuntimeException();
                                     }
-                                    Ring.this.wait(remaining);
+                                    lock.wait(remaining);
                                 } else {
-                                    Ring.this.wait();
+                                    lock.wait();
                                 }
                             } catch (InterruptedException e) {
                                 Thread.currentThread().interrupt();
@@ -155,6 +166,9 @@ public final class CollectionRuntime {
     public static final class WatchHub<Change> {
         private final int depth;
         private final int idleSecs;
+        // Guards rings, drains, refs and drainThreads. A private lock object,
+        // not the hub itself, which is public (SpotBugs USO, #712).
+        private final Object lock = new Object();
         private final Map<String, Ring<Change>> rings = new HashMap<>();
         private final Set<String> drains = new HashSet<>();
         private final Map<String, Integer> refs = new HashMap<>();
@@ -173,7 +187,7 @@ public final class CollectionRuntime {
             Ring<Change> ring;
             Thread drain = null;
             String key = scope == null || scope.isEmpty() ? "/" : scope;
-            synchronized (this) {
+            synchronized (lock) {
                 ring = rings.computeIfAbsent(key, ignored -> new Ring<>(depth, idleSecs));
                 refs.put(key, refs.getOrDefault(key, 0) + 1);
                 boolean first = drains.add(key);
@@ -203,7 +217,7 @@ public final class CollectionRuntime {
                                 try { ((AutoCloseable) changeIter).close(); } catch (Exception ignored) {}
                             }
                             drainRing.close();
-                            synchronized (WatchHub.this) {
+                            synchronized (lock) {
                                 drainThreads.remove(key, Thread.currentThread());
                             }
                         }
@@ -218,24 +232,26 @@ public final class CollectionRuntime {
             return ring.resume(fromRevision, () -> release(key, ring));
         }
 
-        private synchronized void release(String scope, Ring<Change> ring) {
-            int count = refs.getOrDefault(scope, 0) - 1;
-            if (count > 0) {
-                refs.put(scope, count);
-                return;
-            }
-            refs.remove(scope);
-            drains.remove(scope);
-            if (rings.get(scope) == ring) {
-                rings.remove(scope);
-                ring.close();
-                // Stop the drain feeding this ring: close() above makes publish
-                // a no-op, and the interrupt unblocks the drain thread from a
-                // blocking changeIter.hasNext() so it (and its upstream feed)
-                // does not leak on every watcher connect/disconnect generation.
-                Thread drain = drainThreads.remove(scope);
-                if (drain != null) {
-                    drain.interrupt();
+        private void release(String scope, Ring<Change> ring) {
+            synchronized (lock) {
+                int count = refs.getOrDefault(scope, 0) - 1;
+                if (count > 0) {
+                    refs.put(scope, count);
+                    return;
+                }
+                refs.remove(scope);
+                drains.remove(scope);
+                if (rings.get(scope) == ring) {
+                    rings.remove(scope);
+                    ring.close();
+                    // Stop the drain feeding this ring: close() above makes publish
+                    // a no-op, and the interrupt unblocks the drain thread from a
+                    // blocking changeIter.hasNext() so it (and its upstream feed)
+                    // does not leak on every watcher connect/disconnect generation.
+                    Thread drain = drainThreads.remove(scope);
+                    if (drain != null) {
+                        drain.interrupt();
+                    }
                 }
             }
         }

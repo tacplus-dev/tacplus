@@ -126,7 +126,10 @@ func TestAppendLogCreatesFileWithRequestedMode(t *testing.T) {
 func TestAppendLogConcurrentAppendsStayWholeLines(t *testing.T) {
 	base := t.TempDir()
 	const rel = "concurrent.jsonl"
-	const writers, each = 8, 50
+	// Every append fsyncs under one mutex, so the appends are serial and the
+	// test takes writers*each fsyncs: on a loaded disk one can take most of a
+	// second (#721). Interleaving needs contending writers, not many lines.
+	const writers, each = 8, 4
 	var wg sync.WaitGroup
 	for w := 0; w < writers; w++ {
 		wg.Add(1)

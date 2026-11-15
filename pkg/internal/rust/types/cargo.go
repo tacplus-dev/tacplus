@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/packages"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/tmplutil"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
@@ -331,22 +332,25 @@ func requiredWorkspaceDependencyRefs(rustRootDir string, hasServiceWrappers, has
 		}
 	}
 
-	rootCargo := filepath.Join(rustRootDir, "Cargo.toml")
-	if err := filepath.WalkDir(rustRootDir, func(path string, d os.DirEntry, err error) error {
+	if err := fsroot.Walk(rustRootDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
+			name := d.Name()
+			if rel == "." {
+				name = filepath.Base(rustRootDir)
+			}
+			switch name {
 			case "target", ".git":
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if d.Name() != "Cargo.toml" || path == rootCargo {
+		if d.Name() != "Cargo.toml" || rel == "Cargo.toml" {
 			return nil
 		}
-		refs, err := workspaceDependencyRefsInCargo(path)
+		refs, err := workspaceDependencyRefsInCargo(r, rel)
 		if err != nil {
 			return err
 		}
@@ -361,8 +365,8 @@ func requiredWorkspaceDependencyRefs(rustRootDir string, hasServiceWrappers, has
 	return required, nil
 }
 
-func workspaceDependencyRefsInCargo(path string) (map[string]struct{}, error) {
-	data, err := os.ReadFile(path)
+func workspaceDependencyRefsInCargo(r *os.Root, rel string) (map[string]struct{}, error) {
+	data, err := r.ReadFile(rel)
 	if err != nil {
 		return nil, err
 	}

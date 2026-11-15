@@ -41,7 +41,8 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # The Debian packages are images/base.packages, and nothing else is installed
 # (tacplus-packages-check, the last step). APT_REFRESH is unique to each
 # images.yml run, so the registry cache never hands back an older run's
-# upgrade (#369; build.Dockerfile says why).
+# upgrade (#369; build.Dockerfile says why). A Debian advisory is fixed by
+# rebuilding this image, not build alone (#757; docs/VERSIONING.md, Images).
 COPY images/base.packages /usr/local/share/tacplus/packages/base
 COPY images/packages-check.sh /usr/local/bin/tacplus-packages-check
 ARG APT_REFRESH=

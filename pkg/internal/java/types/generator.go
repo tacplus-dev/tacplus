@@ -5,6 +5,7 @@ package types
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
@@ -64,7 +66,12 @@ func copyProtoWithJavaPackage(srcPath, dstPath, relPath string, config *tactype.
 	if err != nil {
 		return fmt.Errorf("failed to read proto file: %w", err)
 	}
+	return writeProtoWithJavaPackage(content, dstPath, relPath, config)
+}
 
+// writeProtoWithJavaPackage writes content, a proto file already read, to
+// dstPath with the java_package option added/modified.
+func writeProtoWithJavaPackage(content []byte, dstPath, relPath string, config *tactype.Config) error {
 	// Determine the Java package based on the proto file location
 	// relPath is like "sys/cloudvendor.proto" or "services/foobar.proto"
 	// Strip tacplus/ prefix — import namespace doesn't affect output structure
@@ -177,8 +184,8 @@ func addJavaPackageToServiceSubdirs(protoDir string, config *tactype.Config) err
 		topDirName := topEntry.Name()
 		topDirPath := filepath.Join(protoDir, topDirName)
 
-		if walkErr := filepath.Walk(topDirPath, func(path string, info os.FileInfo, err error) error {
-			return addJavaPackageToSubdirFile(path, info, err, protoDir, topDirName, config)
+		if walkErr := fsroot.Walk(topDirPath, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+			return addJavaPackageToSubdirFile(r, rel, d, err, topDirName, config)
 		}); walkErr != nil {
 			return walkErr
 		}
@@ -186,21 +193,23 @@ func addJavaPackageToServiceSubdirs(protoDir string, config *tactype.Config) err
 	return nil
 }
 
-func addJavaPackageToSubdirFile(path string, info os.FileInfo, err error, protoDir, topDirName string, config *tactype.Config) error {
+// addJavaPackageToSubdirFile handles one entry of the walk of protoDir's
+// topDirName subtree: rel is relative to that subtree, r is rooted at it.
+func addJavaPackageToSubdirFile(r *os.Root, rel string, d fs.DirEntry, err error, topDirName string, config *tactype.Config) error {
 	if err != nil {
 		return err
 	}
-	if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+	if d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 		return nil
 	}
 
-	relPath, _ := filepath.Rel(protoDir, path)
+	relPath := filepath.Join(topDirName, rel)
 	serviceName, fileName := proto.ServiceProtoParts(relPath)
 	if serviceName == "" {
 		return nil // Not a subdirectory file
 	}
 
-	content, err := os.ReadFile(path)
+	content, err := r.ReadFile(rel)
 	if err != nil {
 		return err
 	}
@@ -263,7 +272,7 @@ func addJavaPackageToSubdirFile(path string, info os.FileInfo, err error, protoD
 		modified = addOrReplaceOption(modified, "java_outer_classname", outerClassName)
 	}
 
-	return os.WriteFile(path, []byte(modified), 0644)
+	return r.WriteFile(rel, []byte(modified), 0644)
 }
 
 // addJavaPackageToGeneratedTenantConfig adds java_package and java_outer_classname options to
@@ -619,25 +628,21 @@ func Generate(config *tactype.Config) error {
 	// Collect all proto files and determine modules
 	modules := make(map[string]*ModuleInfo)
 
-	err := filepath.Walk(config.InputDir, func(path string, info os.FileInfo, err error) error {
+	err := fsroot.Walk(config.InputDir, func(r *os.Root, relPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		// Skip the generated/ directory — its protos are registered separately below
 		// (after ScanAndGenerateConfigHolder creates/updates them) to avoid double-registration.
-		if info.IsDir() && filepath.Base(path) == "generated" {
+		if d.IsDir() && relPath != "." && filepath.Base(relPath) == "generated" {
 			return filepath.SkipDir
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(relPath, ".proto") {
 			return nil
-		}
-		relPath, err := filepath.Rel(config.InputDir, path)
-		if err != nil {
-			return err
 		}
 
 		// Read proto file to get package name
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(relPath)
 		if err != nil {
 			return err
 		}
@@ -702,7 +707,7 @@ func Generate(config *tactype.Config) error {
 		modules[moduleKey].ProtoFiles = append(modules[moduleKey].ProtoFiles, relPath)
 
 		// Copy proto file with java_package option added
-		if err := copyProtoWithJavaPackage(path, filepath.Join(protoDir, relPath), relPath, config); err != nil {
+		if err := writeProtoWithJavaPackage(content, filepath.Join(protoDir, relPath), relPath, config); err != nil {
 			return fmt.Errorf("failed to copy proto file %s: %w", relPath, err)
 		}
 		return nil
@@ -1515,16 +1520,16 @@ func s2sGenerationEnabled(config *tactype.Config, serverServices []ServiceInfo) 
 
 // removeEmptyDirs recursively removes empty directories under root.
 func removeEmptyDirs(root string) error {
-	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || !info.IsDir() || path == root {
+	return fsroot.Walk(root, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() || rel == "." {
 			return nil
 		}
-		entries, err := os.ReadDir(path)
+		entries, err := fs.ReadDir(r.FS(), filepath.ToSlash(rel))
 		if err != nil {
 			return nil
 		}
 		if len(entries) == 0 {
-			os.Remove(path)
+			r.Remove(rel)
 		}
 		return nil
 	})

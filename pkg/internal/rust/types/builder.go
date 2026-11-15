@@ -5,6 +5,7 @@ package types
 
 import (
 	"fmt"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
 	"io/fs"
@@ -1654,7 +1655,7 @@ func fixCrateImports(outputDir string, packageToDirMap map[string]string) error 
 		}
 
 		if modified {
-			if err := os.WriteFile(protoFile, []byte(contentStr), 0644); err != nil {
+			if err := fsroot.WriteFile(outputDir, protoFile, []byte(contentStr), 0644); err != nil {
 				return fmt.Errorf("failed to update %s: %w", protoFile, err)
 			}
 		}

@@ -8,6 +8,7 @@ package llmdesc
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/collection"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
@@ -48,7 +49,7 @@ type FieldDescriptor struct {
 	RecordKey      bool `json:"record_key,omitempty"`      // field is named by (spec.record).key
 	// Timeseries column annotations (store-neutral)
 	Timeseries             bool  `json:"timeseries,omitempty"`                  // true if field has (spec.timeseries_column)
-	TimeseriesOrderKey     int   `json:"timeseries_order_key,omitempty"`        // store-neutral sort-key position (1-indexed)
+	TimeseriesOrderKey     int32 `json:"timeseries_order_key,omitempty"`        // store-neutral sort-key position (1-indexed)
 	TimeseriesPartitionKey bool  `json:"timeseries_partition_key,omitempty"`    // store-neutral partition role
 	TimeseriesCardinality  int32 `json:"timeseries_cardinality_hint,omitempty"` // store-neutral distinct-value hint (0/1/2)
 }
@@ -74,7 +75,7 @@ type ConstraintDescriptor struct {
 // EnumValue describes a single enum value.
 type EnumValue struct {
 	Name        string `json:"name"`
-	Number      int    `json:"number"`
+	Number      int32  `json:"number"`
 	Description string `json:"description,omitempty"`
 }
 
@@ -226,8 +227,11 @@ func BuildTypeDescriptor(msg model.Message, pkg string, msgIdx map[string]Messag
 			if _, ok := field.Annotations["timeseries_column"]; ok {
 				fd.Timeseries = true
 			}
-			if ann, ok := field.Annotations["timeseries_order_key"]; ok && ann.IntValue > 0 {
-				fd.TimeseriesOrderKey = int(ann.IntValue)
+			// Bounded before narrowing: a key past int32 is not emitted rather
+			// than wrapped into another position (ValidateTimeseriesAnnotations
+			// refuses it by name).
+			if ann, ok := field.Annotations["timeseries_order_key"]; ok && ann.IntValue > 0 && ann.IntValue <= math.MaxInt32 {
+				fd.TimeseriesOrderKey = int32(ann.IntValue)
 			}
 			if ann, ok := field.Annotations["timeseries_partition_key"]; ok && ann.BoolValue {
 				fd.TimeseriesPartitionKey = true

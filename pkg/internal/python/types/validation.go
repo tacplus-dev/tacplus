@@ -493,7 +493,7 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 
 					pyLinef(&code, 1, "# Validate %s (required_if_eq: %s=%s)", pyFieldName, condFieldSnake, condValue)
 					if siblingField != nil && siblingField.IsEnum {
-						enumIntVal := 0
+						var enumIntVal int32
 						for _, e := range enums {
 							if e.Name == siblingField.Type {
 								for _, v := range e.Values {

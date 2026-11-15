@@ -5,19 +5,22 @@ package parser
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 )
 
-// ValidateMinGroupSizeAnnotations enforces the two invariants
+// ValidateMinGroupSizeAnnotations enforces the invariants
 // (spec.record).min_group_size needs to mean anything.
 //
 //  1. The threshold cannot be negative. min_group_size is the smallest result
 //     size the record's size-only surfaces will disclose; 0 is "no guard", and a
 //     negative value is a guard that can never refuse. Generation FAILS rather
-//     than emitting a comparison that is always false.
+//     than emitting a comparison that is always false. Nor can it exceed
+//     math.MaxInt32: the stamped (spec.min_group_size) method option is an
+//     int32, and a larger threshold would wrap into another one.
 //
 //  2. Something must read it. The threshold is enforced on the size-only RPCs of
 //     the record query plane, and that plane exists only where a (spec.trait)
@@ -98,6 +101,12 @@ func validateMinGroupSizeAnnotations(fds []*FileDescriptor) error {
 				errs = append(errs, fmt.Sprintf(
 					"%s.%s: (spec.record).min_group_size is %d; a minimum group size cannot be negative (0 or unset = no guard)",
 					fd.Package, msg.Name, ann.IntValue))
+				continue
+			}
+			if ann.IntValue > math.MaxInt32 {
+				errs = append(errs, fmt.Sprintf(
+					"%s.%s: (spec.record).min_group_size is %d; it cannot exceed %d (the annotation is an int32)",
+					fd.Package, msg.Name, ann.IntValue, math.MaxInt32))
 				continue
 			}
 			if !planeExists {

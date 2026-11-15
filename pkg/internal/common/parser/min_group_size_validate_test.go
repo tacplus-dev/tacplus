@@ -4,6 +4,7 @@
 package parser
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -114,5 +115,27 @@ func TestValidateMinGroupSizeRejectsTraitOnNonRecordStore(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "spec.trait") {
 		t.Fatalf("error must name the missing plane, got: %v", err)
+	}
+}
+
+// (spec.record).min_group_size is an int32: a threshold at its bound generates,
+// one past it (only expressible in a model built outside protoc) is refused by
+// name rather than wrapped into another threshold, or a negative one, on the
+// stamped RPCs.
+func TestValidateMinGroupSizeBoundsAtInt32(t *testing.T) {
+	ok := []*FileDescriptor{recordStoreHost(), recordPlaneTrait("stratum"), recordWithMinGroupSize(math.MaxInt32)}
+	if err := validateMinGroupSizeAnnotations(ok); err != nil {
+		t.Fatalf("a threshold of math.MaxInt32 must generate: %v", err)
+	}
+	for _, n := range []int64{math.MaxInt32 + 1, 1<<32 + 5} {
+		fds := []*FileDescriptor{recordStoreHost(), recordPlaneTrait("stratum"), recordWithMinGroupSize(n)}
+		err := validateMinGroupSizeAnnotations(fds)
+		if err == nil {
+			t.Fatalf("a (spec.record).min_group_size of %d must fail generation", n)
+		}
+		if !strings.Contains(err.Error(), "tasks.TaskActivity") || !strings.Contains(err.Error(), "min_group_size") ||
+			!strings.Contains(err.Error(), "cannot exceed 2147483647") {
+			t.Fatalf("error must name the record, the annotation and the bound, got: %v", err)
+		}
 	}
 }

@@ -322,6 +322,9 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		// call made through Approval.callWithApproval carries the two metadata
 		// keys, and every other call through this client carries nothing new.
 		HasRequiresDevice bool
+		// HasRoute declares __ownToken, the caller's own token a routed
+		// (spec.rpc).route_field call is routed by (RouteTenant.forCaller).
+		HasRoute bool
 	}{
 		Header:       header.GeneratedHeader(consts.LangJava, svc.ProtoFile),
 		FullPackage:  fullPackage,
@@ -335,6 +338,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		HasCursor:    hasCursor,
 
 		HasRequiresDevice: hasRequiresDevice,
+		HasRoute:          hasRoute,
 	}
 
 	tmplStr, err := loadTemplate("grpcclient.java.tmpl")
@@ -433,6 +437,7 @@ type javaGrpcClientRouteInfo struct {
 	routed bool
 	field  string // proto name, for messages
 	getter string // generated Java getter on the request
+	setter string // generated Java builder setter on the request
 }
 
 func javaGrpcClientRoute(method *parser.MethodInfo) javaGrpcClientRouteInfo {
@@ -443,16 +448,25 @@ func javaGrpcClientRoute(method *parser.MethodInfo) javaGrpcClientRouteInfo {
 		routed: true,
 		field:  method.RouteField.Field,
 		getter: "get" + javaPascalField(method.RouteField.Field),
+		setter: "set" + javaPascalField(method.RouteField.Field),
 	}
 }
 
-// fromRequest reads and checks the target tenant off a validated request.
-func (r javaGrpcClientRouteInfo) fromRequest(indent string) string {
+// fromRequest routes a validated request by the caller's own token: S2S never
+// crosses tenants (tacplus#258), so a tenant's service gets its own tid,
+// stamped on the request when the field is empty, and is refused another
+// before anything is dialled; anyone else names the tenant. The call sends
+// __routedRequest, the request as routed.
+func (r javaGrpcClientRouteInfo) fromRequest(indent, inputType string) string {
 	if !r.routed {
 		return ""
 	}
-	return fmt.Sprintf("\n%[1]s// (spec.rpc).route_field: this call goes to the tenant its request names.\n%[1]sfinal String __routeTenant = RouteTenant.require(%[2]q, request.%[3]s());",
-		indent, r.field, r.getter)
+	return fmt.Sprintf(`
+%[1]s// (spec.rpc).route_field: this call goes to the tenant its request names; a
+%[1]s// tenant's own service names only its own tenant, stamped when empty.
+%[1]sfinal String __routeTenant = RouteTenant.forCaller(%[2]q, request.%[3]s(), __ownToken());
+%[1]sfinal %[5]s __routedRequest = __routeTenant.equals(request.%[3]s()) ? request : request.toBuilder().%[4]s(__routeTenant).build();`,
+		indent, r.field, r.getter, r.setter, inputType)
 }
 
 // streamParam is the explicit tenant a routed stream is opened for.
@@ -468,7 +482,7 @@ func (r javaGrpcClientRouteInfo) streamOpen(indent string) string {
 	if !r.routed {
 		return ""
 	}
-	return fmt.Sprintf("%[1]s// (spec.rpc).route_field: the stream's tenant is fixed at open.\n%[1]sfinal String __routeTenant = RouteTenant.require(%[2]q, tenant);\n",
+	return fmt.Sprintf("%[1]s// (spec.rpc).route_field: the stream's tenant is fixed at open; a tenant's own\n%[1]s// service opens it only in its own tenant, which an empty tenant names.\n%[1]sfinal String __routeTenant = RouteTenant.forCaller(%[2]q, tenant, __ownToken());\n",
 		indent, r.field)
 }
 
@@ -484,31 +498,36 @@ func (r javaGrpcClientRouteInfo) streamMessage(indent string) string {
 `, indent, r.field, r.getter)
 }
 
-// onStub routes every stub the method calls through to the checked tenant.
-// The stub statements are this generator's own fixed spellings above.
-func (r javaGrpcClientRouteInfo) onStub(body string) string {
+// onStub routes every stub the method calls through to the checked tenant,
+// and a call that takes its request whole sends the routed one. The stub
+// statements and calls are this generator's own fixed spellings above.
+func (r javaGrpcClientRouteInfo) onStub(body, methodName string) string {
 	if !r.routed {
 		return body
 	}
 	for _, stub := range []string{"var stub = blockingStubWithDeadline();", "var stub = blockingStub;", "var stub = asyncStub;"} {
 		body = strings.ReplaceAll(body, stub, strings.TrimSuffix(stub, ";")+".withOption(RouteTenant.CALL_OPTION, __routeTenant);")
 	}
-	return body
+	return strings.ReplaceAll(body, "stub."+methodName+"(request", "stub."+methodName+"(__routedRequest")
 }
 
 // generateJavaGrpcClientMethod generates a Java method for the gRPC client wrapper.
 func generateJavaGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, inputType, outputType, inputValidator, outputValidator string, crossPkgOuterClasses map[string]string) string {
-	return javaGrpcClientRoute(method).onStub(generateJavaGrpcClientMethodBody(svc, method, inputType, outputType, inputValidator, outputValidator, crossPkgOuterClasses))
+	return javaGrpcClientRoute(method).onStub(generateJavaGrpcClientMethodBody(svc, method, inputType, outputType, inputValidator, outputValidator, crossPkgOuterClasses), javaGrpcClientMethodName(method))
+}
+
+// javaGrpcClientMethodName is protoc's Java method name for an rpc: the first
+// letter lowered only ("ExecuteDQL" -> "executeDQL"); a snake_case round-trip
+// would mangle all-caps acronyms.
+func javaGrpcClientMethodName(method *parser.MethodInfo) string {
+	if method.Name == "" {
+		return ""
+	}
+	return strings.ToLower(method.Name[:1]) + method.Name[1:]
 }
 
 func generateJavaGrpcClientMethodBody(svc *parser.ServiceInfo, method *parser.MethodInfo, inputType, outputType, inputValidator, outputValidator string, crossPkgOuterClasses map[string]string) string {
-	// Use protoc's naming convention: lowercase first letter only.
-	// e.g. "ExecuteDQL" → "executeDQL" (not "executeDql").
-	// A snake_case round-trip would mangle all-caps acronyms.
-	methodName := method.Name
-	if len(methodName) > 0 {
-		methodName = strings.ToLower(methodName[:1]) + methodName[1:]
-	}
+	methodName := javaGrpcClientMethodName(method)
 	authRequired := javaGrpcClientAuthRequired(svc, method)
 	emptyInput := method.FullInputType == "google.protobuf.Empty"
 	emptyOutput := method.FullOutputType == "google.protobuf.Empty"
@@ -535,7 +554,7 @@ func generateJavaGrpcClientMethodBody(svc *parser.ServiceInfo, method *parser.Me
 	// explicit argument, and each message must name the same tenant.
 	route := javaGrpcClientRoute(method)
 	if route.routed && !method.ClientStreaming {
-		inputValidation += route.fromRequest("        ")
+		inputValidation += route.fromRequest("        ", inputType)
 	}
 
 	if method.ClientStreaming && method.ServerStreaming {

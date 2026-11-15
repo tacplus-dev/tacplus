@@ -1070,7 +1070,14 @@ authorized by the target's policy. So a tenant-owned instance refuses another
 tenant's **service** token (`sub_type` `service` or `workload`) at the door on
 every rpc, an `RPC_FLAG_ANY_TENANT` one included (`PERMISSION_DENIED`, before
 any handler runs, in every generated server language); the flag never admits
-another tenant's service.
+another tenant's service. The generated S2S client (Go, Java, Rust) holds the
+same line before sending: a tenant's own service (its token's `sub_type` is
+`service` or `workload` and its namespace is in `/tenants`) routes every call
+to a tenant-owned service to its own tid, its token's `tid` claim. A call whose
+route field is empty goes there, the field stamped with that tid; a call naming
+another tid, or made with a token in a tenant that carries no `tid` claim, is
+refused `PERMISSION_DENIED` before anything is dialled. A `/system` service, and
+a user's token, still name the target tenant.
 
 ### Tenant-owned services are routed by a declared field
 
@@ -1134,7 +1141,8 @@ service Crew {
 - **Refused at run time, never defaulted.** A call whose route field is empty or
   not a tid is refused with `INVALID_ARGUMENT` (HTTP `400` at the gateway's REST
   surface) before it is routed. It is never filled in from the caller's token,
-  and a tenant with no healthy instance is `UNAVAILABLE`, never another tenant's
+  except by a tenant's own service's S2S client, which may only call its own
+  tenant and stamps its own tid (above). A tenant with no healthy instance is `UNAVAILABLE`, never another tenant's
   instance. A tenant-owned instance also refuses, before the handler, a request
   routed to a tenant other than its own, the tid of its own subject, never read
   from its namespace claim (`PERMISSION_DENIED`; an instance whose subject

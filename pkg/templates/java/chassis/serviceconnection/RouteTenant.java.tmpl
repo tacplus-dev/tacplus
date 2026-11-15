@@ -7,6 +7,7 @@
 package {{.ChassisBase}}.serviceconnection;
 
 import {{.ChassisBase}}.spiffe.Spiffe;
+import {{.ChassisBase}}.token.TokenWrapper;
 import {{.TypesBase}}.sys.errors.ProtoException;
 import io.grpc.CallOptions;
 
@@ -23,9 +24,14 @@ import java.nio.charset.StandardCharsets;
  * gRPC proxy, and the server wrappers' backstop.
  *
  * <p>A tid is exactly {@value #TID_LENGTH} characters of {@code [0-9a-z]}.
- * Nothing else is one: a value is never trimmed or case-folded, never defaulted
- * from the caller's token, and an empty or malformed one is refused
- * (INVALID_ARGUMENT) before anything is dialled.
+ * Nothing else is one: a value is never trimmed or case-folded, and an empty
+ * or malformed one is refused (INVALID_ARGUMENT) before anything is dialled.
+ *
+ * <p>S2S never crosses tenants ({@link #forCaller}): a tenant's service or
+ * workload routes only to its own tid, read from its own token's {@code tid}
+ * claim; an empty route field is stamped with it, and another tid is refused
+ * (PERMISSION_DENIED) before anything is dialled. Anyone else (a /system
+ * service, a user) names the target tenant, as {@link #require} checks.
  */
 public final class RouteTenant {
     private RouteTenant() {}
@@ -75,6 +81,61 @@ public final class RouteTenant {
                             + " characters of [0-9a-z]): \"" + printable(value) + "\"");
         }
         return value;
+    }
+
+    /**
+     * The tenant a generated S2S client routes a call to, given the route
+     * field's value and the caller's own bearer token. S2S never crosses
+     * tenants (roadmap decision decisions/s2s-never-crosses-tenants-2026-10-31.md,
+     * tacplus-dev/roadmap; tacplus#258):
+     * <ul>
+     * <li>no own token: {@link #require}(field, value);</li>
+     * <li>an own token that does not parse: PERMISSION_DENIED;</li>
+     * <li>a caller that is not a service or workload (a user: RPC_FLAG_ANY_TENANT
+     *     C2S stays open to users), or whose namespace is not in a tenant (a
+     *     /system caller names its target): {@link #require}(field, value);</li>
+     * <li>a tenant's service or workload: its own tid, the {@code tid} claim
+     *     ({@link #callerTenant}); without one, PERMISSION_DENIED (fail closed).
+     *     An empty value is stamped with it, the same value is kept, and any
+     *     other is refused PERMISSION_DENIED.</li>
+     * </ul>
+     * The token is the caller's own, so it is read, not verified: the callee
+     * verifies it and refuses a cross-tenant caller at its door as well.
+     *
+     * @param field the route field's proto name, for messages
+     * @param value the route field's value ("" or null when unset)
+     * @param ownToken the caller's own bearer token, or null when there is none
+     */
+    public static String forCaller(String field, String value, String ownToken) {
+        if (ownToken == null || ownToken.isEmpty()) {
+            return require(field, value);
+        }
+        TokenWrapper token;
+        try {
+            token = TokenWrapper.parse(ownToken);
+        } catch (RuntimeException e) {
+            throw new ProtoException(ProtoException.PERMISSION_DENIED,
+                    "route field " + field + ": the caller's own token does not parse, so its tenant is unknown");
+        }
+        String subType = token.getSubType();
+        if (!Spiffe.SubjectKind.SERVICE.wire().equals(subType) && !Spiffe.SubjectKind.WORKLOAD.wire().equals(subType)) {
+            return require(field, value);
+        }
+        String namespace = token.getNamespace();
+        if (namespace == null || !namespace.startsWith(TENANTS_PREFIX)) {
+            return require(field, value);
+        }
+        String own = callerTenant(token.getTid());
+        if (own.isEmpty()) {
+            throw new ProtoException(ProtoException.PERMISSION_DENIED,
+                    "route field " + field + ": a tenant's service token carries no tid claim, so its own tenant is unknown");
+        }
+        if (value == null || value.isEmpty() || value.equals(own)) {
+            return own;
+        }
+        throw new ProtoException(ProtoException.PERMISSION_DENIED,
+                "route field " + field + ": S2S never crosses tenants: a service of tenant " + own
+                        + " cannot call tenant \"" + printable(value.length() > 64 ? value.substring(0, 64) + "..." : value) + "\"");
     }
 
     /**

@@ -77,7 +77,7 @@ reserved.
 
 ## 2. Identity
 
-**Kernel (an issue on tacplus-dev/kernel).** For a service the operator deploys as a product's, the kernel mints a
+**Kernel (tacplus-dev/kernel#63).** For a service the operator deploys as a product's, the kernel mints a
 service token and SVID with subject `spiffe://<td>/products/<name>/services/<svc>` and namespace claim
 `/products/<name>`, and **no `tid` claim**. `aud` is unchanged (the target service's name, plus what it hosts), so
 audiences need no product segment: who the caller is, is the subject and namespace; whether it may call is the door
@@ -86,7 +86,7 @@ service's layer by the same path it learns `tenant_owned` today (`MintServiceTok
 kernel issue settles the details): a workload the operator deployed as product `<name>`, in `tac-<deployment>-<name>`,
 gets that identity, and nothing else does.
 
-**Operator (an issue on tacplus-dev/operator).** One namespace per product, `tac-<deployment>-<name>`, holding every
+**Operator (tacplus-dev/operator#33).** One namespace per product, `tac-<deployment>-<name>`, holding every
 service of that product; created when the fleet's first service of the product is deployed, deleted with the last. Its
 services read `(spec.service).product` from the merged protos, as they read `tenant_owned`. The rules stay about
 principals: the namespace is where the pods run.
@@ -231,9 +231,9 @@ Jody, 2026-11-09, on #475 ("Approve 475"): the design is approved as proposed, w
    product caller's tenant-pinned config read is refused.
 5. **Reads across tenants: A** now (nobody). **B** (the product's owner tenant, users only, entitlement-gated, audited)
    is a PROPOSALS.md entry.
-6. **Split:** once this design lands, the kernel and operator parts become issues on tacplus-dev/kernel and
-   tacplus-dev/operator. #475's last criterion (an example product service in a fleet, called by a tenant service)
-   waits on them.
+6. **Split:** the kernel and operator parts are tacplus-dev/kernel#63 and tacplus-dev/operator#33 (opened
+   2026-11-15, feature issues asking for a roadmap line on each). #475's last criterion (an example product service
+   in a fleet, called by a tenant service) waits on them.
 
 ## Implementation order
 
@@ -243,6 +243,7 @@ Jody, 2026-11-09, on #475 ("Approve 475"): the design is approved as proposed, w
    "not `/system`" check, Go, Java, Rust; the S2S client check; `caller_tid` binding; `OnTenantDeleted`.
 3. `cross-test/proto-productlayer`, every cell, all three languages; in `just gates`.
 4. USER.md (a "Product layer" section beside the tenant section), API.md, STATE.md.
-5. Kernel and operator issues; the example product service (`example/`) and a fleet that runs it once they land.
+5. tacplus-dev/kernel#63 and tacplus-dev/operator#33; the example product service (`example/`) and a fleet that runs
+   it once they land.
 
 Depends on #258 landing (the door it extends).

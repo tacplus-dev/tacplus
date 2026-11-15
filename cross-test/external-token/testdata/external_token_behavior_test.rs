@@ -8,6 +8,7 @@ use aws_lc_rs::signature::{
 use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tonic::transport::server::TcpIncoming;
 use tonic::transport::{Endpoint, Server};
 
 use crate::types::sys::minter::minter::minter_server::{Minter, MinterServer};
@@ -122,11 +123,12 @@ impl Minter for MockKernel {
     }
 }
 
-fn reserve_local_addr() -> SocketAddr {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve local address");
-    let addr = listener.local_addr().expect("local address");
-    drop(listener);
-    addr
+// The server keeps the listener bound here: releasing the port and binding it
+// again would race the tests running in parallel for it (#531).
+fn bind_local_incoming() -> (TcpIncoming, SocketAddr) {
+    let incoming = TcpIncoming::bind("127.0.0.1:0".parse().unwrap()).expect("bind local address");
+    let addr = incoming.local_addr().expect("local address");
+    (incoming, addr)
 }
 
 async fn connect_plain_channel(addr: SocketAddr) -> Channel {
@@ -222,11 +224,11 @@ async fn rust_bootstrap_token_is_exchanged_once_and_renewed_from_the_refresh_tok
     std::env::set_var("KERNEL_BOOTSTRAP_TOKEN_FILE", &bootstrap_file);
 
     let kernel = Arc::new(BootstrapKernel { refresh_inputs: Mutex::new(Vec::new()) });
-    let addr = reserve_local_addr();
+    let (incoming, addr) = bind_local_incoming();
     let server = tokio::spawn(
         Server::builder()
             .add_service(MinterServer::from_arc(kernel.clone()))
-            .serve(addr),
+            .serve_with_incoming(incoming),
     );
     let channel = connect_plain_channel(addr).await;
 
@@ -273,11 +275,11 @@ async fn rust_token_for_external_mints_a_fresh_es256_token_on_every_call() {
     });
     let verifying_key =
         UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, kernel.key.public_key().as_ref().to_vec());
-    let addr = reserve_local_addr();
+    let (incoming, addr) = bind_local_incoming();
     let server = tokio::spawn(
         Server::builder()
             .add_service(MinterServer::from_arc(kernel.clone()))
-            .serve(addr),
+            .serve_with_incoming(incoming),
     );
     let channel = connect_plain_channel(addr).await;
 

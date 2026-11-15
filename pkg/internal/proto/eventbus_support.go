@@ -5,10 +5,12 @@ package proto
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
@@ -38,15 +40,14 @@ func NeedsEventBusSupportProto(protoDir string) bool {
 		}
 	}
 	foundTopic := false
-	_ = filepath.Walk(protoDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
+	_ = fsroot.Walk(protoDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
-		relPath, relErr := filepath.Rel(protoDir, path)
-		if relErr == nil && IsInfraProto(relPath) {
+		if IsInfraProto(rel) {
 			return nil
 		}
-		data, readErr := os.ReadFile(path)
+		data, readErr := r.ReadFile(rel)
 		if readErr == nil && strings.Contains(string(data), "spec.topic") {
 			foundTopic = true
 			return filepath.SkipAll

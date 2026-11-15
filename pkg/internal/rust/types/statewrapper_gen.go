@@ -5,6 +5,7 @@ package types
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
@@ -125,15 +127,15 @@ func generateRustStateClientWrappers(config *tactype.Config, inputDir string) er
 	generated := make(map[string]bool)
 	var clients []rustGeneratedStateClient
 
-	err = filepath.Walk(inputDir, func(path string, info os.FileInfo, walkErr error) error {
+	err = fsroot.Walk(inputDir, func(r *os.Root, rel string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
 
-		relPath, _ := filepath.Rel(inputDir, path)
+		relPath := rel
 		fileDesc, err := dp.GetFileDescriptor(relPath)
 		if err != nil {
 			return nil

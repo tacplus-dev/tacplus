@@ -5,12 +5,14 @@ package proto
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
@@ -79,19 +81,15 @@ func ValidateGeneratedOpaEvalServiceAuth(protoDir string) error {
 func validateGeneratedServiceAuth(protoDir string, re *regexp.Regexp, kind string, authExempt map[string]bool, remedy string) error {
 	var violations []string
 
-	err := filepath.Walk(protoDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
+	err := fsroot.Walk(protoDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return err
 		}
-		data, rerr := os.ReadFile(path)
+		data, rerr := r.ReadFile(rel)
 		if rerr != nil {
-			return fmt.Errorf("read %s: %w", path, rerr)
+			return fmt.Errorf("read %s: %w", filepath.Join(protoDir, rel), rerr)
 		}
 		text := string(data)
-		rel, relErr := filepath.Rel(protoDir, path)
-		if relErr != nil {
-			rel = path
-		}
 
 		for _, m := range re.FindAllStringSubmatchIndex(text, -1) {
 			svcName := text[m[2]:m[3]]

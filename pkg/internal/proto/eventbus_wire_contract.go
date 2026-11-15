@@ -5,6 +5,7 @@ package proto
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
@@ -416,29 +418,25 @@ func findCanonicalEventBusContract(sourceProtoDir string) ([]string, eventBusDec
 // support proto declares package eventbus_support, so it can never match.
 func findEventBusPackageProtos(sourceProtoDir string) ([]string, error) {
 	var paths []string
-	err := filepath.Walk(sourceProtoDir, func(path string, info os.FileInfo, err error) error {
+	err := fsroot.Walk(sourceProtoDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
-			if info.Name() == ".git" {
+		if d.IsDir() {
+			if d.Name() == ".git" {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !strings.HasSuffix(path, ".proto") {
+		if !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
-		data, readErr := os.ReadFile(path)
+		data, readErr := r.ReadFile(rel)
 		if readErr != nil {
 			return readErr
 		}
 		if !declaresPackage(string(data), canonicalEventBusPackage) {
 			return nil
-		}
-		rel, relErr := filepath.Rel(sourceProtoDir, path)
-		if relErr != nil {
-			return relErr
 		}
 		paths = append(paths, filepath.ToSlash(rel))
 		return nil

@@ -417,6 +417,16 @@ the looper then marks it `promoted` or `declined` here with the date.
   service ids. A legacy per-repo registry's `tacplus registry` likewise never records slice fields: the build still
   assigns them (now in file order), into whichever registry.yaml the build reads (a merged or fetched build's is a
   temporary copy).
+- **A listener seam on the generated Go GrpcServer, so Go tests keep the port they bind** (2026-11-15, #531 → #713):
+  #531 fixed the reserve-then-rebind port race in five Rust cross-test fixtures (bind port 0, keep the listener,
+  `serve_with_incoming`), and `scripts/cross_test_listener_test.go` now refuses the pattern in cross-test Rust. Two Go
+  tests keep it: `cross-test/stream-expiry/testdata/stream_expiry_behavior_test.go` `freePort` and the generated
+  `pkg/templates/go/chassis/grpcserver/keepalive_enforcement_test.go.tmpl` `keepaliveTestPort`, because the generated
+  `GrpcServer.Listen` only binds the address its config names. The race there is across processes on a shared runner
+  (parallel gates, #300; several runs per machine), not between parallel tests. Fix on a minor (a generated surface,
+  `docs/VERSIONING.md`): `Listen` takes an optional bound `net.Listener` (or `New` an option), both tests use it, and
+  the guard test grows a Go rule (`net.Listen("tcp", "...:0")` then `defer l.Close()` and `return ... Port`) over
+  `cross-test/` and `pkg/templates/go/`.
 
 ## Promoted / declined
 - **Member port onto gRPC with make-before-break session rotation (Java)** (2026-11-06, #321): promoted 2026-11-05,

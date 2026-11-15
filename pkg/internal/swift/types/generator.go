@@ -24,12 +24,11 @@ import (
 )
 
 const (
-	defaultSwiftPackageName      = "Tacplus"
-	defaultSwiftProtobufVersion  = "1.38.0"
-	defaultGRPCSwiftVersion      = "2.4.0"
-	defaultGRPCSwiftPBVersion    = "2.4.0"
-	defaultGRPCSwiftNIOVersion   = "2.4.0"
-	defaultDaemonSocketDirectory = "tacplus"
+	defaultSwiftPackageName     = "Tacplus"
+	defaultSwiftProtobufVersion = "1.38.0"
+	defaultGRPCSwiftVersion     = "2.4.0"
+	defaultGRPCSwiftPBVersion   = "2.4.0"
+	defaultGRPCSwiftNIOVersion  = "2.4.0"
 )
 
 type packageTemplateData struct {
@@ -41,9 +40,13 @@ type packageTemplateData struct {
 }
 
 type c2dClientTemplateData struct {
-	PackageName     string
-	DaemonDirectory string
-	Services        []c2dServiceTemplateData
+	PackageName string
+	// DefaultSocketPath is the socket_path the services declare, the one the
+	// generated daemons bind, or "" when they declare different socket paths:
+	// no one default reaches all of them, so the client then requires a socket
+	// path.
+	DefaultSocketPath string
+	Services          []c2dServiceTemplateData
 }
 
 type c2dServiceTemplateData struct {
@@ -308,9 +311,9 @@ func renderPackageSwift(config *tactype.Config) error {
 
 func renderC2DClient(config *tactype.Config, servicesInfo []service.ServiceInfo) error {
 	data := c2dClientTemplateData{
-		PackageName:     config.SwiftPackageBase,
-		DaemonDirectory: daemonDirectory(config, servicesInfo),
-		Services:        c2dServicesTemplateData(servicesInfo),
+		PackageName:       config.SwiftPackageBase,
+		DefaultSocketPath: defaultC2DSocketPath(servicesInfo),
+		Services:          c2dServicesTemplateData(servicesInfo),
 	}
 
 	out, err := executeSwiftTemplate("C2DClient.swift.tmpl", data)
@@ -770,31 +773,17 @@ func swiftModuleName(s string) string {
 	return ident
 }
 
-func daemonDirectory(config *tactype.Config, servicesInfo []service.ServiceInfo) string {
-	if config.SelfPackage != "" {
-		return sanitizeDaemonDirectory(config.SelfPackage)
-	}
+// defaultC2DSocketPath is the one socket_path the C2D services declare, or ""
+// when they declare none or several.
+func defaultC2DSocketPath(servicesInfo []service.ServiceInfo) string {
+	path := ""
 	for _, svc := range servicesInfo {
-		if svc.PackageName != "" {
-			return sanitizeDaemonDirectory(svc.PackageName)
+		if svc.C2DSocketPath == "" || (path != "" && svc.C2DSocketPath != path) {
+			return ""
 		}
+		path = svc.C2DSocketPath
 	}
-	return defaultDaemonSocketDirectory
-}
-
-func sanitizeDaemonDirectory(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = strings.NewReplacer(".", "-", "_", "-").Replace(s)
-	var b strings.Builder
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			b.WriteRune(r)
-		}
-	}
-	if b.Len() == 0 {
-		return defaultDaemonSocketDirectory
-	}
-	return b.String()
+	return path
 }
 
 func swiftDependencyVersion(config *tactype.Config, packageName, fallback string) string {

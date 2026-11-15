@@ -14,6 +14,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/packages"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
@@ -243,7 +244,7 @@ func rewritePythonProtoImports(outputDir, packageBase string, protoFiles []strin
 		if content == string(data) {
 			return nil
 		}
-		return os.WriteFile(path, []byte(content), 0644)
+		return fsroot.WriteFile(outputDir, path, []byte(content), 0644)
 	})
 }
 

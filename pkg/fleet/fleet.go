@@ -48,6 +48,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/tacplus-dev/tacplus/pkg/buildinfo"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/protosrc"
 	"github.com/tacplus-dev/tacplus/pkg/registry"
@@ -365,7 +366,7 @@ func Build(manifestDir, outDir string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(pinsDir, "dependencies.yaml"), pinData, 0o644); err != nil {
+	if err := fsroot.WriteFile(pinsDir, filepath.Join(pinsDir, "dependencies.yaml"), pinData, 0o644); err != nil {
 		return nil, err
 	}
 	dirs = append(dirs, pinsDir)
@@ -764,10 +765,10 @@ func extractContract(protoDir, name string, isService bool) (string, func(), err
 			return err
 		}
 		dst := filepath.Join(staged, rel)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		if err := fsroot.MkdirAll(staged, filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
-		return os.WriteFile(dst, data, 0o644)
+		return fsroot.WriteFile(staged, dst, data, 0o644)
 	}
 	paths := make([]string, 0, len(want))
 	for p := range want {

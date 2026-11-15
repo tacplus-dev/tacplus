@@ -28,7 +28,6 @@ import (
 	"math/big"
 	"net"
 	"os"
-	"strconv"
 	"testing"
 	"time"
 
@@ -45,7 +44,6 @@ import (
 	tokenlib "example.com/streamexpiry/tacplus/model/chassis/token"
 	types "example.com/streamexpiry/tacplus/model/types/svc/streamexpiry"
 	pb "example.com/streamexpiry/tacplus/model/types/sys/grpcconfig"
-	hostpb "example.com/streamexpiry/tacplus/model/types/sys/host"
 	jwkpb "example.com/streamexpiry/tacplus/model/types/sys/jwk"
 	keypb "example.com/streamexpiry/tacplus/model/types/sys/key"
 	x509_pb "example.com/streamexpiry/tacplus/model/types/sys/x509"
@@ -172,14 +170,16 @@ func selfSignedCert(t *testing.T) (*x509_pb.X509CertChain, ed25519.PrivateKey) {
 	return &x509_pb.X509CertChain{Chain: []*x509_pb.X509Cert{cert}}, priv
 }
 
-func freePort(t *testing.T) int {
+// loopbackListener binds a free loopback port and keeps it: the server serves
+// on this listener, so no other process can take the port between the test
+// learning it and the server binding it (#713).
+func loopbackListener(t *testing.T) net.Listener {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port
+	return l
 }
 
 // startServer serves the generated StreamerService behind the generated
@@ -205,16 +205,16 @@ func startServer(t *testing.T) (types.StreamerServiceClient, *keylib.ImmutableKe
 	wrapper.SetAuthenticateAtOrBelowFunc(auth.AuthenticateAtOrBelow)
 
 	cert, certKey := selfSignedCert(t)
-	port := freePort(t)
-	cfg := &pb.Config{ListenAddress: &hostpb.Host{Host: "127.0.0.1", Port: int32(port)}}
-	srv, err := grpcserver.New(ctx, cfg, nil, cert, certKey, wrapper, nil)
+	lis := loopbackListener(t)
+	srv, err := grpcserver.New(ctx, &pb.Config{}, nil, cert, certKey, wrapper, nil)
 	if err != nil {
 		t.Fatalf("grpcserver.New: %v", err)
 	}
-	go func() { _ = srv.Listen(ctx) }()
+	// ServeOn is the fixture's seam (testdata/grpcserver_serve_on.go).
+	go func() { _ = srv.ServeOn(ctx, lis) }()
 
 	// The certificate identity is not under test; stream expiry is.
-	conn, err := grpc.NewClient("127.0.0.1:"+strconv.Itoa(port),
+	conn, err := grpc.NewClient(lis.Addr().String(),
 		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})))
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)

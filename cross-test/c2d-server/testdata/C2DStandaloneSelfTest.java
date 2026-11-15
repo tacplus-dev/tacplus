@@ -109,6 +109,30 @@ public class C2DStandaloneSelfTest {
         }
     }
 
+    // The file's permissions, or "absent": a host that fails closed removes it.
+    private static String modeOf(Path file) {
+        try {
+            return PosixFilePermissions.toString(Files.getPosixFilePermissions(file));
+        } catch (java.io.IOException e) {
+            return "absent";
+        }
+    }
+
+    // One poll of a readiness wait: exits if the host died or the deadline
+    // passed, else sleeps a tick.
+    private static void awaitHost(Thread host, AtomicReference<Throwable> serveErr, long deadline, String timeoutMessage)
+            throws InterruptedException {
+        if (!host.isAlive()) {
+            System.err.println("FAIL: standalone c2d host exited before listening: " + serveErr.get());
+            System.exit(1);
+        }
+        if (System.nanoTime() > deadline) {
+            System.err.println("FAIL: " + timeoutMessage);
+            System.exit(1);
+        }
+        Thread.sleep(20);
+    }
+
     public static void main(String[] args) throws Exception {
         Path socket = Paths.get(SOCKET_PATH);
         // A stale file at the socket path, as a crashed daemon leaves behind.
@@ -131,22 +155,20 @@ public class C2DStandaloneSelfTest {
         }, "c2d-standalone-host");
         host.start();
         // Ready once the stale regular file has been replaced by the socket AND
-        // the socket is locked down: the chassis binds first and chmods after,
-        // so the mode is only final a moment after the file appears. A host
-        // that never restricts it fails here at the deadline.
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-        while (!(Files.exists(socket) && !Files.isRegularFile(socket)
-                && PosixFilePermissions.toString(Files.getPosixFilePermissions(socket)).equals("rw-------"))) {
-            if (!host.isAlive()) {
-                System.err.println("FAIL: standalone c2d host exited before listening: " + serveErr.get());
-                System.exit(1);
-            }
-            if (System.nanoTime() > deadline) {
-                System.err.println("FAIL: no owner-only (rw-------) c2d socket at " + SOCKET_PATH
-                        + (Files.exists(socket) ? " (mode " + PosixFilePermissions.toString(Files.getPosixFilePermissions(socket)) + ")" : ""));
-                System.exit(1);
-            }
-            Thread.sleep(20);
+        // the socket is locked down. Two waits, two bounds: the bind waits on
+        // class loading and Netty's first bind, which a loaded runner can
+        // stretch well past 10s (#778), so its bound only guards a hung host;
+        // the chmod follows the bind within start(), so the short bound from
+        // the socket's appearance is the real assertion: a host that binds and
+        // never restricts the socket fails there, with its mode.
+        long bindDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120);
+        while (!(Files.exists(socket) && !Files.isRegularFile(socket))) {
+            awaitHost(host, serveErr, bindDeadline, "no c2d socket replaced the stale file at " + SOCKET_PATH);
+        }
+        long chmodDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (!modeOf(socket).equals("rw-------")) {
+            awaitHost(host, serveErr, chmodDeadline, "no owner-only (rw-------) c2d socket at " + SOCKET_PATH
+                    + " (mode " + modeOf(socket) + ")");
         }
 
         String perms = PosixFilePermissions.toString(Files.getPosixFilePermissions(socket));

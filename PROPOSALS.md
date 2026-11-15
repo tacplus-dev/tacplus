@@ -400,6 +400,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   .NET 10.0 current, which reads as "newest LTS". Writing that down beside the pins (JDK and .NET the newest LTS,
   Maven the newest non-rc release, Docker the newest major, Rust stable via `1`) would let the scan file a missed
   move as a `bug` instead of leaving it to judgment.
+- **Cut the Java AppendLog concurrency self-test's fsyncs too** (2026-11-15, #723): #723 cut the Go
+  `TestAppendLogConcurrentAppendsStayWholeLines` from 8x50 to 8x4 appends (each an fsync under one lock: 42s of
+  the Go diskstore package's 61s on an unloaded runner, all of go test's 10m on a load-200 one) and still fails
+  every time without the lock. Java's `AppendLogTest.testConcurrentAppendsStayWholeAndComplete`
+  (`pkg/templates/java/chassis/diskstore/AppendLogTest.java.tmpl`) does 4x200, twice Go's old count, with no
+  timeout to hit but the same minutes spent on a loaded `current-generation` run.
 
 ## Promoted / declined
 - **Member port onto gRPC with make-before-break session rotation (Java)** (2026-11-06, #321): promoted 2026-11-05,

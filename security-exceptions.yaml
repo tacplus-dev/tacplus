@@ -1,0 +1,45 @@
+# Accepted security findings (looper-scan; tacplus-dev/looper README, Security checks): the bridge
+# of #340 on release/2.4 (the line's copy of main's), decided by Jody on 2026-11-15 (#340, "Yes do all of this as you recommend"). The first
+# pinned build of this repository (pipeline 3068905492) failed its policy on 122 HIGH findings, each
+# being fixed under the bug issue its entry names; every entry expires on 2026-12-31, and from the
+# day after the build fails on what is left of its rule. An exception with an end date, not a
+# waiver: the findings are still to be fixed.
+#
+# Every entry here is rule-wide, none scoped by path: the scanner matches an exception by the
+# finding's id or alias alone (a rule id, a CVE, a GHSA) and an entry may carry exactly id, reason,
+# decided_by and expires, no path (looper-scan read_exceptions; the README's "Every entry needs all
+# four keys and no other"). Path scoping needs the scanner to grow a key for it (tacplus-dev/looper).
+# Comments stay on their own lines: the parser takes the rest of an entry's line as its value.
+exceptions:
+  - id: G703
+    reason: "#340 bridge, rule-wide: tacplus is a code generator, it writes the files its tacplus.yaml names into the output directory the user names (48 sites, cmd/sitegen, cmd/sysrename, pkg/fleet, pkg/formatter, pkg/protosrc, pkg/internal/proto and the generators); confined under #573-#579 (cmd/sitegen, cmd/sysrename, the indenter, the proto merge) and #754 (the 43 sites in pkg/, through os.Root)"
+    decided_by: jodydadescott
+    expires: 2026-12-31
+  - id: G122
+    reason: "#340 bridge, rule-wide: Walk and WalkDir callbacks read and write the user's own source and output trees with the user's rights (55 sites); moved to root-scoped reads under #566-#569 (cmd/soundness, cmd/sysrename, pkg/protosrc) and #753 (the 51 sites in pkg/, one os.Root-scoped walk helper)"
+    decided_by: jodydadescott
+    expires: 2026-12-31
+  - id: G115
+    reason: "#340 bridge, rule-wide: integer conversions of values the compiler reads from the user's own schema or writes as protobuf wire encoding (11 sites); bounded under #565 (llmdesc.go:236), #755 (the Go approval chassis template, 5 sites), #756 (the Java generator's utf16Units, 2 sites) and #813 (registry.go:928 and :954, record_map.go:291)"
+    decided_by: jodydadescott
+    expires: 2026-12-31
+  - id: G404
+    reason: "#340 bridge, rule-wide: the chaos cross-test's fault schedule is seeded math/rand for reproducibility, not secrecy (2 sites); #570 (fault.go:125) and #571 (orchestrator.go:77)"
+    decided_by: jodydadescott
+    expires: 2026-12-31
+  - id: G702
+    reason: "#340 bridge, rule-wide (1 site): cmd/sitegen runs the protoc that PROTOC_BINARY names, a documentation tool CI runs; #572"
+    decided_by: jodydadescott
+    expires: 2026-12-31
+  - id: go.grpc.security.grpc-server-insecure-connection.grpc-server-insecure-connection
+    reason: "#340 bridge, rule-wide: the runtime-smoke fixture and the example server serve plaintext gRPC to their own tests on loopback (3 sites); #581 and #582 (the fixture), #583 (example/server)"
+    decided_by: jodydadescott
+    expires: 2026-12-31
+  - id: dockerfile.security.missing-user.missing-user
+    reason: "#340 bridge, rule-wide (1 site): the root Dockerfile is the deprecated tacplus image's, never pushed again (#193); #580 retires or fixes it"
+    decided_by: jodydadescott
+    expires: 2026-12-31
+  - id: yaml.github-actions.security.run-shell-injection.run-shell-injection
+    reason: "#340 bridge, rule-wide (1 site): images.yml:74 interpolates github.event.inputs.rebuild into a run: step; #584 moves it to an env variable"
+    decided_by: jodydadescott
+    expires: 2026-12-31

@@ -13,7 +13,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
@@ -80,6 +79,7 @@ const streamMaxBackoff = 30 * time.Second
 // streamRetryWait sleeps for *backoff plus up to 25% jitter, then doubles
 // *backoff up to streamMaxBackoff. Returns false when ctx is done.
 func streamRetryWait(ctx context.Context, backoff *time.Duration) bool {
+	// #nosec G404 -- retry jitter only spreads retries apart; it needs no unpredictability.
 	jitter := time.Duration(mrand.Int63n(int64(*backoff)/4 + 1))
 	select {
 	case <-time.After(*backoff + jitter):
@@ -282,10 +282,8 @@ func NewServiceManager(ctx context.Context, cfg *grpcconfig_pb.Config, identity 
 	}))
 
 	// Build TLS transport credentials for SPIFFE service mesh.
-	// InsecureSkipVerify disables Go's built-in hostname verification
-	// (which requires DNS SANs). VerifyConnection performs CA chain
-	// validation manually for SPIFFE workload identity, where certs carry URI
-	// SANs instead of DNS SANs.
+	// spiffeTLSDialOpt validates the CA chain itself for SPIFFE workload
+	// identity, where certs carry URI SANs instead of DNS SANs.
 	if len(cfg.TrustedCas) == 0 {
 		bcCancel()
 		return nil, fmt.Errorf("trusted CAs are required for SPIFFE TLS verification")
@@ -452,30 +450,12 @@ func (bc *ServiceManager) Config() *grpcconfig_pb.Config { return bc.config }
 // added endpoints, where the specific peer service is not known.
 func (bc *ServiceManager) DialOpts() []grpc.DialOption { return bc.dialOpts }
 
-// spiffeTLSDialOpt builds a TLS transport-credentials dial option whose
-// VerifyConnection validates the peer chain against the trusted CA pool and then
-// pins the peer's SPIFFE identity via peerVerify. InsecureSkipVerify disables
-// Go's built-in DNS-SAN hostname check (service certs carry URI SANs).
+// spiffeTLSDialOpt builds a TLS transport-credentials dial option that, on
+// every handshake (resumed or not), validates the peer chain against the
+// trusted CA pool and then pins the peer's SPIFFE identity via peerVerify
+// (wrapperX509.SpiffeClientTLSConfig).
 func (bc *ServiceManager) spiffeTLSDialOpt(peerVerify func(*x509.Certificate) error) grpc.DialOption {
-	tlsCfg := &tls.Config{
-		InsecureSkipVerify: true,
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return fmt.Errorf("peer certificate is required for SPIFFE TLS verification")
-			}
-			// 1. Validate the peer cert chain against the trusted CA pool.
-			opts := x509.VerifyOptions{Roots: bc.certPool, Intermediates: x509.NewCertPool()}
-			for _, cert := range cs.PeerCertificates[1:] {
-				opts.Intermediates.AddCert(cert)
-			}
-			if _, err := cs.PeerCertificates[0].Verify(opts); err != nil {
-				return err
-			}
-			// 2. Pin the peer's SPIFFE identity. Chain validity alone is CA-only
-			// trust (fail-open): it would accept any CA-issued cert as any peer.
-			return peerVerify(cs.PeerCertificates[0])
-		},
-	}
+	tlsCfg := wrapperX509.SpiffeClientTLSConfig(bc.certPool, peerVerify)
 	return grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
 }
 
@@ -652,6 +632,7 @@ func tlsCertRenewalDelay(expiry time.Time) time.Duration {
 }
 
 func tlsRenewalRetryWait(ctx context.Context, backoff *time.Duration) bool {
+	// #nosec G404 -- retry jitter only spreads retries apart; it needs no unpredictability.
 	jitter := time.Duration(mrand.Int63n(int64(*backoff)/4 + 1))
 	select {
 	case <-time.After(*backoff + jitter):

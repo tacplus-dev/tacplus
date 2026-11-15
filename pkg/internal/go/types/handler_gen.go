@@ -307,6 +307,7 @@ type serviceManagerTemplateData struct {
 	HasAutoTls             bool                    // true when any state has auto_tls enabled
 	AutoTlsKeyType         string                  // key algorithm: "ed25519" or "ecdsa"
 	HasSmb                 bool                    // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
+	HasMemberPort          bool                    // true when this service declares (spec.member_port): the ServiceManager owns its member port (tacplus#212, #322)
 	SmbAuthorityServiceID  string                  // service_id of the declared (spec.smb_authority) service
 	TimeseriesInserts      []TimeseriesInsertEntry // every subscription's insert callbacks, once each
 	HasTypedHealth         bool                    // true when the service's package declares a service_health message
@@ -552,6 +553,7 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 	// and detect typed health messages in the service's own package.
 	pkgToDirMap := make(map[string]string)
 	hasSmb := false
+	hasMemberPort := false
 	smbAuthorityServiceID := ""
 	hasTypedHealth := false
 	typedHealthType := ""
@@ -569,9 +571,6 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		dp, err := parser.NewDescriptorParser(config.FlatProtoDir)
 		if err != nil {
 			return serviceManagerTemplateData{}, fmt.Errorf("service manager data: parse proto descriptors in %q: %w", config.FlatProtoDir, err)
-		}
-		if err := parser.RefuseMemberPort(dp, config.SelfPackage, "go", "tacplus#322"); err != nil {
-			return serviceManagerTemplateData{}, err
 		}
 		{
 			if id, err := parser.SmbAuthorityServiceID(dp); err != nil {
@@ -615,6 +614,15 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 						}
 					}
 				}
+				// Detect a (spec.member_port) service in the own package — drives the
+				// ServiceManager-owned member port (tacplus#212, #322).
+				if config.SelfPackage != "" && fd.Package == config.SelfPackage {
+					for si := range fd.Services {
+						if fd.Services[si].IsMemberPort {
+							hasMemberPort = true
+						}
+					}
+				}
 				// Detect service_health message in the service's own package.
 				if config.SelfPackage != "" && fd.Package == config.SelfPackage {
 					for _, msg := range fd.Messages {
@@ -638,6 +646,12 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 				return serviceManagerTemplateData{}, fmt.Errorf("service manager data: SMB service %q requires ServiceHealthState access to resolve SMB authority %q", config.SelfPackage, smbAuthorityServiceID)
 			}
 		}
+	}
+	// The member port serves TLS with the member's kernel-issued serving
+	// certificate, which only auto_tls delivers: without it there is nothing
+	// to serve, and a member port must never fall back to plaintext.
+	if hasMemberPort && !config.HasAutoTls() {
+		return serviceManagerTemplateData{}, fmt.Errorf("service manager data: %q declares (spec.member_port), which serves TLS with the member's serving certificate: declare auto_tls on its (spec.service_state)", config.SelfPackage)
 	}
 
 	// Ensure typed health type package is importable (may already be present from gRPC services).
@@ -893,6 +907,7 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		HasAutoTls:               config.HasAutoTls(),
 		AutoTlsKeyType:           config.AutoTlsKeyType(),
 		HasSmb:                   hasSmb,
+		HasMemberPort:            hasMemberPort,
 		SmbAuthorityServiceID:    smbAuthorityServiceID,
 		TimeseriesInserts:        timeseriesInserts,
 		HasTypedHealth:           hasTypedHealth,

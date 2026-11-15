@@ -222,6 +222,20 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		Author:                         header.Author(),
 	}
 
+	// The member port crate is emitted only for a (spec.member_port) service,
+	// so no other build compiles it or takes its dependencies.
+	hasMemberPort, err := detectMemberPort(config)
+	if err != nil {
+		return err
+	}
+
+	// The rotation crate (tacplus#322) is emitted only when some service's
+	// streams rotate: an S2S service with streaming rpcs.
+	hasRotation, err := detectRotation(config)
+	if err != nil {
+		return err
+	}
+
 	langFS, err := fs.Sub(templates.FS, "rust/chassis")
 	if err != nil {
 		return fmt.Errorf("failed to create sub filesystem: %w", err)
@@ -236,6 +250,12 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 			return nil
 		}
 		if !strings.HasSuffix(path, ".tmpl") {
+			return nil
+		}
+		if strings.HasPrefix(path, "memberport/") && !hasMemberPort {
+			return nil
+		}
+		if strings.HasPrefix(path, "rotation/") && !hasRotation {
 			return nil
 		}
 

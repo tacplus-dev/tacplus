@@ -35,27 +35,3 @@ func ValidateMemberPort(dp *DescriptorParser) error {
 			"member traffic goes through the member port only: remove (spec.smb)",
 		both[0])
 }
-
-// RefuseMemberPort fails generation for a language that does not generate the
-// member port yet when the service being generated (selfPackage) declares
-// (spec.member_port): a member port that silently is not there would leave the
-// member traffic it guards unguarded. issue names the follow-up that adds it.
-func RefuseMemberPort(dp *DescriptorParser, selfPackage, language, issue string) error {
-	if dp == nil || selfPackage == "" {
-		return nil
-	}
-	for _, fd := range dp.GetAllFiles() {
-		if fd.Package != selfPackage {
-			continue
-		}
-		for si := range fd.Services {
-			if fd.Services[si].IsMemberPort {
-				return fmt.Errorf(
-					"member port error: %s.%s declares (spec.member_port), which is generated for java only so far; "+
-						"%s generates it with %s",
-					fd.Package, fd.Services[si].Name, language, issue)
-			}
-		}
-	}
-	return nil
-}

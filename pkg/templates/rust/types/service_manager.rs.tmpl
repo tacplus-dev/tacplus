@@ -96,6 +96,20 @@ pub const STREAMING_RPC_PATHS: &[&str] = &[
 {{- end}}
 {{- end}}
 ];
+
+/// Full gRPC paths ("/pkg.ServiceRotating/Method") of the rotating siblings
+/// this ServiceManager serves (tacplus#322): each leg of a rotating stream is
+/// ended at its own token's exp like any stream; the logical stream outlives
+/// it on the next leg.
+pub const ROTATING_RPC_PATHS: &[&str] = &[
+{{- range .GrpcServices}}
+{{- if not .IsC2D}}
+{{- range .RotatingPaths}}
+    "{{.}}",
+{{- end}}
+{{- end}}
+{{- end}}
+];
 {{- end}}
 {{- range .ConfigFetches}}
 use {{.ConfigModPath}}::Config as {{.ConfigAliasType}};
@@ -326,6 +340,83 @@ fn on_tls_degraded(seam: &std::sync::Mutex<TlsDegradeSeam>, f: impl Fn(&str) + S
     guard.fns.push(Box::new(f));
 }
 
+{{- if .HasMemberPort}}
+/// grpcconfig.member_port's listen and target addresses; the target must be
+/// loopback, and the peer checks need spiffe_trust_domain and trusted_cas.
+async fn member_port_addresses(
+    cfg: &Config,
+) -> Result<(std::net::SocketAddr, std::net::SocketAddr), Box<dyn std::error::Error>> {
+    let mp = cfg.member_port.as_ref();
+    let (Some(listen), Some(target)) = (
+        mp.and_then(|m| m.listen_address.as_ref()),
+        mp.and_then(|m| m.target_address.as_ref()),
+    ) else {
+        return Err("grpcconfig.member_port.listen_address and target_address are required: {{.ServiceLabel}} declares (spec.member_port)".into());
+    };
+    let listen = resolve_member_port_host("listen_address", listen).await?;
+    let target = resolve_member_port_host("target_address", target).await?;
+    if !target.ip().is_loopback() {
+        return Err(format!(
+            "grpcconfig.member_port.target_address must be a loopback address, got {}: nothing may reach the member protocol except through the member port",
+            target
+        )
+        .into());
+    }
+    if cfg.spiffe_trust_domain.is_empty() || cfg.trusted_cas.is_empty() {
+        return Err("grpcconfig.spiffe_trust_domain and trusted_cas are required: the member port verifies peer members against them".into());
+    }
+    Ok((listen, target))
+}
+
+async fn resolve_member_port_host(
+    what: &str,
+    host: &crate::types::sys::host::host::Host,
+) -> Result<std::net::SocketAddr, Box<dyn std::error::Error>> {
+    let port = u16::try_from(host.port)
+        .map_err(|_| format!("grpcconfig.member_port.{} port {} is out of range", what, host.port))?;
+    tokio::net::lookup_host((host.host.as_str(), port))
+        .await
+        .map_err(|e| format!("grpcconfig.member_port.{} {:?}: {}", what, host.host, e))?
+        .next()
+        .ok_or_else(|| format!("grpcconfig.member_port.{} {:?} resolves to no address", what, host.host).into())
+}
+
+/// Starts the member port: its token is this instance's, minted for audience
+/// member:{{.ServiceLabel}} and refreshed by the identity manager; its JWKS is
+/// the watched verifying keys; it serves the auto-TLS certificate (a renewal
+/// applies from the next handshake).
+async fn start_member_port(
+    cfg: &Config,
+    identity: Arc<IdentityManager>,
+    jwks: Arc<grpcserver::JwkCache>,
+    serving: Arc<std::sync::RwLock<Option<Arc<CertifiedKey>>>>,
+) -> Result<memberport::MemberPort, Box<dyn std::error::Error>> {
+    let (listen, target) = member_port_addresses(cfg).await?;
+    let audience = memberport::audience_for("{{.ServiceLabel}}");
+    let token_source: memberport::TokenSource = Arc::new(move || {
+        let im = identity.clone();
+        let aud = audience.clone();
+        Box::pin(async move {
+            im.get_token_for(&aud).await.map_err(|e| -> memberport::BoxError { e.to_string().into() })
+        })
+    });
+    let jwk_lookup: memberport::JwkLookup = Arc::new(move |kid: &str| jwks.get(kid));
+    let serving_cert: memberport::ServingCert =
+        Arc::new(move || serving.read().ok().and_then(|guard| guard.as_ref().map(Arc::clone)));
+    let port = memberport::MemberPort::new(
+        "{{.ServiceLabel}}",
+        &cfg.spiffe_trust_domain,
+        memberport::certificates(&cfg.trusted_cas)?,
+        token_source,
+        jwk_lookup,
+        serving_cert,
+    )?;
+    let bound = port.listen(listen, target).await?;
+    info!(listen = %bound, target = %target, "member port listening");
+    Ok(port)
+}
+
+{{- end}}
 /// ServiceManager holds the infrastructure state created during new().
 /// Call run(handler) to start the service lifecycle.
 pub struct ServiceManager {
@@ -390,6 +481,10 @@ pub struct ServiceManager {
     /// new handshakes without a process restart.
     tls_server_certified_key: Arc<std::sync::RwLock<Option<Arc<CertifiedKey>>>>,
 	{{- end}}
+{{- if .HasMemberPort}}
+    /// The member port (spec.member_port, tacplus#212, #322), listening from new().
+    member_port: memberport::MemberPort,
+{{- end}}
 	}
 
 {{- if .HasDiskStores}}
@@ -588,6 +683,11 @@ impl ServiceManager {
         // load, before ANY field is read — guarantees every annotated default is
         // in effect on every path, including the state authority's.
         config_defaults(&mut cfg);
+{{- if .HasMemberPort}}
+        // A missing or non-loopback member port is a permanent misconfiguration:
+        // refuse it before any retry loop (fail-closed, never a plaintext port).
+        member_port_addresses(&cfg).await?;
+{{- end}}
         let tasks: Arc<std::sync::Mutex<Vec<JoinHandle<()>>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
         let tls_degrade: Arc<std::sync::Mutex<TlsDegradeSeam>> = Arc::new(std::sync::Mutex::new(TlsDegradeSeam { fns: Vec::new(), seen: Vec::new() }));
 
@@ -947,6 +1047,28 @@ impl ServiceManager {
         }
 {{- end}}
 {{- end}}
+{{- if .HasMemberPort}}
+
+        // The member port serves the auto-TLS certificate, so it starts after
+        // the first delivery; a port that cannot start fails new().
+{{- if .HasTlsGrpc}}
+        let member_jwks = authorizer.jwk_cache().clone();
+{{- else}}
+        let member_jwks = Arc::new(grpcserver::JwkCache::new(
+            state_store_conn.conn().await.ok_or("no active state-store connection for the member port's JWKS")?,
+            Some(tp.clone()),
+        ));
+{{- end}}
+        let member_port = match start_member_port(&cfg, identity.clone(), member_jwks, tls_server_certified_key_arc.clone()).await {
+            Ok(port) => port,
+            Err(e) => {
+                for task in tasks.lock().unwrap().drain(..) {
+                    task.abort();
+                }
+                return Err(e);
+            }
+        };
+{{- end}}
 
         Ok(Self {
             cfg,
@@ -989,6 +1111,9 @@ impl ServiceManager {
             tls_private_key_pem: tls_private_key_pem_arc,
             tls_handler_slot: tls_handler_slot_arc,
             tls_server_certified_key: tls_server_certified_key_arc,
+{{- end}}
+{{- if .HasMemberPort}}
+            member_port,
 {{- end}}
         })
     }
@@ -1041,6 +1166,16 @@ impl ServiceManager {
 	    pub fn instance_id(&self) -> &str {
 	        self.identity.instance_id()
 	    }
+{{- if .HasMemberPort}}
+
+    /// Returns the member port (spec.member_port): already listening on
+    /// grpcconfig.member_port.listen_address and delivering to its loopback
+    /// target_address. Call [`memberport::MemberPort::forward`] for each remote
+    /// member to get the loopback address the black-box protocol dials instead.
+    pub fn member_port(&self) -> &memberport::MemberPort {
+        &self.member_port
+    }
+{{- end}}
 
     /// Marks the service as SERVING or NOT_SERVING on the gRPC health endpoint
     /// (the same handle that backs the plaintext 8444 probe and the main-server
@@ -1542,6 +1677,9 @@ impl ServiceManager {
                 task.abort();
             }
         };
+{{- if .HasMemberPort}}
+        self.member_port.close();
+{{- end}}
 {{- if .HasStates}}
         self.state_clients.close();
 {{- end}}
@@ -1842,7 +1980,7 @@ impl ServiceManager {
         // wrapper; this layer ends every streaming rpc at its opening token's
         // exp with UNAUTHENTICATED so no stream outlives its credential.
         let mut server = server.layer(StreamCredentialExpiryLayer::new(
-            STREAMING_RPC_PATHS.iter().map(|p| p.to_string()),
+            STREAMING_RPC_PATHS.iter().chain(ROTATING_RPC_PATHS.iter()).map(|p| p.to_string()),
         ));
 
         // Build router: if handler provides additional services, start from those routes
@@ -1861,6 +1999,17 @@ impl ServiceManager {
                     .max_decoding_message_size(max_recv_msg_size)
                     .max_encoding_message_size(max_send_msg_size),
                 ))
+{{- if .RotatingPaths}}
+                // {{.ServerType}}'s rotating sibling (tacplus#322), running the
+                // same generated server on one logical stream per session.
+                .add_service({{.WrapperVar}}.rotating_sibling(servicemanager::deadline::InboundDeadline::new(
+                    {{.TypesBasePath}}::{{.ServerModName}}::{{.ServerType}}::new(
+                        {{.WrapperVar}}.clone(),
+                    )
+                    .max_decoding_message_size(max_recv_msg_size)
+                    .max_encoding_message_size(max_send_msg_size),
+                )).max_message_size(max_recv_msg_size.max(max_send_msg_size)))
+{{- end}}
 {{- end}}
 {{- end}}
         } else {
@@ -1875,6 +2024,17 @@ impl ServiceManager {
                     .max_decoding_message_size(max_recv_msg_size)
                     .max_encoding_message_size(max_send_msg_size),
                 ))
+{{- if .RotatingPaths}}
+                // {{.ServerType}}'s rotating sibling (tacplus#322), running the
+                // same generated server on one logical stream per session.
+                .add_service({{.WrapperVar}}.rotating_sibling(servicemanager::deadline::InboundDeadline::new(
+                    {{.TypesBasePath}}::{{.ServerModName}}::{{.ServerType}}::new(
+                        {{.WrapperVar}}.clone(),
+                    )
+                    .max_decoding_message_size(max_recv_msg_size)
+                    .max_encoding_message_size(max_send_msg_size),
+                )).max_message_size(max_recv_msg_size.max(max_send_msg_size)))
+{{- end}}
 {{- end}}
 {{- end}}
         };
@@ -2404,6 +2564,9 @@ impl ServiceManager {
         }
 
         self.shutdown_owned_tasks().await;
+{{- if .HasMemberPort}}
+        self.member_port.close();
+{{- end}}
         // state-store ServiceConnection drops naturally;
         Ok(())
     }

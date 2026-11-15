@@ -333,6 +333,11 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMa
 	// (e.g., MapEmpty defined in both the service module and a sys module).
 	var crossPkgImports strings.Builder
 
+	// An S2S client's streams rotate across token lifetimes (tacplus#322) when
+	// the target serves its <Svc>Rotating sibling, falling back to the plain
+	// method on a server without it.
+	rotates := svc.Config.GetSmPrefix() == "s2sm" && rustServesRotatingSibling(targetService)
+
 	// Build method implementations and extra types (bidi handles go outside impl block)
 	var methods strings.Builder
 	var extraTypes strings.Builder
@@ -340,7 +345,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMa
 	usesUnaryRetry := false
 	hasRequiresDevice := false
 	for _, method := range targetService.Methods {
-		result, err := generateRustGrpcClientMethod(targetService, method, info.Package, info.CrossPackageTypes)
+		result, err := generateRustGrpcClientMethodRotating(targetService, method, info.Package, info.CrossPackageTypes, rotates)
 		if err != nil {
 			return fmt.Errorf("failed to generate Rust gRPC client method %s.%s: %w", targetService.Name, method.Name, err)
 		}
@@ -574,11 +579,29 @@ func rustClientStreamRouteCheck(method *parser.MethodInfo) string {
 }
 
 func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePkg string, crossPkgTypes map[string]string) (grpcMethodResult, error) {
+	return generateRustGrpcClientMethodRotating(svc, method, servicePkg, crossPkgTypes, false)
+}
+
+// generateRustGrpcClientMethodRotating renders one client method; with
+// rotates (an S2S client of a service that serves its <Svc>Rotating sibling,
+// tacplus#322) a streaming method that carries a token opens its stream on a
+// rotation::RotatingChannel over the channel it resolved, so the stream
+// outlives its tokens.
+func generateRustGrpcClientMethodRotating(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePkg string, crossPkgTypes map[string]string, rotates bool) (grpcMethodResult, error) {
 	methodSnake := prostSnakeName(method.Name)
 	inputType, outputType := resolveRustTypeQualified(method, servicePkg, crossPkgTypes)
 	tonicClientName := tonicServiceTypeName(svc.Name) + "Client"
 	authRequired := grpcClientAuthRequired(svc, method)
 	routed := method.RouteField != nil
+	rotates = rotates && authRequired && rustRotatingMethod(method)
+	// streamChannel is the channel expression a stream opens on: wrapped when
+	// it rotates, with tokenProvider naming the token provider there.
+	streamChannel := func(tokenProvider string) string {
+		if !rotates {
+			return "channel"
+		}
+		return fmt.Sprintf("rotation::RotatingChannel::new(channel, %s)", tokenProvider)
+	}
 
 	// channelResolve creates a tonic client from the channel provider on each
 	// call: for a routed rpc, the channel to the tenant its route field names.
@@ -586,7 +609,7 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
 	if routed {
 		channelExpr = "self.channel_provider.channel_for_tenant(&route_tenant)"
 	}
-	channelResolve := fmt.Sprintf("let channel = %s.await?;\n        let mut client = %s::new(channel);", channelExpr, tonicClientName)
+	channelResolve := fmt.Sprintf("let channel = %s.await?;\n        let mut client = %s::new(%s);", channelExpr, tonicClientName, streamChannel("self.token_provider.clone()"))
 
 	if method.ClientStreaming && method.ServerStreaming {
 		// Bidirectional streaming — managed lifecycle with reconnection.
@@ -616,6 +639,8 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
 			RequestValidation  string
 			ResponseValidation string
 			Routed             bool
+			// StreamChannel is the channel expression the stream opens on.
+			StreamChannel string
 		}{
 			MethodName:         method.Name,
 			MethodSnake:        methodSnake,
@@ -628,6 +653,7 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
 			RequestValidation:  rustGrpcStreamValueValidation("msg", method.FullInputType, "tonic::Status::invalid_argument(format!(\"validation failed: {e}\"))"),
 			ResponseValidation: rustGrpcBidiResponseValidation("resp", method.FullOutputType),
 			Routed:             routed,
+			StreamChannel:      streamChannel("Some(tp.clone())"),
 		}
 
 		tmpl, err := template.New("bidi").Parse(tmplStr)
@@ -731,14 +757,14 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
 		// takes it, refuses a non-tid before anything is dialled, and the
 		// handle refuses a message routed to any other tenant.
 		openSig := fmt.Sprintf("pub fn %s(&self) -> %s {", methodSnake, handleType)
-		streamChannel := "cp.channel()"
+		streamChannelExpr := "cp.channel()"
 		handleOpen, handleTenant, handleClose := handleType+" {", "", "        }"
 		tenantField := ""
 		if routed {
 			openSig = fmt.Sprintf("pub fn %s(&self, tenant: &str) -> Result<%s, tonic::Status> {\n"+
 				"        let tenant = servicemanager::tenant_route::route_tenant(\"tenant\", tenant)?;\n"+
 				"        let stream_tenant = tenant.clone();", methodSnake, handleType)
-			streamChannel = "cp.channel_for_tenant(&stream_tenant)"
+			streamChannelExpr = "cp.channel_for_tenant(&stream_tenant)"
 			handleOpen, handleTenant, handleClose = "Ok("+handleType+" {", "            tenant,\n", "        })"
 			tenantField = "    /// The tenant this stream was opened to: every message must name it.\n    tenant: String,\n"
 		}
@@ -757,7 +783,7 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
                 let mut req = tonic::Request::new(outbound);
 %s
                 let channel = %s.await?;
-                let mut client = %s::new(channel);
+                let mut client = %s::new(%s);
                 let response = client.%s(req).await?;
 %s
                 Ok(response)
@@ -772,7 +798,7 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
             auth_required: %t,
 %s%s
     }`, method.Name, svc.Name, method.Name, openSig, inputType, outputType,
-			rustGrpcInitialStreamAuthBlock(authRequired), streamChannel, tonicClientName, methodSnake, rustGrpcResponseValidation(method, "response"), handleOpen, authRequired, handleTenant, handleClose)
+			rustGrpcInitialStreamAuthBlock(authRequired), streamChannelExpr, tonicClientName, streamChannel("token_provider.clone()"), methodSnake, rustGrpcResponseValidation(method, "response"), handleOpen, authRequired, handleTenant, handleClose)
 
 		handleStruct := fmt.Sprintf(`
 /// Handle for the managed %s client-streaming call.

@@ -45,6 +45,9 @@ import (
 {{- if .HasRoute}}
 	"{{.ServiceConnectionImportPath}}"
 {{- end}}
+{{- if .Rotates}}
+	"{{.RotationLibImportPath}}"
+{{- end}}
 	"google.golang.org/grpc"
 {{- if or .HasNonBidi .HasRoute}}
 	"google.golang.org/grpc/codes"
@@ -84,9 +87,21 @@ type {{.ClientName}} struct {
 // New{{.ClientName}} creates a new typed gRPC client for {{.ServiceName}}.
 // The conn parameter is the gRPC client connection to the server.
 // Authenticated methods require tokenProvider to return a non-empty Bearer token.
+{{- if .Rotates}}
+//
+// Its streams outlive their tokens (tacplus#322): each is carried on
+// {{.ServiceName}}Rotating, re-opened with a fresh token from tokenProvider before
+// the current one expires (make-before-break, on the same connection), and
+// returned as one stream. A server without the sibling gets the plain method,
+// whose stream ends at its token's exp.
+{{- end}}
 func New{{.ClientName}}(conn grpc.ClientConnInterface, tokenProvider func() (string, error)) *{{.ClientName}} {
 	return &{{.ClientName}}{
+{{- if .Rotates}}
+		client:        types.New{{.ServiceName}}Client(rotation.NewConn(conn, tokenProvider)),
+{{- else}}
 		client:        types.New{{.ServiceName}}Client(conn),
+{{- end}}
 		tokenProvider: tokenProvider,
 {{- if .HasNonBidi}}
 		timeout:       30 * time.Second,

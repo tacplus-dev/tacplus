@@ -67,19 +67,3 @@ func TestValidateMemberPort(t *testing.T) {
 		})
 	}
 }
-
-func TestRefuseMemberPort(t *testing.T) {
-	skipIfNoProtoc(t)
-
-	p := volumeGroupParserFiles(t, map[string]string{
-		"grid.proto":  `service Grid { option (spec.member_port) = {}; rpc Get(Ping) returns (Ping); }`,
-		"plain.proto": `service Plain { rpc Get(Ping) returns (Ping); }`,
-	})
-	if err := RefuseMemberPort(p, "plain", "go", "tacplus#322"); err != nil {
-		t.Fatalf("a service without (spec.member_port) is refused: %v", err)
-	}
-	err := RefuseMemberPort(p, "grid", "go", "tacplus#322")
-	if err == nil || !strings.Contains(err.Error(), "grid.Grid declares (spec.member_port)") || !strings.Contains(err.Error(), "tacplus#322") {
-		t.Fatalf("RefuseMemberPort error = %v, want the service and the follow-up named", err)
-	}
-}

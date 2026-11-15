@@ -402,6 +402,15 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		}
 	}
 
+	// The <Svc>Rotating sibling (tacplus#322): served beside the plain service,
+	// admitted by rotationAdmit with each method's own open-time policy.
+	var rotationAdmit string
+	for _, service := range targetServices {
+		if goServesRotatingSibling(service) {
+			rotationAdmit = goRotationAdmit(service, svc.ParentDir)
+		}
+	}
+
 	// Build RegisterMethodAuth function.
 	var registerMethodAuth string
 	if len(methodAuthLines) > 0 {
@@ -558,6 +567,10 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		CollectionLibImportPath  string
 		HasRequiresDevice        bool
 		ApprovalLibImportPath    string
+		// RotationAdmit is the wrapper's rotationAdmit, "" when the service
+		// serves no <Svc>Rotating sibling (tacplus#322).
+		RotationAdmit   string
+		RotationLibPath string
 	}{
 		GrpcPackageName:          grpcPkgName,
 		TypesModulePath:          typesModulePath,
@@ -582,6 +595,8 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, accountingM
 		CollectionLibImportPath:  collectionLibImportPath,
 		HasRequiresDevice:        hasRequiresDevice,
 		ApprovalLibImportPath:    approvalLibImportPath,
+		RotationAdmit:            replaceWrapper(rotationAdmit),
+		RotationLibPath:          svc.Config.ModuleBasePath + "/chassis/rotation",
 	}
 
 	t, err := template.New("servicewrapper").Funcs(header.Funcs()).Parse(tmpl)

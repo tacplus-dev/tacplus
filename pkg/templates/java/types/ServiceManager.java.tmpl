@@ -1291,7 +1291,8 @@ public class ServiceManager implements AutoCloseable {
             public void registerServices(ServerBuilder<?> grpcServerBuilder) throws Exception {
 {{- range .GrpcServices}}
 {{- if not .IsC2D}}
-                grpcServerBuilder.addService({{.WrapperVarName}});
+                // The service, and its <Svc>Rotating sibling when it has one (tacplus#322).
+                {{.WrapperVarName}}.registerServices(grpcServerBuilder);
 {{- end}}
 {{- end}}
                 for (io.grpc.ServerServiceDefinition svc : handler.additionalServices()) {

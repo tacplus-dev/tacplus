@@ -38,6 +38,9 @@ import (
 {{- if .HasRequiresDevice}}
 	"{{.ApprovalLibImportPath}}"
 {{- end}}
+{{- if .RotationAdmit}}
+	"{{.RotationLibPath}}"
+{{- end}}
 	trace_pb "{{.TraceTypesPath}}"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -359,10 +362,23 @@ func (p *{{.ServerName}}) authenticateAtOrBelow(ctx context.Context, targetNames
 }
 
 // RegisterServices registers the gRPC service with validation wrappers
+{{- if .RotationAdmit}}, and
+// beside it its rotating sibling, {{.ServiceName}}Rotating (tacplus#322): the
+// same streaming methods, whose streams the generated clients carry across
+// token lifetimes. The sibling runs these same wrappers on a logical stream,
+// so a handler sees one stream for its whole life.
+{{- end}}
 func (p *{{.ServerName}}) RegisterServices(grpcServer *grpc.Server) error {
 	types.Register{{.ServiceName}}Server(grpcServer, p)
+{{- if .RotationAdmit}}
+	rotation.Register(grpcServer, &types.{{.ServiceName}}_ServiceDesc, p, p.rotationAdmit)
+{{- end}}
 	return nil
 }
+{{- if .RotationAdmit}}
+
+{{.RotationAdmit}}
+{{- end}}
 
 type {{.ServerName}}ValidatingServerStreamingServer[T any] struct {
 	grpc.ServerStreamingServer[T]

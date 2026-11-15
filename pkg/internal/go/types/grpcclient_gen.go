@@ -461,6 +461,18 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		return strings.ReplaceAll(s, "{{.ClientName}}", clientName)
 	}
 
+	// S2S streams rotate across token lifetimes (tacplus#322): the client's
+	// connection is wrapped so its streams go to the <Svc>Rotating sibling,
+	// falling back to the plain method on a server without it.
+	rotates := false
+	if svc.Config.GetSmPrefix() == "s2sm" {
+		for _, service := range targetServices {
+			if goServesRotatingSibling(service) {
+				rotates = true
+			}
+		}
+	}
+
 	// Count total methods and methods that need fmt (non-streaming methods with validation).
 	totalMethods := 0
 	hasValidationMethods := false
@@ -508,6 +520,9 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		// routes by tenant through the serviceconnection chassis.
 		HasRoute                    bool
 		ServiceConnectionImportPath string
+		// Rotates: the client's streams rotate (tacplus#322).
+		Rotates               bool
+		RotationLibImportPath string
 	}{
 		GrpcPackageName:             grpcPkgName,
 		TypesModulePath:             typesModulePath,
@@ -528,6 +543,8 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		ApprovalLibImportPath:       svc.Config.ModuleBasePath + "/chassis/approval",
 		HasRoute:                    hasRoute,
 		ServiceConnectionImportPath: svc.Config.ModuleBasePath + "/chassis/serviceconnection",
+		Rotates:                     rotates,
+		RotationLibImportPath:       svc.Config.ModuleBasePath + "/chassis/rotation",
 	}
 
 	tmpl, err := loadTemplate("grpcclient.go.tmpl")

@@ -1,0 +1,77 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+// Package rotation is the wire of make-before-break stream rotation
+// (tacplus#322): every generated long-lived service-to-service stream
+// (client-streaming, server-streaming, bidi) outlives the token it opened with
+// by moving, transparently, onto a new stream with a new token. It is part of
+// the sys contract: tacplus generates both ends, so no service hand-writes it.
+// Field numbers are frozen.
+//
+// For every service <pkg>.<Svc> with streaming rpcs, the generated server also
+// serves a sibling service <pkg>.<Svc>Rotating with the same method names:
+//
+//   /<pkg>.<Svc>Rotating/<Method> (stream Envelope) returns (stream Envelope)
+//
+// It is not declared in the user's proto, nor here: generated code builds its
+// descriptor. Every sibling method is bidi on the wire, whatever the shape of
+// the original; each Envelope carries one serialized message of the original
+// rpc. The sibling is authorized with exactly the original method's
+// (spec.rpc) policy. The original method stays as it is on the wire: a client
+// whose server answers the sibling with UNIMPLEMENTED falls back to it, where
+// the stream ends at its token's exp as before.
+//
+// A logical stream is a session carried by one stream (a leg) at a time. The
+// token goes in the `authorization` metadata when a leg opens, never in an
+// envelope, and is checked once, there; the server ends every leg at its
+// token's exp with UNAUTHENTICATED. A refused leg ends with UNAUTHENTICATED (a
+// bad, missing or expired token) or PERMISSION_DENIED (a valid token not
+// allowed), with no description.
+//
+//   - Open. The client's first envelope carries no session_id (and nothing
+//     else); the server answers with a first envelope carrying the new
+//     session_id and nothing else, then runs the handler.
+//   - Rotation. At about 75% of its token's lifetime the client acquires a new
+//     token and opens a new leg on the same connection whose first envelope
+//     carries the session_id. The server attaches it only when the session is
+//     live, has no rotation pending, and the new token names the same subject
+//     (the same service in the same namespace) and passes the method's policy;
+//     otherwise PERMISSION_DENIED. The id alone authorizes nothing. Once the
+//     server's first envelope on the new leg echoes the id, the client sends
+//     an envelope with last = true on the old leg and sends nothing more
+//     there; the server, reading it, moves its sends to the new leg, sends its
+//     own last on the old one and ends it OK. Each side reads the old leg to
+//     its last before anything of the new one, so messages keep their order
+//     with no sequence numbers.
+//   - End. fin = true is the client's half-close of the logical stream. The
+//     server ends the logical stream by ending its current leg with the
+//     handler's status (no last); the client returns that status. A leg that
+//     ends any other way without its last is a fault: the logical stream ends
+//     (the handler's context is cancelled, the caller gets the status), and is
+//     never spliced onto another leg.
+syntax = "proto3";
+
+package rotation;
+
+// Envelope is one message of a rotating leg, each way. An envelope with
+// neither last, fin nor session_id set carries exactly one message of the
+// original rpc, its payload (empty for a message whose fields are all
+// default); any other is a control envelope and carries none.
+message Envelope {
+  // payload is one serialized message of the original rpc; empty in a
+  // control envelope.
+  bytes payload = 1;
+  // last marks the sender's final envelope on this leg: it is cutting over to
+  // the session's next leg and sends nothing more here.
+  bool last = 2;
+  // session_id names the session: set on the first envelope of each leg each
+  // way, empty after. The client's is empty when it opens a new session. It
+  // authorizes nothing by itself.
+  string session_id = 3;
+  // cursor is reserved for a resumable stream's position. Generated streams
+  // carry none: a leg that ends without last ends the logical stream.
+  bytes cursor = 4;
+  // fin marks the end of the sender's messages on the logical stream (the
+  // client's half-close): no payload follows it on any leg of the session.
+  bool fin = 5;
+}

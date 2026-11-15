@@ -103,6 +103,11 @@ type grpcServiceEntry struct {
 	// StreamCredentialExpiryLayer, which ends each such stream at its opening
 	// token's exp: a tower layer cannot tell unary from streaming by itself.
 	StreamingPaths []string
+	// RotatingPaths are the full gRPC paths ("/pkg.ServiceRotating/Method")
+	// of the service's rotating sibling (tacplus#322), empty when it serves
+	// none. The ServiceManager serves the sibling beside the service (the
+	// wrapper's rotating_sibling) and ends each of its legs at its token's exp.
+	RotatingPaths []string
 	// IsHosted is true when this entry came from a vservice declaring HostLabel ==
 	// SelfPackage rather than from the host service's own proto package.
 	// Hosted entries get a default Handler trait impl that returns a stub,
@@ -172,6 +177,7 @@ type smTemplateData struct {
 	HasAutoTls            bool
 	AutoTlsKeyType        string
 	HasSmb                bool // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
+	HasMemberPort         bool // true when this service declares (spec.member_port): the ServiceManager owns its member port (tacplus#212, #322)
 	SmbAuthorityServiceID string
 	IsGateway             bool
 	HasSubscriptions      bool
@@ -291,6 +297,11 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 	if err != nil {
 		return smTemplateData{}, err
 	}
+	// Rotating siblings per service (tacplus#322).
+	rotatingPathsBySvc, err := rustRotatingServices(config.FlatProtoDir)
+	if err != nil {
+		return smTemplateData{}, err
+	}
 
 	var grpcSvcs []grpcServiceEntry
 	for _, svc := range svcs {
@@ -369,6 +380,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 			TenantRouted:             tenantRoutedSvcs[svc.PackageName+"."+svc.ServiceName],
 			AuthExemptPaths:          svc.AuthExemptPaths,
 			StreamingPaths:           streamingPathsBySvc[svc.PackageName+"."+svc.ServiceName],
+			RotatingPaths:            rotatingPathsBySvc[svc.PackageName+"."+svc.ServiceName],
 			IsHosted:                 config.SelfPackage != "" && svc.PackageName != config.SelfPackage,
 			// The one service whose handler the ServiceManager supplies itself.
 			IsGeneratedRecordC2S: svc.SynthesizedKind == parser.SynthesizedKindRecordC2S,
@@ -469,6 +481,10 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		return smTemplateData{}, err
 	}
 	hasMcpRpcs, err := detectOwnPackageMcpRpcs(config)
+	if err != nil {
+		return smTemplateData{}, err
+	}
+	hasMemberPort, err := detectMemberPort(config)
 	if err != nil {
 		return smTemplateData{}, err
 	}
@@ -713,6 +729,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 			return "ecdsa"
 		}(),
 		HasSmb:                     hasSmb,
+		HasMemberPort:              hasMemberPort,
 		SmbAuthorityServiceID:      smbAuthorityServiceID,
 		IsGateway:                  config.IsGateway,
 		HasSubscriptions:           len(config.Subscriptions) > 0,
@@ -857,9 +874,6 @@ func detectSmbRuntimeMetadata(config *tactype.Config) (bool, string, error) {
 	if err != nil {
 		return false, "", fmt.Errorf("service manager data: parse proto descriptors in %q: %w", config.FlatProtoDir, err)
 	}
-	if err := parser.RefuseMemberPort(dp, config.SelfPackage, "rust", "tacplus#322"); err != nil {
-		return false, "", err
-	}
 	authorityID, err := parser.SmbAuthorityServiceID(dp)
 	if err != nil {
 		return false, "", fmt.Errorf("service manager data: resolve SMB authority: %w", err)
@@ -877,6 +891,37 @@ func detectSmbRuntimeMetadata(config *tactype.Config) (bool, string, error) {
 		}
 	}
 	return hasSmb, authorityID, nil
+}
+
+// detectMemberPort reports whether the service's own proto package declares a
+// (spec.member_port) service: the ServiceManager then owns its member port
+// (tacplus#212, #322). The member port serves TLS with the member's
+// kernel-issued serving certificate, which only auto_tls delivers: without it
+// there is nothing to serve, and a member port must never fall back to
+// plaintext, so the annotation without auto_tls fails generation.
+func detectMemberPort(config *tactype.Config) (bool, error) {
+	if config.FlatProtoDir == "" || config.SelfPackage == "" {
+		return false, nil
+	}
+	dp, err := parser.NewDescriptorParser(config.FlatProtoDir)
+	if err != nil {
+		return false, fmt.Errorf("service manager data: parse proto descriptors in %q: %w", config.FlatProtoDir, err)
+	}
+	for _, fd := range dp.GetAllFiles() {
+		if fd.Package != config.SelfPackage {
+			continue
+		}
+		for si := range fd.Services {
+			if !fd.Services[si].IsMemberPort {
+				continue
+			}
+			if !config.HasAutoTls() {
+				return false, fmt.Errorf("service manager data: %q declares (spec.member_port), which serves TLS with the member's serving certificate: declare auto_tls on its (spec.service_state)", config.SelfPackage)
+			}
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // detectOwnPackageMcpRpcs reports whether the service's own proto package

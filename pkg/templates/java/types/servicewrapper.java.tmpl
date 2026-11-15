@@ -584,11 +584,21 @@ public class {{.ServerClassName}} extends {{.ServiceName}}Grpc.{{.ServiceName}}I
     // ==================== gRPC Service Registration ====================
 
     /**
-     * Registers the gRPC service with the server.
+     * Registers the gRPC service with the server
+{{- if .RotationAdmit}}, and beside it its rotating
+     * sibling, {{.ServiceName}}Rotating (tacplus#322)
+{{- end}}.
      */
     public void registerServices(io.grpc.ServerBuilder<?> grpcServerBuilder) {
         grpcServerBuilder.addService(this);
+{{- if .RotationAdmit}}
+        grpcServerBuilder.addService(rotatingService());
+{{- end}}
     }
+{{- if .RotationAdmit}}
+
+{{.RotationAdmit}}
+{{- end}}
 {{- if .RegisterMethodAuth}}
 
 {{.RegisterMethodAuth}}

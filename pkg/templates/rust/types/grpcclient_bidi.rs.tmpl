@@ -119,7 +119,7 @@
                         continue;
                     }
                 };
-                let mut client = {{.TonicClientName}}::new(channel);
+                let mut client = {{.TonicClientName}}::new({{.StreamChannel}});
                 let mut inbound = match tokio::time::timeout(CONNECT_TIMEOUT, client.{{.MethodSnake}}(req)).await {
                     Ok(Ok(resp)) => {
                         connects += 1;

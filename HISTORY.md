@@ -109,3 +109,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-14 looper release v2.4.23 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.4.23)
 - 2026-11-14 looper release v2.5.24 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.5.24)
 - 2026-11-14 looper release v2.6.12 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.6.12)
+- 2026-11-14 looper issue Swift C2DClient's default socket ignores socket_path: it dials ~/.<package>/daemon.sock, where no daemon listens (#494)

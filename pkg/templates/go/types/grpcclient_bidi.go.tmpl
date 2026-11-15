@@ -18,14 +18,17 @@
 //
 // Tenant-routed: the stream goes to tenant's instance, fixed at open. tenant
 // must be a tenant id (INVALID_ARGUMENT, before anything is dialled), and
-// every message sent on the stream must name it in {{.RouteField}}.
+// every message sent on the stream must name it in {{.RouteField}}. A tenant's
+// own service opens it to its own tenant only: an empty tenant is its own tid,
+// another is refused (PERMISSION_DENIED).
 func (c *{{.ClientName}}) {{.MethodName}}(
 	ctx context.Context,
 	tenant string,
 	onConnect func(send func(*{{.GoInput}}) error),
 	onMessage func(*{{.GoOutput}}),
 ) (*{{.HandleType}}, error) {
-	if _, err := serviceconnection.RouteTenant("tenant", tenant); err != nil {
+	tenant, err := serviceconnection.CallerRouteTenant("tenant", tenant, c.ownToken())
+	if err != nil {
 		return nil, err
 	}
 	h := &{{.HandleType}}{

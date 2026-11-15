@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"go.uber.org/zap"
 )
@@ -163,7 +164,7 @@ func appendOpaEvalToSourceFile(tempProtoDir, sourceRelPath string, defs []opaEva
 	sb.WriteString("}\n")
 
 	content += sb.String()
-	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+	if err := fsroot.WriteFile(tempProtoDir, filePath, []byte(content), 0644); err != nil {
 		return fmt.Errorf("appending OpaEval to %s: %w", sourceRelPath, err)
 	}
 

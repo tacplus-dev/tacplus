@@ -607,6 +607,13 @@ the looper then marks it `promoted` or `declined` here with the date.
   .NET 10.0 current, which reads as "newest LTS". Writing that down beside the pins (JDK and .NET the newest LTS,
   Maven the newest non-rc release, Docker the newest major, Rust stable via `1`) would let the scan file a missed
   move as a `bug` instead of leaving it to judgment.
+- **Every write into a tree the compiler owns goes through `fsroot`, checked by a rule** (2026-11-15, #754): #754 moved
+  the 43 writes gosec's G703 taint analysis reaches onto `os.Root` (`pkg/internal/common/fsroot`, or a root the
+  function opens), but G703 only follows paths it sees as tainted: many writes into the same output and staged-proto
+  trees still go through a joined path (`header.ReplaceProtocHeader`, most template emitters' `os.WriteFile` under
+  `config.OutputDir`), and a symlink there would redirect them the same way. A soundness rule refusing
+  `os.WriteFile`/`MkdirAll`/`Rename`/`RemoveAll` under `pkg/internal/` and `pkg/fleet`/`pkg/runner`/`pkg/registry` outside
+  `fsroot` (as #753 proposes for `filepath.Walk`) would cover them and keep the next one from being written the old way.
 - **The security report's `new` keys on `file:line`, so an edit above a finding makes it new again** (2026-11-15,
   nightly scan; tacplus-dev/looper, Security checks): the build's report of 2026-11-15 marked 320 findings `new since
   the previous run`, 216 of them MEDIUM/LOW ones #585 already lists at a line a few above (every G306/G301/G304 of

@@ -512,6 +512,13 @@ the looper then marks it `promoted` or `declined` here with the date.
   has the runtime fix), which argues for keeping a 6.1-era toolchain in some gate while 2.0–2.5 are supported;
   but a gate on main should also build with main's image (`just gates-container`), or its verdict says nothing about
   what main's consumers get. A change in tacplus-dev/looper's runner image, or in which image the gates run in.
+- **consumer-contract's swift legs fail on the linker's own warnings** (2026-11-15, #803): `cross-test/consumer-contract/run.sh
+  --language swift --case c2s` on the looper's runner ends in `ERROR: warning/error output found in .../swift-build.log`
+  after `Build complete!` with no `error:` line: the only warnings are `/usr/bin/ld: warning: ... has a LOAD segment with
+  RWX permissions`, binutils ≥ 2.39 on SwiftPM's own plugin and manifest binaries, nothing generated. The check should
+  look for the compiler's diagnostics (`error:`, `warning:` from swiftc on a generated source), not for any line with
+  the word in it, or the leg says nothing on a runner with a recent binutils. It is not in `just gates`, so #803
+  compile-checked the generated `C2SClient` by reading that log instead.
 
 ## Promoted / declined
 - **`just generated <dir>`: tacplus's security checks scan its generated output** (2026-11-09, #376): promoted

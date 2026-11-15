@@ -123,7 +123,10 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   and on stop the socket is removed and the handler's shutdown runs once.
   Its swift leg builds a consumer of the generated Swift package whose
   `C2DClient()`, with no argument, calls the generated Go daemon over its
-  declared socket (#494). Does not run `Run()` itself (`docs/KNOWN_TEST_GAPS.md` C2D-1). Local
+  declared socket (#494), 2000 times over so that the client's teardown runs
+  thousands of times: through grpc-swift's `withGRPCClient` it aborted the
+  process on Swift toolchains before 6.3.1, once in a few hundred teardowns
+  (#803). Does not run `Run()` itself (`docs/KNOWN_TEST_GAPS.md` C2D-1). Local
   (`just c2d-server`, part of `just gates`); not yet in CI.
 - `zero-rpc-s2s` (`cross-test/zero-rpc-s2s/run.sh`): behavioral gate for a
   zero-rpc (client-only) Rust host (#94). Generates `cross-test/proto-zerorpc`

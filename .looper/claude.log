@@ -1,0 +1,400 @@
+< 130:	if aud := os.Getenv("STREAM_EXPIRY_AUDIENCE"); aud != "" {
+Keep `os`, drop `strconv`. Now write the new lint test file and resolve across all lines.
+> Bash B=/builds/looper/tacplus/homes/looper-713/tmp; R=/builds/looper/tacplus/issues/713 cat > $B/cross_test_go_listener_test.go <<'EOF' // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0  package scripts  import ( 	"io/fs" 	"os" 	"path/filepath" 	"regexp" 	"strings" 	"testing" )  EOF...
+= task_progress
+= task_started
+= task_notification
+< // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0  package scripts  import ( 	"io/fs" 	"os" 	"path/filepath" 	"regexp" 	"strings" 	"testing" )  // The Go form of the same race (#713): a helper binds port 0, closes the // listener on return and hands back only the port, which a ...
+> Bash cd /builds/looper/tacplus/homes/looper-713/tmp/bp713-2.6; gofmt -d cross-test/stream-expiry/testdata/stream_expiry_behavior_test.go | head -20; git show origin/release/2.6:cross-test/stream-expiry/testdata/stream_expiry_behavior_test.go > /tmp/x713.go; gofmt -l /tmp/x713.go; rm /tmp/x713.go
+= task_progress
+< diff cross-test/stream-expiry/testdata/stream_expiry_behavior_test.go.orig cross-test/stream-expiry/testdata/stream_expiry_behavior_test.go --- cross-test/stream-expiry/testdata/stream_expiry_behavior_test.go.orig +++ cross-test/stream-expiry/testdata/stream_expiry_behavior_test.go @@ -41,12 +41,12 ...
+> Bash B=/builds/looper/tacplus/homes/looper-713/tmp; R=/builds/looper/tacplus/issues/713 git -C $R log -1 --format=%B a4e9a225 | sed '/^Co-Authored-By/,$d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > $B/msg713.txt cat >> $B/msg713.txt <<'EOF'  On release branches the Go lint test lives in a new file, script...
+= task_progress
+< - The stream-expiry test lives in another package, so its fixture copies   a test-only ServeOn into its own generated chassis, the way the Rust   leg already extends its generated tree.  scripts/cross_test_listener_test.go now also fails on the Go form of the pattern (bind port 0, defer Close, retur...
+> Bash B=/builds/looper/tacplus/homes/looper-713/tmp; for l in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do cd $B/bp713-$l/scripts; echo "== $l"; ls ../.git >/dev/null; go test -run KeepTheListener -count=1 . 2>&1 | tail -2; cd ..; git show origin/release/$l:cross-test/stream-expiry/testdata/stream_expiry_behavior_test...
+= task_progress
+= task_started
+= task_notification
+< == 2.0 ok  	github.com/tacplus-dev/tacplus/scripts	0.116s --- FAIL: TestGoTestsKeepTheListenerTheyBind (0.33s)     cross_test_go_listener_test.go:53: ../cross-test/stream-expiry/testdata/stream_expiry_behavior_test.go binds port 0 as l, closes it and returns its port, so     cross_test_go_listener_t...
+> Bash cd /builds/looper/tacplus/homes/looper-713/tmp/bp713-2.0; sed -n 1,140p cross-test/stream-expiry/run.sh; for l in 2.1 2.2 2.3 2.4 2.5 2.6; do diff -q cross-test/stream-expiry/run.sh ../bp713-$l/cross-test/stream-expiry/run.sh; done
+= task_progress
+< Exit code 1 #!/usr/bin/env bash # Behavioral fixture for server-side stream credential expiry (issue #260). # API.md's Client Send Contract says a stream carries exactly one token, the one # it opened with, and that servers terminate streams carrying expired # credentials. A client-streaming, a serv...
+> Bash B=/builds/looper/tacplus/homes/looper-713/tmp; cat > $B/verify713.sh <<'EOF' #!/usr/bin/env bash # usage: verify713.sh <line> set -uo pipefail l="$1"; B=/builds/looper/tacplus/homes/looper-713/tmp; W=$B/bp713-$l echo "### (b) $l" (cd "$W" && bash cross-test/stream-expiry/run.sh --language go) > $B/b...
+= task_progress
+< 30653 30654
+Meanwhile, I'll push branches and draft PR bodies after tests pass. Let me compute tags now.
+> Bash R=/builds/looper/tacplus/issues/713; for l in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do t=$(git -C $R tag -l "v$l.*" --sort=-v:refname | head -1); echo "$l $t v$l.$(( ${t##*.} + 1 ))"; done; git -C $R ls-remote --tags origin 'v2.*' | wc -l
+= task_progress
+< 2.0 v2.0.31 v2.0.32 2.1 v2.1.24 v2.1.25 2.2 v2.2.21 v2.2.22 2.3 v2.3.23 v2.3.24 2.4 v2.4.23 v2.4.24 2.5 v2.5.24 v2.5.25 2.6 v2.6.12 v2.6.13 267
+> Monitor B=/builds/looper/tacplus/homes/looper-713/tmp; until ! kill -0 $(cat $B/pidA) 2>/dev/null && ! kill -0 $(cat $B/pidB) 2>/dev/null; do sleep 30; done; cat $B/v-*.out
+= task_progress
+= permission_denied
+< Permission to use Monitor has been denied. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your ab...
+> Bash B=/builds/looper/tacplus/homes/looper-713/tmp; for i in $(seq 1 19); do kill -0 $(cat $B/pidA) 2>/dev/null || kill -0 $(cat $B/pidB) 2>/dev/null || break; sleep 30; done; tail -n +1 $B/v-*.out
+= task_progress
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===     PASS go ==> Generating java cross-test fixture
+> Bash timeout 590 bash -c 'while kill -0 18750 2>/dev/null; do sleep 10; done'; grep "^=== .* rc=" /tmp/gates713.log; tail -2 /tmp/gates713.log
+= task_started
+= task_notification
+< ==> /builds/looper/tacplus/homes/looper-713/tmp/v-2.0.out <== ### (b) 2.0 b exit 0 PASS ok  	example.com/streamexpiry/tacplus/model/s2sm/grpc/servers/svc/streamexpiry	9.085s ==> stream-expiry check PASSED (go) ### (c) 2.0 c exit 0 === RUN   TestKeepaliveOverrideDoesNotGOAWAYGeneratedClient --- PASS:...
+> Bash B=/builds/looper/tacplus/homes/looper-713/tmp; for i in $(seq 1 19); do kill -0 $(cat $B/pidA) 2>/dev/null || kill -0 $(cat $B/pidB) 2>/dev/null || break; sleep 30; done; tail -n +1 $B/v-2.[2-6].out
+= task_progress
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === ==> Generating java cross-test fixture ==> Compiling java cross-test fixture
+> Bash timeout 590 bash -c 'while kill -0 18750 2>/dev/null; do sleep 10; done'; grep "^=== .* rc=" /tmp/gates713.log; tail -2 /tmp/gates713.log
+= task_started
+= task_notification
+< ==> /builds/looper/tacplus/homes/looper-713/tmp/v-2.2.out <== ### (b) 2.2 b exit 0 PASS ok  	example.com/streamexpiry/tacplus/model/s2sm/grpc/servers/svc/streamexpiry	9.121s ==> stream-expiry check PASSED (go) ### (c) 2.2 c exit 0 === RUN   TestKeepaliveOverrideDoesNotGOAWAYGeneratedClient --- PASS:...
+While waiting, push the lines already verified (2.0–2.3) and prepare a body generator.
+> Bash B=/builds/looper/tacplus/homes/looper-713/tmp; cat > $B/body713.sh <<'XEOF' #!/usr/bin/env bash l="$1"; B=/builds/looper/tacplus/homes/looper-713/tmp R=/builds/looper/tacplus/issues/713 cur=$(git -C $R tag -l "v$l.*" --sort=-v:refname | head -1); next="v$l.$(( ${cur##*.} + 1 ))" extra=""; [[ "$l" ==...
+= task_progress
+< Backport of #713 to release/2.0. It is a bug fix (a flaky-gate race; issue #713 approved by Jody), and this line has the bug: the Go stream-expiry fixture and the generated keepalive test reserve a port, release it, and bind it again.  **Patch to cut once this merges: the next unused 2.0 tag, `v2.0....
+> Bash B=/builds/looper/tacplus/homes/looper-713/tmp; for l in 2.0 2.1 2.2 2.3; do cd $B/bp713-$l; git status --short; git push -q origin backport/713-release-$l 2>&1 | grep -v '^remote:' ; gh pr create --repo tacplus-dev/tacplus --base release/$l --head backport/713-release-$l --title "[release/$l] Go str...
+= task_progress
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= vcs_state_changed
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/730 https://github.com/tacplus-dev/tacplus/pull/731 https://github.com/tacplus-dev/tacplus/pull/732 https://github.com/tacplus-dev/tacplus/pull/733
+> Bash B=/builds/looper/tacplus/homes/looper-713/tmp; for i in $(seq 1 19); do kill -0 $(cat $B/pidA) 2>/dev/null || kill -0 $(cat $B/pidB) 2>/dev/null || break; sleep 30; done; tail -n +1 $B/v-2.[4-6].out
+= task_progress
+= task_started
+= task_notification
+< ==> /builds/looper/tacplus/homes/looper-713/tmp/v-2.4.out <== ### (b) 2.4 b exit 0 PASS ok  	example.com/streamexpiry/tacplus/model/s2sm/grpc/servers/svc/streamexpiry	9.568s ==> stream-expiry check PASSED (go) ### (c) 2.4 c exit 0 === RUN   TestKeepaliveOverrideDoesNotGOAWAYGeneratedClient --- PASS:...
+> Bash B=/builds/looper/tacplus/homes/looper-713/tmp; kill -0 $(cat $B/pidA) $(cat $B/pidB) 2>&1 | head -2; for l in 2.4 2.5 2.6; do cd $B/bp713-$l; git status --short; git push -q origin backport/713-release-$l 2>&1 | grep -v '^remote:' ; gh pr create --repo tacplus-dev/tacplus --base release/$l --head ba...
+= task_progress
+= task_started
+= task_notification
+= vcs_state_changed
+= code_change_published
+< /bin/bash: line 1: kill: (30653) - No such process /bin/bash: line 1: kill: (30654) - No such process https://github.com/tacplus-dev/tacplus/pull/734 https://github.com/tacplus-dev/tacplus/pull/735 https://github.com/tacplus-dev/tacplus/pull/736 **Patch to cut once this merges: the next unused 2.6 t...
+Cleanup: remove worktrees and my temp files.
+> Bash B=/builds/looper/tacplus/homes/looper-713/tmp; R=/builds/looper/tacplus/issues/713; for l in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do git -C $B/bp713-$l log -1 --format="$l %h %H"; done; for l in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do git -C $R worktree remove --force $B/bp713-$l; done; git -C $R worktree list; rm ...
+= task_progress
+= permission_denied
+< Permission to use Bash has been denied. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your abili...
+> Bash B=/builds/looper/tacplus/homes/looper-713/tmp; for l in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do git -C $B/bp713-$l log -1 --format="$l %h"; git -C $B/bp713-$l status --short --ignored | head -5; done
+= task_progress
+< 2.0 73fa0375 !! target/ 2.1 5266c278 !! target/ 2.2 79b8471c !! target/ 2.3 dda4133d !! target/ 2.4 29eecf93 !! target/ 2.5 1ea98fa8 !! target/ 2.6 6fb336e3 !! target/
+> Bash B=/builds/looper/tacplus/homes/looper-713/tmp; for l in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do git -C /builds/looper/tacplus/issues/713 worktree remove $B/bp713-$l && echo removed $l; done
+= task_progress
+< removed 2.0 removed 2.1 removed 2.2 removed 2.3 removed 2.4 removed 2.5 removed 2.6
+I backported #713 to all seven release lines and opened seven PRs. Every check you listed passed on every line, and nothing had to be skipped.
+
+| Line | Commit | PR | Tag named |
+|---|---|---|---|
+| 2.0 | 73fa0375 | https://github.com/tacplus-dev/tacplus/pull/730 | v2.0.32 |
+| 2.1 | 5266c278 | https://github.com/tacplus-dev/tacplus/pull/731 | v2.1.25 |
+| 2.2 | 79b8471c | https://github.com/tacplus-dev/tacplus/pull/732 | v2.2.22 |
+| 2.3 | dda4133d | https://github.com/tacplus-dev/tacplus/pull/733 | v2.3.24 |
+| 2.4 | 29eecf93 | https://github.com/tacplus-dev/tacplus/pull/734 | v2.4.24 |
+| 2.5 | 1ea98fa8 | https://github.com/tacplus-dev/tacplus/pull/735 | v2.5.25 |
+| 2.6 | 6fb336e3 | https://github.com/tacplus-dev/tacplus/pull/736 | v2.6.13 |
+
+Each tag is the newest tag of its line plus one patch. Each PR body says other open backports may name the same tag, so whichever is unused at merge time should be taken. Only the 2.6 PR has the note that main gets no 2.6 tag.
+
+**How the cherry-pick went**
+- **Templates, `run.sh` and the new `grpcserver_serve_on.go`:** applied cleanly on every line.
+- **`stream_expiry_behavior_test.go` on 2.0–2.3:** the only real conflict was in the import block. Those branches still import `os`, which the file uses for `os.Getenv`. I kept `os`, dropped `strconv`, and the rest of the change applied as on main. 2.4–2.6 merged automatically.
+- **Lint test:** on every line I deleted `scripts/cross_test_listener_test.go` and put the test in the new `scripts/cross_test_go_listener_test.go`, with its own header, imports and comment.
+- **Commit message:** it keeps a4e9a225's text, then adds a short paragraph saying where the lint test lives on release branches, then the `(cherry picked from commit a4e9a225...)` line, and ends with `Co-Authored-By: Claude <noreply@anthropic.com>`. The original paragraph still says "scripts/cross_test_listener_test.go now also fails…"; the added paragraph right after it gives the correct file name.
+
+**Test results (the same on all seven lines)**
+- **(a) Lint test:** `go test -run KeepTheListener -count=1 .` gives `ok github.com/tacplus-dev/tacplus/scripts`. With only the two test files reset to the branch's originals it gives `--- FAIL: TestGoTestsKeepTheListenerTheyBind`, naming both files, so every line has the bug. I restored the files afterwards.
+- **(b) Stream-expiry:** `run.sh --language go` ends with `ok …/s2sm/grpc/servers/svc/streamexpiry ~8.3–9.6s` and `==> stream-expiry check PASSED (go)`.
+- **(c) Generated keepalive test:** after `go mod tidy` and `go vet` passed, it gives `--- PASS: TestKeepaliveOverrideDoesNotGOAWAYGeneratedClient (140.05–140.10s)` and `ok …/chassis/grpcserver ~141.1s`.
+
+Each PR body follows #538 and has the four sections you asked for. The Changes section explains the different lint test file name and why. Tests gives the commands and their last result lines, and says full `just gates` was not run.
+
+**Other notes**
+- `gofmt` flags an import-ordering issue (`x509wrapper`) in `stream_expiry_behavior_test.go` on every line. It is already on the release branches, so I left it alone.
+- I removed all seven worktrees; only ignored files were in them. The background runs I started have both finished. I did not touch the main checkout.
+- My working files are still in `/builds/looper/tacplus/homes/looper-713/tmp/`: the run logs (`b-<line>.log`, `c-<line>.log`, `v-<line>.out`), the scripts I used, and the commit-message file. The cleanup command I tried was denied, so delete them if you want them gone.
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=1 ===     PASS python/base (byte-identical) ==> typescript/base: generating twice into separate work dirs
+= thinking_tokens
+= thinking_tokens
+Backports are open (#730–#736). But the gates' `current-generation` failed; investigating.
+> Bash awk '/^=== current-generation ===/,/^=== current-generation rc=/' /tmp/gates713.log | grep -n -i "fail\|error\|FAILED" | head -30
+< 170:07:19:24.928 [grpc-default-worker-ELG-3-2] DEBUG io.grpc.netty.shaded.io.grpc.netty.NettyClientHandler -- [id: 0xeffe4f9d, L:/127.0.0.1:34858 - R:127.0.0.1/127.0.0.1:35065] OUTBOUND GO_AWAY: lastStreamId=0 errorCode=0 length=0 bytes= 172:07:19:24.933 [grpc-default-worker-ELG-3-3] DEBUG io.grpc.n...
+> Bash awk '/^=== current-generation ===/,/^=== current-generation rc=/' /tmp/gates713.log | sed -n 195,232p; grep -rn "appends must not wait on a failing upload" --include=* cross-test pkg | head -3
+< PASS: redact preserves key PASS: redact adds marker PASS: redact case insensitive (Authorization) PASS: redact case insensitive (AUTHORIZATION) PASS: redact basic auth PASS: redact cookie PASS: redact set-cookie PASS: redact x-auth-token PASS: redact client-secret PASS: redact access_token PASS: red...
+= thinking_tokens
+= thinking_tokens
+A Java DiskStore test failed, which is unrelated to this Go-only change. Checking whether it's a known flake.
+> Bash gh issue list --repo tacplus-dev/tacplus --state all --search "appends must not wait" --json number,title,state; gh issue list --repo tacplus-dev/tacplus --state all --search "DiskStoreTest" --json number,title,state | head -c 1500; echo; sed -n 470,505p pkg/templates/java/chassis/diskstore/DiskStor...
+< [{"number":539,"state":"OPEN","title":"Java DiskStore self-test testAppendsDoNotWaitForUploads fails on a loaded runner: 100 fsync'd appends must finish within 20s (current-generation red on main)"},{"number":657,"state":"OPEN","title":"runtime-smoke: run.sh fails at setup, copies consumer-contract/...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash git status --short | head; /usr/local/bin/repo-looper --repo tacplus --issue 713 --checkpoint "Fix a4e9a225 committed; backport PRs #730-#736 open (tags v2.0.32..v2.6.13 named). Local just gates running (current-generation hit known flake #539). Landing now. Left: land verdict, outcome comment, clos...
+= task_started
+= task_notification
+< [2026-11-15T07:32:00Z] checkpoint of #713 (a step) pushed to looper/tacplus-713:  8 files changed, 588 insertions(+), 23 deletions(-) 72394
+> Bash timeout 590 bash -c 'while kill -0 18750 2>/dev/null && kill -0 72394 2>/dev/null; do sleep 10; done'; grep "^=== .* rc=" /tmp/gates713.log; echo ---; tail -5 /tmp/land713.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=1 === --- [2026-11-15T07:32:05Z] checkpoint of #713 (land queued) pushed to looper/tacplus-713:  9 files changed, 595 insertions(+), 23 deletions(-) [2026-11-15T07:32:08Z] queued: the manager of tacplus merg...
+= thinking_tokens
+= thinking_tokens
+The checkpoint reported more files than my commit; checking what's on the branch the land will merge.
+> Bash git fetch -q origin looper/tacplus-713 && git log --oneline origin/main..FETCH_HEAD && git diff --stat origin/main FETCH_HEAD
+< ee247d2a looper: work in progress on #713 (land queued) a4e9a225 Go stream-expiry and keepalive tests serve on the listener they bind (#713)  .looper/claude.log                                 | 366 +++++++++++++++++++++  .looper/land                                       |   4 +  .looper/prompt.md ...
+Only the looper's own `.looper/` bookkeeping besides my commit, which is the standard flow. Continuing to poll.
+> Bash timeout 590 bash -c 'while kill -0 18750 2>/dev/null && kill -0 72394 2>/dev/null; do sleep 10; done'; grep "^=== .* rc=" /tmp/gates713.log | tail -4; echo ---; tail -2 /tmp/land713.log | cut -c1-300
+> Bash timeout 590 bash -c 'while kill -0 18750 2>/dev/null && kill -0 72394 2>/dev/null; do sleep 10; done'; grep "^=== .* rc=" /tmp/gates713.log | tail -4; echo ---; tail -2 /tmp/land713.log | cut -c1-300
+= task_started
+= task_notification
+< === soundness rc=0 === === test rc=0 === === current-generation rc=1 === === determinism rc=0 === --- [2026-11-15T07:32:05Z] checkpoint of #713 (land queued) pushed to looper/tacplus-713:  9 files changed, 595 insertions(+), 23 deletions(-) [2026-11-15T07:32:08Z] queued: the manager of tacplus merge...
+= task_started
+= task_notification
+< === current-generation rc=1 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=1 === --- [2026-11-15T07:32:05Z] checkpoint of #713 (land queued) pushed to looper/tacplus-713:  9 files changed, 595 insertions(+), 23 deletions(-) [2026-11-15T07:32:08Z] queued: the manager of ta...
+stream-expiry failed in the gates, which matters for this change. Looking.
+> Bash awk '/^=== stream-expiry ===/,/^=== stream-expiry rc=/' /tmp/gates713.log | grep -n -i "fail\|error\|PASSED\|panic\|==>" | head -40; grep -n "^stream-expiry" -A8 justfile
+< <persisted-output> Output too large (41KB). Full output saved to: /builds/looper/tacplus/homes/looper-713/.claude/projects/-builds-looper-tacplus-issues-713/c0f5c9f8-5b2b-4917-b989-87f2136f94df/tool-results/bady1szjj.txt  Preview (first 2KB): 3:==> Building tacplus binary 4:==> Generating stream-exp...
+> Bash awk '/^=== stream-expiry ===/,/^=== stream-expiry rc=/' /tmp/gates713.log | grep -v "INFO\|DEBUG" | grep -n -i "fail\|error\|PASSED\|panic\|==>\|--- " | cut -c1-250 | head -40
+< 3:==> Building tacplus binary 4:==> Generating stream-expiry fixture (go) 5:==> Running generated Go stream-expiry behavior tests 7:go: finding module for package github.com/hashicorp/go-multierror 8:go: found github.com/hashicorp/go-multierror in github.com/hashicorp/go-multierror v1.1.1 20:--- PAS...
+The Go leg passed in the gates; the Java leg failed, and Java is untouched by this change. Checking for a known issue.
+> Bash gh issue list --repo tacplus-dev/tacplus --state all --search "Context was not cancelled after the expiry close" --json number,title,state; gh issue list --repo tacplus-dev/tacplus --state all --search "StreamExpiryBehaviorTest" --json number,title,state | head -c 1200; echo; sed -n 390,410p cross-t...
+< [{"number":627,"state":"OPEN","title":"stream-expiry Java self-test streamsAreEndedAtTheOpeningTokensExpiry fails on a loaded runner: handler Context cancellation must land within a fixed 3s"},{"number":585,"state":"OPEN","title":"Security checks: 1331 other new findings (MEDIUM and LOW: gosec, semg...
+Also known: #627 (a fixed 3s window on a loaded runner). Both red legs are pre-existing Java flakes in code this change doesn't touch. Continuing.
+> Bash timeout 590 bash -c 'while kill -0 18750 2>/dev/null && kill -0 72394 2>/dev/null; do sleep 10; done'; grep "^=== .* rc=" /tmp/gates713.log | tail -4; echo ---; tail -1 /tmp/land713.log | cut -c1-300
+= task_started
+= task_notification
+< === cert-stream rc=0 === === stream-expiry rc=1 === === memberport rc=1 === === claims-provenance rc=0 === --- [2026-11-15T07:32:08Z] queued: the manager of tacplus merges looper/tacplus-713 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdi...
+> Bash awk '/^=== memberport ===/,/^=== memberport rc=/' /tmp/gates713.log | grep -v "INFO\|DEBUG" | grep -i "FAIL\|ERROR\]" | cut -c1-250 | head -12
+< 	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.failOrExecuteEngine(EngineExecutionOrchestrator.java:218) 	at org.junit.platform.launcher.core.EngineExecutionOrchestrator.failOrExecuteEngine(EngineExecutionOrchestrator.java:218) io.grpc.netty.shaded.io.netty.channel.unix.Errors$Nati...
+> Bash awk '/^=== memberport ===/,/^=== memberport rc=/' /tmp/gates713.log | grep -E "Tests run:|<<< FAIL|FAILED|recipe" | cut -c1-250 | head -12; gh issue list --repo tacplus-dev/tacplus --state open --search "memberport in:title" --json number,title | head -c 1500
+< [ERROR] Tests run: 27, Failures: 1, Errors: 0, Skipped: 1, Time elapsed: 53.30 s <<< FAILURE! -- in com.example.grid.model.chassis.memberport.MemberPortBehaviorTest [ERROR] com.example.grid.model.chassis.memberport.MemberPortBehaviorTest.byteSessionRunsAcrossSeveralTokenLifetimesBothWaysAtOnce -- Ti...
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue list --repo tacplus-dev/tacplus --state all --search "byteSessionRunsAcrossSeveralTokenLifetimesBothWaysAtOnce" --json number,title,state; awk '/^=== memberport ===/,/^=== memberport rc=/' /tmp/gates713.log | grep -A4 "byteSessionRunsAcrossSeveralTokenLifetimesBothWaysAtOnce -- Time" | head...
+< [] [ERROR] com.example.grid.model.chassis.memberport.MemberPortBehaviorTest.byteSessionRunsAcrossSeveralTokenLifetimesBothWaysAtOnce -- Time elapsed: 6.854 s <<< FAILURE! org.opentest4j.AssertionFailedError: client: no loss, duplication or reordering: Result{received=633141, firstMismatch=-1, error=...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n -i "memberport\|member port" ROADMAP.md | head -8; gh api repos/tacplus-dev/roadmap/contents/ROADMAP.md -H 'Accept: application/vnd.github.raw' | grep -n -i "member port\|flak" | head -8; gh issue view 722 --repo tacplus-dev/tacplus --json body --jq .body | head -30
+< 19:- Generated member port: Hazelcast member traffic over server TLS plus framed bearer tokens, no mTLS (#212); moves onto gRPC with #259 21:- Long-lived streams survive token expiry by make-before-break rotation: acquire token, open, send, acquire new token, open new stream, cut over, close old; th...
+= thinking_tokens
+= thinking_tokens
+Same pattern as #722 but a different test. Filing it with the evidence.
+> Bash awk '/^=== memberport ===/,/^=== memberport rc=/' /tmp/gates713.log | grep -n "member port: session\|rotation failed" | head -8 | cut -c1-220
+< 772:INFO: member port: session dGssy1mxXPGAbH9xPUf9Pg dropped: token expired without a rotation 778:INFO: member port: session dGssy1mxXPGAbH9xPUf9Pg dropped: a stream's token expired without a rotation 780:INFO: member port: session 0_QrLGD5Q24_BvHsetsYQw dropped: token expired without a rotation 8...
+> Bash gh issue create --repo tacplus-dev/tacplus --label bug --title "memberport Java self-test byteSessionRunsAcrossSeveralTokenLifetimesBothWaysAtOnce: client connection reset mid-session on a loaded runner" --body-file - <<'EOF' Found while running the full gates for #713 (2026-11-15). #713's change is...
+< https://github.com/tacplus-dev/tacplus/issues/737
+> Bash timeout 590 bash -c 'while kill -0 18750 2>/dev/null && kill -0 72394 2>/dev/null; do sleep 10; done'; grep "^=== .* rc=" /tmp/gates713.log | tail -4; echo ---; tail -1 /tmp/land713.log | cut -c1-300
+= task_started
+= task_notification
+< === stream-expiry rc=1 === === memberport rc=1 === === claims-provenance rc=0 === === accounting-identity rc=0 === --- [2026-11-15T07:32:08Z] queued: the manager of tacplus merges looper/tacplus-713 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for i...
+> Bash timeout 590 bash -c 'while kill -0 18750 2>/dev/null && kill -0 72394 2>/dev/null; do sleep 10; done'; grep "^=== .* rc=" /tmp/gates713.log | tail -4; echo ---; tail -1 /tmp/land713.log | cut -c1-300
+= task_started
+= task_notification
+< === memberport rc=1 === === claims-provenance rc=0 === === accounting-identity rc=0 === === w2s-validate rc=0 === --- [2026-11-15T07:32:08Z] queued: the manager of tacplus merges looper/tacplus-713 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for it...
+> Bash timeout 590 bash -c 'while kill -0 18750 2>/dev/null && kill -0 72394 2>/dev/null; do sleep 10; done'; grep "^=== .* rc=" /tmp/gates713.log | tail -4; echo ---; tail -1 /tmp/land713.log | cut -c1-300
+= task_started
+= task_notification
+< === memberport rc=1 === === claims-provenance rc=0 === === accounting-identity rc=0 === === w2s-validate rc=0 === --- [2026-11-15T07:32:08Z] queued: the manager of tacplus merges looper/tacplus-713 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for it...
+> Bash timeout 590 bash -c 'while kill -0 18750 2>/dev/null && kill -0 72394 2>/dev/null; do sleep 10; done'; grep "^=== .* rc=" /tmp/gates713.log | tail -4; echo ---; tail -1 /tmp/land713.log | cut -c1-300; date -u
+= task_started
+= task_notification
+< === memberport rc=1 === === claims-provenance rc=0 === === accounting-identity rc=0 === === w2s-validate rc=0 === --- [2026-11-15T07:32:08Z] queued: the manager of tacplus merges looper/tacplus-713 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for it...
+Still waiting: the local full gates are on `c2d-server`, and the land is queued with the manager. Polling both.
+> Bash timeout 590 bash -c 'while kill -0 18750 2>/dev/null && kill -0 72394 2>/dev/null; do sleep 10; done'; grep "^=== .* rc=" /tmp/gates713.log | tail -3; tail -1 /tmp/gates713.log | cut -c1-150; echo ---; tail -1 /tmp/land713.log | cut -c1-300
+= task_started
+= task_notification
+< === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc=0 === ==> Building local tacplus binary --- [2026-11-15T07:32:08Z] queued: the manager of tacplus merges looper/tacplus-713 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its ve...
+> Bash timeout 590 bash -c 'while kill -0 18750 2>/dev/null && kill -0 72394 2>/dev/null; do sleep 10; done'; grep "^=== .* rc=" /tmp/gates713.log | tail -3; tail -1 /tmp/gates713.log | cut -c1-150; echo ---; tail -1 /tmp/land713.log | cut -c1-300
+= task_started
+= task_notification
+< === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc=0 === ==> Building the rust leg --- [2026-11-15T07:32:08Z] queued: the manager of tacplus merges looper/tacplus-713 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. I...
+> Bash timeout 590 bash -c 'while kill -0 18750 2>/dev/null && kill -0 72394 2>/dev/null; do sleep 10; done'; grep "^=== .* rc=" /tmp/gates713.log | tail -3; tail -1 /tmp/gates713.log | cut -c1-150; echo ---; tail -1 /tmp/land713.log | cut -c1-300
+= task_started
+= task_notification
+< === zero-rpc-s2s rc=0 === === jwk-alg rc=0 === === redact rc=0 === ==> Building the rust leg --- [2026-11-15T07:32:08Z] queued: the manager of tacplus merges looper/tacplus-713 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your ti...
+> Bash timeout 590 bash -c 'while kill -0 18750 2>/dev/null && kill -0 72394 2>/dev/null; do sleep 10; done'; grep "^=== .* rc=" /tmp/gates713.log | tail -3; tail -2 /tmp/gates713.log | cut -c1-150; echo ---; tail -1 /tmp/land713.log | cut -c1-300; date -u
+= task_started
+= task_notification
+< === redact rc=0 === === trace-carry rc=0 === === tacplus-script rc=0 === error: recipe `gates` failed with exit code 1 error: recipe `gates` failed with exit code 1 --- [2026-11-15T07:32:08Z] queued: the manager of tacplus merges looper/tacplus-713 after the lands queued before it, one at a time, an...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash tail -3 /tmp/gates713.log | head -1; nohup bash -c 'just stream-expiry-java; echo "SE rc=$?"; just memberport-java; echo "MP rc=$?"' > /tmp/rerun713.log 2>&1 & echo $!
+< === OVERALL fail=1 === 127710
+> Bash timeout 590 bash -c 'while kill -0 127710 2>/dev/null && kill -0 72394 2>/dev/null; do sleep 10; done'; grep -E "rc=|Tests run:.*Fail|PASSED|FAILED" /tmp/rerun713.log | tail -6; echo ---; tail -1 /tmp/land713.log | cut -c1-300
+= task_started
+= task_notification
+< [ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 17.54 s <<< FAILURE! -- in com.example.streamexpiry.model.chassis.grpcserver.StreamExpiryBehaviorTest [ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0 stream-expiry check FAILED: generated Java stream-expiry behavior tes...
+> Bash grep -E "AssertionFailed|expected:" /tmp/rerun713.log | head -3 | cut -c1-250; uptime
+< org.opentest4j.AssertionFailedError: SendTicks handler's Context was not cancelled after the expiry close ==> expected: <true> but was: <false> [ERROR]   StreamExpiryBehaviorTest.streamsAreEndedAtTheOpeningTokensExpiry:407 SendTicks handler's Context was not cancelled after the expiry close ==> expe...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'while kill -0 127710 2>/dev/null && kill -0 72394 2>/dev/null; do sleep 10; done'; grep -E "rc=|Tests run:.*Fail|PASSED|FAILED" /tmp/rerun713.log | tail -4; echo ---; tail -1 /tmp/land713.log | cut -c1-300
+= task_started
+= task_notification
+< stream-expiry check FAILED: generated Java stream-expiry behavior test failed SE rc=1 ==> memberport check PASSED (java) MP rc=0 --- [2026-11-15T07:32:08Z] queued: the manager of tacplus merges looper/tacplus-713 after the lands queued before it, one at a time, and says on the issue what came of it;...
+= thinking_tokens
+= thinking_tokens
+memberport-java passed on the rerun, so #737 is a load flake. Adding that to #737, then waiting on the land.
+> Bash gh issue comment 737 --repo tacplus-dev/tacplus --body "Rerun of \`just memberport-java\` alone on the same branch about 2h later (runner load average ~47 from other runs): \`==> memberport check PASSED (java)\`. So far it has failed once and passed once: a load flake like #722, not yet reproduced. ...
+= task_started
+= task_notification
+< [2026-11-15T09:38:27Z] checkpoint of #713 (a step) pushed to looper/tacplus-713:  9 files changed, 629 insertions(+), 23 deletions(-)
+> Bash timeout 590 bash -c 'while kill -0 72394 2>/dev/null; do sleep 15; done'; tail -3 /tmp/land713.log | cut -c1-400; date -u
+= task_started
+= task_notification
+< [2026-11-15T07:32:05Z] checkpoint of #713 (land queued) pushed to looper/tacplus-713:  9 files changed, 595 insertions(+), 23 deletions(-) [2026-11-15T07:32:08Z] queued: the manager of tacplus merges looper/tacplus-713 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash timeout 590 bash -c 'while kill -0 72394 2>/dev/null; do sleep 15; done'; tail -2 /tmp/land713.log | cut -c1-400; date -u
+= task_started
+= task_notification
+< [2026-11-15T07:32:05Z] checkpoint of #713 (land queued) pushed to looper/tacplus-713:  9 files changed, 595 insertions(+), 23 deletions(-) [2026-11-15T07:32:08Z] queued: the manager of tacplus merges looper/tacplus-713 after the lands queued before it, one at a time, and says on the issue what came ...
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'while kill -0 72394 2>/dev/null; do sleep 15; done'; tail -2 /tmp/land713.log | cut -c1-600; date -u
+= task_started
+= task_notification
+< [2026-11-15T07:32:05Z] checkpoint of #713 (land queued) pushed to looper/tacplus-713:  9 files changed, 595 insertions(+), 23 deletions(-) [2026-11-15T07:32:08Z] queued: the manager of tacplus merges looper/tacplus-713 after the lands queued before it, one at a time, and says on the issue what came ...
+> Bash timeout 590 bash -c 'while kill -0 72394 2>/dev/null; do sleep 15; done'; tail -2 /tmp/land713.log | cut -c1-600; date -u
+= task_started
+= task_notification
+< [2026-11-15T07:32:05Z] checkpoint of #713 (land queued) pushed to looper/tacplus-713:  9 files changed, 595 insertions(+), 23 deletions(-) [2026-11-15T07:32:08Z] queued: the manager of tacplus merges looper/tacplus-713 after the lands queued before it, one at a time, and says on the issue what came ...
+= thinking_tokens
+= thinking_tokens
+About 20 minutes remain and the land is still queued. Posting a progress comment and a final checkpoint now, so the next run can close the issue once the manager's verdict is in.
+> Bash gh issue comment 713 --repo tacplus-dev/tacplus --body-file - <<'EOF' Progress (this run's time is running out; the land is still queued with the manager, which lands it after this run ends and reports here. The next run closes this issue.)  ## What changed: a4e9a225 (queued to land) - **Generated G...
+= task_started
+= task_notification
+< https://github.com/tacplus-dev/tacplus/issues/713#issuecomment-6892876564 [2026-11-15T10:18:47Z] checkpoint of #713 (a step) pushed to looper/tacplus-713:  9 files changed, 629 insertions(+), 23 deletions(-)
+> Bash timeout 840 bash -c 'while kill -0 72394 2>/dev/null; do sleep 15; done'; tail -2 /tmp/land713.log | cut -c1-600; date -u
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b2eagv95h). Output is being written to: /builds/looper/tacplus/homes/looper-713/tmp/claude-61000/-builds-looper-tacplus-issues-713/c0f5c9f8-5b2b-4917-b989-87f2136f94df/tasks/b2eagv95h.output. You will be notified w...
+> Bash tail -2 /tmp/land713.log | cut -c1-600; date -u
+< [2026-11-15T07:32:05Z] checkpoint of #713 (land queued) pushed to looper/tacplus-713:  9 files changed, 595 insertions(+), 23 deletions(-) [2026-11-15T07:32:08Z] queued: the manager of tacplus merges looper/tacplus-713 after the lands queued before it, one at a time, and says on the issue what came ...
+I fixed the port race and queued the fix to land on main, but it hasn't landed yet: it was still waiting in the manager's queue when my time ran out. #713 stays open. The manager lands it after this run and posts its verdict on the issue. The next run then adds the commit hash and the gate set the land ran, and closes the issue.
+
+**The fix (commit a4e9a225):**
+- **Generated Go server:** the generated Go server now has an internal (unexported) way to serve on a listener a test has already bound. Users of the generated code can't see it, so this is a patch rather than a new feature for the next minor, which the issue's proposed public seam would have required.
+- **Keepalive test:** binds port 0, keeps that listener and hands it to the server, so the port is never released for another process to take.
+- **stream-expiry Go test:** this test lives in another package and can't reach the internal field. Its fixture script copies a test-only `ServeOn` helper into its own temporary generated output, the way the Rust leg already extends its generated output.
+- **Lint test:** `scripts/cross_test_listener_test.go` now also fails on the Go form of this pattern. It failed on exactly the two files named in the issue before the fix and passes after.
+
+**Tests:**
+- Both affected tests pass on their own.
+- Local full `just gates` ended `OVERALL fail=1`. Every gate passed except three Java tests that my Go-only change doesn't touch, all on a heavily loaded runner:
+  - **DiskStore test:** already tracked as #539.
+  - **stream-expiry Java leg:** already tracked as #627. It failed again when rerun; the Go leg passed.
+  - **memberport Java test:** new, so I filed #737. It passed when rerun alone.
+
+**Backports:** main has taken features since v2.6.1, so no tag is cut from main. I opened backport PRs #730–#736 for release/2.0 through 2.6. Each one was checked on its branch and names the patch tag to cut once it merges (v2.0.32 through v2.6.13). On those branches the lint test is in its own file, because #531's backports, which add the original lint file, are still open.
+
+**Trace propagation:** I touched no service handler. The trace checker's 8 findings are all in a test client driver and are already filed as #311.
+
+I posted all of this as a progress comment on #713 and saved a checkpoint telling the next run what's left.
+= success: I fixed the port race and queued the fix to land on main, but it hasn't landed yet: it was still waiting in the manager's queue when my time ran out. #713 stays open. The manager lands it after this run and posts its verdict on the issue. The next run then adds the commit hash and the gate set the land ran, and closes the issue.
+
+**The fix (commit a4e9a225):**
+- **Generated Go server:** the generated Go server now has an internal (unexported) way to serve on a listener a test has already bound. Users of the generated code can't see it, so this is a patch rather than a new feature for the next minor, which the issue's proposed public seam would have required.
+- **Keepalive test:** binds port 0, keeps that listener and hands it to the server, so the port is never released for another process to take.
+- **stream-expiry Go test:** this test lives in another package and can't reach the internal field. Its fixture script copies a test-only `ServeOn` helper into its own temporary generated output, the way the Rust leg already extends its generated output.
+- **Lint test:** `scripts/cross_test_listener_test.go` now also fails on the Go form of this pattern. It failed on exactly the two files named in the issue before the fix and passes after.
+
+**Tests:**
+- Both affected tests pass on their own.
+- Local full `just gates` ended `OVERALL fail=1`. Every gate passed except three Java tests that my Go-only change doesn't touch, all on a heavily loaded runner:
+  - **DiskStore test:** already tracked as #539.
+  - **stream-expiry Java leg:** already tracked as #627. It failed again when rerun; the Go leg passed.
+  - **memberport Java test:** new, so I filed #737. It passed when rerun alone.
+
+**Backports:** main has taken features since v2.6.1, so no tag is cut from main. I opened backport PRs #730–#736 for release/2.0 through 2.6. Each one was checked on its branch and names the patch tag to cut once it merges (v2.0.32 through v2.6.13). On those branches the lint test is in its own file, because #531's backports, which add the original lint file, are still open.
+
+**Trace propagation:** I touched no service handler. The trace checker's 8 findings are all in a test client driver and are already filed as #311.
+
+I posted all of this as a progress comment on #713 and saved a checkpoint telling the next run what's left.
+= usage: {"claude-opus-5-5":{"inputTokens":190,"outputTokens":44950,"cacheReadInputTokens":6355685,"cacheCreationInputTokens":279194,"webSearchRequests":0,"costUSD":3.860762,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":10303,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}
+= task_updated
+= task_notification
+= background_tasks_changed
+= init
+> Bash tail -4 /tmp/land713.log | cut -c1-800; kill -0 72394 2>/dev/null && echo still-running; date -u
+< [2026-11-15T07:32:05Z] checkpoint of #713 (land queued) pushed to looper/tacplus-713:  9 files changed, 595 insertions(+), 23 deletions(-) [2026-11-15T07:32:08Z] queued: the manager of tacplus merges looper/tacplus-713 after the lands queued before it, one at a time, and says on the issue what came ...
+No change: that background check only hit its own timeout. The fix for #713 still hasn't landed and is waiting in the manager's queue, with about 6 minutes left in this run.
+
+The issue stays open. The manager lands the fix after this run and posts its verdict on the issue. The next run then posts the commit hash and gate set and closes #713; if the land is refused, it fixes what the verdict names and lands again. The backport PRs (#730–#736), the new flake issue #737 and the progress comment on #713 are all in place.
+= success: No change: that background check only hit its own timeout. The fix for #713 still hasn't landed and is waiting in the manager's queue, with about 6 minutes left in this run.
+
+The issue stays open. The manager lands the fix after this run and posts its verdict on the issue. The next run then posts the commit hash and gate set and closes #713; if the land is refused, it fixes what the verdict names and lands again. The backport PRs (#730–#736), the new flake issue #737 and the progress comment on #713 are all in place.
+= usage: {"claude-opus-5-5":{"inputTokens":196,"outputTokens":45262,"cacheReadInputTokens":6578410,"cacheCreationInputTokens":280747,"webSearchRequests":0,"costUSD":3.9239949999999997,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":10327,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}

@@ -167,4 +167,31 @@ func TestSysRedoContract_GeneratesAloneAsASystemService(t *testing.T) {
 			t.Fatalf("redolog.Redo has no %s rpc", name)
 		}
 	}
+	// The 2.6 patch line keeps field 1 (tenant) of both requests declared, with
+	// the same name, number and type, so a caller built on this line that sets
+	// it still compiles; it routes nothing and redo ignores it.
+	kept := map[string]bool{"RedoAppend": false, "RedoReplayRequest": false}
+	for _, fd := range dp.GetAllFiles() {
+		if fd.Package != "redolog" {
+			continue
+		}
+		for _, msg := range fd.Messages {
+			if _, ok := kept[msg.Name]; !ok {
+				continue
+			}
+			for _, f := range msg.Fields {
+				if f.Number == 1 {
+					if f.Name != "tenant" || f.Type != "string" || f.IsRepeated {
+						t.Fatalf("redolog.%s field 1 = %s %s, want string tenant (kept on the 2.6 line)", msg.Name, f.Type, f.Name)
+					}
+					kept[msg.Name] = true
+				}
+			}
+		}
+	}
+	for name, ok := range kept {
+		if !ok {
+			t.Fatalf("redolog.%s has no field 1 tenant; the 2.6 line keeps it declared", name)
+		}
+	}
 }

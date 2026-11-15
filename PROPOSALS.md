@@ -485,6 +485,19 @@ the looper then marks it `promoted` or `declined` here with the date.
   `docs/VERSIONING.md`): `Listen` takes an optional bound `net.Listener` (or `New` an option), both tests use it, and
   the guard test grows a Go rule (`net.Listen("tcp", "...:0")` then `defer l.Close()` and `return ... Port`) over
   `cross-test/` and `pkg/templates/go/`.
+- **Self-tests wait on state, not the clock, wherever the work fsyncs** (2026-11-07, #341): the durable accounting
+  spool's Go and Java self-tests waited a fixed 1s (or slept 300ms) for fsync'd appends, and main went red when a
+  loaded runner disk was slower. #341 fixed those two. Other hand-written fixture self-tests and generated
+  `_test` templates that sleep or poll against an RPC-sized bound for disk work (redo log, append log, cursor and
+  snapshot writes) have the same exposure. Audit them: wait on the observable state, with a generous hang bound
+  separate from any timing assertion. A cheap way to find them is #341's reproduction: a 100ms sleep before each
+  fsync in a scratch copy of the generated diskstore, then run the self-tests. Size the hang bound for a shared
+  runner, not a quiet disk: on the looper host with several gate runs' fsync-heavy tests in flight (load average
+  40-130, 2026-11-15), one `dsync` 4 KiB write took 0.2s to 3s on both the overlay `/tmp` and the ext4 `/builds`
+  volume, so fifty fsync'd appends ran 8s to over 60s and a 60s bound failed 2 runs in 10; #341 uses 180s. The
+  same pressure is behind #539, #721 and #723. A standing fix for all of them: run the fixtures' disk tests on a
+  tmpfs (`TMPDIR`, which `t.TempDir` and `Files.createTempDirectory` honour), where fsync is a no-op and the
+  self-tests test the code, not the host's disk queue.
 
 ## Promoted / declined
 - **`just generated <dir>`: tacplus's security checks scan its generated output** (2026-11-09, #376): promoted

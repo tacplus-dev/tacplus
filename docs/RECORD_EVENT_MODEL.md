@@ -358,7 +358,9 @@ the entry's new `revision` and the `durability` level the write was acked at.
     tenant-routed nor `RPC_FLAG_ANY_TENANT` (S2S never crosses tenants). The tenant a
     write **belongs to** is never a request field: it is the caller's tid, from its
     token, and the redo service, the custodian of every tenant's log, keys each log by
-    trust domain and that tid.
+    trust domain and that tid. Field 1 (`tenant`) of `RedoAppend` and
+    `RedoReplayRequest`, the old route tenant, stays declared on the 2.5 patch line so
+    code that sets it still compiles; it is deprecated, routes nothing and is ignored.
   - **`Append`** (bidi). Each message is one store operation, a single write or a whole
     `Apply`, which the log keeps all or nothing: its `changes` (record type full name,
     typed key, `PUT`/`DELETE`, the record's protobuf bytes, the revision the store

@@ -167,4 +167,32 @@ func TestSysRedoContract_GeneratesAloneAsASystemService(t *testing.T) {
 			t.Fatalf("redolog.Redo has no %s rpc", name)
 		}
 	}
+	// Patch-line compatibility (2.5): field 1 `tenant` of RedoAppend and
+	// RedoReplayRequest, the old route tenant, stays declared (main reserves
+	// it) so code built on this line that sets it still compiles. It routes
+	// nothing: no rpc names it as its route field (checked above).
+	tenantField := map[string]bool{"RedoAppend": false, "RedoReplayRequest": false}
+	for _, fd := range dp.GetAllFiles() {
+		if fd.Package != "redolog" {
+			continue
+		}
+		for _, msg := range fd.Messages {
+			if _, ok := tenantField[msg.Name]; !ok {
+				continue
+			}
+			for _, f := range msg.Fields {
+				if f.Number == 1 {
+					if f.Name != "tenant" || f.Type != "string" || f.IsRepeated {
+						t.Fatalf("redolog.%s field 1 = %s %s (repeated=%v), want string tenant", msg.Name, f.Type, f.Name, f.IsRepeated)
+					}
+					tenantField[msg.Name] = true
+				}
+			}
+		}
+	}
+	for name, seen := range tenantField {
+		if !seen {
+			t.Fatalf("redolog.%s does not declare field 1 tenant; the 2.5 patch line keeps it declared", name)
+		}
+	}
 }

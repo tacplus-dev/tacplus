@@ -97,10 +97,12 @@ message RedoChange {
 // RedoAppend is one store operation: a single write, or an Apply of several
 // ops, which the log keeps all or nothing, as the store applied it.
 message RedoAppend {
-  // Field 1 was the route tenant while redo lived in the restore tenant;
-  // redo is a /system service now and the log is the caller's tid's (#258).
-  reserved 1;
-  reserved "tenant";
+  // Deprecated and ignored. tenant was the route tenant while redo lived in
+  // the restore tenant. redo is a /system service since #258; it keeps each
+  // tenant's log apart by the caller's tid claim; this field routes nothing
+  // and is ignored. It stays declared on the 2.5 patch line so code built on
+  // this line that sets it still compiles (main reserves field 1).
+  string tenant = 1 [(spec.assert_max_size) = 8];
   // seq is the tenant log position of this operation; see Append.
   uint64 seq = 2;
   // changes are the operation's entry changes, in the store's canonical lock
@@ -120,10 +122,12 @@ message RedoAck {
 
 // RedoReplayRequest asks for the caller's tenant log.
 message RedoReplayRequest {
-  // Field 1 was the route tenant while redo lived in the restore tenant;
-  // the log replayed is the caller's tid's (#258).
-  reserved 1;
-  reserved "tenant";
+  // Deprecated and ignored. tenant was the route tenant while redo lived in
+  // the restore tenant. redo is a /system service since #258; it keeps each
+  // tenant's log apart by the caller's tid claim; this field routes nothing
+  // and is ignored. It stays declared on the 2.5 patch line so code built on
+  // this line that sets it still compiles (main reserves field 1).
+  string tenant = 1 [(spec.assert_max_size) = 8];
 }
 
 // RedoReplayEntry is one operation of a replay.

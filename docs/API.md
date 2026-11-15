@@ -634,7 +634,9 @@ numbers are frozen.
   `decisions/s2s-never-crosses-tenants-2026-10-31.md`): a store's call is tenant →
   `/system`, so neither rpc is tenant-routed nor `RPC_FLAG_ANY_TENANT`, and
   `registry.json` carries neither. Field 1 of `RedoAppend` and `RedoReplayRequest`, the
-  old route tenant, is reserved.
+  old route tenant, is deprecated and ignored: on the 2.5 patch line it stays declared
+  (`string tenant = 1`) so code that sets it still compiles; it routes nothing (2.6
+  reserves it).
 - The tenant a write belongs to is the caller's verified tid, from its token, never a
   request field; ordering, acks, compaction and isolation are the host's behaviour, not
   the wrapper's.

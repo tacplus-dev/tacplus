@@ -64,3 +64,18 @@ func TestAcceptedCredentialClearsDegraded(t *testing.T) {
 		t.Fatalf("an accepted credential did not clear the degraded state")
 	}
 }
+
+// The AWS region names the STS host the web identity token is sent to, so a
+// value that is not a region name is refused before any request (#359, G704).
+func TestAWSRegionPattern(t *testing.T) {
+	for _, ok := range []string{"us-east-1", "eu-west-3", "cn-north-1", "us-gov-west-1", "ap-southeast-2"} {
+		if !awsRegionPattern.MatchString(ok) {
+			t.Errorf("region %q must be accepted", ok)
+		}
+	}
+	for _, bad := range []string{"", "evil.example/x?", "us-east-1.evil.example", "us-east-1/", "US-EAST-1", "us east 1"} {
+		if awsRegionPattern.MatchString(bad) {
+			t.Errorf("region %q must be refused", bad)
+		}
+	}
+}

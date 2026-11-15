@@ -23,10 +23,11 @@ func TestServiceIMBootstrapPinsTrustDomain(t *testing.T) {
 		// Fail-closed: refuse bootstrap TLS with no trust domain to pin.
 		"trustDomain := cfg.GetSpiffeTrustDomain()",
 		"spiffe_trust_domain is required for bootstrap TLS",
-		// Chain validation is still performed...
-		"cs.PeerCertificates[0].Verify(opts)",
+		// Chain validation is still performed (SpiffeClientTLSConfig:
+		// TestGoSpiffeClientTLSConfigVerifiesEveryHandshake)...
+		"tlsCfg := wrapperX509.SpiffeClientTLSConfig(certPool, func(cert *x509.Certificate) error {",
 		// ...AND the peer's SPIFFE trust domain is pinned after it.
-		"wrapperX509.VerifyPeerInTrustDomain(cs.PeerCertificates[0], trustDomain)",
+		"return wrapperX509.VerifyPeerInTrustDomain(cert, trustDomain)",
 	} {
 		if !strings.Contains(rendered, expected) {
 			t.Fatalf("service_im bootstrap TLS missing trust-domain pin %q:\n%s", expected, rendered)

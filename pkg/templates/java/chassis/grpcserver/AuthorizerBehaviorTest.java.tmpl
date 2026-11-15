@@ -27,6 +27,7 @@ import org.slf4j.LoggerFactory;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -569,16 +570,23 @@ public class AuthorizerBehaviorTest {
     // The remote JWK watch against a key authority that is rolling (every Watch
     // fails UNAVAILABLE) re-subscribes on the Backoff schedule (0.5s, 1s, 2s, ...),
     // not in a hot loop; it keeps retrying until the authority serves again, and
-    // stop() ends it.
+    // stop() ends it. The check times the gaps between attempts, from the first
+    // one, against the schedule's lower bounds: a slow start (channel connect, a
+    // cold JVM on a loaded runner) only delays the attempts and a slow scheduler
+    // only widens the gaps, so neither can fail it, while a hot loop does.
     private static void checkRemoteJwkSourceBackoff(JwkOuterClass.Jwk jwk) throws Exception {
         AtomicInteger watches = new AtomicInteger();
+        List<Long> attemptNanos = new CopyOnWriteArrayList<>();
+        CountDownLatch threeAttempts = new CountDownLatch(3);
         AtomicBoolean serving = new AtomicBoolean(false);
         AtomicReference<StreamObserver<Jwkview.JwkViewResponse>> served = new AtomicReference<>();
         Server server = NettyServerBuilder.forPort(0)
             .addService(new JwkVerifyingKeysViewServiceGrpc.JwkVerifyingKeysViewServiceImplBase() {
                 @Override
                 public void watch(Trace.TraceRequest request, StreamObserver<Jwkview.JwkViewResponse> out) {
+                    attemptNanos.add(System.nanoTime());
                     watches.incrementAndGet();
+                    threeAttempts.countDown();
                     if (serving.get()) {
                         served.set(out);
                         out.onNext(Jwkview.JwkViewResponse.newBuilder().putEntries(jwk.getKid(), jwk).build());
@@ -604,12 +612,21 @@ public class AuthorizerBehaviorTest {
                 }
             });
 
-            // Attempts at ~0s, 0.5s, 1.5s; the next is not due until ~3.5s.
-            Thread.sleep(2_500);
-            int failing = watches.get();
-            if (failing < 2 || failing > 4) {
-                System.err.println("FAIL: JWK watch made " + failing
-                    + " attempts in 2.5s against a rolling authority, want 2..4 (backoff 0.5s doubling)");
+            // The scheduled delays are 0.5s then 1s, each plus up to a quarter of
+            // jitter, never less: the second attempt comes at least 0.5s after the
+            // first, the third at least 1s after the second.
+            if (!threeAttempts.await(30, TimeUnit.SECONDS)) {
+                System.err.println("FAIL: JWK watch made " + watches.get()
+                    + " attempts in 30s against a rolling authority, want it to keep retrying");
+                failures++;
+                return;
+            }
+            long firstGapMillis = TimeUnit.NANOSECONDS.toMillis(attemptNanos.get(1) - attemptNanos.get(0));
+            long secondGapMillis = TimeUnit.NANOSECONDS.toMillis(attemptNanos.get(2) - attemptNanos.get(1));
+            if (firstGapMillis < 500 || secondGapMillis < 1_000) {
+                System.err.println("FAIL: JWK watch retried " + firstGapMillis + "ms then " + secondGapMillis
+                    + "ms after a failed attempt against a rolling authority, want at least 500ms then 1000ms"
+                    + " (backoff 0.5s doubling)");
                 failures++;
             }
 

@@ -17,6 +17,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/tmplutil"
@@ -490,10 +491,10 @@ func copyCSharpProtoClosure(srcDir, dstDir string, protoFiles []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to read C# proto %s: %w", rel, err)
 		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		if err := fsroot.MkdirAll(dstDir, filepath.Dir(dst), 0755); err != nil {
 			return fmt.Errorf("failed to create C# proto directory for %s: %w", rel, err)
 		}
-		if err := os.WriteFile(dst, content, 0644); err != nil {
+		if err := fsroot.WriteFile(dstDir, dst, content, 0644); err != nil {
 			return fmt.Errorf("failed to write C# proto %s: %w", rel, err)
 		}
 	}

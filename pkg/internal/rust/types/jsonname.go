@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 )
 
 // jsonKeyOption matches a (spec.json_key) field option and captures its value.
@@ -47,7 +49,7 @@ func injectJsonNameForJsonKey(protoDir string) error {
 		if !changed {
 			return nil
 		}
-		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		if err := fsroot.WriteFile(protoDir, path, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
 			return fmt.Errorf("inject json_name into %s: %w", path, err)
 		}
 		return nil

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"go.uber.org/zap"
 )
@@ -109,7 +110,7 @@ func AppendRoutingEnvelopesToProtos(tempProtoDir, inputDir string) error {
 		if err != nil {
 			return fmt.Errorf("failed to read proto file %s: %w", relPath, err)
 		}
-		if err := os.WriteFile(protoPath, append(content, buf.Bytes()...), 0644); err != nil {
+		if err := fsroot.WriteFile(tempProtoDir, protoPath, append(content, buf.Bytes()...), 0644); err != nil {
 			return fmt.Errorf("failed to write proto file %s: %w", relPath, err)
 		}
 

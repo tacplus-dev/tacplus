@@ -14,6 +14,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
@@ -37,7 +38,7 @@ func findGrpcJavaPlugin() string {
 
 	// Check environment variable first
 	if envPath := os.Getenv("PROTOC_GRPC_JAVA"); envPath != "" {
-		if _, err := os.Stat(envPath); err == nil {
+		if _, err := os.Stat(envPath); err == nil { // #nosec G703 -- operator-provided tool path, not under a root
 			return envPath
 		}
 	}
@@ -1408,14 +1409,14 @@ func Generate(config *tactype.Config) error {
 	{
 		src := filepath.Join(config.OutputDir, "registry.json")
 		dstDir := filepath.Join(config.OutputDir, "src", "main", "resources")
-		if err := os.MkdirAll(dstDir, 0755); err != nil {
+		if err := fsroot.MkdirAll(config.OutputDir, dstDir, 0755); err != nil {
 			return fmt.Errorf("failed to create resources dir: %w", err)
 		}
 		data, err := os.ReadFile(src)
 		if err != nil {
 			return fmt.Errorf("failed to read registry.json: %w", err)
 		}
-		if err := os.WriteFile(filepath.Join(dstDir, "registry.json"), data, 0644); err != nil {
+		if err := fsroot.WriteFile(config.OutputDir, filepath.Join(dstDir, "registry.json"), data, 0644); err != nil {
 			return fmt.Errorf("failed to copy registry.json to resources: %w", err)
 		}
 	}

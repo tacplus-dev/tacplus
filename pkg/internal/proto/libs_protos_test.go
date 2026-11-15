@@ -361,3 +361,46 @@ func TestSysCopyAndPrepareProtoDirSkipsSysInput(t *testing.T) {
 		t.Error("CopyAndPrepareProtoDir() used user's sys/ proto instead of embedded version")
 	}
 }
+
+// Copying the user's protos into the staged proto dir stays inside it: a
+// symlink already there (to a directory or a file outside) is refused, not
+// written through (#754).
+func TestCopyUserProtosWritesConfinedToProtoDir(t *testing.T) {
+	for _, tc := range []struct{ name, link string }{
+		{"proto under a linked dir", "svc"},
+		{"proto file linked", "svc/a.proto"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := t.TempDir()
+			protoDir := t.TempDir()
+			outside := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(input, "svc"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(input, "svc", "a.proto"), []byte("package svc;\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			target := outside
+			if tc.link == "svc/a.proto" {
+				if err := os.MkdirAll(filepath.Join(protoDir, "svc"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				target = filepath.Join(outside, "a.proto")
+			}
+			if err := os.Symlink(target, filepath.Join(protoDir, tc.link)); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+
+			if err := copyUserProtos(input, protoDir); err == nil {
+				t.Fatal("expected an error writing through a symlink out of the proto dir, got nil")
+			}
+			entries, err := os.ReadDir(outside)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("copy wrote outside the proto dir: %v", entries)
+			}
+		})
+	}
+}

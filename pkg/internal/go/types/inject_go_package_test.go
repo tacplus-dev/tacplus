@@ -17,8 +17,7 @@ import (
 // every failure except "the file was never generated" is propagated.
 
 func TestInjectGoPackageMissingFileIsNotAnError(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "generated", "tenant_config.proto")
-	exists, err := injectGoPackage(path, "tenant_config", "example.com/m/types/generated/tenant_config")
+	exists, err := injectGoPackage(t.TempDir(), "generated/tenant_config.proto", "tenant_config", "example.com/m/types/generated/tenant_config")
 	if err != nil {
 		t.Fatalf("a never-generated proto must not be an error: %v", err)
 	}
@@ -33,7 +32,7 @@ func TestInjectGoPackageInjectsOnce(t *testing.T) {
 	if err := os.WriteFile(path, []byte("syntax = \"proto3\";\n\npackage tenant_config;\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	exists, err := injectGoPackage(path, "tenant_config", "example.com/m/types/generated/tenant_config")
+	exists, err := injectGoPackage(dir, "tenant_config.proto", "tenant_config", "example.com/m/types/generated/tenant_config")
 	if err != nil || !exists {
 		t.Fatalf("injectGoPackage(exists=%v) = %v", exists, err)
 	}
@@ -46,7 +45,7 @@ func TestInjectGoPackageInjectsOnce(t *testing.T) {
 		t.Fatalf("missing %q in:\n%s", want, content)
 	}
 	// A second pass must be a no-op, not a second option line.
-	if _, err := injectGoPackage(path, "tenant_config", "example.com/m/types/generated/tenant_config"); err != nil {
+	if _, err := injectGoPackage(dir, "tenant_config.proto", "tenant_config", "example.com/m/types/generated/tenant_config"); err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
 	again, err := os.ReadFile(path)
@@ -66,7 +65,7 @@ func TestInjectGoPackagePropagatesReadFailure(t *testing.T) {
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	exists, err := injectGoPackage(path, "tenant_config", "example.com/m/types/generated/tenant_config")
+	exists, err := injectGoPackage(dir, "tenant_config.proto", "tenant_config", "example.com/m/types/generated/tenant_config")
 	if err == nil {
 		t.Fatal("expected an error when the generated proto cannot be read, got nil")
 	}
@@ -94,7 +93,7 @@ func TestInjectGoPackagePropagatesWriteFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 
-	exists, err := injectGoPackage(path, "tenant_config", "example.com/m/types/generated/tenant_config")
+	exists, err := injectGoPackage(dir, "tenant_config.proto", "tenant_config", "example.com/m/types/generated/tenant_config")
 	if err == nil {
 		t.Fatal("expected an error when go_package cannot be written, got nil")
 	}

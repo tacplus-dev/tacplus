@@ -5,6 +5,7 @@ package types
 
 import (
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
+	"regexp"
 	"strings"
 	"testing"
 	"text/template"
@@ -373,6 +374,40 @@ func TestJavaCollectionRuntimeStopsDrainOnRelease(t *testing.T) {
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("CollectionRuntime drain must stop on last-watcher release; missing %q", want)
+		}
+	}
+}
+
+// #712: SpotBugs USO_UNSAFE_OBJECT_SYNCHRONIZATION (HIGH in the fleet's
+// security job). Ring and WatchHub lock a private final Object, never the
+// instance itself: no synchronized method, no synchronized (this), and the
+// ResumeIterator and the drain lambda reach the monitor through the field
+// (never Ring.this / WatchHub.this), with wait/notifyAll on that same lock.
+func TestJavaCollectionRuntimeSynchronizesOnPrivateLocks(t *testing.T) {
+	rendered := readJavaTemplate(t, "java/chassis/collection/CollectionRuntime.java.tmpl")
+
+	for _, forbidden := range []*regexp.Regexp{
+		regexp.MustCompile(`synchronized\s+\w[\w<>, ]*\s+\w+\s*\(`), // a synchronized method
+		regexp.MustCompile(`synchronized\s*\(\s*(\w+\.)?this\s*\)`), // synchronized (this) / (Ring.this) / (WatchHub.this)
+		regexp.MustCompile(`(^|[^.\w])(wait|notify|notifyAll)\s*\(`), // the instance's own monitor
+		regexp.MustCompile(`\w+\.this\.(wait|notify|notifyAll)\s*\(`),
+	} {
+		if loc := forbidden.FindStringIndex(rendered); loc != nil {
+			line := 1 + strings.Count(rendered[:loc[0]], "\n")
+			t.Fatalf("CollectionRuntime must synchronize on a private lock object, not the instance (SpotBugs USO, #712): %q at template line %d", rendered[loc[0]:loc[1]], line)
+		}
+	}
+	if got := strings.Count(rendered, "private final Object lock = new Object();"); got != 2 {
+		t.Fatalf("Ring and WatchHub must each hold a private final lock object, got %d declarations", got)
+	}
+	for _, want := range []string{
+		"synchronized (lock) {",
+		"lock.notifyAll();",
+		"lock.wait(remaining);",
+		"lock.wait();",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("CollectionRuntime must publish, wait and notify on the private lock; missing %q", want)
 		}
 	}
 }

@@ -28,8 +28,10 @@ import (
 
 // spoolSettleBound is how long the spool goroutine may take to append or drop the
 // records a test emitted. Every append fsyncs, so it bounds the disk, not the RPC:
-// it is a hang detector, generous for a slow runner disk, not a timing assertion.
-const spoolSettleBound = 60 * time.Second
+// it is a hang detector, not a timing assertion, and a passing run never waits
+// for it. It is sized for a shared runner under I/O pressure, where one fsync was
+// measured at 0.2s to 3s (issue #341), so fifty appends can take minutes.
+const spoolSettleBound = 180 * time.Second
 
 // durableSink opens a durable sink over dir with the given publisher queue.
 func durableSink(t *testing.T, tx chan *accountingrecord_pb.AccountingRecord, stop <-chan struct{}, dir string) *EventBusSink {

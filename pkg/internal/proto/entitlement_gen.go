@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
@@ -93,7 +94,7 @@ func AppendEntitlementMessagesToProtos(tempProtoDir, inputDir string) error {
 			content = injectImports(content, []string{`import "sys/entitlement.proto";`})
 		}
 		out := string(content) + "\n// Auto-generated data-entitlement structures (tacplus)\n" + block.String()
-		if err := os.WriteFile(filePath, []byte(out), 0644); err != nil {
+		if err := fsroot.WriteFile(tempProtoDir, filePath, []byte(out), 0644); err != nil {
 			return fmt.Errorf("write %s after entitlement generation: %w", relPath, err)
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"go.uber.org/zap"
 )
@@ -120,7 +121,7 @@ func AppendEventBusWrappersToProtos(tempProtoDir, inputDir string) error {
 			})
 		}
 		text := string(content) + buf.String()
-		if err := os.WriteFile(protoPath, []byte(text), 0644); err != nil {
+		if err := fsroot.WriteFile(tempProtoDir, protoPath, []byte(text), 0644); err != nil {
 			return fmt.Errorf("failed to write proto file %s: %w", relPath, err)
 		}
 

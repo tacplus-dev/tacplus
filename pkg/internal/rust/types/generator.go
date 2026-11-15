@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/registry"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
@@ -957,7 +958,7 @@ func mergeProstProtocOutput(prostTempDir, outputDir string) error {
 			}
 
 			outPath := filepath.Join(outputDir, f.Name())
-			if err := os.WriteFile(outPath, data, 0644); err != nil {
+			if err := fsroot.WriteFile(outputDir, outPath, data, 0644); err != nil {
 				return fmt.Errorf("failed to write %s: %w", outPath, err)
 			}
 
@@ -1060,7 +1061,7 @@ func fixSerdeUnknownFields(outputDir string) error {
 		content = strings.Join(result, "\n")
 
 		if modified {
-			if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+			if err := fsroot.WriteFile(outputDir, filePath, []byte(content), 0644); err != nil {
 				return fmt.Errorf("failed to write %s: %w", filePath, err)
 			}
 			zap.L().Debug("Fixed serde unknown fields", zap.String("file", entry.Name()))
@@ -1102,7 +1103,7 @@ func fixSerdeSelfVariant(outputDir string) error {
 			continue
 		}
 
-		if err := os.WriteFile(filePath, fixed, 0644); err != nil {
+		if err := fsroot.WriteFile(outputDir, filePath, fixed, 0644); err != nil {
 			return fmt.Errorf("failed to write %s: %w", filePath, err)
 		}
 		zap.L().Debug("Fixed serde Self variant", zap.String("file", entry.Name()))
@@ -1138,7 +1139,7 @@ func suppressTonicGeneratedWarnings(outputDir string) error {
 		if updated == content {
 			return nil
 		}
-		if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
+		if err := fsroot.WriteFile(outputDir, path, []byte(updated), 0644); err != nil {
 			return fmt.Errorf("failed to write %s: %w", path, err)
 		}
 		return nil

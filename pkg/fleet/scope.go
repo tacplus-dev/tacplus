@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 	"gopkg.in/yaml.v3"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/registry"
 	"github.com/tacplus-dev/tacplus/pkg/tacplusyaml"
@@ -281,10 +282,10 @@ func Stage(root string, sc *Scope, dest string) error {
 			return err
 		}
 		dst := filepath.Join(dest, rel)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		if err := fsroot.MkdirAll(dest, filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
-		return os.WriteFile(dst, data, 0o644)
+		return fsroot.WriteFile(dest, dst, data, 0o644)
 	}
 	for _, rel := range sc.Files {
 		if err := copyOne(rel); err != nil {

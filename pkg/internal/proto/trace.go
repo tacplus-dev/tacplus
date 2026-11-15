@@ -12,6 +12,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
@@ -181,7 +182,7 @@ func InjectTraceFields(tempProtoDir, inputDir string) (SkippedTraceTypes, error)
 		// for injected fields. SwapEmptyInputs adds the import when needed
 		// for trace.TraceRequest.
 
-		if err := os.WriteFile(protoPath, []byte(text), 0644); err != nil {
+		if err := fsroot.WriteFile(tempProtoDir, protoPath, []byte(text), 0644); err != nil {
 			return skipped, fmt.Errorf("failed to write modified proto %s: %w", relPath, err)
 		}
 
@@ -362,7 +363,7 @@ func SwapEmptyInputs(protoDir string) error {
 		}
 
 		if newText != text {
-			if err := os.WriteFile(path, []byte(newText), 0644); err != nil {
+			if err := fsroot.WriteFile(protoDir, path, []byte(newText), 0644); err != nil {
 				return fmt.Errorf("failed to write %s: %w", relPath, err)
 			}
 			zap.L().Info("Swapped Empty inputs to TraceRequest", zap.String("file", relPath))

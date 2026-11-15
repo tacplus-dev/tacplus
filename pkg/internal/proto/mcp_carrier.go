@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 )
@@ -159,7 +160,7 @@ func AppendMcpCarrierRpcsToProtos(tempProtoDir, inputDir string) ([]string, erro
 			text = text[:p.at] + mcpCarrierRpcBlock(p.name, p.exposure) + text[p.at:]
 		}
 
-		if err := os.WriteFile(filePath, []byte(text), 0644); err != nil {
+		if err := fsroot.WriteFile(tempProtoDir, filePath, []byte(text), 0644); err != nil {
 			return nil, fmt.Errorf("write %s after MCP carrier injection: %w", relPath, err)
 		}
 		modified = append(modified, relPath)

@@ -925,7 +925,7 @@ func buildFieldInfoProto(field llmdesc.FieldDescriptor) *spec.FieldInfo {
 		MapKeyType:                field.MapKey,
 		MapValueType:              field.MapValue,
 		ProjectionSource:          field.ProjectionSource,
-		TimeseriesOrderKey:        int32(field.TimeseriesOrderKey),
+		TimeseriesOrderKey:        field.TimeseriesOrderKey,
 		TimeseriesPartitionKey:    field.TimeseriesPartitionKey,
 		TimeseriesCardinalityHint: spec.CardinalityHint(field.TimeseriesCardinality),
 		DataEntitlementMode:       entitlementModeToProto(field.DataEntitlementMode),
@@ -951,7 +951,7 @@ func buildFieldInfoProto(field llmdesc.FieldDescriptor) *spec.FieldInfo {
 	for _, ev := range field.EnumValues {
 		fi.EnumValues = append(fi.EnumValues, &spec.EnumValueInfo{
 			Name:        ev.Name,
-			Number:      int32(ev.Number),
+			Number:      ev.Number,
 			Description: ev.Description,
 		})
 	}

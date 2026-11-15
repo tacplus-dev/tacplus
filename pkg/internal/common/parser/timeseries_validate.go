@@ -5,6 +5,7 @@ package parser
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -17,7 +18,7 @@ import (
 //
 // Rules enforced:
 //   - At least one field must have order_key > 0
-//   - order_key values must be unique and contiguous starting from 1
+//   - order_key values must fit an int32, and be unique and contiguous starting from 1
 //   - CARDINALITY_LOW hint only on string or enum types
 //   - Messages with source must have projection_source on every timeseries field
 //
@@ -79,6 +80,12 @@ func ValidateTimeseriesAnnotations(allFiles []model.ProtoFile) error {
 
 				// Collect order keys
 				if okAnn, hasOK := field.Annotations["timeseries_order_key"]; hasOK && okAnn.IntValue > 0 {
+					if okAnn.IntValue > math.MaxInt32 {
+						errs = append(errs, fmt.Sprintf(
+							"%s: order_key %d cannot exceed %d (an order_key is an int32)",
+							fieldLoc, okAnn.IntValue, math.MaxInt32))
+						continue
+					}
 					key := int(okAnn.IntValue)
 					if existing, dup := orderKeyFields[key]; dup {
 						errs = append(errs, fmt.Sprintf(

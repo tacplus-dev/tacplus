@@ -112,3 +112,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-14 looper issue Swift C2DClient's default socket ignores socket_path: it dials ~/.<package>/daemon.sock, where no daemon listens (#494)
 - 2026-11-14 looper issue Build images carry linux-libc-dev 6.12.116-1: six HIGH kernel CVEs fixed in Debian 13's 6.12.117-1 (DSA-6628-1) fail every pinned repo's security scan (#711)
 - 2026-11-14 looper issue Gates red on main since #321: memberport's HazelcastMemberPortTest.anExpiredTokenDropsTheMemberConnection times out (x2 never removed from x1's cluster) (#465)
+- 2026-11-15 looper issue Java AuthorizerBehaviorTest checkRemoteJwkSourceBackoff fails on a loaded runner: wants 2..4 JWK watch attempts in a fixed 2.5s sleep (#540)

@@ -114,6 +114,14 @@ the looper then marks it `promoted` or `declined` here with the date.
 - **The nightly image sweep scans every `base:X.Y`** (2026-11-15, #757): the Published images job scans `base:latest`
   and each `build:X.Y`, but no `base:X.Y`. A stale line base is found only once a patch builds on it. Add
   `base:${minor#release/}` beside `build:` in the loop of `.github/workflows/nightly-security.yml`.
+- **The c2d-server gate's socket is one path per machine, not per run** (2026-11-15, #778): the fixture declares
+  `socket_path: /tmp/tacplus-c2d-server-check/daemon.sock` (`cross-test/c2d-server/proto`), and every leg writes a stale
+  file there, serves on it and removes it. `scripts/with-tree-lock.sh` serializes runs of one checkout only, so two
+  gate runs in different checkouts on one runner (loopers' worktrees, a land beside a local `just gates`, #300's
+  concurrent gates) can replace each other's socket mid-test, and a directory left by another user fails the next
+  run's write. A per-run directory (the gate overriding the declared path for its run, or the self-tests taking the
+  path from an env the gate sets under its `mktemp -d`) would isolate them; the generated-constant check stays on the
+  declared value.
 - **A release tag never builds on another line's base** (2026-11-08, #283): a release tag's Images run starts its fresh
   `build` from its line's `base:X.Y`, else `base:latest` (main's). Before any line rebuild had pushed a `base:X.Y`, the
   v2.1.13–v2.5.13 runs took main's base (Swift 6.4.2) under their lines' Swift 6.1.3 plugins and failed the smoke test

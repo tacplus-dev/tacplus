@@ -1,8 +1,8 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-14 by looper (#284).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-15 by looper (#352).
 
-- **Version / line:** v2.6.2 (latest release, 2026-11-07, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
+- **Version / line:** v2.6.13 (latest release, 2026-11-15, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
   generated write surface on the record query plane's S2S half (Get/Put/InsertIfAbsent/ReplaceIfUnchanged/Delete,
   Watch<T>Changes, the atomic Apply with canonical lock order), per-record-type durability (MEMORY/LOCAL/REMOTE),
@@ -23,6 +23,11 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-14 by lo
   The fetch layer authenticates `https://github.com` clones (`src`, `depends`, the private registry) with `GH_TOKEN`
   (else `GITHUB_TOKEN`) and no other host; `CI_JOB_TOKEN` still goes only to `CI_SERVER_HOST` (#191; released as
   v2.4.2 and v2.5.1).
+  A `(spec.config_slice)`'s `TenantConfig` / `ProjectConfig` field is registered in an authority like an id
+  (`tacplus registry register NAME --tenant-slice|--project-slice`; global from 1, private from 1024; a union refuses
+  a field in two registries) and synced into locks; a build whose registry is a lock refuses a slice with no
+  registered field instead of assigning max+1, and a legacy registry assigns in file order (#352; no patch from main,
+  which carries 2.7 features: backported to release/2.0 through release/2.6 by pull request, the lock part to 2.4+).
   The generated Rust chassis signs and verifies RSA and ECDSA with aws-lc-rs: the `rsa` crate (RUSTSEC-2023-0071,
   Marvin) and the elliptic-curve 0.13 stack (crypto-bigint 0.5, RUSTSEC-2026-0387) are gone from the generated
   lockfile, which current-generation checks (#186; backported to release/2.0 through release/2.5 by pull request, as

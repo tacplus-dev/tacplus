@@ -45,7 +45,7 @@ func IsEnumSentinel(name string) bool {
 // EnumValue represents a single value in an enum
 type EnumValue struct {
 	Name      string
-	Number    int
+	Number    int32
 	Comment   string // Leading comment from proto source (extracted via protoc --include_source_info)
 	JsonValue string // Optional json_return_value annotation for custom JSON serialization
 }

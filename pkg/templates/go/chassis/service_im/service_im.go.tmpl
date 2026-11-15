@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,7 +43,6 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"crypto/tls"
 	"crypto/x509"
 	wrapperX509 "{{.X509LibPath}}"
 )
@@ -247,26 +247,12 @@ func New(ctx context.Context, cfg *grpcconfig_pb.Config) (*IdentityManager, erro
 		}
 		certPool.AddCert(immCert.X509Certificate())
 	}
-	tlsCfg := &tls.Config{
-		InsecureSkipVerify: true,
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return fmt.Errorf("im: peer certificate is required for SPIFFE TLS verification")
-			}
-			// 1. Validate the peer cert chain against the trusted CA pool.
-			opts := x509.VerifyOptions{Roots: certPool, Intermediates: x509.NewCertPool()}
-			for _, cert := range cs.PeerCertificates[1:] {
-				opts.Intermediates.AddCert(cert)
-			}
-			if _, err := cs.PeerCertificates[0].Verify(opts); err != nil {
-				return err
-			}
-			// 2. Pin the peer's SPIFFE trust domain. Chain validity alone is
-			// CA-only trust (fail-open); this rejects any chain-valid cert that
-			// carries no canonical service SPIFFE ID in the trust domain.
-			return wrapperX509.VerifyPeerInTrustDomain(cs.PeerCertificates[0], trustDomain)
-		},
-	}
+	// Chain validity alone is CA-only trust (fail-open); pinning the trust
+	// domain rejects any chain-valid cert that carries no canonical service
+	// SPIFFE ID in it.
+	tlsCfg := wrapperX509.SpiffeClientTLSConfig(certPool, func(cert *x509.Certificate) error {
+		return wrapperX509.VerifyPeerInTrustDomain(cert, trustDomain)
+	})
 	bareOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
 		// Keepalive on bootstrap/token-authority connection: same values as
@@ -704,7 +690,7 @@ func newBootstrapTokenMinter(bootstrapFile string) (*k8sTokenMinter, error) {
 	if bootstrapFile == "" {
 		return nil, fmt.Errorf("bootstrap token file path is empty")
 	}
-	raw, err := os.ReadFile(bootstrapFile)
+	raw, err := os.ReadFile(bootstrapFile) // #nosec G703 -- the path the workload's environment names (its platform's projected token), not a request's
 	if err != nil {
 		return nil, fmt.Errorf("reading bootstrap token file %s: %w", bootstrapFile, err)
 	}
@@ -712,7 +698,7 @@ func newBootstrapTokenMinter(bootstrapFile string) (*k8sTokenMinter, error) {
 	if token == "" {
 		return nil, fmt.Errorf("bootstrap token file %s is empty", bootstrapFile)
 	}
-	if err := os.Remove(bootstrapFile); err != nil {
+	if err := os.Remove(bootstrapFile); err != nil { // #nosec G703 -- the path the workload's environment names (its platform's projected token), not a request's
 		zap.L().Warn("IdentityManager: could not remove bootstrap token file",
 			zap.String("bootstrap_token_file", bootstrapFile), zap.Error(err))
 	}
@@ -1044,6 +1030,9 @@ func awsIMDSCredentials(ctx context.Context) (accessKey, secretKey, sessionToken
 	return accessKey, secretKey, sessionToken, nil
 }
 
+// awsRegionPattern is an AWS region name (us-east-1, cn-north-1, us-gov-west-1).
+var awsRegionPattern = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`)
+
 // awsEKSCredentials reads credentials from EKS IRSA (projected service account token)
 // and fetches temporary credentials via STS AssumeRoleWithWebIdentity.
 func awsEKSCredentials(ctx context.Context) (accessKey, secretKey, sessionToken string, err error) {
@@ -1052,7 +1041,7 @@ func awsEKSCredentials(ctx context.Context) (accessKey, secretKey, sessionToken 
 	if tokenFile == "" || roleArn == "" {
 		return "", "", "", fmt.Errorf("AWS_WEB_IDENTITY_TOKEN_FILE or AWS_ROLE_ARN not set")
 	}
-	tokenBytes, err := os.ReadFile(tokenFile)
+	tokenBytes, err := os.ReadFile(tokenFile) // #nosec G703 -- the path the workload's environment names (its platform's projected token), not a request's
 	if err != nil {
 		return "", "", "", fmt.Errorf("reading web identity token: %w", err)
 	}
@@ -1064,6 +1053,11 @@ func awsEKSCredentials(ctx context.Context) (accessKey, secretKey, sessionToken 
 	}
 	if region == "" {
 		region = "us-east-1"
+	}
+	// The region names the STS host the web identity token is sent to: one
+	// that is not a region name ("evil.example/x?") would send it elsewhere.
+	if !awsRegionPattern.MatchString(region) {
+		return "", "", "", fmt.Errorf("invalid AWS region %q", region)
 	}
 
 	// Call STS AssumeRoleWithWebIdentity
@@ -1077,12 +1071,12 @@ func awsEKSCredentials(ctx context.Context) (accessKey, secretKey, sessionToken 
 	}.Encode()
 
 	httpClient := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "POST", stsURL, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", stsURL, strings.NewReader(body)) // #nosec G704 -- the STS host of a validated AWS region name
 	if err != nil {
 		return "", "", "", fmt.Errorf("creating STS request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := httpClient.Do(req)
+	resp, err := httpClient.Do(req) // #nosec G704 -- the STS host of a validated AWS region name
 	if err != nil {
 		return "", "", "", fmt.Errorf("STS AssumeRoleWithWebIdentity: %w", err)
 	}

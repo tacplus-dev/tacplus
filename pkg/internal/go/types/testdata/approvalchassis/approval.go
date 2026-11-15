@@ -138,23 +138,23 @@ func appendSingular(dst []byte, fd protoreflect.FieldDescriptor, v protoreflect.
 		}
 		return protowire.AppendVarint(protowire.AppendTag(dst, num, protowire.VarintType), n), nil
 	case protoreflect.EnumKind:
-		return protowire.AppendVarint(protowire.AppendTag(dst, num, protowire.VarintType), uint64(v.Enum())), nil
+		return protowire.AppendVarint(protowire.AppendTag(dst, num, protowire.VarintType), uint64(v.Enum())), nil // #nosec G115 -- protobuf wire encoding: a varint carries the value's two's-complement bits
 	case protoreflect.Int32Kind, protoreflect.Int64Kind:
-		return protowire.AppendVarint(protowire.AppendTag(dst, num, protowire.VarintType), uint64(v.Int())), nil
+		return protowire.AppendVarint(protowire.AppendTag(dst, num, protowire.VarintType), uint64(v.Int())), nil // #nosec G115 -- protobuf wire encoding: a varint carries the value's two's-complement bits
 	case protoreflect.Uint32Kind, protoreflect.Uint64Kind:
 		return protowire.AppendVarint(protowire.AppendTag(dst, num, protowire.VarintType), v.Uint()), nil
 	case protoreflect.Sint32Kind, protoreflect.Sint64Kind:
 		return protowire.AppendVarint(protowire.AppendTag(dst, num, protowire.VarintType), protowire.EncodeZigZag(v.Int())), nil
 	case protoreflect.Fixed32Kind:
-		return protowire.AppendFixed32(protowire.AppendTag(dst, num, protowire.Fixed32Type), uint32(v.Uint())), nil
+		return protowire.AppendFixed32(protowire.AppendTag(dst, num, protowire.Fixed32Type), uint32(v.Uint())), nil // #nosec G115 -- protobuf wire encoding: a fixed32 carries the value's low 32 bits
 	case protoreflect.Sfixed32Kind:
-		return protowire.AppendFixed32(protowire.AppendTag(dst, num, protowire.Fixed32Type), uint32(v.Int())), nil
+		return protowire.AppendFixed32(protowire.AppendTag(dst, num, protowire.Fixed32Type), uint32(v.Int())), nil // #nosec G115 -- protobuf wire encoding: a fixed32 carries the value's low 32 bits
 	case protoreflect.FloatKind:
 		return protowire.AppendFixed32(protowire.AppendTag(dst, num, protowire.Fixed32Type), math.Float32bits(float32(v.Float()))), nil
 	case protoreflect.Fixed64Kind:
 		return protowire.AppendFixed64(protowire.AppendTag(dst, num, protowire.Fixed64Type), v.Uint()), nil
 	case protoreflect.Sfixed64Kind:
-		return protowire.AppendFixed64(protowire.AppendTag(dst, num, protowire.Fixed64Type), uint64(v.Int())), nil
+		return protowire.AppendFixed64(protowire.AppendTag(dst, num, protowire.Fixed64Type), uint64(v.Int())), nil // #nosec G115 -- protobuf wire encoding: a fixed64 carries the value's two's-complement bits
 	case protoreflect.DoubleKind:
 		return protowire.AppendFixed64(protowire.AppendTag(dst, num, protowire.Fixed64Type), math.Float64bits(v.Float())), nil
 	case protoreflect.StringKind:

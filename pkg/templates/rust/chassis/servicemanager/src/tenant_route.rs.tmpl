@@ -80,7 +80,7 @@ pub fn caller_route_tenant(field: &str, value: &str, own_token: Option<&str>) ->
         return route_tenant(field, value);
     }
     let tenants = format!("/{}/", ::spiffe::TENANTS_SEGMENT);
-    if !token.namespace().unwrap_or("").starts_with(tenants.as_str()) {
+    if token.namespace().and_then(|ns| ns.strip_prefix(tenants.as_str())).is_none() {
         return route_tenant(field, value);
     }
     let own = caller_tenant(token.tid()).ok_or_else(|| {

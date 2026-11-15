@@ -10,7 +10,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 // A 429 carries Retry-After: the peer is asking callers to wait. A GET that
 // receives one must not be sent again before that delay, so a 30 s Retry-After
 // under a 2 s caller deadline is one request, not the four the backoff schedule
-// would otherwise send within about a second (issue #36).
+// would otherwise send within about a second (issue #36). The 2 s run from the
+// first 429, not from the call: on a loaded runner the client's cold start
+// alone can take longer than that, which would send nothing at all.
 public class TypedClientRetryAfterTest {
     public static void main(String[] args) throws Exception {
         AtomicInteger hits = new AtomicInteger();
@@ -36,6 +38,10 @@ public class TypedClientRetryAfterTest {
             // The worker sleeps out the Retry-After on a fixed build; it must not hold the JVM open.
             worker.setDaemon(true);
             worker.start();
+            long firstDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+            while (hits.get() == 0 && System.nanoTime() < firstDeadline) {
+                Thread.sleep(10);
+            }
             try {
                 call.get(2, TimeUnit.SECONDS);
             } catch (Exception expected) {

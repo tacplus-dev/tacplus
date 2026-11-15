@@ -400,6 +400,15 @@ the looper then marks it `promoted` or `declined` here with the date.
   .NET 10.0 current, which reads as "newest LTS". Writing that down beside the pins (JDK and .NET the newest LTS,
   Maven the newest non-rc release, Docker the newest major, Rust stable via `1`) would let the scan file a missed
   move as a `bug` instead of leaving it to judgment.
+- **The security report's `new` keys on `file:line`, so an edit above a finding makes it new again** (2026-11-15,
+  nightly scan; tacplus-dev/looper, Security checks): the build's report of 2026-11-15 marked 320 findings `new since
+  the previous run`, 216 of them MEDIUM/LOW ones #585 already lists at a line a few above (every G306/G301/G304 of
+  `pkg/internal/go/types/generator.go` moved up four lines; `rust/types/builder.go`, `typescript/types/generator.go`
+  and `registry/registry.go` likewise), so each night that touches a generator re-files its backlog as new. Keying
+  `new` on the finding's identity without its line (tool, rule, file, and the matched source text or a hash of the
+  enclosing function, as gosec's `-track-suppressions`/SARIF fingerprints do) would leave `new` meaning new. Until
+  then the scan compares the lists by hand; it also means `security-baseline.json`, once written, would go stale on
+  every edit above a finding. A change in tacplus-dev/looper.
 
 ## Promoted / declined
 - **Member port onto gRPC with make-before-break session rotation (Java)** (2026-11-06, #321): promoted 2026-11-05,

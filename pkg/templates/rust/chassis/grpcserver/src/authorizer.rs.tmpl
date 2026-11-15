@@ -301,8 +301,9 @@ impl Authorizer {
     }
 
     /// Registers an rpc declaring RPC_FLAG_ANY_TENANT: on a tenant-owned
-    /// instance, a caller of ANY tenant passes the door for this rpc ("any
-    /// authenticated user of any tenant may call this"). Nothing else is
+    /// instance, a user of ANY tenant passes the door for this rpc ("any
+    /// authenticated user of any tenant may call this"); another tenant's
+    /// service never does (S2S never crosses tenants). Nothing else is
     /// widened: the token, its audience, auth_services, entitlements and the
     /// level-or-below rule are checked exactly as before. An rpc not
     /// registered here keeps the default door: members of the instance's own
@@ -330,15 +331,30 @@ impl Authorizer {
         }
     }
 
-    /// The tenant-owned instance's door check.
-    fn check_host_tenant(&self, caller_namespace: &str) -> Result<()> {
+    /// The tenant-owned instance's door check. `full_method` is the rpc being
+    /// called, when the check knows it: an rpc registered with
+    /// [`set_method_any_tenant`](Self::set_method_any_tenant) opens the door to
+    /// users of any tenant; every other rpc, and a check that names none, keeps
+    /// it shut. S2S never crosses tenants: another tenant's service or workload
+    /// is refused on every rpc, an RPC_FLAG_ANY_TENANT one included.
+    fn check_host_tenant(&self, tw: &token::Token, full_method: Option<&str>) -> Result<()> {
         let host = self.host_tenant.read().unwrap();
         if host.is_empty() {
             return Ok(());
         }
+        let caller_namespace = tw.namespace().unwrap_or("");
         if crate::spiffe::is_at_or_below("/system", caller_namespace)
             || crate::spiffe::is_at_or_below(caller_namespace, &host)
         {
+            return Ok(());
+        }
+        if matches!(tw.sub_type(), Some("service") | Some("workload")) {
+            return Err(AuthorizerError::permission_denied(format!(
+                "service caller namespace \"{}\" is not at-or-above this instance's tenant \"{}\": S2S never crosses tenants",
+                caller_namespace, *host
+            )));
+        }
+        if self.opens_tenant_door(full_method) {
             return Ok(());
         }
         Err(AuthorizerError::permission_denied(format!(
@@ -518,9 +534,9 @@ impl Authorizer {
     /// trusting any claim — `Token::parse` alone only base64-decodes.
     ///
     /// `full_method` is the rpc being called, when the check knows it: the
-    /// tenant door is skipped for an rpc registered with
+    /// tenant door is open to users of any tenant for an rpc registered with
     /// [`set_method_any_tenant`](Self::set_method_any_tenant), and held for
-    /// every other rpc and for a check that names none.
+    /// every other caller and rpc, and for a check that names none.
     fn verify_bearer(&self, authorization: Option<&str>, full_method: Option<&str>) -> Result<token::Token> {
         let auth_header = authorization.unwrap_or("");
         if auth_header.is_empty() {
@@ -590,10 +606,8 @@ impl Authorizer {
         }
 
         // Tenant-owned instance: refuse another tenant's caller at the door,
-        // unless the rpc declares RPC_FLAG_ANY_TENANT.
-        if !self.opens_tenant_door(full_method) {
-            self.check_host_tenant(tw.namespace().unwrap_or(""))?;
-        }
+        // unless the caller is a user and the rpc declares RPC_FLAG_ANY_TENANT.
+        self.check_host_tenant(&tw, full_method)?;
 
         Ok(tw)
     }
@@ -1840,18 +1854,18 @@ mod authorizer_behavior_tests {
     }
 
     // RPC_FLAG_ANY_TENANT opens a tenant-owned instance's door for that rpc
-    // only: a caller of ANY tenant passes it, on every entry point that knows
-    // the rpc (authorize_grpc, authenticate_method, the at-or-below check). It
-    // widens nothing else — auth_services and the level-or-below rule still
-    // hold — and every other rpc keeps the default door ("members of the
-    // instance's tenant only").
+    // only, and to other tenants' USERS only (C2S): a user of ANY tenant passes
+    // it, on every entry point that knows the rpc (authenticate_method, the
+    // at-or-below check). It widens nothing else — auth_services and the
+    // level-or-below rule still hold — and every other rpc keeps the default
+    // door ("members of the instance's tenant only").
     #[tokio::test]
     async fn any_tenant_rpc_opens_the_door_for_that_rpc_only() {
         const OTHER: &str = "/demo.DemoService/Other";
         let key = new_test_key();
-        let token_as = |caller: &'static str, ns: &'static str| {
+        let token_as = |sub_type: &'static str, caller: &'static str, ns: &'static str| {
             signed_token(&key, now_plus(3600), SERVICE_NAME, move |tok| {
-                tok.set_sub_type("service").expect("sub_type");
+                tok.set_sub_type(sub_type).expect("sub_type");
                 tok.set_subject(caller).expect("subject");
                 tok.set_namespace(ns).expect("namespace");
             })
@@ -1863,12 +1877,9 @@ mod authorizer_behavior_tests {
         beta.set_host_namespace("/tenants/beta");
         assert_eq!(beta.host_namespace(), "/tenants/beta");
 
-        let acme = token_as("caller-svc", "/tenants/acme");
-        beta.authorize_grpc(TEST_METHOD, METHOD, Some(&acme), &empty_md())
-            .await
-            .expect("ANY_TENANT: another tenant's caller passes the door");
+        let acme = token_as("user", "someone@example.com", "/tenants/acme");
         beta.authenticate_method(TEST_METHOD, Some(&acme))
-            .expect("ANY_TENANT: authenticate_method admits another tenant's caller");
+            .expect("ANY_TENANT: authenticate_method admits another tenant's user");
         beta.check_caller_at_or_below_method(TEST_METHOD, Some(&acme), "/tenants/acme")
             .expect("ANY_TENANT: the level-or-below check still admits the caller's own level");
         let err = beta
@@ -1877,26 +1888,81 @@ mod authorizer_behavior_tests {
             .expect("ANY_TENANT does not widen target_namespace_field");
         assert_eq!(err.code, 7);
         let err = beta
-            .authorize_grpc(TEST_METHOD, METHOD, Some(&token_as("other-svc", "/tenants/acme")), &empty_md())
+            .authorize_grpc(TEST_METHOD, METHOD, Some(&token_as("service", "other-svc", "/tenants/beta")), &empty_md())
             .await
             .err()
             .expect("ANY_TENANT does not widen auth_services");
         assert_eq!(err.code, 7);
 
         // The default door holds on every other rpc and on method-less checks.
-        let err = beta
-            .authorize_grpc(OTHER, "Other", Some(&acme), &empty_md())
-            .await
-            .err()
-            .expect("default rpc: another tenant's caller is refused at the door");
-        assert_eq!(err.code, 7);
         beta.authenticate_method(OTHER, Some(&acme))
             .expect_err("default rpc: authenticate_method keeps the door");
         beta.authenticate(Some(&acme))
             .expect_err("a check that names no rpc keeps the door");
-        beta.authorize_grpc(OTHER, "Other", Some(&token_as("caller-svc", "/tenants/beta")), &empty_md())
+        let err = beta
+            .authorize_grpc(OTHER, "Other", Some(&token_as("service", "caller-svc", "/tenants/acme")), &empty_md())
+            .await
+            .err()
+            .expect("default rpc: another tenant's caller is refused at the door");
+        assert_eq!(err.code, 7);
+        beta.authorize_grpc(OTHER, "Other", Some(&token_as("service", "caller-svc", "/tenants/beta")), &empty_md())
             .await
             .expect("the instance's own tenant still passes");
+    }
+
+    // S2S never crosses tenants (tacplus-dev/roadmap
+    // decisions/s2s-never-crosses-tenants-2026-10-31.md): RPC_FLAG_ANY_TENANT
+    // opens the door to other tenants' users only. Another tenant's service or
+    // workload is refused at a tenant-owned instance's door on every rpc, the
+    // ANY_TENANT one included, on every entry point; the instance's own tenant
+    // and /system pass.
+    #[tokio::test]
+    async fn any_tenant_never_admits_another_tenants_service() {
+        let key = new_test_key();
+        let token_as = |sub_type: &'static str, caller: &'static str, ns: &'static str| {
+            signed_token(&key, now_plus(3600), SERVICE_NAME, move |tok| {
+                tok.set_sub_type(sub_type).expect("sub_type");
+                tok.set_subject(caller).expect("subject");
+                tok.set_namespace(ns).expect("namespace");
+            })
+        };
+        let beta = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        beta.set_method_auth(METHOD_KEY, &["caller-svc"]);
+        beta.set_method_any_tenant(METHOD_KEY);
+        beta.set_host_identity("/tenants/beta", "spiffe://example.com/tenants/bbbbbbbb/services/demo");
+
+        for foreign in [
+            token_as("service", "spiffe://example.com/tenants/aaaaaaaa/services/caller-svc", "/tenants/alpha"),
+            token_as(
+                "workload",
+                "spiffe://example.com/tenants/aaaaaaaa/services/caller-svc/workloads/pigeon-1",
+                "/tenants/alpha",
+            ),
+        ] {
+            let err = beta
+                .authorize_grpc(TEST_METHOD, METHOD, Some(&foreign), &empty_md())
+                .await
+                .err()
+                .expect("ANY_TENANT: another tenant's service is refused at the door");
+            assert_eq!(err.code, 7);
+            let err = beta
+                .authenticate_method(TEST_METHOD, Some(&foreign))
+                .expect_err("ANY_TENANT: authenticate_method refuses another tenant's service");
+            assert_eq!(err.code, 7);
+            let err = beta
+                .check_caller_at_or_below_method(TEST_METHOD, Some(&foreign), "/tenants/alpha")
+                .err()
+                .expect("ANY_TENANT: the at-or-below check refuses another tenant's service");
+            assert_eq!(err.code, 7);
+        }
+        for own in [
+            token_as("service", "spiffe://example.com/tenants/bbbbbbbb/services/caller-svc", "/tenants/beta"),
+            token_as("service", "spiffe://example.com/system/services/caller-svc", "/system"),
+        ] {
+            beta.authorize_grpc(TEST_METHOD, METHOD, Some(&own), &empty_md())
+                .await
+                .expect("ANY_TENANT: beta's own and /system services pass beta's door");
+        }
     }
 
     // Two DIFFERENT services hosted behind ONE Authorizer that each declare an

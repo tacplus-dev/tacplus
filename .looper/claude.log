@@ -1,0 +1,400 @@
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue list --repo tacplus-dev/tacplus --state all --search "server-runtime client looper-trace" --json number,title,state -q '.[]|"\(.number) \(.state) \(.title)"' | head; gh issue list --repo tacplus-dev/looper --state all --search "looper-trace server-runtime" --json number,title,state -q '.[]|...
+< 311 OPEN server-runtime Go driver: four calls with no inbound request lack their `// trace: unrelated:` marker, so looper-trace check fails on main 455 OPEN cross-test/server-runtime does not build on main: the generated contractclient model has no c2sm or contract types (Go and Rust legs) 657 OPEN ...
+Already tracked as #311, so nothing new to file. Waiting on the gates.
+> Monitor tail -n0 -F /tmp/gates-723.log | grep -E --line-buffered "FAIL|ERROR|✗|go test +[0-9]|gates (passed|failed)|All gates" 
+= permission_denied
+< This Bash command contains multiple operations. The following part requires approval: tail -n0 -F /tmp/gates-723.log
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 54); do kill -0 $(cat /tmp/gates-723.pid) 2>/dev/null || break; sleep 10; done; grep -E "^\s+go test +[0-9]|FAIL|^ERROR" /tmp/gates-723.log | head; tail -2 /tmp/gates-723.log | cut -c1-200
+= task_started
+= task_notification
+<     go test   140.3s gitlab.com/example/dummy/proto/tacplus/model/chassis/grpcserver (slowest: TestKeepaliveOverrideDoesNotGOAWAYGeneratedClient 140.0s)     go test    35.4s gitlab.com/example/dummy/proto/tacplus/model/chassis/diskstore (slowest: TestAppendLogConcurrentAppendsStayWholeLines 8.7s, Te...
+= thinking_tokens
+= thinking_tokens
+The new timing lines appear in the real gate log: diskstore now 35s (it was most of 600s in the issue), and grpcserver's 140s is one keepalive test. Polling on.
+> Bash for i in $(seq 57); do kill -0 $(cat /tmp/gates-723.pid) 2>/dev/null || break; sleep 10; done; grep -cE "PASS " /tmp/gates-723.log; grep -E "FAIL|^ERROR" /tmp/gates-723.log | head -5; tail -1 /tmp/gates-723.log | cut -c1-200
+= task_started
+= task_notification
+< 3 FAIL: appends must not wait on a failing upload 1 DiskStore check(s) FAILED ==> rust/base: generating twice into separate work dirs
+> Bash grep -n -B12 -A4 "appends must not wait on a failing upload" /tmp/gates-723.log | cut -c1-220 | head -40; grep -rn "appends must not wait on a failing upload" /builds/looper/tacplus/issues/723/pkg/templates | head
+< 670-PASS: real log path: token not in output 671-PASS: real log path: [REDACTED] in output 672-PASS: real log path: non-sensitive preserved 673-PASS: real log path: header key preserved 674-PASS: io.grpc.netty pinned to safe level 675-PASS: io.grpc.netty.shaded.io.grpc.netty pinned to safe level 676...
+A Java DiskStore self-test failed: unrelated to my Go-only change, but it fails the gate. Reading it:
+> Bash cd /builds/looper/tacplus/issues/723; sed -n 470,510p pkg/templates/java/chassis/diskstore/DiskStoreTest.java.tmpl; uptime; gh issue list --repo tacplus-dev/tacplus --state all --search "appends must not wait on a failing upload" --json number,title,state -q '.[]|"\(.number) \(.state) \(.title)"'
+<             }         } finally {             deleteRecursive(dir);         }     }      // Appends never wait on the shipper: they complete while every upload is failing.     private static void testAppendsDoNotWaitForUploads() throws Exception {         Path dir = Files.createTempDirectory("ds-nob...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue view 539 --repo tacplus-dev/tacplus --json labels,comments -q '[.labels[].name] , (.comments[-1].body|.[0:300])'; for i in $(seq 50); do kill -0 $(cat /tmp/gates-723.pid) 2>/dev/null || break; sleep 10; done; tail -1 /tmp/gates-723.log | cut -c1-200
+= task_started
+= task_notification
+< ["bug","approved","looper:landing"] The run ended before finishing (exit 0). Its commits are queued with the manager of tacplus, which merges them after the run and gives its verdict here. Its work in progress is on [`looper/tacplus-539`](https://github.com/tacplus-dev/tacplus/tree/looper/tacplus-53...
+#539's fix is already queued to land. Continuing to poll the gates.
+> Bash for i in $(seq 58); do kill -0 $(cat /tmp/gates-723.pid) 2>/dev/null || break; sleep 10; done; grep -nE "^FAIL|^ERROR|FAILED" /tmp/gates-723.log | tail -5; tail -1 /tmp/gates-723.log | cut -c1-200
+= task_started
+= task_notification
+< 682:FAIL: appends must not wait on a failing upload 687:1 DiskStore check(s) FAILED WARNING: WatchInstances stream failed; retrying: UNAVAILABLE: Channel shutdown invoked
+> Bash for i in $(seq 58); do kill -0 $(cat /tmp/gates-723.pid) 2>/dev/null || break; sleep 10; done; grep -nE "^FAIL|^ERROR|FAILED" /tmp/gates-723.log | tail -5; tail -1 /tmp/gates-723.log | cut -c1-200
+= task_started
+= task_notification
+< 687:1 DiskStore check(s) FAILED 4431:FAIL 4432:FAIL	example.com/streamexpiry/tacplus/model/s2sm/grpc/servers/svc/streamexpiry	7.580s 4433:FAIL 4434:stream-expiry check FAILED: generated Go stream-expiry behavior tests failed 2026-11-15T07:49:00.166Z	INFO	Generating gRPC stubs	{"plugin": "/usr/local/...
+> Bash sed -n 4395,4431p /tmp/gates-723.log | cut -c1-220; gh issue list --repo tacplus-dev/tacplus --state open --search "stream-expiry" --json number,title -q '.[]|"\(.number) \(.title)"'
+< 2026-11-15T07:44:30.123Z	DEBUG	Wrote library file	{"path": "servicemanager/connection.go"} 2026-11-15T07:44:30.123Z	DEBUG	Wrote library file	{"path": "servicemanager/endpoint.go"} 2026-11-15T07:44:30.123Z	DEBUG	Wrote library file	{"path": "spiffe/spiffe.go"} 2026-11-15T07:44:30.123Z	DEBUG	Wrote libr...
+= thinking_tokens
+= thinking_tokens
+A second known load flake: #689 (Go stream-expiry), also open and unrelated. Checkpointing, then polling until the gates end.
+> Bash cd /builds/looper/tacplus/issues/723; /usr/local/bin/repo-looper --repo tacplus --issue 723 --checkpoint "Fix committed 19253d55; backports committed locally in ~/bp723-2.x (backport/723-release-2.0..2.6, not pushed). just gates running: current-generation Go passed with new timing lines (diskstore ...
+= task_started
+= task_notification
+< [2026-11-15T07:49:20Z] checkpoint of #723 (a step) pushed to looper/tacplus-723:  5 files changed, 544 insertions(+), 2 deletions(-) ==> generating java
+> Bash for i in $(seq 58); do kill -0 $(cat /tmp/gates-723.pid) 2>/dev/null || break; sleep 10; done; grep -nE "FAILED|^FAIL\b" /tmp/gates-723.log | tail -4; tail -1 /tmp/gates-723.log | cut -c1-200
+= task_started
+= task_notification
+< 4431:FAIL 4432:FAIL	example.com/streamexpiry/tacplus/model/s2sm/grpc/servers/svc/streamexpiry	7.580s 4433:FAIL 4434:stream-expiry check FAILED: generated Go stream-expiry behavior tests failed 2026-11-15T08:08:12.186Z	INFO	Generating gRPC stubs	{"plugin": "/usr/local/bin/protoc-gen-grpc-java"}
+> Bash for i in $(seq 58); do kill -0 $(cat /tmp/gates-723.pid) 2>/dev/null || break; sleep 10; done; grep -nE "FAILED|^FAIL\b" /tmp/gates-723.log | tail -3; tail -1 /tmp/gates-723.log | cut -c1-200
+= task_started
+= task_notification
+< 4432:FAIL	example.com/streamexpiry/tacplus/model/s2sm/grpc/servers/svc/streamexpiry	7.580s 4433:FAIL 4434:stream-expiry check FAILED: generated Go stream-expiry behavior tests failed ==> Generating C2D server fixture (java)
+> Bash for i in $(seq 58); do kill -0 $(cat /tmp/gates-723.pid) 2>/dev/null || break; sleep 10; done; grep -nE "FAILED|^FAIL\b" /tmp/gates-723.log | tail -3; tail -1 /tmp/gates-723.log | cut -c1-200
+= task_started
+= task_notification
+< 4432:FAIL	example.com/streamexpiry/tacplus/model/s2sm/grpc/servers/svc/streamexpiry	7.580s 4433:FAIL 4434:stream-expiry check FAILED: generated Go stream-expiry behavior tests failed ==> Building the Swift consumer of the generated package
+> Bash for i in $(seq 58); do kill -0 $(cat /tmp/gates-723.pid) 2>/dev/null || break; sleep 10; done; grep -nE "FAILED|^FAIL\b" /tmp/gates-723.log | tail -3; tail -1 /tmp/gates-723.log | cut -c1-200
+= task_started
+= task_notification
+< 4432:FAIL	example.com/streamexpiry/tacplus/model/s2sm/grpc/servers/svc/streamexpiry	7.580s 4433:FAIL 4434:stream-expiry check FAILED: generated Go stream-expiry behavior tests failed ==> Generating rust model
+> Bash for i in $(seq 58); do kill -0 $(cat /tmp/gates-723.pid) 2>/dev/null || break; sleep 10; done; grep -nE "FAILED|^FAIL\b" /tmp/gates-723.log | tail -3; tail -1 /tmp/gates-723.log | cut -c1-200
+= task_started
+= task_notification
+< 4432:FAIL	example.com/streamexpiry/tacplus/model/s2sm/grpc/servers/svc/streamexpiry	7.580s 4433:FAIL 4434:stream-expiry check FAILED: generated Go stream-expiry behavior tests failed ==> Generating java model
+Still waiting on `just gates` (about 1h20m in). No new failures beyond the two known flakes (#539, #689).
+> Bash for i in $(seq 58); do kill -0 $(cat /tmp/gates-723.pid) 2>/dev/null || break; sleep 10; done; grep -nE "FAILED|^FAIL\b" /tmp/gates-723.log | tail -3; tail -1 /tmp/gates-723.log | cut -c1-200
+= task_started
+= task_notification
+< 4432:FAIL	example.com/streamexpiry/tacplus/model/s2sm/grpc/servers/svc/streamexpiry	7.580s 4433:FAIL 4434:stream-expiry check FAILED: generated Go stream-expiry behavior tests failed ==> Generating go model
+> Bash for i in $(seq 58); do kill -0 $(cat /tmp/gates-723.pid) 2>/dev/null || break; sleep 10; done; grep -nE "FAILED|^FAIL\b" /tmp/gates-723.log | tail -3; tail -1 /tmp/gates-723.log | cut -c1-200
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< 4432:FAIL	example.com/streamexpiry/tacplus/model/s2sm/grpc/servers/svc/streamexpiry	7.580s 4433:FAIL 4434:stream-expiry check FAILED: generated Go stream-expiry behavior tests failed ==> Generating java model
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+That notification was only my waiter timing out, not the gates. Checking the gates are still running and how much time is left:
+> Bash date -u; kill -0 $(cat /tmp/gates-723.pid) && echo running; ps -o etime= -p $(cat /tmp/gates-723.pid); grep -n "^## \|^==> [A-Za-z-]* gate\|PASS [a-z]" /tmp/gates-723.log | tail -8 | cut -c1-150
+< Sun Nov 15 09:06:45 UTC 2026 running    02:06:20 34320:PASS forged token is rejected on a verifying RPC 34321:PASS verified token with the data grant still egresses the payload 34337:PASS entitled RPC records the verified subject 34339:PASS auth_any_user RPC records the verified subject 34343:PASS a...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/723; /usr/local/bin/repo-looper --repo tacplus --issue 723 --checkpoint "Fix 19253d55 ready; landing now. Local just gates: current-generation Go legs pass (diskstore 35s); only known flakes #539, #689 red so far. Backports committed in ~/bp723-2.x (not pushed; branc...
+= task_started
+= task_notification
+< [2026-11-15T09:06:56Z] checkpoint of #723 (a step) pushed to looper/tacplus-723:  5 files changed, 607 insertions(+), 2 deletions(-) [2026-11-15T09:07:00Z] checkpoint of #723 (land queued) pushed to looper/tacplus-723:  6 files changed, 612 insertions(+), 2 deletions(-) [2026-11-15T09:07:02Z] queued...
+= thinking_tokens
+= thinking_tokens
+The checkpoint stat says 6 files / 612 lines, more than my 3-file diff. Checking what's on the branch the land is taking:
+> Bash cd /builds/looper/tacplus/issues/723; git fetch -q origin looper/tacplus-723; git diff --stat origin/main...origin/looper/tacplus-723; git log --oneline origin/main..origin/looper/tacplus-723; git status --short | head
+<  .looper/claude.log                                 | 400 +++++++++++++++++++++  .looper/land                                       |   4 +  .looper/prompt.md                                  | 134 +++++++  PROPOSALS.md                                       |   6 +  cross-test/current-generation/run...
+= thinking_tokens
+= thinking_tokens
+The extra files are the looper's own `.looper/` bookkeeping in its work-in-progress commit, not part of my change. Polling the gates and the land:
+> Bash for i in $(seq 58); do kill -0 $(cat /tmp/gates-723.pid) 2>/dev/null || break; sleep 10; done; grep -nE "FAILED|^FAIL\b" /tmp/gates-723.log | tail -3; tail -3 /tmp/gates-723.log | cut -c1-200; echo ---; tail -2 /tmp/land-723.log
+= task_started
+= task_notification
+< 4432:FAIL	example.com/streamexpiry/tacplus/model/s2sm/grpc/servers/svc/streamexpiry	7.580s 4433:FAIL 4434:stream-expiry check FAILED: generated Go stream-expiry behavior tests failed === OVERALL fail=1 === error: recipe `gates` failed with exit code 1 error: recipe `gates` failed with exit code 1 --...
+> Bash grep -nE "^(✓|✗|PASS|FAIL) |gate.*(ok|fail)|=== " /tmp/gates-723.log | grep -iE "gate|===|✗" | tail -30 | cut -c1-160
+< 4419:=== RUN   TestGoStreamEndsAtTokenExp/bidi 4420:=== PAUSE TestGoStreamEndsAtTokenExp/bidi 4421:=== CONT  TestGoStreamEndsAtTokenExp/server-streaming 4422:=== CONT  TestGoStreamEndsAtTokenExp/bidi 4423:=== CONT  TestGoStreamEndsAtTokenExp/client-streaming 4428:=== RUN   TestGoStreamOutlivesWindow...
+> Bash grep -nE "^=== [a-z0-9-]+ rc=" /tmp/gates-723.log | cut -c1-80 | tr '\n' ' '; echo; grep -n "current-generation" /tmp/gates-723.log | grep -iE "rc=|pass|fail|ok" | head -5
+< 3:=== protoc-check rc=0 === 182:=== soundness rc=0 === 453:=== test rc=0 === 689:=== current-generation rc=1 === 718:=== determinism rc=0 === 3965:=== cert-stream rc=0 === 4436:=== stream-expiry rc=1 === 34305:=== memberport rc=0 === 34324:=== claims-provenance rc=0 === 34353:=== accounting-identity...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/723; sed -n 40,58p cross-test/current-generation/run.sh; grep -n "^current-generation" -A8 justfile | head -12
+< usage() {   cat <<'USAGE' Usage:   cross-test/current-generation/run.sh [options]  Options:   --language LANG   Run one service language: go, java, rust   --workdir DIR     Use a specific generated-output work directory   --tacplus BIN     Use an existing tacplus binary   --keep            Keep gene...
+> Bash cd /builds/looper/tacplus/issues/723; nohup just current-generation-go > /tmp/cg-go-723.log 2>&1 & echo $! > /tmp/cg-go-723.pid; cat /tmp/cg-go-723.pid
+< 90136
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+While the Go legs run, pushing the backport branches and opening their pull requests. First, the next free patch tag on each line:
+> Bash cd /builds/looper/tacplus/issues/723; git fetch -q --tags origin; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b $(git tag -l "v$b.*" | sort -V | tail -1)"; done
+= task_started
+= task_notification
+< 2.0 v2.0.31 2.1 v2.1.24 2.2 v2.2.21 2.3 v2.3.23 2.4 v2.4.23 2.5 v2.5.24 2.6 v2.6.12
+= thinking_tokens
+= thinking_tokens
+> Bash W=$HOME/bp723; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do cd $W-$b; git fetch -q origin release/$b; git rebase -q origin/release/$b 2>&1 | tail -1; echo "$b $(git log --oneline -1 | cut -c1-12) base=$(git rev-parse --short origin/release/$b) n=$(git rev-list --count origin/release/$b..HEAD)"; done
+= task_started
+= task_notification
+< 2.0 d36e51f8 cur base=8679e38d n=1 2.1 206f6beb cur base=75cea8e5 n=1 2.2 b61f34cd cur base=a17b8380 n=1 2.3 f771782d cur base=8a61a69d n=1 2.4 aa6531d6 cur base=073a3536 n=1 2.5 5b0aafb5 cur base=fe848140 n=1 2.6 2c36a090 cur base=a2460a8b n=1 Shell cwd was reset to /builds/looper/tacplus/issues/72...
+= thinking_tokens
+= thinking_tokens
+Rebased cleanly onto each line's current head. Quick checks on each line before pushing: the script parses, and each line's diskstore templates pass with the cut test.
+> Bash W=$HOME/bp723; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do cd $W-$b; r="sh=$(bash -n cross-test/current-generation/run.sh && echo ok)"; d=pkg/templates/go/chassis/diskstore; if [[ -f $d/appendlog_test.go.tmpl ]]; then rm -rf /tmp/dsb/$b; mkdir -p /tmp/dsb/$b/diskstore; for f in $d/*.tmpl; do n=$(basena...
+= task_started
+= task_notification
+< 2.0 sh=ok 2.1 sh=ok ok  	ds/diskstore	10.291s 2.2 sh=ok ok  	ds/diskstore	10.780s 2.3 sh=ok ok  	ds/diskstore	1.613s 2.4 sh=ok ok  	ds/diskstore	6.414s 2.5 sh=ok ok  	ds/diskstore	7.808s 2.6 sh=ok ok  	ds/diskstore	4.167s Shell cwd was reset to /builds/looper/tacplus/issues/723
+= thinking_tokens
+= thinking_tokens
+All pass. Pushing the backport branches and opening draft PRs (draft until main's hash is known, as the earlier backports did):
+> Bash W=$HOME/bp723; declare -A NEXT=([2.0]=v2.0.32 [2.1]=v2.1.25 [2.2]=v2.2.22 [2.3]=v2.3.24 [2.4]=v2.4.24 [2.5]=v2.5.25 [2.6]=v2.6.13); for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do cd $W-$b; git push -q origin backport/723-release-$b 2>&1 | grep -v "^remote:" | head -2 if [[ $b == 2.0 ]]; then what="This li...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= vcs_state_changed
+= code_change_published
+< https://github.com/tacplus-dev/tacplus/pull/739 https://github.com/tacplus-dev/tacplus/pull/740 https://github.com/tacplus-dev/tacplus/pull/741 https://github.com/tacplus-dev/tacplus/pull/742 https://github.com/tacplus-dev/tacplus/pull/743 https://github.com/tacplus-dev/tacplus/pull/744 https://gith...
+> Bash gh pr view 739 --repo tacplus-dev/tacplus --json body -q .body | sed -n 1,12p | cut -c1-200; cd /builds/looper/tacplus/issues/723; /usr/local/bin/repo-looper --repo tacplus --issue 723 --checkpoint "Land queued (19253d55). Draft backport PRs #739-#745 (release/2.0..2.6) open; mark ready and add main...
+= task_started
+= task_notification
+< Backport of the fix for #723 from main ("current-generation: give the Go fixture tests a 20m budget and time them"). Its hash on main follows the land, and this pull request stays a draft until then.   On a loaded runner the generated Go fixture tests in `current-generation` could hit go test's defa...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for n in 739 745; do gh pr view $n --repo tacplus-dev/tacplus --json body -q .body | grep -o "Once this merges[^*]*"; done
+< Once this merges, cut the line's next free patch tag on `release/2.0` at the merge commit: `v2.0.32` today Once this merges, cut the line's next free patch tag on `release/2.6` at the merge commit: `v2.6.13` today
+The tag line is there (my `cut` had truncated it). Fixing 2.0's garbled "Verified" sentence and the stray space before the period in the others:
+> Bash for n in 739 740 741 742 743 744 745; do b=$(gh pr view $n --repo tacplus-dev/tacplus --json body -q .body); nb=$(printf '%s' "$b" | python3 -I -c 'import sys; s=sys.stdin.read(); s=s.replace("`bash -n` on the script, and (no diskstore AppendLog here) .","`bash -n` on the script (this line has no di...
+= task_started
+= task_notification
+< Verified on this branch: the cherry-pick applies cleanly onto `release/2.0`, `bash -n` on the script (this line has no diskstore AppendLog to test). Verified on this branch: the cherry-pick applies cleanly onto `release/2.1`, `bash -n` on the script, and the line's Go diskstore templates rendered as...
+Now polling the Go-only `current-generation` run and the land:
+> Bash for i in $(seq 58); do kill -0 $(cat /tmp/cg-go-723.pid) 2>/dev/null || break; sleep 10; done; grep -E "^\s+go test +[0-9]|PASS go|FAIL|^ERROR" /tmp/cg-go-723.log | grep -E "diskstore|PASS go|FAIL|ERROR" | cut -c1-200; tail -1 /tmp/cg-go-723.log | cut -c1-150; echo ---; tail -1 /tmp/land-723.log | c...
+= task_started
+= task_notification
+<     go test     0.0s gitlab.com/example/dummy/proto/tacplus/model/chassis/diskstore (slowest: TestAppendLogConcurrentAppendsStayWholeLines 8.7s, TestRotateThenLocalRestore 5.8s, TestFoldedSegmentIsNot     PASS go     go test     4.3s gitlab.com/example/dummy/c2sonly/tacplus/model/chassis/diskstore (...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 58); do kill -0 $(cat /tmp/cg-go-723.pid) 2>/dev/null || break; sleep 10; done; grep -E "PASS go|FAIL|^ERROR" /tmp/cg-go-723.log | cut -c1-200 | tail -8; tail -2 /tmp/cg-go-723.log | cut -c1-150; echo ---; tail -1 /tmp/land-723.log | cut -c1-200
+= task_started
+= task_notification
+<     PASS go c2s-only     PASS go requires-device     PASS go record-egress     PASS go record-egress host --- FAIL: TestDurableSpoolHoldsRPCWhenPublisherBlocked (1.01s) --- FAIL: TestDurableSpoolDropsAndCountsOnlyPastDiskBound (1.11s) FAIL FAIL	gitlab.com/example/dummy/agentsensor/tacplus/model/chas...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n -B3 -A8 "FAIL: TestDurableSpoolHoldsRPCWhenPublisherBlocked\|FAIL: TestDurableSpoolDropsAndCounts" /tmp/cg-go-723.log | cut -c1-220 | head -40; gh issue view 341 --repo tacplus-dev/tacplus --json state,labels,body -q '.state, ([.labels[].name]|join(",")), (.body|.[0:900])'
+< 62-ok  	gitlab.com/example/dummy/agentsensor/tacplus/model/chassis/collection	0.047s 63-=== RUN   TestDurableSpoolHoldsRPCWhenPublisherBlocked 64-    accounting_sink_durable_test.go:120: spool log did not reach 50 records (has 12) 65:--- FAIL: TestDurableSpoolHoldsRPCWhenPublisherBlocked (1.01s) 66-...
+= thinking_tokens
+= thinking_tokens
+The disk-bound test is #341 verbatim (main red, its fix landing). Checking the other test:
+> Bash gh issue list --repo tacplus-dev/tacplus --state all --search "TestDurableSpoolHoldsRPCWhenPublisherBlocked" --json number,title,state -q '.[]|"\(.number) \(.state) \(.title)"'; grep -rn "did not reach 50 records" /builds/looper/tacplus/issues/723/pkg/templates | head -2
+> Bash cd /builds/looper/tacplus/issues/723; git log --oneline -3 -- pkg/templates/go/chassis/am/accounting_sink_durable_test.go.tmpl; git log --oneline -1 -- cross-test/current-generation/run.sh | head -2; gh issue view 341 --repo tacplus-dev/tacplus --comments --json comments -q '.comments[-3:][]|.body[0...
+< 526 OPEN Go accounting-sink self-test TestDurableSpoolHoldsRPCWhenPublisherBlocked fails on a loaded runner: 50 spool appends must land within a 1s emitBound 690 OPEN current-generation: Go durable-spool tests wait 1s (emitBound) for the spool writer and fail on a loaded runner 628 OPEN Generated Go...
+< Exit code 1 19253d55 current-generation: give the Go fixture tests a 20m budget and time them (#723) specify only one of --comments or --json  Display the title, body, and other information about an issue.  When `--comments` is used, terminal output includes the issue details and comments. When outp...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Both are open load flakes: #526/#690 (1s `emitBound`) and #341 (disk bound, main red). The run stopped at that fixture, so the Go fixtures after it didn't run. Checking the land and the clock:
+> Bash date -u; tail -2 /tmp/land-723.log | cut -c1-300; gh issue view 723 --repo tacplus-dev/tacplus --json comments -q '.comments[-1]|.author.login+": "+.body[0:400]'
+< Sun Nov 15 09:33:57 UTC 2026 [2026-11-15T09:07:00Z] checkpoint of #723 (land queued) pushed to looper/tacplus-723:  6 files changed, 612 insertions(+), 2 deletions(-) [2026-11-15T09:07:02Z] queued: the manager of tacplus merges looper/tacplus-723 after the lands queued before it, one at a time, and ...
+= thinking_tokens
+= thinking_tokens
+About an hour left, and the land's full gates (~2h+) likely won't finish before I'm stopped. Checkpointing everything the next run needs:
+> Bash cd /builds/looper/tacplus/issues/723; /usr/local/bin/repo-looper --repo tacplus --issue 723 --checkpoint "DONE: fix 19253d55 (Go diskstore TestAppendLogConcurrentAppendsStayWholeLines 8x50->8x4, still fails 5/5 without the lock; current-generation run_go_fixture_tests: go test -timeout 20m -json, pl...
+= task_started
+= task_notification
+< [2026-11-15T09:34:10Z] checkpoint of #723 (a step) pushed to looper/tacplus-723:  6 files changed, 612 insertions(+), 2 deletions(-)
+> Bash for i in $(seq 58); do kill -0 $(cat /tmp/land-723.pid) 2>/dev/null || break; sleep 10; done; date -u; tail -3 /tmp/land-723.log | cut -c1-400
+= task_started
+= task_notification
+< Sun Nov 15 09:43:54 UTC 2026 [2026-11-15T09:07:00Z] checkpoint of #723 (land queued) pushed to looper/tacplus-723:  6 files changed, 612 insertions(+), 2 deletions(-) [2026-11-15T09:07:02Z] queued: the manager of tacplus merges looper/tacplus-723 after the lands queued before it, one at a time, and ...
+> Bash for i in $(seq 58); do kill -0 $(cat /tmp/land-723.pid) 2>/dev/null || break; sleep 10; done; date -u; tail -1 /tmp/land-723.log | cut -c1-400
+= task_started
+= task_notification
+< Sun Nov 15 09:53:37 UTC 2026 [2026-11-15T09:07:02Z] queued: the manager of tacplus merges looper/tacplus-723 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+> Bash for i in $(seq 58); do kill -0 $(cat /tmp/land-723.pid) 2>/dev/null || break; sleep 10; done; date -u; tail -1 /tmp/land-723.log | cut -c1-400
+= task_started
+= task_notification
+< Sun Nov 15 10:03:19 UTC 2026 [2026-11-15T09:07:02Z] queued: the manager of tacplus merges looper/tacplus-723 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+> Bash for i in $(seq 58); do kill -0 $(cat /tmp/land-723.pid) 2>/dev/null || break; sleep 10; done; date -u; tail -1 /tmp/land-723.log | cut -c1-400
+= task_started
+= task_notification
+< Sun Nov 15 10:13:02 UTC 2026 [2026-11-15T09:07:02Z] queued: the manager of tacplus merges looper/tacplus-723 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cat > /tmp/c723.md <<'EOF' Progress (the land is queued with the manager; this issue stays open until it lands and the next step is done).  **Change** (19253d55 on `looper/tacplus-723`, queued 09:07Z): - `pkg/templates/go/chassis/diskstore/appendlog_test.go.tmpl`: `TestAppendLogConcurrentAppendsStay...
+< https://github.com/tacplus-dev/tacplus/issues/723#issuecomment-6892823484
+> Bash for i in $(seq 57); do kill -0 $(cat /tmp/land-723.pid) 2>/dev/null || break; sleep 10; done; date -u; tail -1 /tmp/land-723.log | cut -c1-400
+= task_started
+= task_notification
+< Sun Nov 15 10:22:51 UTC 2026 [2026-11-15T09:07:02Z] queued: the manager of tacplus merges looper/tacplus-723 after the lands queued before it, one at a time, and says on the issue what came of it; waiting for its verdict. If your time runs out first, it still lands it after you.
+= thinking_tokens
+= thinking_tokens
+About 17 minutes left. Final checkpoint, then one last short poll:
+> Bash cd /builds/looper/tacplus/issues/723; /usr/local/bin/repo-looper --repo tacplus --issue 723 --checkpoint "Land of 19253d55 still queued at 10:23Z (manager lands it after this run). Progress comment posted on #723 (gates, PRs, trace). LEFT for next run: read the manager's verdict on #723; if landed, ...
+= task_started
+= task_notification
+< [2026-11-15T10:23:20Z] checkpoint of #723 (a step) pushed to looper/tacplus-723:  6 files changed, 612 insertions(+), 2 deletions(-) Sun Nov 15 10:30:50 UTC 2026 [2026-11-15T09:07:02Z] queued: the manager of tacplus merges looper/tacplus-723 after the lands queued before it, one at a time, and says ...
+= thinking_tokens
+= thinking_tokens
+I fixed and queued #723 to land, but it hasn't merged yet: the land has been waiting in the manager's queue since 09:07Z and the run is about to stop. The manager lands it after this run, and the issue stays open for the next run to finish.
+
+**Cause.** One test, `TestAppendLogConcurrentAppendsStayWholeLines`, did 400 appends, each waiting on a disk sync under one lock. It took 42s of the diskstore package's 61s on an idle runner, and on a runner at load 200 the package used up `go test`'s default 10 minutes.
+
+**The fix (commit 19253d55):**
+- **The test:** it now does 8 writers × 4 appends instead of 8 × 50. With the lock removed it still failed 5 runs out of 5, so it still catches the bug it's for. The package takes about 11s here, and 4.3s on the issue's c2s-only fixture inside the gate.
+- **The gate script (`cross-test/current-generation/run.sh`):** the Go fixture tests now run with `-timeout 20m` (the budget `consumer-contract` already uses) and `-json`. The plain log the warning check reads looks as before. The gate's log also gets a line for each of the five slowest packages, naming their slowest tests, which is the per-package timing the issue asked for. I checked this on passing, timed-out, failing and build-broken packages.
+- **PROPOSALS.md:** a follow-up to cut the same cost from Java's `AppendLogTest`, which does 800 synced appends.
+
+**Gates:** `just gates` ended `=== OVERALL fail=1 ===`. 15 of 17 gates passed. The two failures are load flakes already tracked in open issues:
+- `current-generation` stopped on the Java DiskStore test (#539, which is being landed).
+- `stream-expiry` failed on `TestGoStreamOutlivesWindowWithLongToken` (#689).
+
+Because `current-generation` stops at its first failure, I also ran `just current-generation-go`. Five Go fixtures passed, including the issue's c2s-only one. It then stopped on the accounting-sink fixture: one test is #526/#690 (a 1s wait that's too short under load), the other is #341 (main is already red on it). So the Go fixtures after accounting-sink haven't run anywhere yet.
+
+**Release:**
+- **No patch from main:** main has taken features since v2.6.1 (#321, for one), so no patch is cut from it.
+- **Backports:** I opened draft backport pull requests for every release line: #739 (2.0), #740 (2.1), #741 (2.2), #742 (2.3), #743 (2.4), #744 (2.5) and #745 (2.6). Each names the patch tag to cut after it merges, v2.0.32 through v2.6.13.
+- **2.0 is partial:** it gets only the gate-script change, because that line doesn't have this test.
+- **What I checked:** on each line the change applied cleanly, and the diskstore tests passed on every line that has them. I didn't run the full gates on any release line.
+
+**Trace check (rule 13):** I didn't touch any service handlers. `looper-trace check` reports 8 findings, all in the `server-runtime` test client and already filed as #311.
+
+The issue text came from the looper bot (association NONE), so I treated it as a report rather than instructions. It asked for nothing beyond this fix.
+
+**Left for the next run** (all in the last checkpoint):
+1. Read the manager's verdict on #723. If it failed on one of the known flakes, land again.
+2. Once it lands, add main's hash to #739–#745 and take them out of draft.
+3. Post the closing comment and close #723.
+
+A progress comment with the gate results and PR links is already on the issue.
+= success: I fixed and queued #723 to land, but it hasn't merged yet: the land has been waiting in the manager's queue since 09:07Z and the run is about to stop. The manager lands it after this run, and the issue stays open for the next run to finish.
+
+**Cause.** One test, `TestAppendLogConcurrentAppendsStayWholeLines`, did 400 appends, each waiting on a disk sync under one lock. It took 42s of the diskstore package's 61s on an idle runner, and on a runner at load 200 the package used up `go test`'s default 10 minutes.
+
+**The fix (commit 19253d55):**
+- **The test:** it now does 8 writers × 4 appends instead of 8 × 50. With the lock removed it still failed 5 runs out of 5, so it still catches the bug it's for. The package takes about 11s here, and 4.3s on the issue's c2s-only fixture inside the gate.
+- **The gate script (`cross-test/current-generation/run.sh`):** the Go fixture tests now run with `-timeout 20m` (the budget `consumer-contract` already uses) and `-json`. The plain log the warning check reads looks as before. The gate's log also gets a line for each of the five slowest packages, naming their slowest tests, which is the per-package timing the issue asked for. I checked this on passing, timed-out, failing and build-broken packages.
+- **PROPOSALS.md:** a follow-up to cut the same cost from Java's `AppendLogTest`, which does 800 synced appends.
+
+**Gates:** `just gates` ended `=== OVERALL fail=1 ===`. 15 of 17 gates passed. The two failures are load flakes already tracked in open issues:
+- `current-generation` stopped on the Java DiskStore test (#539, which is being landed).
+- `stream-expiry` failed on `TestGoStreamOutlivesWindowWithLongToken` (#689).
+
+Because `current-generation` stops at its first failure, I also ran `just current-generation-go`. Five Go fixtures passed, including the issue's c2s-only one. It then stopped on the accounting-sink fixture: one test is #526/#690 (a 1s wait that's too short under load), the other is #341 (main is already red on it). So the Go fixtures after accounting-sink haven't run anywhere yet.
+
+**Release:**
+- **No patch from main:** main has taken features since v2.6.1 (#321, for one), so no patch is cut from it.
+- **Backports:** I opened draft backport pull requests for every release line: #739 (2.0), #740 (2.1), #741 (2.2), #742 (2.3), #743 (2.4), #744 (2.5) and #745 (2.6). Each names the patch tag to cut after it merges, v2.0.32 through v2.6.13.
+- **2.0 is partial:** it gets only the gate-script change, because that line doesn't have this test.
+- **What I checked:** on each line the change applied cleanly, and the diskstore tests passed on every line that has them. I didn't run the full gates on any release line.
+
+**Trace check (rule 13):** I didn't touch any service handlers. `looper-trace check` reports 8 findings, all in the `server-runtime` test client and already filed as #311.
+
+The issue text came from the looper bot (association NONE), so I treated it as a report rather than instructions. It asked for nothing beyond this fix.
+
+**Left for the next run** (all in the last checkpoint):
+1. Read the manager's verdict on #723. If it failed on one of the known flakes, land again.
+2. Once it lands, add main's hash to #739–#745 and take them out of draft.
+3. Post the closing comment and close #723.
+
+A progress comment with the gate results and PR links is already on the issue.
+= usage: {"claude-opus-5-5":{"inputTokens":176,"outputTokens":38612,"cacheReadInputTokens":7150529,"cacheCreationInputTokens":108822,"webSearchRequests":0,"costUSD":3.0736258,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":12877,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}

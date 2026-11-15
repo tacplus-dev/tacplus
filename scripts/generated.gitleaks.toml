@@ -1,0 +1,29 @@
+# gitleaks configuration of the generated tree (scripts/generated.sh copies it
+# to DIR/.gitleaks.toml, which gitleaks reads at the root of the tree it scans).
+# The same decisions as the root .gitleaks.toml, for what those templates
+# generate: code that assembles PEM text at runtime, and redaction/security
+# test fixtures that must hold a token-shaped string to prove it is redacted.
+# Plus two lines no template allowlist covers: the KeyType enum's name strings
+# (key_private_ed25519, ...) and a service's assignment of a field the proto
+# names secrets. A path here is matched anywhere in the tree (every set and
+# language); keep it to the generated file of a template the root allowlists.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "PEM assembly in generated service managers, redaction test fixtures, enum names and field assignments"
+regexTarget = "line"
+paths = [
+  '''(^|/)tacplus/model/s2sm/mod\.rs$''',
+  '''(^|/)tacplus/model/s2sm/service_manager\.(ts|py)$''',
+  '''(^|/)chassis/logger/src/redact\.rs$''',
+  '''(^|/)chassis/logger/logger_security_test\.go$''',
+  '''(^|/)chassis/logger/test_security\.py$''',
+  '''(^|/)chassis/logger/LogbackConfiguratorSecurityTest\.java$''',
+  '''(^|/)chassis/grpcconfig/RedactionInstalledTest\.java$''',
+  '''(^|/)chassis/collection/page_behavior_test\.go$''',
+]
+regexes = [
+  '''^\s*case ENC_TYPE_KEY_PRIVATE_[A-Z0-9_]+ -> "key_private_[a-z0-9_]+";$''',
+  '''^\s*resp\.Secrets = __[A-Za-z0-9_]+$''',
+]

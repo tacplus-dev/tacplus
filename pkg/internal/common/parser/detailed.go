@@ -5,11 +5,15 @@ package parser
 
 import (
 	"bufio"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 )
 
 // ProtoFile represents a parsed proto file
@@ -59,14 +63,18 @@ type ProtoRPC struct {
 func ParseProtoDirectoryDetailed(dir string) (map[string]*ProtoFile, error) {
 	protos := make(map[string]*ProtoFile)
 
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	err := fsroot.Walk(dir, func(r *os.Root, relPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if !info.IsDir() && strings.HasSuffix(path, ".proto") {
-			relPath, _ := filepath.Rel(dir, path)
-			proto, err := ParseProtoFileDetailed(path)
+		if !d.IsDir() && strings.HasSuffix(relPath, ".proto") {
+			file, err := r.Open(relPath)
+			if err != nil {
+				return err
+			}
+			proto, err := parseProtoDetailed(filepath.Join(dir, relPath), file)
+			file.Close()
 			if err != nil {
 				return err
 			}
@@ -89,7 +97,11 @@ func ParseProtoFileDetailed(path string) (*ProtoFile, error) {
 		return nil, err
 	}
 	defer file.Close()
+	return parseProtoDetailed(path, file)
+}
 
+// parseProtoDetailed parses the proto file at path, read from file.
+func parseProtoDetailed(path string, file io.Reader) (*ProtoFile, error) {
 	proto := &ProtoFile{
 		Path:     path,
 		Messages: make(map[string]*ProtoMessage),

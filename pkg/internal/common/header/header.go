@@ -5,11 +5,13 @@ package header
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
 )
 
@@ -111,14 +113,22 @@ func ExampleHeader(language string, source string) string {
 // matching ext (e.g. ".java", ".pb.go", "_pb2.py") with the standard tacplus header.
 // packageKeyword is the language's package declaration keyword (e.g. "package" for Go/Java).
 func ReplaceProtocHeaders(dir, language, ext, packageKeyword string) error {
-	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+	return fsroot.Walk(dir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
 			return err
 		}
-		if !strings.HasSuffix(path, ext) {
+		if !strings.HasSuffix(rel, ext) {
 			return nil
 		}
-		return replaceProtocHeader(path, language, packageKeyword)
+		content, err := r.ReadFile(rel)
+		if err != nil {
+			return err
+		}
+		out, err := rewriteProtocHeader(content, filepath.Join(dir, rel), language, packageKeyword)
+		if err != nil {
+			return err
+		}
+		return r.WriteFile(rel, out, 0644)
 	})
 }
 
@@ -132,7 +142,16 @@ func replaceProtocHeader(filePath, language, packageKeyword string) error {
 	if err != nil {
 		return err
 	}
+	out, err := rewriteProtocHeader(content, filePath, language, packageKeyword)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filePath, out, 0644)
+}
 
+// rewriteProtocHeader returns content, the file at filePath, with its
+// protoc-generated header replaced by the standard tacplus header.
+func rewriteProtocHeader(content []byte, filePath, language, packageKeyword string) ([]byte, error) {
 	lines := strings.Split(string(content), "\n")
 
 	// Find the first non-comment, non-blank line (the package/code declaration)
@@ -155,7 +174,7 @@ func replaceProtocHeader(filePath, language, packageKeyword string) error {
 		}
 	}
 	if codeStart < 0 {
-		return fmt.Errorf("no code declaration found in %s", filePath)
+		return nil, fmt.Errorf("no code declaration found in %s", filePath)
 	}
 
 	// Extract source from existing header if present
@@ -174,5 +193,5 @@ func replaceProtocHeader(filePath, language, packageKeyword string) error {
 	var sb strings.Builder
 	sb.WriteString(GeneratedHeader(language, source))
 	sb.WriteString(strings.Join(lines[codeStart:], "\n"))
-	return os.WriteFile(filePath, []byte(sb.String()), 0644)
+	return []byte(sb.String()), nil
 }

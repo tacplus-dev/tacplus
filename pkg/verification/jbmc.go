@@ -6,6 +6,7 @@ package verification
 import (
 	"bufio"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 )
 
@@ -140,19 +142,19 @@ func groupByMavenModule(proofFiles []string) map[string][]string {
 // findJbmcProofs walks a directory for Proof.java files containing CProver references.
 func findJbmcProofs(dir string) []string {
 	var files []string
-	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+	fsroot.Walk(dir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
 			return nil
 		}
-		if info.Name() != "Proof.java" {
+		if d.Name() != "Proof.java" {
 			return nil
 		}
-		data, err := os.ReadFile(path)
+		data, err := r.ReadFile(rel)
 		if err != nil {
 			return nil
 		}
 		if strings.Contains(string(data), "CProver") {
-			files = append(files, path)
+			files = append(files, filepath.Join(dir, rel))
 		}
 		return nil
 	})

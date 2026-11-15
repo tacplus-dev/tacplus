@@ -4,10 +4,12 @@
 package types
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
@@ -24,14 +26,15 @@ func generatePackageHelpers(protocDir, outputDir string) error {
 	var protoFiles []model.ProtoFile
 
 	// Walk through all proto files
-	err = filepath.Walk(protocDir, func(path string, info os.FileInfo, err error) error {
+	err = fsroot.Walk(protocDir, func(_ *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
+		path := filepath.Join(protocDir, rel)
 
 		// Parse proto file using descriptor parser
 		protoFile, err := parser.ConvertToProtoFile(path)

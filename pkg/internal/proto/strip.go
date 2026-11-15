@@ -5,9 +5,12 @@ package proto
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 )
 
 // StripSpecOptions removes all spec.* annotations from proto file content.
@@ -200,15 +203,16 @@ func StripSpecOptionsFromDir(protoDir string) error {
 	needsSpecProto := false
 
 	// Strip all remaining .proto files
-	if err := filepath.Walk(protoDir, func(path string, info os.FileInfo, err error) error {
+	if err := fsroot.Walk(protoDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
+		path := filepath.Join(protoDir, rel)
 
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(rel)
 		if err != nil {
 			return fmt.Errorf("failed to read %s: %w", path, err)
 		}
@@ -218,7 +222,7 @@ func StripSpecOptionsFromDir(protoDir string) error {
 			needsSpecProto = true
 		}
 		if stripped != string(content) {
-			if err := os.WriteFile(path, []byte(stripped), 0644); err != nil {
+			if err := r.WriteFile(rel, []byte(stripped), 0644); err != nil {
 				return fmt.Errorf("failed to write %s: %w", path, err)
 			}
 		}

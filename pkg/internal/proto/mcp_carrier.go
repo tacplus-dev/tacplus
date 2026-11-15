@@ -6,11 +6,13 @@ package proto
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 )
@@ -174,18 +176,14 @@ func AppendMcpCarrierRpcsToProtos(tempProtoDir, inputDir string) ([]string, erro
 // (that is the descriptor's).
 func protoDirMayDeclareMcpTools(dir string) (bool, error) {
 	found := false
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || found || !strings.HasSuffix(path, ".proto") {
+	err := fsroot.Walk(dir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || found || !strings.HasSuffix(rel, ".proto") {
 			return err
 		}
-		relPath, relErr := filepath.Rel(dir, path)
-		if relErr != nil {
-			return relErr
-		}
-		if IsInfraProto(filepath.ToSlash(relPath)) {
+		if IsInfraProto(filepath.ToSlash(rel)) {
 			return nil
 		}
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(rel)
 		if err != nil {
 			return err
 		}

@@ -9,6 +9,7 @@ import (
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
 	"go/format"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,6 +18,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/keepaliveconst"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
@@ -899,16 +901,15 @@ func generateStateWrappers(config *tactype.Config, inputDir string) ([]generated
 	generated := make(map[string]bool) // key: "pkg.stateRootName"
 	var clients []generatedStateClient
 
-	err = filepath.Walk(inputDir, func(path string, info os.FileInfo, walkErr error) error {
+	err = fsroot.Walk(inputDir, func(_ *os.Root, relPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(relPath, ".proto") {
 			return nil
 		}
 
-		relPath, _ := filepath.Rel(inputDir, path)
-		fileDesc, err := dp.GetFileDescriptor(path)
+		fileDesc, err := dp.GetFileDescriptor(filepath.Join(inputDir, relPath))
 		if err != nil {
 			return nil
 		}

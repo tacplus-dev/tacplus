@@ -409,6 +409,14 @@ the looper then marks it `promoted` or `declined` here with the date.
   enclosing function, as gosec's `-track-suppressions`/SARIF fingerprints do) would leave `new` meaning new. Until
   then the scan compares the lists by hand; it also means `security-baseline.json`, once written, would go stale on
   every edit above a finding. A change in tacplus-dev/looper.
+- **`tacplus registry` checks declared config slices against their registered fields** (2026-11-07, #352): since
+  #352 a build whose registry is a lock refuses a `(spec.config_slice)` with no registered `TenantConfig` /
+  `ProjectConfig` field, but the lock sync (`tacplus registry --proto-dir .`) scans only service and vservice
+  declarations, so it reports a missing slice registration only at build time. Scanning the tree's own slices
+  (`configSliceOwner`, today in `pkg/internal/proto`, out of `cmd/`'s reach) in the sync would name it with the
+  service ids. A legacy per-repo registry's `tacplus registry` likewise never records slice fields: the build still
+  assigns them (now in file order), into whichever registry.yaml the build reads (a merged or fetched build's is a
+  temporary copy).
 
 ## Promoted / declined
 - **Member port onto gRPC with make-before-break session rotation (Java)** (2026-11-06, #321): promoted 2026-11-05,

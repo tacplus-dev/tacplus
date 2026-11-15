@@ -169,11 +169,10 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-15 by lo
   images.yml once pushed; the launcher and `tacplus pin` by the gates. The fleet build's image lookup on a private package is
   verified against a fake registry only: the looper's token has no `read:packages` (a public image resolves live).
   Rootless BuildKit (#315) has not run yet: it needs a user namespace (`--security-opt seccomp=unconfined
-  --security-opt apparmor=unconfined`), which no looper container may have. images.yml still builds with buildx on
-  the runner: its half of #315 (build base and build with `tacplus-image-build` in `build:latest`, run
-  `images/cache-determinism.sh` in each new build image) is a patch posted on #315: a report's token pushes
-  `.github/workflows/` only for an issue carrying `looper:workflows`, set by a member (tacplus-dev/looper#115), and
-  #315 does not carry it yet; its first run on main is where both are proven.
+  --security-opt apparmor=unconfined`), which no looper container may have. images.yml builds base and build with
+  `tacplus-image-build` in `build:latest` and runs `images/cache-determinism.sh` in each new build image (#315); its
+  first run on main is where both are proven. That run still builds with buildx on the runner, as the `build:latest`
+  it finds predates `tacplus-image-build`; the rootless path first runs in the run after it, or on a dispatch.
   The compiler half of `images/cache-determinism.sh` passed in a build:2.5-derived image. The build jobs in the
   `ci` project (tacplus-dev/looper, tacplus-dev/cloud) do not set the cache variables or the two security options
   yet (PROPOSALS.md).

@@ -120,6 +120,30 @@ back an older run's layer, and a run whose index lacks linux/amd64 or
 linux/arm64, or holds an image created before the run started, fails before
 any `X.Y.Z` or floating tag moves (`scripts/images-check-index.sh`).
 
+A Debian package advisory (a DSA) is fixed in `base`, not in `build` alone
+(#757). Both images run `apt-get upgrade`, so rebuilding `build` alone clears
+the build images but leaves `base:latest` and every `base:X.Y` on the old
+package until the weekly run. The Nightly security sweep scans `base:latest`
+and fails `main` until then. The fix is:
+
+1. Dispatch `images.yml` on `main` with `rebuild: base`. This moves
+   `base:latest` and `build:latest`.
+2. Dispatch it on each supported `release/X.Y`. This is a line rebuild: it
+   moves `base:X.Y` and `build:X.Y`.
+3. If a release's pin must take the fix, tag a patch on that line afterwards.
+   Its `build:X.Y.Z` starts from the fresh `base:X.Y`.
+
+A patch tag alone does not do this: it rebuilds only `build` (#711 left
+`base` behind this way). The fix is done when `trivy image --severity
+HIGH,CRITICAL --ignore-unfixed` reports nothing on `base:latest`, each
+`base:X.Y`, `build:latest` and each `build:X.Y`. A dispatch needs `actions:
+write` on the repository. Without it, a change to `images/base.Dockerfile`
+landed on `main` rebuilds `base:latest`. On a line, the same change backported
+to `release/X.Y` rebuilds `base:X.Y` with the line's next patch tag: a tag
+rebuilds `base` when its definition changed since the line's previous tag. A
+push to a release branch runs no image build. Otherwise the lines wait for the
+weekly run.
+
 The definitions are `images/base.Dockerfile` and `images/build.Dockerfile`.
 Their Debian packages are `images/base.packages` and `images/build.packages`
 (#554): an image carries those, Debian's base system (Essential, Priority

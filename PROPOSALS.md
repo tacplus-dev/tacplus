@@ -150,6 +150,15 @@ the looper then marks it `promoted` or `declined` here with the date.
   matrix, so it rotted unnoticed through four contract changes (the 2.4 sys contract #161, MCP-7 doc comments,
   `grpc-servers` scoping, PAR-9's Python error shape). `--consumer typescript` takes a few minutes; add it to
   `just gates`, and `--consumer python` once #665 lets Python generate a client of a C2S service.
+- **Work down the security baseline: file modes, unchecked errors, pinned actions** (2026-11-14, #585):
+  `security-baseline.json` records the 1331 MEDIUM and LOW findings of the 2026-11-13 security run (Jody's decision
+  on #585: a baseline, no per-finding exceptions), so the scan files only new ones. The issue's triage still holds:
+  gosec G306 (317) and G301 (233), files and directories the compiler writes wider than 0600/0750, want one policy
+  (0644/0755 is intended for generated source: tighten the rest, or `#nosec` with a reason); G104 (46) unchecked
+  errors want checking; the 34 `github-actions-mutable-action-tag` want actions pinned by SHA (overlaps #194). Each
+  fixed finding lowers its entry's count: re-record with `looper-scan baseline` (tacplus-dev/looper#146). Twelve
+  gosec entries keep a line range in their `file` (`builder.go:669-684`, say) until tacplus-dev/looper#156: four
+  of them have already moved, so re-record those once it lands.
 - **Per-language gate sets, and more of the map** (2026-11-08, #266): `gates.yaml` runs the full gates (~3h) for any
   change under `pkg/**`, `cmd/**` or `.github/`. Next: `pkg/internal/<lang>/**` and `pkg/templates/<lang>/**` to that
   language's `current-generation-<lang>`, `determinism-<lang>` and `-<lang>` cross-tests (with `just test`), once each

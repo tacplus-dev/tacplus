@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/eventbus"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
@@ -1129,7 +1130,7 @@ message %s {
 				continue
 			}
 
-			if err := os.WriteFile(protoPath, append(existing, []byte(configState)...), 0644); err != nil {
+			if err := fsroot.WriteFile(dir, protoPath, append(existing, []byte(configState)...), 0644); err != nil {
 				return nil, fmt.Errorf("failed to write ConfigState to %s: %w", cfg.ProtoImportPath, err)
 			}
 		}

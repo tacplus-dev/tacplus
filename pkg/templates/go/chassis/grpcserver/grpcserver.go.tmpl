@@ -67,6 +67,12 @@ type GrpcServer struct {
 	// rebuild of a renewed serving certificate is reported to the fleet health
 	// plane as well as logged (PC-L-1). Serving continues on the last good cert.
 	reportCertDegraded func(reason string)
+
+	// listener, when set, is served on instead of binding the configured
+	// address. Unexported: only the chassis' own tests set it, so they serve on
+	// the port-0 listener they bound rather than release its port and bind it
+	// again, which another process may take in between (#713).
+	listener net.Listener
 }
 
 // SetCertProvider installs the live certificate provider. Call before Listen.
@@ -247,7 +253,9 @@ func (ps *GrpcServer) Listen(ctx context.Context) error {
 		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsConfig)))
 	}
 
-	{
+	if ps.listener != nil {
+		listener = ps.listener
+	} else {
 		lis, err := net.Listen("tcp", listenAddr)
 		if err != nil {
 			return protoerrors.NewErrGeneral(err, "failed to listen on %s", listenAddr)
@@ -307,7 +315,7 @@ func (ps *GrpcServer) Listen(ctx context.Context) error {
 	healthpb.RegisterHealthServer(grpcServer, ps.healthServer)
 
 	zap.L().Info("gRPC server starting",
-		zap.String("address", listenAddr),
+		zap.String("address", listener.Addr().String()),
 		zap.Bool("tls", true))
 
 	// Graceful shutdown on context cancellation

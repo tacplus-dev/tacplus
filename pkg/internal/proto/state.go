@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/eventbus"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
@@ -1175,7 +1176,7 @@ func appendStateServicesForFile(
 	}
 	text += shared.String()
 
-	if err := os.WriteFile(protoPath, []byte(text), 0644); err != nil {
+	if err := fsroot.WriteFile(tempProtoDir, protoPath, []byte(text), 0644); err != nil {
 		return fmt.Errorf("failed to write proto file %s: %w", relPath, err)
 	}
 

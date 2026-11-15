@@ -6,6 +6,7 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
 	"os"
@@ -969,7 +970,7 @@ func copyHelperFiles(builderTempDir, outputDir string) error {
 			}
 		}
 
-		if err := os.MkdirAll(dstDir, 0755); err != nil {
+		if err := fsroot.MkdirAll(outputDir, dstDir, 0755); err != nil {
 			return err
 		}
 
@@ -978,7 +979,7 @@ func copyHelperFiles(builderTempDir, outputDir string) error {
 			return err
 		}
 
-		if err := os.WriteFile(dstFile, content, 0644); err != nil {
+		if err := fsroot.WriteFile(outputDir, dstFile, content, 0644); err != nil {
 			return err
 		}
 
@@ -1355,7 +1356,7 @@ func generateIndexForDir(path string) error {
 		if len(exports) > 0 {
 			content += "\n"
 		}
-		if err := os.WriteFile(indexPath, []byte(content), 0644); err != nil {
+		if err := fsroot.WriteFile(path, indexPath, []byte(content), 0644); err != nil {
 			return err
 		}
 		zap.L().Debug("Created index.ts", zap.String("dir", path))
@@ -1659,7 +1660,7 @@ func fixImportPaths(outputDir string, serviceStateFiles map[string]bool) error {
 
 			// Only write if content changed
 			if fixed != original {
-				if err := os.WriteFile(path, []byte(fixed), 0644); err != nil {
+				if err := fsroot.WriteFile(outputDir, path, []byte(fixed), 0644); err != nil {
 					return err
 				}
 				zap.L().Debug("Fixed imports", zap.String("file", relPath))

@@ -12,6 +12,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/packages"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
@@ -211,7 +212,7 @@ func updatePyprojectToml(pyprojectPath, version, protobufVersion, pyYAMLVersion,
 		ensureProjectDep(dep.Name, dep.Version)
 	}
 
-	if err := os.WriteFile(pyprojectPath, []byte(content), 0644); err != nil {
+	if err := fsroot.WriteFile(filepath.Dir(pyprojectPath), pyprojectPath, []byte(content), 0644); err != nil {
 		return fmt.Errorf("failed to update %s: %w", pyprojectPath, err)
 	}
 

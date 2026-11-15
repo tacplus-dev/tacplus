@@ -32,8 +32,10 @@ public final class AccountingSinkDurableTest {
     private static final long EMIT_BOUND_MS = 1000;
     // SETTLE_BOUND_MS is how long the drain thread may take to append or drop the
     // records a check emitted. Every append fsyncs, so it bounds the disk, not the RPC:
-    // a hang detector, generous for a slow runner disk, not a timing assertion.
-    private static final long SETTLE_BOUND_MS = 60_000;
+    // a hang detector, not a timing assertion, and a passing run never waits for it.
+    // It is sized for a shared runner under I/O pressure, where one fsync was measured
+    // at 0.2s to 3s (issue #341), so fifty appends can take minutes.
+    private static final long SETTLE_BOUND_MS = 180_000;
 
     private static Accounting.Event event(int i) {
         return Accounting.Event.newBuilder()

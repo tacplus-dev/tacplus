@@ -4,6 +4,7 @@
 package parser
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -69,5 +70,25 @@ func TestValidateTimeseriesAnnotations_OrderKeyWithoutDedupIsFine(t *testing.T) 
 
 	if err := ValidateTimeseriesAnnotations([]model.ProtoFile{pf}); err != nil {
 		t.Errorf("expected no error for order_key without dedup, got %v", err)
+	}
+}
+
+// order_key is an int32: a key past it (only expressible in a model built
+// outside protoc) is refused by name rather than wrapped into another sort-key
+// position in the registry.
+func TestValidateTimeseriesAnnotations_OrderKeyPastInt32IsRefused(t *testing.T) {
+	for _, key := range []int64{math.MaxInt32 + 1, 1<<32 + 1} {
+		pf := timeseriesMsg(map[string]model.AnnotationValue{
+			"timeseries_column":    {Type: model.AnnotationTypeBool, BoolValue: true},
+			"timeseries_order_key": {Type: model.AnnotationTypeInt, IntValue: key},
+		}, nil)
+		err := ValidateTimeseriesAnnotations([]model.ProtoFile{pf})
+		if err == nil {
+			t.Fatalf("order_key %d: expected an error, got nil", key)
+		}
+		if !strings.Contains(err.Error(), "test.Record.occurred_at_ms") ||
+			!strings.Contains(err.Error(), "order_key") || !strings.Contains(err.Error(), "cannot exceed 2147483647") {
+			t.Errorf("order_key %d: error = %q, want it to name the field, the annotation and the bound", key, err.Error())
+		}
 	}
 }

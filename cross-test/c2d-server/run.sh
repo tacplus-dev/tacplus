@@ -19,7 +19,11 @@
 # socket mode, stale-socket removal, and on stop: drain, socket cleanup and
 # one Handler shutdown call.
 #
-# Usage: run.sh [--language go|java|rust]   (default: all three)
+# The swift leg is the client side (issue #494): the generated Swift lite
+# package's C2DClient(), with no argument, dials the generated Go daemon served
+# on its declared socket_path, a unary call and a server stream.
+#
+# Usage: run.sh [--language go|java|rust|swift]   (default: all four)
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -32,7 +36,7 @@ source "$ROOT_DIR/cross-test/lib/java-compile.sh"
 
 die() { echo "c2d-server check FAILED: $*" >&2; exit 1; }
 
-LANGUAGES="go java rust"
+LANGUAGES="go java rust swift"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --language) LANGUAGES="$2"; shift 2 ;;
@@ -51,7 +55,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 generate() {
   local language="$1"
-  local dir="$WORK/$language"
+  local dir="$WORK/${2:-$language}"
   mkdir -p "$dir"
   cat > "$dir/tacplus.yaml" <<EOF2
 language: "$language"
@@ -174,11 +178,61 @@ run_rust() {
   echo "==> c2d-server check PASSED (rust)"
 }
 
+run_swift() {
+  command -v swift >/dev/null || die "swift is required to build the generated Swift package"
+  # The daemon: the generated Go model, served by a daemon main outside it on
+  # sm.C2DSocketPath, the declared socket_path.
+  generate go swift-daemon
+  local DAEMON="$WORK/swift-daemon"
+  mkdir -p "$DAEMON/cmd/daemon"
+  cp "$TESTDATA/swift-daemon/main.go" "$DAEMON/cmd/daemon/"
+  printf 'module example.com/c2dserver\n\ngo 1.23\n' > "$DAEMON/go.mod"
+  echo "==> Building the generated Go daemon"
+  (cd "$DAEMON" && go mod tidy && go build -o "$DAEMON/daemon" ./cmd/daemon) >"$DAEMON/build.log" 2>&1 \
+    || { tail -40 "$DAEMON/build.log"; die "generated Go daemon does not build"; }
+
+  # The client: the generated Swift package, and a consumer of it.
+  generate swift
+  local OUT="$WORK/swift/model"
+  local CLIENT
+  CLIENT="$(find "$OUT/Sources" -type f -name C2DClient.swift -print -quit)"
+  [[ -n "$CLIENT" ]] || die "no generated Swift C2DClient.swift under $OUT"
+  grep -qF '"/tmp/tacplus-c2d-server-check/daemon.sock"' "$CLIENT" \
+    || die "Swift C2DClient's default socket is not the declared socket_path"
+  cp -R "$TESTDATA/swift-default-dial" "$WORK/swift/consumer"
+  echo "==> Building the Swift consumer of the generated package"
+  (cd "$WORK/swift/consumer" && swift build) >"$WORK/swift/build.log" 2>&1 \
+    || { tail -60 "$WORK/swift/build.log"; die "Swift consumer of the generated package does not build"; }
+
+  local socket="/tmp/tacplus-c2d-server-check/daemon.sock"
+  rm -f "$socket"
+  "$DAEMON/daemon" >"$DAEMON/daemon.log" 2>&1 &
+  local daemon_pid=$!
+  local tries=0
+  until [[ -S "$socket" ]]; do
+    kill -0 "$daemon_pid" 2>/dev/null || { cat "$DAEMON/daemon.log"; die "Go daemon exited before listening"; }
+    (( ++tries < 250 )) || { kill "$daemon_pid"; die "no c2d socket at $socket"; }
+    sleep 0.04
+  done
+
+  echo "==> Dialing the Go daemon with the Swift C2DClient's default socket"
+  local rc=0
+  (cd "$WORK/swift/consumer" && swift run --skip-build C2DDefaultDial) >"$WORK/swift/dial.log" 2>&1 || rc=$?
+  kill "$daemon_pid"
+  wait "$daemon_pid" || true
+  cat "$WORK/swift/dial.log"
+  [[ $rc -eq 0 ]] || die "Swift C2DClient() did not reach the daemon"
+  grep -q "swift default C2D dial passed" "$WORK/swift/dial.log" || die "Swift dial exited 0 without its pass line"
+
+  echo "==> c2d-server check PASSED (swift)"
+}
+
 for language in $LANGUAGES; do
   case "$language" in
     go) run_go ;;
     java) run_java ;;
     rust) run_rust ;;
+    swift) run_swift ;;
     *) die "unsupported language: $language" ;;
   esac
 done

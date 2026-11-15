@@ -16,6 +16,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
@@ -148,16 +149,17 @@ func processProtoFiles(protocDir, outputDir string) ([]model.ProtoFile, error) {
 	var protoFiles []model.ProtoFile
 
 	// Walk through all proto files
-	err = filepath.Walk(protocDir, func(path string, info os.FileInfo, err error) error {
+	err = fsroot.Walk(protocDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
 
 		// Parse proto file using descriptor parser
+		path := filepath.Join(protocDir, rel)
 		protoFile, err := parser.ConvertToProtoFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to parse %s: %w", path, err)
@@ -576,20 +578,20 @@ func generateParentModFiles(baseDir string, subdirHelpers map[string][]string) e
 func reorganizeProstOutput(inputDir, outputDir string) (map[string]string, error) {
 	// Build a mapping of package name -> list of (protoDir, protoFilePath) pairs
 	type protoDirInfo struct {
-		dir      string
-		filePath string
+		dir     string
+		content []byte
 	}
 	packageToDirsMap := make(map[string][]protoDirInfo)
 
-	err := filepath.Walk(inputDir, func(path string, info os.FileInfo, err error) error {
+	err := fsroot.Walk(inputDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
 
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(rel)
 		if err != nil {
 			return err
 		}
@@ -616,11 +618,7 @@ func reorganizeProstOutput(inputDir, outputDir string) (map[string]string, error
 			return nil
 		}
 
-		relPath, err := filepath.Rel(inputDir, path)
-		if err != nil {
-			return err
-		}
-		protoDir := filepath.Dir(relPath)
+		protoDir := filepath.Dir(rel)
 
 		// Check if this directory is already tracked
 		found := false
@@ -632,8 +630,8 @@ func reorganizeProstOutput(inputDir, outputDir string) (map[string]string, error
 		}
 		if !found {
 			packageToDirsMap[packageName] = append(packageToDirsMap[packageName], protoDirInfo{
-				dir:      protoDir,
-				filePath: path,
+				dir:     protoDir,
+				content: content,
 			})
 		}
 
@@ -746,12 +744,8 @@ func reorganizeProstOutput(inputDir, outputDir string) (map[string]string, error
 			// Extract type/service/enum names from each proto file to determine ownership.
 			dirTypeNames := make(map[string]map[string]bool) // protoDir -> set of snake_case names
 			for _, pdi := range protoDirs {
-				content, err := os.ReadFile(pdi.filePath)
-				if err != nil {
-					continue
-				}
 				names := make(map[string]bool)
-				for _, line := range strings.Split(string(content), "\n") {
+				for _, line := range strings.Split(string(pdi.content), "\n") {
 					trimmed := strings.TrimSpace(line)
 					// Match "message FooBar {" or "service FooBar {" or "enum FooBar {"
 					for _, prefix := range []string{"message ", "service ", "enum "} {
@@ -1153,13 +1147,18 @@ func generateModuleStructure(outputDir string, crateBasePath string) error {
 	dirModules := make(map[string][]string)
 
 	// Walk through output directory to find all .rs files
-	err := filepath.Walk(outputDir, func(path string, info os.FileInfo, err error) error {
+	err := fsroot.Walk(outputDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
+		name := d.Name()
+		if rel == "." {
+			name = filepath.Base(outputDir)
+		}
+
 		// Skip target directory entirely
-		if info.IsDir() && info.Name() == "target" {
+		if d.IsDir() && name == "target" {
 			return filepath.SkipDir
 		}
 
@@ -1169,23 +1168,20 @@ func generateModuleStructure(outputDir string, crateBasePath string) error {
 		// Exception: the "types" directory IS a separate crate but its module
 		// structure is managed by generateModuleStructure — the proto .rs files
 		// and helper mod.rs files live inside it and need to be discovered.
-		if info.IsDir() && info.Name() != "types" {
-			cargoToml := filepath.Join(path, "Cargo.toml")
-			if _, err := os.Stat(cargoToml); err == nil {
+		if d.IsDir() && name != "types" {
+			cargoToml := filepath.Join(rel, "Cargo.toml")
+			if _, err := r.Stat(cargoToml); err == nil {
 				return filepath.SkipDir
 			}
 		}
 
 		// Skip directories and non-Rust files
-		if info.IsDir() || !strings.HasSuffix(path, ".rs") {
+		if d.IsDir() || !strings.HasSuffix(rel, ".rs") {
 			return nil
 		}
 
 		// Get relative path from output dir
-		relPath, err := filepath.Rel(outputDir, path)
-		if err != nil {
-			return err
-		}
+		relPath := rel
 
 		// Skip lib.rs, mod.rs, and protoc-gen-prost sibling files (.serde.rs, .tonic.rs).
 		// Sibling files are include!()'d by their main .rs and should not be declared as modules.
@@ -1563,27 +1559,31 @@ func updateLibFileWithHelpers(outputDir string) error {
 func fixCrateImports(outputDir string, packageToDirMap map[string]string) error {
 	// Find all proto .rs files
 	var protoFiles []string
-	err := filepath.Walk(outputDir, func(path string, info os.FileInfo, err error) error {
+	err := fsroot.Walk(outputDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() && info.Name() == "target" {
+		name := d.Name()
+		if rel == "." {
+			name = filepath.Base(outputDir)
+		}
+		if d.IsDir() && name == "target" {
 			return filepath.SkipDir
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".rs") {
+		if d.IsDir() || !strings.HasSuffix(rel, ".rs") {
 			return nil
 		}
-		base := filepath.Base(path)
+		base := filepath.Base(rel)
 		if base == "mod.rs" || base == "lib.rs" {
 			return nil
 		}
 		// Only process prost-generated files
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(rel)
 		if err != nil {
 			return nil
 		}
 		if strings.Contains(string(content), "@generated") || strings.Contains(string(content), "Code generated by prost-build") {
-			protoFiles = append(protoFiles, path)
+			protoFiles = append(protoFiles, rel)
 		}
 		return nil
 	})
@@ -1591,9 +1591,16 @@ func fixCrateImports(outputDir string, packageToDirMap map[string]string) error 
 		return err
 	}
 
+	root, err := os.OpenRoot(outputDir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
 	// Fix imports in each proto file
-	for _, protoFile := range protoFiles {
-		content, err := os.ReadFile(protoFile)
+	for _, rel := range protoFiles {
+		protoFile := filepath.Join(outputDir, rel)
+		content, err := root.ReadFile(rel)
 		if err != nil {
 			continue
 		}
@@ -1654,7 +1661,7 @@ func fixCrateImports(outputDir string, packageToDirMap map[string]string) error 
 		}
 
 		if modified {
-			if err := os.WriteFile(protoFile, []byte(contentStr), 0644); err != nil {
+			if err := root.WriteFile(rel, []byte(contentStr), 0644); err != nil {
 				return fmt.Errorf("failed to update %s: %w", protoFile, err)
 			}
 		}
@@ -1669,24 +1676,24 @@ func fixCrateImports(outputDir string, packageToDirMap map[string]string) error 
 func fixCrossModuleImports(outputDir string, packageToDirMap map[string]string) error {
 	// Find all prost-generated .rs files (not mod.rs)
 	var protoFiles []string
-	err := filepath.Walk(outputDir, func(path string, info os.FileInfo, err error) error {
+	err := fsroot.Walk(outputDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".rs") {
+		if d.IsDir() || !strings.HasSuffix(rel, ".rs") {
 			return nil
 		}
-		base := filepath.Base(path)
+		base := filepath.Base(rel)
 		if base == "mod.rs" || base == "lib.rs" {
 			return nil
 		}
 		// Only process prost-generated files (they have @generated marker)
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(rel)
 		if err != nil {
 			return nil // Skip files we can't read
 		}
 		if strings.Contains(string(content), "@generated") {
-			protoFiles = append(protoFiles, path)
+			protoFiles = append(protoFiles, rel)
 		}
 		return nil
 	})
@@ -1698,9 +1705,15 @@ func fixCrossModuleImports(outputDir string, packageToDirMap map[string]string) 
 	// Map: directory -> set of modules to re-export
 	reexports := make(map[string]map[string]bool)
 
+	root, err := os.OpenRoot(outputDir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
 	// Scan each proto file for super:: references
 	for _, protoFile := range protoFiles {
-		content, err := os.ReadFile(protoFile)
+		content, err := root.ReadFile(protoFile)
 		if err != nil {
 			continue
 		}
@@ -1725,10 +1738,11 @@ func fixCrossModuleImports(outputDir string, packageToDirMap map[string]string) 
 
 	// Update each mod.rs file with necessary re-exports
 	for dir, modules := range reexports {
-		modPath := filepath.Join(dir, "mod.rs")
+		modRel := filepath.Join(dir, "mod.rs")
+		modPath := filepath.Join(outputDir, modRel)
 
 		// Read existing mod.rs
-		content, err := os.ReadFile(modPath)
+		content, err := root.ReadFile(modRel)
 		if err != nil {
 			continue
 		}
@@ -1786,7 +1800,7 @@ func fixCrossModuleImports(outputDir string, packageToDirMap map[string]string) 
 				fmt.Fprintf(&b, "pub use %s;\n", reexportPath)
 			}
 
-			if err := os.WriteFile(modPath, []byte(b.String()), 0644); err != nil {
+			if err := root.WriteFile(modRel, []byte(b.String()), 0644); err != nil {
 				return fmt.Errorf("failed to update %s: %w", modPath, err)
 			}
 		}

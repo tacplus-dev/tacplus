@@ -116,21 +116,29 @@ async fn generated_c2d_standalone_host_over_socket() {
     });
 
     // Ready once the stale file has been replaced by a socket AND the socket is
-    // locked down: the chassis binds first and chmods after, so the mode is only
-    // final a moment after the file appears. A host that never restricts it
-    // fails here at the deadline.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        if let Ok(meta) = std::fs::metadata(SOCKET_PATH) {
-            if meta.file_type().is_socket() && meta.permissions().mode() & 0o777 == 0o600 {
-                break;
-            }
-        }
+    // locked down. Two waits, two bounds: the bind can take long on a loaded
+    // runner (#778), so its bound only guards a hung host; the chmod follows
+    // the bind within the chassis, so the short bound from the socket's
+    // appearance is the real assertion: a host that binds and never restricts
+    // the socket fails there, with its mode.
+    let bind_deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    while !std::fs::metadata(SOCKET_PATH).is_ok_and(|m| m.file_type().is_socket()) {
         if host.is_finished() {
             panic!("standalone c2d host exited before listening: {:?}", host.await);
         }
         assert!(
-            tokio::time::Instant::now() < deadline,
+            tokio::time::Instant::now() < bind_deadline,
+            "no c2d socket replaced the stale file at {SOCKET_PATH}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let chmod_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !std::fs::metadata(SOCKET_PATH).is_ok_and(|m| m.permissions().mode() & 0o777 == 0o600) {
+        if host.is_finished() {
+            panic!("standalone c2d host exited before listening: {:?}", host.await);
+        }
+        assert!(
+            tokio::time::Instant::now() < chmod_deadline,
             "no owner-only (0600) c2d socket at {SOCKET_PATH} (metadata: {:?}); the socket ACL is the c2d auth boundary",
             std::fs::metadata(SOCKET_PATH).map(|m| m.permissions().mode())
         );

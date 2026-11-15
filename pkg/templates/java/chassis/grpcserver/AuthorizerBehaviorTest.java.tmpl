@@ -413,8 +413,10 @@ public class AuthorizerBehaviorTest {
 
     // (spec.rpc).route_field and RPC_FLAG_ANY_TENANT on a tenant-owned instance
     // (issue #170). The door stays the default: only the instance's own tenant
-    // (and /system) pass. An rpc declaring RPC_FLAG_ANY_TENANT skips the door,
-    // and nothing else: audience and auth_services still apply. The backstop
+    // (and /system) pass. An rpc declaring RPC_FLAG_ANY_TENANT opens the door
+    // to other tenants' users only, and nothing else: audience and
+    // auth_services still apply. S2S never crosses tenants (#258): another
+    // tenant's service or workload is refused on it too. The backstop
     // refuses a request whose route field is not a tid (INVALID_ARGUMENT) or
     // names another tenant than the tid of the instance's own subject
     // (PERMISSION_DENIED), never the tenant its namespace claim names: since
@@ -430,16 +432,26 @@ public class AuthorizerBehaviorTest {
         crew.setMethodAuth(memberMethod, List.of("caller-svc"));
         crew.setMethodAnyTenant(anyTenantMethod);
 
-        String foreign = signedToken(key, t -> t.setSubType("service").setSubject("caller-svc").setNamespace("/tenants/alpha"));
+        String foreign = signedToken(key, t -> t.setSubType("user").setSubject("someone@example.com")
+            .setNamespace("/tenants/alpha/users/u1"));
+        String foreignSvc = signedToken(key, t -> t.setSubType("service")
+            .setSubject("spiffe://example.com/tenants/aaaaaaaa/services/caller-svc").setNamespace("/tenants/alpha"));
+        String foreignWorkload = signedToken(key, t -> t.setSubType("workload")
+            .setSubject("spiffe://example.com/tenants/aaaaaaaa/services/caller-svc/workloads/pigeon-1").setNamespace("/tenants/alpha"));
         String member = signedToken(key, t -> t.setSubType("service").setSubject("caller-svc").setNamespace("/tenants/beta"));
-        mustPass("ANY_TENANT: a caller of another tenant passes the door",
-            () -> crew.authorizeWithToken(bearer(foreign), anyTenantMethod, null));
-        mustRejectCode("default door: a caller of another tenant is refused", ProtoException.PERMISSION_DENIED,
-            () -> crew.authorizeWithToken(bearer(foreign), memberMethod, null));
+        String system = signedToken(key, t -> t.setSubType("service").setSubject("caller-svc").setNamespace("/system"));
+        mustRejectCode("ANY_TENANT: another tenant's service is refused at the door", ProtoException.PERMISSION_DENIED,
+            () -> crew.authorizeWithToken(bearer(foreignSvc), anyTenantMethod, null));
+        mustRejectCode("ANY_TENANT: another tenant's workload is refused at the door", ProtoException.PERMISSION_DENIED,
+            () -> crew.authorizeWithToken(bearer(foreignWorkload), anyTenantMethod, null));
+        mustPass("ANY_TENANT: a member service passes", () -> crew.authorizeWithToken(bearer(member), anyTenantMethod, null));
+        mustPass("ANY_TENANT: a /system service passes", () -> crew.authorizeWithToken(bearer(system), anyTenantMethod, null));
+        mustRejectCode("default door: a service of another tenant is refused", ProtoException.PERMISSION_DENIED,
+            () -> crew.authorizeWithToken(bearer(foreignSvc), memberMethod, null));
         mustPass("default door: a member passes", () -> crew.authorizeWithToken(bearer(member), memberMethod, null));
 
         // ANY_TENANT widens nothing else.
-        String otherSvc = signedToken(key, t -> t.setSubType("service").setSubject("other-svc").setNamespace("/tenants/alpha"));
+        String otherSvc = signedToken(key, t -> t.setSubType("service").setSubject("other-svc").setNamespace("/tenants/beta"));
         mustReject("ANY_TENANT keeps auth_services", () -> crew.authorizeWithToken(bearer(otherSvc), anyTenantMethod, null));
         String wrongAud = signedToken(key, t -> t.setSubType("service").setSubject("caller-svc")
             .setNamespace("/tenants/alpha").setAudience("kernel"));
@@ -463,6 +475,15 @@ public class AuthorizerBehaviorTest {
                 open.detach(prev);
             }
         });
+        mustRejectCode("authenticate inside the ANY_TENANT context refuses another tenant's service",
+            ProtoException.PERMISSION_DENIED, () -> {
+                io.grpc.Context prev = open.attach();
+                try {
+                    crew.authenticateWithToken(bearer(foreignSvc));
+                } finally {
+                    open.detach(prev);
+                }
+            });
         io.grpc.Context unregistered = io.grpc.Context.current().withValue(Authorizer.ANY_TENANT_METHOD_CTX_KEY, memberMethod);
         mustReject("authenticate inside the context of an unregistered method keeps the door", () -> {
             io.grpc.Context prev = unregistered.attach();

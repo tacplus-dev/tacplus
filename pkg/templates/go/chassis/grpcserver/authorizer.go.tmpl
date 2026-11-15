@@ -74,8 +74,9 @@ type Authorizer interface {
 	// CheckRoute reads. Keyed by the same identifier as SetMethodAuth.
 	SetMethodRouteField(methodKey, fieldName string)
 	// SetMethodAnyTenant registers RPC_FLAG_ANY_TENANT for a method: on a
-	// tenant-owned instance, a caller of any tenant passes the tenant door for
-	// that method. Nothing else about the caller's token is widened.
+	// tenant-owned instance, a user of any tenant passes the tenant door for
+	// that method; another tenant's service never does (S2S never crosses
+	// tenants). Nothing else about the caller's token is widened.
 	SetMethodAnyTenant(methodKey string)
 	// CheckRoute is the tenant-owned instance's routing backstop for a routed
 	// method, run after request validation and before the handler: the
@@ -228,7 +229,7 @@ type authorizer struct {
 	methodTargetNamespaceField map[string]string
 	// methodRouteField is each tenant-routed method's route field, read by
 	// CheckRoute; methodAnyTenant marks RPC_FLAG_ANY_TENANT methods, whose
-	// callers of any tenant pass the tenant door.
+	// users of any tenant pass the tenant door.
 	methodRouteField map[string]string
 	methodAnyTenant  map[string]bool
 	// hostTenant is the instance's own tenant namespace ("/tenants/<t>"), or ""
@@ -321,14 +322,21 @@ func isTenantNamespace(ns string) bool {
 
 // checkHostTenant is the tenant-owned instance's door check. fullMethod is the
 // method being called ("" when unknown): an RPC_FLAG_ANY_TENANT method opens
-// the door to callers of any tenant; an unknown method keeps it shut.
-func (a *authorizer) checkHostTenant(callerNamespace, fullMethod string) error {
+// the door to users of any tenant; an unknown method keeps it shut. S2S never
+// crosses tenants: another tenant's service or workload is refused on every
+// method, an RPC_FLAG_ANY_TENANT one included.
+func (a *authorizer) checkHostTenant(tw *tokenlib.TokenWrapper, fullMethod string) error {
 	host, _ := a.hostTenant.Load().(string)
 	if host == "" {
 		return nil
 	}
+	callerNamespace := tw.GetNamespace()
 	if IsAtOrBelow("/system", callerNamespace) || IsAtOrBelow(callerNamespace, host) {
 		return nil
+	}
+	if subType := tw.GetSubType(); subType == "service" || subType == "workload" {
+		return protoerrors.NewErrPermissionDenied(nil,
+			"service caller namespace %q is not at-or-above this instance's tenant %q: S2S never crosses tenants", callerNamespace, host)
 	}
 	if fullMethod != "" && a.methodAnyTenant[qualifiedMethodKey(fullMethod)] {
 		return nil
@@ -359,8 +367,9 @@ func (a *authorizer) SetMethodRouteField(methodKey, fieldName string) {
 	a.methodRouteField[methodKey] = fieldName
 }
 
-// SetMethodAnyTenant registers RPC_FLAG_ANY_TENANT for a method: a caller of
-// any tenant passes a tenant-owned instance's door for it. The token, its
+// SetMethodAnyTenant registers RPC_FLAG_ANY_TENANT for a method: a user of
+// any tenant passes a tenant-owned instance's door for it, another tenant's
+// service or workload never does (S2S never crosses tenants). The token, its
 // audience, auth_services, entitlements and target_namespace_field are still
 // checked exactly as for any other method.
 func (a *authorizer) SetMethodAnyTenant(methodKey string) {
@@ -728,7 +737,7 @@ func (a *authorizer) verifyBearer(ctx context.Context, fullMethod string) (*toke
 		return nil, protoerrors.NewErrPermissionDenied(nil,
 			"token audience %q is not accepted by service %q", tw.GetAudience(), serviceName)
 	}
-	if err := a.checkHostTenant(tw.GetNamespace(), fullMethod); err != nil {
+	if err := a.checkHostTenant(tw, fullMethod); err != nil {
 		return nil, err
 	}
 	return tw, nil

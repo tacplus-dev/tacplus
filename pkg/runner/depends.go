@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/protosrc"
 	"github.com/tacplus-dev/tacplus/pkg/registry"
 	"github.com/tacplus-dev/tacplus/pkg/tacplusyaml"
@@ -164,10 +165,10 @@ func stageDependency(dir string) (string, func(), error) {
 			}
 		}
 		dst := filepath.Join(staged, rel)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		if err := fsroot.MkdirAll(staged, filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
-		return os.WriteFile(dst, data, 0o644)
+		return fsroot.WriteFile(staged, dst, data, 0o644)
 	})
 	if err != nil {
 		cleanup()

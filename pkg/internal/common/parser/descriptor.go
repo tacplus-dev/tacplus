@@ -5,9 +5,11 @@ package parser
 
 import (
 	"fmt"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -402,19 +404,15 @@ func NewDescriptorParserForFiles(protoDir string, protoFiles []string) (*Descrip
 func discoverProtoFiles(protoDir string) ([]string, error) {
 	rootProtoDir := protoDir
 	var protoFiles []string
-	err := filepath.Walk(rootProtoDir, func(path string, info os.FileInfo, err error) error {
+	err := fsroot.Walk(rootProtoDir, func(_ *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() && info.Name() == ".git" {
+		if d.IsDir() && rel != "." && d.Name() == ".git" {
 			return filepath.SkipDir
 		}
-		if !info.IsDir() && filepath.Ext(path) == ".proto" {
-			relPath, err := filepath.Rel(rootProtoDir, path)
-			if err != nil {
-				return err
-			}
-			relPath = filepath.ToSlash(relPath)
+		if !d.IsDir() && filepath.Ext(rel) == ".proto" {
+			relPath := filepath.ToSlash(rel)
 			if strings.Contains(relPath, "..") {
 				return fmt.Errorf("proto file path contains traversal: %s", relPath)
 			}

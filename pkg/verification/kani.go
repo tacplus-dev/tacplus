@@ -6,6 +6,7 @@ package verification
 import (
 	"bufio"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 )
 
@@ -78,14 +80,14 @@ func runKani(outputDir string) (*spec.VerificationReport, error) {
 // contains at least one helpers.rs with #[kani::proof].
 func findKaniCrates(outputDir string) []string {
 	var crates []string
-	filepath.Walk(outputDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+	fsroot.Walk(outputDir, func(_ *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
 			return nil
 		}
-		if info.Name() != "Cargo.toml" {
+		if d.Name() != "Cargo.toml" {
 			return nil
 		}
-		crateDir := filepath.Dir(path)
+		crateDir := filepath.Join(outputDir, filepath.Dir(rel))
 		if crateHasKaniProofs(crateDir) {
 			crates = append(crates, crateDir)
 		}
@@ -97,14 +99,14 @@ func findKaniCrates(outputDir string) []string {
 // crateHasKaniProofs checks if any .rs file under crateDir contains #[kani::proof].
 func crateHasKaniProofs(crateDir string) bool {
 	found := false
-	filepath.Walk(crateDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || found || info.IsDir() {
+	fsroot.Walk(crateDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || found || d.IsDir() {
 			return nil
 		}
-		if !strings.HasSuffix(path, ".rs") {
+		if !strings.HasSuffix(rel, ".rs") {
 			return nil
 		}
-		data, err := os.ReadFile(path)
+		data, err := r.ReadFile(rel)
 		if err != nil {
 			return nil
 		}

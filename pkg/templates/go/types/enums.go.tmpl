@@ -69,7 +69,7 @@ if s == "" {
 return {{.ZeroValue}}
 }
 // Try parsing as integer
-if num, err := strconv.Atoi(s); err == nil {
+if num, err := strconv.ParseInt(s, 10, 32); err == nil {
 return {{.EnumName}}(num)
 }
 // Normalize and try parsing

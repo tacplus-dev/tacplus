@@ -1,0 +1,248 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// CODE GENERATED - DO NOT EDIT
+
+package x509
+
+import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	stdx509 "crypto/x509"
+	"crypto/x509/pkix"
+	"io"
+	"math/big"
+	"net"
+	"net/url"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// Pins #359 (gosec G123/G402): the peer-identity check of every TLS config the
+// chassis builds runs on a resumed session too. crypto/tls skips
+// VerifyPeerCertificate on resumption, so a session resumed from a ticket would
+// keep a peer that no longer passes; VerifyConnection runs on every handshake.
+
+const resumeTD = "example.com"
+
+type resumeCA struct {
+	cert *stdx509.Certificate
+	key  *ecdsa.PrivateKey
+	pool *stdx509.CertPool
+}
+
+func newResumeCA(t *testing.T) *resumeCA {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &stdx509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "resume-test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              stdx509.KeyUsageCertSign,
+	}
+	der, err := stdx509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := stdx509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := stdx509.NewCertPool()
+	pool.AddCert(cert)
+	return &resumeCA{cert: cert, key: key, pool: pool}
+}
+
+// chain issues a leaf carrying the canonical service SPIFFE ID of svc (and the
+// DNS name localhost, for crypto/tls's own server-name check where it runs) and
+// returns it as an ImmutableCertChain: chain[0] the leaf, chain[1] the CA.
+func (ca *resumeCA) chain(t *testing.T, svc string) *ImmutableCertChain {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serial, err := rand.Int(rand.Reader, big.NewInt(1<<62))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &stdx509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: svc},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     stdx509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []stdx509.ExtKeyUsage{stdx509.ExtKeyUsageServerAuth, stdx509.ExtKeyUsageClientAuth},
+		URIs:         []*url.URL{mustSpiffeURI(t, resumeTD, "", svc)},
+		DNSNames:     []string{"localhost"},
+	}
+	der, err := stdx509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := stdx509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert := &ImmutableCert{x509Certificate: leaf}
+	caCert := &ImmutableCert{x509Certificate: ca.cert}
+	return &ImmutableCertChain{
+		leaf:  leafCert,
+		chain: []*ImmutableCert{leafCert, caCert},
+		tlsCert: &tls.Certificate{
+			Certificate: [][]byte{der, ca.cert.Raw},
+			PrivateKey:  key,
+			Leaf:        leaf,
+		},
+	}
+}
+
+// handshake runs one TLS connection over loopback and reports whether the
+// client resumed, and the first error either side saw. The server writes a byte
+// the client reads, so the client both receives the session ticket and learns
+// of a refusal by the server (in TLS 1.3 the server verifies the client's
+// certificate after the client's Handshake returns).
+func handshake(t *testing.T, serverCfg, clientCfg *tls.Config) (bool, error) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	serverErr := make(chan error, 1)
+	go func() {
+		raw, err := ln.Accept()
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		conn := tls.Server(raw, serverCfg)
+		defer conn.Close()
+		if err := conn.Handshake(); err != nil {
+			serverErr <- err
+			return
+		}
+		_, err = conn.Write([]byte{1})
+		serverErr <- err
+	}()
+	raw, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := tls.Client(raw, clientCfg)
+	defer conn.Close()
+	clientErr := conn.Handshake()
+	if clientErr == nil {
+		_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		_, clientErr = io.ReadFull(conn, make([]byte, 1))
+	}
+	resumed := conn.ConnectionState().DidResume
+	if sErr := <-serverErr; sErr != nil {
+		return resumed, sErr
+	}
+	return resumed, clientErr
+}
+
+// TestSpiffeClientTLSConfigResumption: the mesh and bootstrap client config
+// (servicemanager, service_im) pins the peer on a resumed session too.
+func TestSpiffeClientTLSConfigResumption(t *testing.T) {
+	ca := newResumeCA(t)
+	serverCfg := &tls.Config{
+		Certificates: []tls.Certificate{*ca.chain(t, "alpha").TlsCert()},
+		MinVersion:   tls.VersionTLS13,
+	}
+	var expect atomic.Value
+	expect.Store("alpha")
+	clientCfg := SpiffeClientTLSConfig(ca.pool, func(cert *stdx509.Certificate) error {
+		return VerifyPeerServiceIdentity(cert, expect.Load().(string), resumeTD)
+	})
+	clientCfg.ClientSessionCache = tls.NewLRUClientSessionCache(4)
+	clientCfg.ServerName = "localhost"
+
+	if resumed, err := handshake(t, serverCfg, clientCfg); err != nil || resumed {
+		t.Fatalf("first handshake: resumed=%v err=%v, want a full handshake", resumed, err)
+	}
+	if resumed, err := handshake(t, serverCfg, clientCfg); err != nil || !resumed {
+		t.Fatalf("second handshake: resumed=%v err=%v, want a resumed session", resumed, err)
+	}
+	// The peer no longer passes: a resumed session to it is refused.
+	expect.Store("beta")
+	if _, err := handshake(t, serverCfg, clientCfg); err == nil {
+		t.Fatal("a resumed session to a peer that no longer passes the identity pin was accepted")
+	}
+	// A peer outside the trusted CA no longer passes either.
+	expect.Store("alpha")
+	clientCfg.VerifyConnection = SpiffeClientTLSConfig(newResumeCA(t).pool, func(*stdx509.Certificate) error {
+		return nil
+	}).VerifyConnection
+	if _, err := handshake(t, serverCfg, clientCfg); err == nil {
+		t.Fatal("a resumed session to a peer outside the trusted CAs was accepted")
+	}
+}
+
+// TestTLSConfigClientResumption: TLSConfig's client pins the server's identity
+// on a resumed session. Two configs that share a session cache stand for a
+// client whose expected peer changed: the session the first one established
+// with alpha must not let the second one, which expects beta, reach alpha.
+func TestTLSConfigClientResumption(t *testing.T) {
+	ca := newResumeCA(t)
+	_, serverCfg := ca.chain(t, "alpha").TLSConfig("client", resumeTD)
+	clientChain := ca.chain(t, "client")
+	cache := tls.NewLRUClientSessionCache(4)
+	clientFor := func(peer string) *tls.Config {
+		cfg, _ := clientChain.TLSConfig(peer, resumeTD)
+		cfg.ClientSessionCache = cache
+		cfg.ServerName = "localhost"
+		return cfg
+	}
+
+	if _, err := handshake(t, serverCfg, clientFor("alpha")); err != nil {
+		t.Fatalf("first handshake: %v", err)
+	}
+	if resumed, err := handshake(t, serverCfg, clientFor("alpha")); err != nil || !resumed {
+		t.Fatalf("second handshake: resumed=%v err=%v, want a resumed session", resumed, err)
+	}
+	if _, err := handshake(t, serverCfg, clientFor("beta")); err == nil {
+		t.Fatal("a resumed session to a server that no longer passes the identity pin was accepted")
+	}
+}
+
+// TestTLSConfigServerResumption: TLSConfig's server pins the client's identity
+// on a resumed session. Two server configs that share their session ticket keys
+// stand for a server whose expected peer changed (a restart with persisted keys,
+// a rotated config): a ticket the first issued to client alpha must not let it
+// in to the second, which expects beta.
+func TestTLSConfigServerResumption(t *testing.T) {
+	ca := newResumeCA(t)
+	serverChain := ca.chain(t, "server")
+	var ticketKey [32]byte
+	if _, err := rand.Read(ticketKey[:]); err != nil {
+		t.Fatal(err)
+	}
+	serverFor := func(peer string) *tls.Config {
+		_, cfg := serverChain.TLSConfig(peer, resumeTD)
+		cfg.SetSessionTicketKeys([][32]byte{ticketKey})
+		return cfg
+	}
+	clientCfg, _ := ca.chain(t, "alpha").TLSConfig("server", resumeTD)
+	clientCfg.ClientSessionCache = tls.NewLRUClientSessionCache(4)
+	clientCfg.ServerName = "localhost"
+
+	if _, err := handshake(t, serverFor("alpha"), clientCfg); err != nil {
+		t.Fatalf("first handshake: %v", err)
+	}
+	if resumed, err := handshake(t, serverFor("alpha"), clientCfg); err != nil || !resumed {
+		t.Fatalf("second handshake: resumed=%v err=%v, want a resumed session", resumed, err)
+	}
+	if _, err := handshake(t, serverFor("beta"), clientCfg); err == nil {
+		t.Fatal("a resumed session from a client that no longer passes the identity pin was accepted")
+	}
+}

@@ -2,9 +2,12 @@ package parser
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 )
 
 // protoDirHasProtos reports whether dir exists and contains at least one .proto
@@ -18,11 +21,11 @@ func protoDirHasProtos(dir string) bool {
 		return false
 	}
 	found := false
-	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	_ = fsroot.Walk(dir, func(_ *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if !info.IsDir() && filepath.Ext(path) == ".proto" {
+		if !d.IsDir() && filepath.Ext(rel) == ".proto" {
 			found = true
 			return filepath.SkipAll
 		}

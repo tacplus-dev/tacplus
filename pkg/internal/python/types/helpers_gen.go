@@ -11,6 +11,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
@@ -139,16 +140,17 @@ func processProtoFiles(protocDir, outputDir string) ([]model.ProtoFile, error) {
 	var protoFiles []model.ProtoFile
 
 	// Walk through all proto files
-	err = filepath.Walk(protocDir, func(path string, info os.FileInfo, err error) error {
+	err = fsroot.Walk(protocDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
 
 		// Parse proto file using descriptor parser
+		path := filepath.Join(protocDir, rel)
 		protoFile, err := parser.ConvertToProtoFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to parse %s: %w", path, err)

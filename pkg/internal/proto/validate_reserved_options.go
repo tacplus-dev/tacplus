@@ -5,11 +5,14 @@ package proto
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 )
 
 // reservedSpecOptionFields are field names that once existed in spec.proto
@@ -73,19 +76,15 @@ var specOptionStartRe = regexp.MustCompile(`(?m)^[^\n/]*?option\s+\(\s*spec\.([a
 // this, protoc silently drops the field and the declared intent vanishes.
 func ValidateReservedSpecOptionFields(protoDir string) error {
 	var violations []string
-	err := filepath.Walk(protoDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
+	err := fsroot.Walk(protoDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return err
-		}
-		rel, rerr := filepath.Rel(protoDir, path)
-		if rerr != nil {
-			rel = path
 		}
 		// sys/ is tacplus's own (current) spec surface; only user protos matter.
 		if IsInfraProto(filepath.ToSlash(rel)) {
 			return nil
 		}
-		data, rerr := os.ReadFile(path)
+		data, rerr := r.ReadFile(rel)
 		if rerr != nil {
 			return rerr
 		}

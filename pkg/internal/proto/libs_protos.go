@@ -7,11 +7,13 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	pkgproto "github.com/tacplus-dev/tacplus/pkg/proto"
 	"go.uber.org/zap"
@@ -164,22 +166,18 @@ func IsServicesFileName(fileName string) bool {
 //   - Max one subdirectory deep (dir/file.proto or dir/sub/file.proto)
 //   - A proto file's package declaration must not match its top-level directory name
 func ValidateProtoLayout(protoDir string) error {
-	return filepath.Walk(protoDir, func(path string, info os.FileInfo, err error) error {
+	return fsroot.Walk(protoDir, func(r *os.Root, relPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		// Skip hidden directories (.claude, .git, etc.)
-		if info.IsDir() && strings.HasPrefix(info.Name(), ".") && path != protoDir {
+		if d.IsDir() && strings.HasPrefix(d.Name(), ".") && relPath != "." {
 			return filepath.SkipDir
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(relPath, ".proto") {
 			return nil
 		}
 
-		relPath, err := filepath.Rel(protoDir, path)
-		if err != nil {
-			return err
-		}
 		normalized := filepath.ToSlash(relPath)
 		parts := strings.Split(normalized, "/")
 
@@ -199,7 +197,7 @@ func ValidateProtoLayout(protoDir string) error {
 		}
 
 		// Package must not match the top-level directory name
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(relPath)
 		if err != nil {
 			return fmt.Errorf("failed to read %s: %w", relPath, err)
 		}
@@ -228,40 +226,35 @@ func extractPackageDecl(content string) string {
 // copyUserProtos copies user proto files from inputDir to protoDir,
 // skipping embedded protos (sys/) which are overlaid separately.
 func copyUserProtos(inputDir, protoDir string) error {
-	return filepath.Walk(inputDir, func(path string, info os.FileInfo, err error) error {
+	return fsroot.Walk(inputDir, func(r *os.Root, relPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		// Skip hidden directories (.claude, .git, etc.)
-		if info.IsDir() && strings.HasPrefix(info.Name(), ".") && path != inputDir {
+		if d.IsDir() && strings.HasPrefix(d.Name(), ".") && relPath != "." {
 			return filepath.SkipDir
-		}
-
-		relPath, err := filepath.Rel(inputDir, path)
-		if err != nil {
-			return err
 		}
 
 		// Skip infrastructure protos (sys/, generated/) — sys are overlaid
 		// from embedded FS, generated/ is created dynamically by tacplus.
 		if IsSysProto(relPath) || IsGeneratedProto(relPath) {
-			if info.IsDir() {
+			if d.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
 		dst := filepath.Join(protoDir, relPath)
-		if info.IsDir() {
+		if d.IsDir() {
 			return os.MkdirAll(dst, 0755)
 		}
 
-		if !strings.HasSuffix(info.Name(), ".proto") {
+		if !strings.HasSuffix(d.Name(), ".proto") {
 			return nil
 		}
 
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(relPath)
 		if err != nil {
 			return err
 		}
@@ -386,26 +379,21 @@ func WriteAnnotatedProtos(protoDir, targetDir string) error {
 		return fmt.Errorf("failed to clean annotated proto directory: %w", err)
 	}
 
-	return filepath.Walk(protoDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		relPath, err := filepath.Rel(protoDir, path)
+	return fsroot.Walk(protoDir, func(r *os.Root, relPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		dst := filepath.Join(annotatedDir, relPath)
-		if info.IsDir() {
+		if d.IsDir() {
 			return os.MkdirAll(dst, 0755)
 		}
 
-		if !strings.HasSuffix(info.Name(), ".proto") {
+		if !strings.HasSuffix(d.Name(), ".proto") {
 			return nil
 		}
 
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(relPath)
 		if err != nil {
 			return err
 		}

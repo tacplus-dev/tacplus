@@ -105,26 +105,35 @@ func TestGeneratedC2DStandaloneHostOverSocket(t *testing.T) {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- sm.ServeC2DStandalone(ctx, sm.C2DSocketPath, daemon) }()
 
-	dialCtx, dialCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer dialCancel()
 	// Ready once the stale file has been replaced by a socket AND the socket is
-	// locked down: the chassis listens first and chmods after, so the mode is
-	// only final a moment after the file appears. A host that never restricts
-	// it fails here at the deadline.
-	for {
-		info, err := os.Stat(socketPath)
-		if err == nil && info.Mode()&os.ModeSocket != 0 && info.Mode().Perm() == 0o600 {
-			break
-		}
-		select {
-		case err := <-serveErr:
-			t.Fatalf("standalone c2d host exited before listening: %v", err)
-		case <-dialCtx.Done():
-			t.Fatalf("no owner-only (0600) c2d socket at %s (last stat: %v, %v); the socket ACL is the c2d auth boundary", socketPath, info, err)
-		case <-time.After(20 * time.Millisecond):
+	// locked down. Two waits, two bounds: the bind can take long on a loaded
+	// runner (#778), so its bound only guards a hung host; the chmod follows
+	// the listen within the chassis, so the short bound from the socket's
+	// appearance is the real assertion: a host that listens and never
+	// restricts the socket fails there, with its mode.
+	awaitSocket := func(bound time.Duration, ready func(os.FileInfo) bool, what string) {
+		deadline := time.After(bound)
+		for {
+			info, err := os.Stat(socketPath)
+			if err == nil && ready(info) {
+				return
+			}
+			select {
+			case err := <-serveErr:
+				t.Fatalf("standalone c2d host exited before listening: %v", err)
+			case <-deadline:
+				t.Fatalf("%s at %s (last stat: %v, %v); the socket ACL is the c2d auth boundary", what, socketPath, info, err)
+			case <-time.After(20 * time.Millisecond):
+			}
 		}
 	}
+	awaitSocket(120*time.Second, func(info os.FileInfo) bool { return info.Mode()&os.ModeSocket != 0 },
+		"no c2d socket replaced the stale file")
+	awaitSocket(10*time.Second, func(info os.FileInfo) bool { return info.Mode().Perm() == 0o600 },
+		"no owner-only (0600) c2d socket")
 
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer dialCancel()
 	client, err := c2dm.Dial(dialCtx, socketPath)
 	if err != nil {
 		t.Fatalf("dial c2d socket: %v", err)

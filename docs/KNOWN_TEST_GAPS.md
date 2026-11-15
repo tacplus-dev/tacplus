@@ -247,7 +247,10 @@ dropping unary request validation from the Go, Java or Rust wrapper generator,
 or dropping the handler shutdown call from any of the three entries, turns
 the matching leg red. Earlier (2026-10-14): dropping the c2d auth skip from
 the Go wrapper, or widening the chmod in either Go or Java chassis, turned it
-red.
+red. The Java leg also runs its self-test against two mutants of the generated
+`C2DServer` on every run (#778): one that binds 15s late, as a loaded runner
+does, must pass; one with the chmod stubbed away must fail, naming the
+socket's mode.
 
 What it does not run is the `Run()` / `run()` line that mounts the same
 server on `C2DSocketPath`: `Run` needs a live cluster (config, identity, state

@@ -91,15 +91,35 @@ public struct C2SClient: Sendable {
     public func {{.MethodName}}<Result: Sendable>(
         _ body: ({{.ClientType}}.Client<HTTP2ClientTransport.Posix>) async throws -> Result
     ) async throws -> Result {
-        try await withGRPCClient(
-            transport: .http2NIOPosix(
-                target: .dns(host: self.host, port: self.port),
-                transportSecurity: self.transportSecurity()
-            ),
-            interceptors: self.interceptors()
-        ) { client in
+        try await self.withClient { client in
             try await body({{.ClientType}}.Client(wrapping: client))
         }
     }
 {{end}}
+
+    /// Runs `body` against a client dialing the service, then shuts the client
+    /// down gracefully once `body` returns, as grpc-swift's `withGRPCClient`
+    /// does. That helper runs the client on a discarding task group, whose
+    /// teardown intermittently frees task memory out of order on Swift
+    /// toolchains before 6.3.1 (swiftlang/swift#75501): the process aborts
+    /// with "freed pointer was not the last allocation". So the client runs
+    /// on a plain task group here instead (tacplus#803).
+    private func withClient<Result: Sendable>(
+        _ body: (GRPCClient<HTTP2ClientTransport.Posix>) async throws -> Result
+    ) async throws -> Result {
+        let client = GRPCClient(
+            transport: try .http2NIOPosix(
+                target: .dns(host: self.host, port: self.port),
+                transportSecurity: self.transportSecurity()
+            ),
+            interceptors: self.interceptors()
+        )
+        return try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { try await client.runConnections() }
+            let result = try await body(client)
+            client.beginGracefulShutdown()
+            try await group.waitForAll()
+            return result
+        }
+    }
 }

@@ -142,9 +142,8 @@ natively for one machine.
 The build image builds images itself, with `tacplus-image-build`: rootless
 BuildKit, with no host Docker socket in the container (#315;
 tacplus-dev/roadmap: decisions/builds-in-containers-2026-11-03.md).
-images.yml still builds them with buildx on the runner until its change lands
-(a looper's token pushes `.github/workflows/` only for an issue carrying
-`looper:workflows`, tacplus-dev/looper#115).
+images.yml builds base and build with it in `build:latest`, and falls back to
+buildx on the runner, once, while `build:latest` predates the tool.
 The build cache comes from the build's configuration (`TACPLUS_CACHE_REGISTRY`,
 `TACPLUS_CACHE_BUCKET`, `TACPLUS_CACHE_DIR`; [install](INSTALL.md#image-builds-and-the-build-cache)),
 never from the image. With none configured, the build is cold.

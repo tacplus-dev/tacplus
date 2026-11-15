@@ -27,6 +27,13 @@ name: Images
 # keeps the registry cache from handing back an older run's apt-get upgrade
 # layer, and scripts/images-check-index.sh fails the run unless each index it
 # pushes holds linux/amd64 and linux/arm64, both created during the run.
+#
+# The images are built inside the build image (build:latest, as CI runs in),
+# by tacplus-image-build: rootless BuildKit, no host Docker socket in the
+# container (#315; tacplus-dev/roadmap: decisions/builds-in-containers-2026-11-03.md).
+# Its cache is this workflow's configuration, TACPLUS_CACHE_REGISTRY: ghcr.io
+# here, where GitHub can write. A builder that predates tacplus-image-build
+# builds with buildx on the runner instead, once, to publish the first one.
 
 on:
   push:
@@ -52,6 +59,10 @@ concurrency:
 
 env:
   NS: ghcr.io/${{ github.repository }}
+  BUILDER: ghcr.io/${{ github.repository }}/build:latest
+  TACPLUS_CACHE_REGISTRY: ghcr.io/${{ github.repository }}
+  # Rootless BuildKit needs a user namespace in its container (images/image-build.sh).
+  BUILDKIT_CONTAINER: --security-opt seccomp=unconfined --security-opt apparmor=unconfined
 
 jobs:
   plan:
@@ -126,13 +137,45 @@ jobs:
           echo "list=$list" >> "$GITHUB_OUTPUT"
           echo "$list"
       - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Builder
+        id: builder
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Ubuntu's AppArmor withholds capabilities in a user namespace an
+          # unconfined process creates; RootlessKit needs them.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 || true
+          if docker pull -q "$BUILDER" && docker run --rm "$BUILDER" sh -c 'command -v tacplus-image-build' >/dev/null; then
+            # BuildKit's state on the runner's large disk, not in the container's layer.
+            sudo install -d -o 1000 -g 1000 /mnt/buildkit
+            echo "rootless=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::$BUILDER has no tacplus-image-build yet: building with buildx on the runner"
+            echo "rootless=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build and push (rootless BuildKit in the build image)
+        if: steps.builder.outputs.rootless == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The commit's time for the image's timestamps (images/image-build.sh),
+          # read here: inside the container the checkout is another user's, which
+          # git refuses to read.
+          # shellcheck disable=SC2086 # BUILDKIT_CONTAINER is a list of options
+          docker run --rm $BUILDKIT_CONTAINER -e TACPLUS_CACHE_REGISTRY -e SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
+            -v "$PWD:/src:ro" -v "$HOME/.docker/config.json:/root/.docker/config.json:ro" -v /mnt/buildkit:/home/build/.local/share/buildkit "$BUILDER" \
+            tacplus-image-build -f /src/images/base.Dockerfile --platform linux/amd64,linux/arm64 --cache base \
+            --build-arg "APT_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}" \
+            --output 'type=image,"name=${{ steps.tags.outputs.list }}",push=true' /src
+      - uses: docker/setup-buildx-action@v3
+        if: steps.builder.outputs.rootless != 'true'
       - uses: docker/build-push-action@v6
+        if: steps.builder.outputs.rootless != 'true'
         with:
           context: .
           file: images/base.Dockerfile
@@ -167,13 +210,51 @@ jobs:
           df -h / | tail -1
       - uses: docker/setup-qemu-action@v3
         if: matrix.arch != 'amd64'
-      - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: push
+      - name: Builder
+        id: builder
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Ubuntu's AppArmor withholds capabilities in a user namespace an
+          # unconfined process creates; RootlessKit needs them.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 || true
+          if docker pull -q "$BUILDER" && docker run --rm "$BUILDER" sh -c 'command -v tacplus-image-build' >/dev/null; then
+            # BuildKit's state on the runner's large disk, not in the container's layer.
+            sudo install -d -o 1000 -g 1000 /mnt/buildkit
+            echo "rootless=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::$BUILDER has no tacplus-image-build yet: building with buildx on the runner"
+            echo "rootless=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build and push (rootless BuildKit in the build image)
+        id: rootless
+        if: steps.builder.outputs.rootless == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The build's log goes to stderr; its metadata (the digest) to stdout.
+          # shellcheck disable=SC2086 # BUILDKIT_CONTAINER is a list of options
+          metadata=$(docker run --rm $BUILDKIT_CONTAINER -e TACPLUS_CACHE_REGISTRY -e SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
+            -v "$PWD:/src:ro" -v "$HOME/.docker/config.json:/root/.docker/config.json:ro" -v /mnt/buildkit:/home/build/.local/share/buildkit "$BUILDER" \
+            bash -c 'tacplus-image-build "$@" >&2 && cat /tmp/metadata.json' tacplus-image-build \
+            -f /src/images/build.Dockerfile --platform "linux/${{ matrix.arch }}" --cache build \
+            --build-arg "BASE_IMAGE=${{ needs.base.result == 'success' && format('{0}/base:{1}', env.NS, needs.plan.outputs.stamp) || needs.plan.outputs.base_image }}" \
+            --build-arg "TACPLUS_LINE=${{ needs.plan.outputs.line }}" \
+            --build-arg "APT_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}" \
+            --output "type=image,name=${{ env.NS }}/build,push-by-digest=true,name-canonical=true,push=true" \
+            --metadata-file /tmp/metadata.json /src)
+          digest=$(jq -r '."containerimage.digest"' <<<"$metadata")
+          [[ "$digest" == sha256:* ]] || { echo "::error::no digest in $metadata"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+        if: steps.builder.outputs.rootless != 'true'
+      - id: buildx
+        if: steps.builder.outputs.rootless != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -186,9 +267,22 @@ jobs:
           outputs: type=image,name=${{ env.NS }}/build,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=registry,ref=${{ env.NS }}/build:buildcache-${{ matrix.arch }}
           cache-to: type=registry,ref=${{ env.NS }}/build:buildcache-${{ matrix.arch }},mode=max
+      - id: push
+        name: Digest
+        run: echo "digest=${{ steps.rootless.outputs.digest || steps.buildx.outputs.digest }}" >> "$GITHUB_OUTPUT"
       - name: Smoke test (this architecture)
         if: matrix.arch == 'amd64'
         run: docker run --rm "$NS/build@${{ steps.push.outputs.digest }}" tacplus-smoke
+      # A cache only speeds a build up (#315): compilers and an image built
+      # cold and warm in the new image give one verdict and one set of digests.
+      - name: Cache determinism (cold and warm identical)
+        if: matrix.arch == 'amd64'
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 || true
+          # shellcheck disable=SC2086 # BUILDKIT_CONTAINER is a list of options
+          docker run --rm $BUILDKIT_CONTAINER -v "$PWD:/src:ro" "$NS/build@${{ steps.push.outputs.digest }}" bash /src/images/cache-determinism.sh
       # Generate, test, verify (Kani; Go reported as skipped) and fuzz a pinned
       # repository through the image's tacplus launcher, with a tacplus built
       # from this commit as a local release of the image's line.

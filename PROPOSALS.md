@@ -21,8 +21,7 @@ the looper then marks it `promoted` or `declined` here with the date.
   digest on any day takes snapshot.debian.org at a pinned date, base images by digest and locked tool installs.
   `images/cache-determinism.sh` proves the cache on a hermetic fixture.
 - **images.yml: drop the buildx fallback, and `just images` in the build image** (2026-11-07, #315): #315's images.yml
-  (its second half, posted on the issue as a patch: a report's token pushes `.github/workflows/` only for an issue
-  carrying `looper:workflows`, tacplus-dev/looper#115) builds base and build with `tacplus-image-build` in `build:latest` and falls back to buildx
+  builds base and build with `tacplus-image-build` in `build:latest` and falls back to buildx
   on the runner while `build:latest` predates the tool. Once a `build:latest` carrying `tacplus-image-build` is published, the fallback
   is dead code: drop it. `just images` still builds with the host's Docker (it bootstraps an image set from
   nothing); a variant that builds inside a published build image would need BuildKit named contexts for base → build.

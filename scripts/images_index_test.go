@@ -112,9 +112,16 @@ func TestImagesAptUpgradeRebuildsEachRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Every build of base or build: each image is built either in the build
+	// image (tacplus-image-build, #315) or with buildx on the runner, and each
+	// path names its Dockerfile once.
+	builds := len(regexp.MustCompile(`images/(base|build)\.Dockerfile`).FindAll(wf, -1))
+	if builds < 2 {
+		t.Errorf("images.yml builds %d of base and build, want at least 2", builds)
+	}
 	pass := regexp.MustCompile(`APT_REFRESH=\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}`)
-	if n := len(pass.FindAll(wf, -1)); n != 2 {
-		t.Errorf("images.yml passes APT_REFRESH=<run id>-<attempt> to %d builds, want 2 (base and build)", n)
+	if n := len(pass.FindAll(wf, -1)); n != builds {
+		t.Errorf("images.yml passes APT_REFRESH=<run id>-<attempt> to %d builds, want %d (every build of base and build)", n, builds)
 	}
 	check := regexp.MustCompile(`scripts/images-check-index\.sh"? "\$NS/(base|build):`)
 	if n := len(check.FindAll(wf, -1)); n != 2 {

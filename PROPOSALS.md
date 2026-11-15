@@ -4,6 +4,28 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Point the GitLab build jobs at the `ci` cache, and give them a user namespace** (2026-11-06, #315): the
+  build image reads its cache from the build's configuration, and the tacplus-dev/build jobs (looper
+  `ci/build.gitlab-ci.yml`) are where that configuration belongs:
+  - `TACPLUS_CACHE_BUCKET=gs://tacplus-ci-build-cache`;
+  - `TACPLUS_CACHE_REGISTRY=<region>-docker.pkg.dev/tacplus-ci/build-cache` (tacplus-dev/cloud#5);
+  - `eval "$(tacplus-cache env)"`, with `tacplus-cache restore` before the build and `tacplus-cache save` after it.
+
+  Rootless BuildKit also needs `security_opt = ["seccomp=unconfined", "apparmor=unconfined"]` on the build jobs'
+  containers (cloud's `jobs.build`, kept apart for this) and newuidmap's setuid (no `cap_drop` of SETUID/SETGID).
+  Two things are not verified yet: sccache's GCS backend authenticating through Workload Identity Federation
+  (external_account ADC), and gcloud's for the snapshots.
+- **Hermetic base and build Dockerfiles** (2026-11-06, #315): the cache keeps an image's digest the same cold and
+  warm, but two cold builds on different days still differ, because the inputs move: `apt-get update && upgrade`,
+  `rust:1` and the other base tags, `npm install -g` and git clones by tag. Making the same commit give the same
+  digest on any day takes snapshot.debian.org at a pinned date, base images by digest and locked tool installs.
+  `images/cache-determinism.sh` proves the cache on a hermetic fixture.
+- **images.yml: drop the buildx fallback, and `just images` in the build image** (2026-11-07, #315): #315's images.yml
+  (its second half, posted on the issue as a patch: a report's token pushes `.github/workflows/` only for an issue
+  carrying `looper:workflows`, tacplus-dev/looper#115) builds base and build with `tacplus-image-build` in `build:latest` and falls back to buildx
+  on the runner while `build:latest` predates the tool. Once a `build:latest` carrying `tacplus-image-build` is published, the fallback
+  is dead code: drop it. `just images` still builds with the host's Docker (it bootstraps an image set from
+  nothing); a variant that builds inside a published build image would need BuildKit named contexts for base → build.
 - **A release tag never builds on another line's base** (2026-11-08, #283): a release tag's Images run starts its fresh
   `build` from its line's `base:X.Y`, else `base:latest` (main's). Before any line rebuild had pushed a `base:X.Y`, the
   v2.1.13–v2.5.13 runs took main's base (Swift 6.4.2) under their lines' Swift 6.1.3 plugins and failed the smoke test

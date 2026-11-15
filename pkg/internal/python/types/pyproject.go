@@ -5,6 +5,7 @@ package types
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/packages"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
@@ -76,18 +78,18 @@ func createRootPyprojectToml(config *tactype.Config, outputDir string) error {
 	// Ensure __init__.py exists in all directories that are Python packages.
 	// Walk the entire output directory and add __init__.py to any directory
 	// that contains .py files or subdirectories (making them proper Python packages).
-	err = filepath.Walk(outputDir, func(path string, info os.FileInfo, walkErr error) error {
+	err = fsroot.Walk(outputDir, func(r *os.Root, rel string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if !info.IsDir() {
+		if !d.IsDir() {
 			return nil
 		}
-		if strings.HasPrefix(filepath.Base(path), ".") || filepath.Base(path) == "__pycache__" {
+		if strings.HasPrefix(filepath.Base(rel), ".") || filepath.Base(rel) == "__pycache__" {
 			return nil
 		}
 		// Skip the proto directory (reference protos, not Python packages)
-		relPath, _ := filepath.Rel(outputDir, path)
+		relPath := rel
 		if relPath == "." {
 			return nil
 		}
@@ -95,11 +97,11 @@ func createRootPyprojectToml(config *tactype.Config, outputDir string) error {
 			return nil
 		}
 		// Create __init__.py if it doesn't exist and the dir has package content
-		if hasPackageContent(path) {
-			initPath := filepath.Join(path, "__init__.py")
-			if _, err := os.Stat(initPath); os.IsNotExist(err) {
-				if err := os.WriteFile(initPath, []byte("# Auto-generated package\n"), 0644); err != nil {
-					return fmt.Errorf("failed to create __init__.py in %s: %w", path, err)
+		if hasPackageContent(r, rel) {
+			initPath := filepath.Join(rel, "__init__.py")
+			if _, err := r.Stat(initPath); os.IsNotExist(err) {
+				if err := r.WriteFile(initPath, []byte("# Auto-generated package\n"), 0644); err != nil {
+					return fmt.Errorf("failed to create __init__.py in %s: %w", filepath.Join(outputDir, rel), err)
 				}
 			}
 		}
@@ -252,8 +254,8 @@ func pythonRootProjectDependencies(config *tactype.Config, getPythonVersion func
 }
 
 // hasPackageContent checks if a directory contains Python package content
-func hasPackageContent(dirPath string) bool {
-	entries, err := os.ReadDir(dirPath)
+func hasPackageContent(r *os.Root, rel string) bool {
+	entries, err := fs.ReadDir(r.FS(), filepath.ToSlash(rel))
 	if err != nil {
 		return false
 	}

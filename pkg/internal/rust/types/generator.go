@@ -5,6 +5,7 @@ package types
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/registry"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
@@ -239,18 +241,14 @@ func Generate(config *tactype.Config) error {
 	// Collect proto files from the split copy, including services/{name}/services.proto files
 	// (tonic-build needs service definitions to generate client/server modules)
 	var protoFiles []string
-	err = filepath.Walk(absProtoSrcDir, func(path string, info os.FileInfo, err error) error {
+	err = fsroot.Walk(absProtoSrcDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
-		relPath, err := filepath.Rel(absProtoSrcDir, path)
-		if err != nil {
-			return err
-		}
-		protoFiles = append(protoFiles, relPath)
+		protoFiles = append(protoFiles, rel)
 		return nil
 	})
 	if err != nil {
@@ -743,15 +741,15 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 
 	var servicesInfo []ServiceInfo
 
-	err = filepath.Walk(inputDir, func(path string, info os.FileInfo, walkErr error) error {
+	err = fsroot.Walk(inputDir, func(r *os.Root, rel string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
 
-		relPath, _ := filepath.Rel(inputDir, path)
+		relPath := rel
 		fileDesc, err := descriptorParser.GetFileDescriptor(relPath)
 		if err != nil {
 			zap.L().Debug("Skipping proto file (no descriptor)", zap.String("path", relPath), zap.Error(err))
@@ -906,11 +904,11 @@ func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]Servic
 // Uses Contains on raw proto text (quick scan before full descriptor parsing).
 func hasProtoServices(inputDir string) bool {
 	found := false
-	filepath.Walk(inputDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || found || info.IsDir() || !strings.HasSuffix(path, ".proto") {
+	fsroot.Walk(inputDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || found || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
-		data, err := os.ReadFile(path)
+		data, err := r.ReadFile(rel)
 		if err != nil {
 			return nil
 		}
@@ -1117,15 +1115,16 @@ func fixSerdeSelfVariant(outputDir string) error {
 }
 
 func suppressTonicGeneratedWarnings(outputDir string) error {
-	return filepath.WalkDir(outputDir, func(path string, d os.DirEntry, err error) error {
+	return fsroot.Walk(outputDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || !strings.HasSuffix(path, ".tonic.rs") {
+		if d.IsDir() || !strings.HasSuffix(rel, ".tonic.rs") {
 			return nil
 		}
 
-		data, err := os.ReadFile(path)
+		path := filepath.Join(outputDir, rel)
+		data, err := r.ReadFile(rel)
 		if err != nil {
 			return fmt.Errorf("failed to read %s: %w", path, err)
 		}
@@ -1143,7 +1142,7 @@ func suppressTonicGeneratedWarnings(outputDir string) error {
 		if updated == content {
 			return nil
 		}
-		if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
+		if err := r.WriteFile(rel, []byte(updated), 0644); err != nil {
 			return fmt.Errorf("failed to write %s: %w", path, err)
 		}
 		return nil
@@ -1160,12 +1159,12 @@ func generateRustGrpcFiles(outputDir, inputDir string) error {
 		return fmt.Errorf("failed to create descriptor parser: %w", err)
 	}
 
-	return filepath.Walk(inputDir, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
+	return fsroot.Walk(inputDir, func(r *os.Root, rel string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return walkErr
 		}
 
-		relPath, _ := filepath.Rel(inputDir, path)
+		relPath := rel
 		fileDesc, err := descriptorParser.GetFileDescriptor(relPath)
 		if err != nil || len(fileDesc.Services) == 0 {
 			return nil

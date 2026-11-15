@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	pkgproto "github.com/tacplus-dev/tacplus/pkg/proto"
 	"go.uber.org/zap"
@@ -228,6 +229,13 @@ func extractPackageDecl(content string) string {
 // copyUserProtos copies user proto files from inputDir to protoDir,
 // skipping embedded protos (sys/) which are overlaid separately.
 func copyUserProtos(inputDir, protoDir string) error {
+	// Every copy goes through root, so a symlink in protoDir cannot redirect
+	// one outside it.
+	root, err := fsroot.Open(protoDir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	return filepath.Walk(inputDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -252,9 +260,8 @@ func copyUserProtos(inputDir, protoDir string) error {
 			return nil
 		}
 
-		dst := filepath.Join(protoDir, relPath)
 		if info.IsDir() {
-			return os.MkdirAll(dst, 0755)
+			return root.MkdirAll(relPath, 0755)
 		}
 
 		if !strings.HasSuffix(info.Name(), ".proto") {
@@ -265,7 +272,7 @@ func copyUserProtos(inputDir, protoDir string) error {
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(dst, content, 0644)
+		return root.WriteFile(relPath, content, 0644)
 	})
 }
 
@@ -380,6 +387,11 @@ func WriteAnnotatedProtos(protoDir, targetDir string) error {
 	if err := os.RemoveAll(annotatedDir); err != nil {
 		return fmt.Errorf("failed to clean annotated proto directory: %w", err)
 	}
+	root, err := fsroot.Open(annotatedDir)
+	if err != nil {
+		return fmt.Errorf("failed to create annotated proto directory: %w", err)
+	}
+	defer root.Close()
 
 	return filepath.Walk(protoDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -391,9 +403,8 @@ func WriteAnnotatedProtos(protoDir, targetDir string) error {
 			return err
 		}
 
-		dst := filepath.Join(annotatedDir, relPath)
 		if info.IsDir() {
-			return os.MkdirAll(dst, 0755)
+			return root.MkdirAll(relPath, 0755)
 		}
 
 		if !strings.HasSuffix(info.Name(), ".proto") {
@@ -404,10 +415,10 @@ func WriteAnnotatedProtos(protoDir, targetDir string) error {
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		if err := root.MkdirAll(filepath.Dir(relPath), 0755); err != nil {
 			return err
 		}
-		return os.WriteFile(dst, content, 0644)
+		return root.WriteFile(relPath, content, 0644)
 	})
 }
 

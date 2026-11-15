@@ -11,6 +11,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 )
@@ -159,7 +160,7 @@ func InjectRegistryEnums(protoDir string) error {
 		}
 		text += block.String()
 
-		if err := os.WriteFile(path, []byte(text), 0644); err != nil {
+		if err := fsroot.WriteFile(protoDir, path, []byte(text), 0644); err != nil {
 			return fmt.Errorf("failed to write registry enums to %s: %w", relPath, err)
 		}
 

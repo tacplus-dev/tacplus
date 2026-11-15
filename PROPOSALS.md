@@ -104,6 +104,16 @@ the looper then marks it `promoted` or `declined` here with the date.
   is the run's tail, so give its pool the CPUs the other gates leave once they finish; (4)
   `cross-test/consumer-contract/run.sh` still runs a `cargo test -p` per crate (not in `just gates`).
   `gates.yaml`'s `full: minutes` follows.
+- **The OS-advisory image fix a looper can run** (2026-11-15, #757, #711): an OS package advisory is fixed by
+  rebuilding `base` (docs/VERSIONING.md, Images). That takes a `rebuild: base` dispatch on main and on each
+  `release/X.Y`. The looper's token cannot dispatch a workflow (HTTP 403, no `actions: write`). Its only image path is
+  a patch tag, which rebuilds `build` alone, so #711 left `base:latest` and every `base:X.Y` behind. Either give the
+  looper `actions: write` on images.yml, or have a release tag's run also rebuild `base` and push `base:X.Y` (and
+  `base:latest` for the newest release). The second changes the Images contract in VERSIONING.md and costs a base
+  build per release.
+- **The nightly image sweep scans every `base:X.Y`** (2026-11-15, #757): the Published images job scans `base:latest`
+  and each `build:X.Y`, but no `base:X.Y`. A stale line base is found only once a patch builds on it. Add
+  `base:${minor#release/}` beside `build:` in the loop of `.github/workflows/nightly-security.yml`.
 - **A release tag never builds on another line's base** (2026-11-08, #283): a release tag's Images run starts its fresh
   `build` from its line's `base:X.Y`, else `base:latest` (main's). Before any line rebuild had pushed a `base:X.Y`, the
   v2.1.13–v2.5.13 runs took main's base (Swift 6.4.2) under their lines' Swift 6.1.3 plugins and failed the smoke test

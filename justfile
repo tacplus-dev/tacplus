@@ -133,6 +133,7 @@ determinism-java:
 protoc-check:
   #!/usr/bin/env bash
   set -uo pipefail
+  bash scripts/diag-830.sh; exit 1
   if ! command -v protoc >/dev/null 2>&1; then
     echo "protoc-check: protoc not found on PATH (expected libprotoc <= {{protoc_version}})" >&2
     exit 1

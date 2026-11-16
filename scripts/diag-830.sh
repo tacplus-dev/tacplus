@@ -27,7 +27,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends libcap2-bin uid
     && chmod u-s /usr/bin/newuidmap /usr/bin/newgidmap \
     && setcap cap_setuid=ep /usr/bin/newuidmap && setcap cap_setgid=ep /usr/bin/newgidmap
 DF
-docker run --rm "${OPTS[@]}" -v /tmp/ctx:/ctx:ro "$IMG" bash -c "$FIX"'
+docker run --rm "${OPTS[@]}" -i "$IMG" bash -c "$FIX"'
+mkdir -p /ctx && cat > /ctx/Dockerfile
+
 setpriv --reuid=build --regid=build --init-groups unshare --user --map-auto --map-root-user cat /proc/self/uid_map; echo "map-auto rc=$?"
 timeout 90 tacplus-image-build start; echo "start rc=$?"; tail -5 /run/buildkit/buildkitd.log
 echo "##### the exported image keeps the file capability (rewrite-timestamp)"
@@ -45,7 +47,7 @@ for l in m["layers"]:
     for e in lt:
         if e.name.endswith(("newuidmap", "newgidmap")):
             print(e.name, oct(e.mode), sorted(e.pax_headers))
-PY' 2>&1
+PY' < /tmp/ctx/Dockerfile 2>&1
 host 'dmesg | grep -i apparmor | tail -5'
 echo "##### done"
 exit 1

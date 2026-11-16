@@ -114,3 +114,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-14 looper issue Gates red on main since #321: memberport's HazelcastMemberPortTest.anExpiredTokenDropsTheMemberConnection times out (x2 never removed from x1's cluster) (#465)
 - 2026-11-15 looper issue Java AuthorizerBehaviorTest checkRemoteJwkSourceBackoff fails on a loaded runner: wants 2..4 JWK watch attempts in a fixed 2.5s sleep (#540)
 - 2026-11-15 looper issue accounting-identity gate: generated Java does not compile, its pom lacks the MCP SDK the generated MCP carrier needs (#474)
+- 2026-11-15 looper issue MCP session tenant and the c2s record reader read a tid from the caller's namespace claim, which holds the tenant's name (users always; services since kernel#23) (#284)

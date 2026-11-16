@@ -31,6 +31,11 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
+{{- /* tinyvec is pinned as a direct dep (not just transitively pulled in via
+reqwest -> quinn) to force the resolver to 1.12.0: tinyvec 1.13.0 has a
+still-open upstream bug ("cannot find macro `vec`") on newer rustc, and no newer
+tinyvec has been published to fix it.
+See decisions/2026-09-03-tinyvec-current-generation-root-cause.md. */}}
 tinyvec = { workspace = true }
 tokio-util = { workspace = true }
 tonic-prost = { workspace = true }

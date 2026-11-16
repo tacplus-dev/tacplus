@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -94,42 +95,9 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 			}
 		}
 	}
-
-	// Build workspace dependencies from the package registry
-	// These are the dependencies that crates reference with { workspace = true }
+	// Workspace dependency versions come from the package registry
 	allDeps := registry.GetAllRustDependencies()
 
-	// Core dependencies that the types crate always needs
-	coreDeps := map[string]string{
-		"prost":           "",
-		"prost-types":     "",
-		"prost-wkt-types": "",
-		"pbjson":          "",
-		"pbjson-types":    "",
-		"bytes":           "",
-		"serde":           "",
-		"serde_json":      "",
-		"serde_yaml":      "",
-		"toml":            "",
-		"regex":           "",
-	}
-
-	// Service-related dependencies
-	serviceDeps := map[string]string{
-		"tonic":   "",
-		"axum":    "",
-		"tracing": "",
-		"tokio":   "",
-		"tower":   "",
-	}
-
-	// Merge all into a single map with versions from the registry
-	workspaceDeps := make(map[string]string)
-	for dep := range coreDeps {
-		if version, ok := allDeps[dep]; ok {
-			workspaceDeps[dep] = version
-		}
-	}
 	hasGrpcClients := len(config.GrpcS2SClients) > 0 ||
 		config.GrpcS2SClientAll ||
 		len(config.GrpcC2SClients) > 0 ||
@@ -143,14 +111,6 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 	// a state alone also needs the cert crates.
 	hasAutoTls := config.HasAutoTls() || hasServiceWrappers || len(config.States) > 0
 
-	if hasServiceWrappers || hasGrpcClients {
-		for dep := range serviceDeps {
-			if version, ok := allDeps[dep]; ok {
-				workspaceDeps[dep] = version
-			}
-		}
-	}
-
 	hasW2SClients := len(config.GrpcW2SClients) > 0
 	if hasW2SClients {
 		for _, dep := range []string{"tokio-tungstenite"} {
@@ -160,7 +120,63 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 		}
 	}
 
-	requiredDeps, err := requiredWorkspaceDependencyRefs(rustRootDir, hasServiceWrappers, hasGrpcClients, hasW2SClients, hasAutoTls || hasSmb)
+	// Rust crate names must use hyphens or underscores, not dots
+	crateName := strings.ReplaceAll(config.CrateBasePath, ".", "-")
+
+	// HasAutoTls/AutoTlsKeyType policy mirrors handler_gen.go: every service
+	// with gRPC service wrappers gets the auto-TLS code path (and therefore
+	// needs the aws-lc-rs/ed25519 crate in Cargo.toml). Default key type to ECDSA
+	// for universal compatibility when no proto-level override is set.
+	// A spec.smb service reuses the shared key-generation helper for its member
+	// keypair, so the cert crates (aws-lc-rs/ed25519/rand) must be in Cargo.toml even
+	// when the service has no TLS gRPC of its own (SPIFFE plan D7).
+	autoTlsKeyType := config.AutoTlsKeyType()
+	if autoTlsKeyType == "" && (hasServiceWrappers || hasSmb || len(config.States) > 0) {
+		autoTlsKeyType = "ecdsa"
+	}
+	data := cargoWorkspaceData{
+		Members:            members,
+		CrateName:          crateName,
+		HasServiceWrappers: hasServiceWrappers,
+		HasGrpcClients:     hasGrpcClients,
+		HasW2SClients:      hasW2SClients,
+		HasSubscriptions:   hasSubscriptions,
+		HasAutoTls:         hasAutoTls,
+		AutoTlsKeyType:     autoTlsKeyType,
+		HasSmb:             hasSmb,
+		SkipWorkspace:      skipWorkspace,
+		HasMcpRpcs:         hasMcpRpcs,
+		RmcpVersion:        rmcpCrateVersion,
+		SchemarsVersion:    schemarsCrateVersion,
+		LibCrates:          libCrates,
+	}
+
+	typeFS, err := fs.Sub(templates.FS, "rust/types")
+	if err != nil {
+		return fmt.Errorf("failed to get template FS: %w", err)
+	}
+
+	funcMap := tmplutil.BaseFuncMap()
+	typesData := typesCargoData{
+		CrateName:          crateName,
+		HasServiceWrappers: hasServiceWrappers,
+	}
+	typesResult, err := tmplutil.ExecuteTemplate(typeFS, "types_cargo.toml.tmpl", funcMap, typesData)
+	if err != nil {
+		return fmt.Errorf("failed to execute types cargo template: %w", err)
+	}
+	// Rendered without [workspace.dependencies] first: the root crate's own
+	// { workspace = true } references are among those the workspace declares.
+	rootDeps, err := tmplutil.ExecuteTemplate(typeFS, "cargo.toml.tmpl", funcMap, data)
+	if err != nil {
+		return fmt.Errorf("failed to execute cargo template: %w", err)
+	}
+
+	// The workspace declares exactly the dependencies its crates reference:
+	// cargo 1.100 warns on one no member uses (cargo::unused_workspace_dependencies,
+	// tacplus#829), so the Rust pins in dependencies.yaml nothing generated
+	// references stay out.
+	requiredDeps, err := requiredWorkspaceDependencyRefs(rustRootDir, rootDeps, typesResult)
 	if err != nil {
 		return err
 	}
@@ -175,16 +191,9 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 		return fmt.Errorf("rust dependencies.yaml missing required workspace dependency versions: %s", strings.Join(missingDeps, ", "))
 	}
 
-	// Also add any remaining deps from the registry that crates might reference
-	for dep, version := range allDeps {
-		if _, exists := workspaceDeps[dep]; !exists {
-			workspaceDeps[dep] = version
-		}
-	}
-
 	// Sort dependency names for deterministic output
 	var depNames []string
-	for name := range workspaceDeps {
+	for name := range requiredDeps {
 		depNames = append(depNames, name)
 	}
 	sort.Strings(depNames)
@@ -207,52 +216,15 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 	}
 
 	for _, name := range depNames {
-		version := workspaceDeps[name]
+		version := allDeps[name]
 		if tmpl, ok := specDeps[name]; ok {
 			fmt.Fprintf(&depsToml, "%s = %s\n", name, fmt.Sprintf(tmpl, version))
 		} else {
 			fmt.Fprintf(&depsToml, "%s = \"%s\"\n", name, version)
 		}
 	}
+	data.DepsToml = depsToml.String()
 
-	// Rust crate names must use hyphens or underscores, not dots
-	crateName := strings.ReplaceAll(config.CrateBasePath, ".", "-")
-
-	// HasAutoTls/AutoTlsKeyType policy mirrors handler_gen.go: every service
-	// with gRPC service wrappers gets the auto-TLS code path (and therefore
-	// needs the aws-lc-rs/ed25519 crate in Cargo.toml). Default key type to ECDSA
-	// for universal compatibility when no proto-level override is set.
-	// A spec.smb service reuses the shared key-generation helper for its member
-	// keypair, so the cert crates (aws-lc-rs/ed25519/rand) must be in Cargo.toml even
-	// when the service has no TLS gRPC of its own (SPIFFE plan D7).
-	autoTlsKeyType := config.AutoTlsKeyType()
-	if autoTlsKeyType == "" && (hasServiceWrappers || hasSmb || len(config.States) > 0) {
-		autoTlsKeyType = "ecdsa"
-	}
-	data := cargoWorkspaceData{
-		Members:            members,
-		DepsToml:           depsToml.String(),
-		CrateName:          crateName,
-		HasServiceWrappers: hasServiceWrappers,
-		HasGrpcClients:     hasGrpcClients,
-		HasW2SClients:      hasW2SClients,
-		HasSubscriptions:   hasSubscriptions,
-		HasAutoTls:         hasAutoTls,
-		AutoTlsKeyType:     autoTlsKeyType,
-		HasSmb:             hasSmb,
-		SkipWorkspace:      skipWorkspace,
-		HasMcpRpcs:         hasMcpRpcs,
-		RmcpVersion:        rmcpCrateVersion,
-		SchemarsVersion:    schemarsCrateVersion,
-		LibCrates:          libCrates,
-	}
-
-	typeFS, err := fs.Sub(templates.FS, "rust/types")
-	if err != nil {
-		return fmt.Errorf("failed to get template FS: %w", err)
-	}
-
-	funcMap := tmplutil.BaseFuncMap()
 	result, err := tmplutil.ExecuteTemplate(typeFS, "cargo.toml.tmpl", funcMap, data)
 	if err != nil {
 		return fmt.Errorf("failed to execute cargo template: %w", err)
@@ -267,14 +239,6 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 	// Generate types/Cargo.toml — the types-only crate that lib crates depend on.
 	// This breaks the dependency cycle: main crate → lib crates → types crate.
 	typesCargoPath := filepath.Join(rustRootDir, "types", "Cargo.toml")
-	typesData := typesCargoData{
-		CrateName:          crateName,
-		HasServiceWrappers: hasServiceWrappers,
-	}
-	typesResult, err := tmplutil.ExecuteTemplate(typeFS, "types_cargo.toml.tmpl", funcMap, typesData)
-	if err != nil {
-		return fmt.Errorf("failed to execute types cargo template: %w", err)
-	}
 	if err := os.WriteFile(typesCargoPath, typesResult, 0644); err != nil {
 		return fmt.Errorf("failed to create types Cargo.toml: %w", err)
 	}
@@ -283,55 +247,20 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 	return nil
 }
 
-func requiredWorkspaceDependencyRefs(rustRootDir string, hasServiceWrappers, hasGrpcClients, hasW2SClients, hasCertStreams bool) (map[string]struct{}, error) {
+// requiredWorkspaceDependencyRefs returns the dependencies the workspace's
+// crates take with { workspace = true }: those in the manifests about to be
+// written (the root and types crates) and in every other Cargo.toml under
+// rustRootDir (the chassis crates).
+func requiredWorkspaceDependencyRefs(rustRootDir string, manifests ...[]byte) (map[string]struct{}, error) {
 	required := map[string]struct{}{}
-	add := func(names ...string) {
-		for _, name := range names {
-			required[name] = struct{}{}
-		}
-	}
-
-	add(
-		"base64",
-		"bytes",
-		"pbjson",
-		"pbjson-types",
-		"prost",
-		"prost-types",
-		"prost-wkt-types",
-		"regex",
-		"rustls",
-		"serde",
-		"serde_json",
-		"serde_yaml",
-		"toml",
-		"tonic-health",
-	)
-	if hasServiceWrappers {
-		add("tonic", "tonic-prost")
-	}
-	if hasServiceWrappers || hasGrpcClients || hasW2SClients {
-		// tinyvec is pinned as a direct dep (not just transitively pulled in via
-		// reqwest -> quinn) to force the resolver to 1.12.0: tinyvec 1.13.0 has a
-		// still-open upstream bug ("cannot find macro `vec`") on newer rustc, and
-		// no newer tinyvec has been published to fix it.
-		// See decisions/2026-09-03-tinyvec-current-generation-root-cause.md.
-		add("prost", "tonic", "futures", "tokio-stream", "tokio", "serde", "serde_json", "reqwest", "tinyvec", "tokio-util", "tonic-prost", "tracing")
-	}
-	if hasW2SClients {
-		add("tokio-tungstenite")
-	}
-	if hasServiceWrappers || hasGrpcClients {
-		add("async-trait", "axum", "base64", "regex")
-	}
-	if hasCertStreams {
-		add("rustls-pemfile")
-		if hasServiceWrappers {
-			add("tokio-rustls")
+	for _, manifest := range manifests {
+		for dep := range workspaceDependencyRefs(manifest) {
+			required[dep] = struct{}{}
 		}
 	}
 
 	rootCargo := filepath.Join(rustRootDir, "Cargo.toml")
+	typesCargo := filepath.Join(rustRootDir, "types", "Cargo.toml")
 	if err := filepath.WalkDir(rustRootDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -343,7 +272,7 @@ func requiredWorkspaceDependencyRefs(rustRootDir string, hasServiceWrappers, has
 			}
 			return nil
 		}
-		if d.Name() != "Cargo.toml" || path == rootCargo {
+		if d.Name() != "Cargo.toml" || path == rootCargo || path == typesCargo {
 			return nil
 		}
 		refs, err := workspaceDependencyRefsInCargo(path)
@@ -366,8 +295,12 @@ func workspaceDependencyRefsInCargo(path string) (map[string]struct{}, error) {
 	if err != nil {
 		return nil, err
 	}
+	return workspaceDependencyRefs(data), nil
+}
+
+func workspaceDependencyRefs(manifest []byte) map[string]struct{} {
 	refs := map[string]struct{}{}
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(string(manifest), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if !strings.Contains(trimmed, "workspace = true") {
 			continue
@@ -380,6 +313,232 @@ func workspaceDependencyRefsInCargo(path string) (map[string]struct{}, error) {
 		if name != "" {
 			refs[name] = struct{}{}
 		}
+	}
+	return refs
+}
+
+// moveUnusedCrateDependencies runs once the generated Rust source is complete:
+// in each crate's Cargo.toml (the root crate, types and every chassis crate) it
+// moves a dependency the crate's source does not reference to
+// [dev-dependencies] (moveUnusedDependencies). What a crate uses depends on the
+// protos (the types crate's hmac only with redact fields, the root crate's
+// chassis crates only with a service manager), and cargo 1.100 warns on a
+// dependency nothing in the crate uses (cargo::unused_dependencies,
+// tacplus#829). The root crate always keeps typesCrate, which lib.rs re-exports.
+func moveUnusedCrateDependencies(rustRootDir, typesCrate string) error {
+	crateDirs := []string{rustRootDir, filepath.Join(rustRootDir, "types")}
+	chassis, err := filepath.Glob(filepath.Join(rustRootDir, "chassis", "*", "Cargo.toml"))
+	if err != nil {
+		return err
+	}
+	sort.Strings(chassis)
+	for _, manifest := range chassis {
+		crateDirs = append(crateDirs, filepath.Dir(manifest))
+	}
+	for _, crateDir := range crateDirs {
+		manifestPath := filepath.Join(crateDir, "Cargo.toml")
+		manifest, err := os.ReadFile(manifestPath)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		keep := ""
+		if crateDir == rustRootDir {
+			keep = typesCrate
+		}
+		moved, err := moveUnusedDependencies(crateDir, manifest, keep)
+		if err != nil {
+			return err
+		}
+		if string(moved) == string(manifest) {
+			continue
+		}
+		if err := os.WriteFile(manifestPath, moved, 0644); err != nil {
+			return fmt.Errorf("failed to write %s: %w", manifestPath, err)
+		}
+	}
+	return nil
+}
+
+// moveUnusedDependencies moves each dependency of a crate's [dependencies]
+// that the crate's source does not reference, with the comment lines above
+// it, to its [dev-dependencies] (a new table after [dependencies] if it has
+// none; one already there is not repeated). A dev-dependency still takes part
+// in the workspace's lockfile, so a pin (tinyvec, x509-cert) still holds, and
+// tests placed in the crate's tests/ still reach it. keep, if set, is never
+// moved.
+func moveUnusedDependencies(crateDir string, manifest []byte, keep string) ([]byte, error) {
+	lines := strings.Split(string(manifest), "\n")
+	deps, ok := findCargoTable(lines, "[dependencies]")
+	if !ok {
+		return manifest, nil
+	}
+	devDeps, hasDevDeps := findCargoTable(lines, "[dev-dependencies]")
+
+	rustName := func(name string) string { return strings.ReplaceAll(name, "-", "_") }
+	var names []string
+	for _, dep := range deps.entries {
+		names = append(names, rustName(dep.name))
+	}
+	refs, err := crateReferences(crateDir, names)
+	if err != nil {
+		return nil, err
+	}
+	inDevDeps := map[string]bool{}
+	for _, dep := range devDeps.entries {
+		inDevDeps[dep.name] = true
+	}
+	var kept, moved []string
+	anyMoved := false
+	for _, dep := range deps.entries {
+		switch {
+		case dep.name == keep || refs[rustName(dep.name)]:
+			kept = append(kept, dep.lines...)
+		case inDevDeps[dep.name]:
+			anyMoved = true
+		default:
+			anyMoved = true
+			moved = append(moved, dep.lines...)
+		}
+	}
+	if !anyMoved {
+		return manifest, nil
+	}
+
+	newDeps := append(append([]string{lines[deps.start]}, kept...), deps.trailing...)
+	if !hasDevDeps {
+		newDeps = append(append([]string{lines[deps.start]}, kept...),
+			"",
+			"# What this crate's generated code does not use: cargo warns on a dependency",
+			"# nothing in the crate uses (cargo::unused_dependencies). As dev-dependencies",
+			"# they still pin the workspace's lockfile and are in reach of tests in tests/.",
+			"[dev-dependencies]",
+		)
+		newDeps = append(append(newDeps, moved...), deps.trailing...)
+		return []byte(strings.Join(spliceLines(lines, deps.start, deps.end, newDeps), "\n")), nil
+	}
+	var newDevDeps []string
+	newDevDeps = append(newDevDeps, lines[devDeps.start])
+	for _, dep := range devDeps.entries {
+		newDevDeps = append(newDevDeps, dep.lines...)
+	}
+	newDevDeps = append(append(newDevDeps, moved...), devDeps.trailing...)
+	// Splice the later table first, so the earlier one's indexes still hold.
+	if devDeps.start > deps.start {
+		lines = spliceLines(lines, devDeps.start, devDeps.end, newDevDeps)
+		lines = spliceLines(lines, deps.start, deps.end, newDeps)
+	} else {
+		lines = spliceLines(lines, deps.start, deps.end, newDeps)
+		lines = spliceLines(lines, devDeps.start, devDeps.end, newDevDeps)
+	}
+	return []byte(strings.Join(lines, "\n")), nil
+}
+
+// cargoTable is a dependency table of a Cargo.toml: its header's line index,
+// the index of the line ending it (the next header, or the end), its entries,
+// each with the comment and blank lines above it, and the lines after the last.
+type cargoTable struct {
+	start, end int
+	entries    []cargoTableEntry
+	trailing   []string
+}
+
+type cargoTableEntry struct {
+	name  string
+	lines []string
+}
+
+func findCargoTable(lines []string, header string) (cargoTable, bool) {
+	table := cargoTable{start: -1, end: len(lines)}
+	for i, line := range lines {
+		if strings.TrimSpace(line) == header {
+			table.start = i
+			break
+		}
+	}
+	if table.start < 0 {
+		return table, false
+	}
+	for i := table.start + 1; i < len(lines); i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "[") {
+			table.end = i
+			break
+		}
+	}
+	var pending []string
+	for _, line := range lines[table.start+1 : table.end] {
+		trimmed := strings.TrimSpace(line)
+		name, _, ok := strings.Cut(trimmed, "=")
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || !ok {
+			pending = append(pending, line)
+			continue
+		}
+		table.entries = append(table.entries, cargoTableEntry{name: strings.TrimSpace(name), lines: append(pending, line)})
+		pending = nil
+	}
+	table.trailing = pending
+	return table, true
+}
+
+func spliceLines(lines []string, start, end int, replacement []string) []string {
+	out := append([]string{}, lines[:start]...)
+	out = append(out, replacement...)
+	return append(out, lines[end:]...)
+}
+
+// crateReferences reports which of the crates named (as Rust paths name them:
+// underscores) a crate's Rust source references, by a path through it
+// (`name::`), a `use name` or an `extern crate name`. It reads every .rs file
+// under crateDir but those of the crates nested in it (a directory with its own
+// Cargo.toml) and of the crate's tests/, which reach dev-dependencies too. A
+// mention in a comment or a string counts: a dependency kept that the code does
+// not use is a warning a gate shows, one moved that it does use a build that
+// fails.
+func crateReferences(crateDir string, names []string) (map[string]bool, error) {
+	patterns := make(map[string]*regexp.Regexp, len(names))
+	for _, name := range names {
+		quoted := regexp.QuoteMeta(name)
+		patterns[name] = regexp.MustCompile(`(?:^|[^\w:]|(?:^|[^\w:])::)` + quoted + `::|\b(?:use|extern\s+crate)\s+` + quoted + `\b`)
+	}
+	refs := map[string]bool{}
+	err := filepath.WalkDir(crateDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if path == crateDir {
+				return nil
+			}
+			switch d.Name() {
+			case "target", ".git":
+				return filepath.SkipDir
+			}
+			if path == filepath.Join(crateDir, "tests") {
+				return filepath.SkipDir
+			}
+			if _, err := os.Stat(filepath.Join(path, "Cargo.toml")); err == nil {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".rs") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for name, pattern := range patterns {
+			if !refs[name] && pattern.Match(data) {
+				refs[name] = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan generated Rust crate %s for crate references: %w", crateDir, err)
 	}
 	return refs, nil
 }

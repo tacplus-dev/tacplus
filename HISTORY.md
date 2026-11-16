@@ -119,3 +119,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-16 looper issue Java chassis: CollectionRuntime synchronizes on Ring.this (SpotBugs USO_UNSAFE_OBJECT_SYNCHRONIZATION, HIGH in the fleet's security job) (#712)
 - 2026-11-16 looper issue cert-stream Rust fixture: reserve_local_addr races between parallel tests (port TOCTOU) (#531)
 - 2026-11-16 looper issue w2s-validate Rust fixture: start_backend races between parallel tests (port TOCTOU), the gate flakes with AddrInUse (#562)
+- 2026-11-16 looper issue Security floor: a `generated` recipe so tacplus's security checks scan its generated output (the kitchensink), at the source (looper#108) (#376)

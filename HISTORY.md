@@ -122,3 +122,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-16 looper issue Security floor: a `generated` recipe so tacplus's security checks scan its generated output (the kitchensink), at the source (looper#108) (#376)
 - 2026-11-16 looper issue Build images ship gh built with golang.org/x/net v0.60.0 (CVE-2026-78661, HIGH): rebuild gh with x/net >= 0.62.0 on every supported line (#350)
 - 2026-11-16 looper issue Gates red on main: the Go accounting-sink fixture's TestDurableSpoolDropsAndCountsOnlyPastDiskBound drops nothing past a 1024-byte disk bound (#341)
+- 2026-11-16 looper issue Nightly gates have failed five nights running: the runner runs out of disk (~2h in) before just gates finishes (#282)

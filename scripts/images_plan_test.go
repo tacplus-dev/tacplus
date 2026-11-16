@@ -56,14 +56,26 @@ func (r *repo) tag(name string) {
 	r.git("tag", name)
 }
 
+// rev resolves a revision to its commit hash.
+func (r *repo) rev(rev string) string {
+	r.t.Helper()
+	cmd := exec.Command("git", "rev-parse", rev)
+	cmd.Dir = r.dir
+	out, err := cmd.Output()
+	if err != nil {
+		r.t.Fatalf("git rev-parse %s: %v", rev, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // plan runs images-plan.sh in the fixture repo and returns its "<base> <build>" output.
-func plan(t *testing.T, dir, event, refType, refName, rebuild string) string {
+func plan(t *testing.T, dir, event, refType, refName, rebuild, before string) string {
 	t.Helper()
 	script, err := filepath.Abs("images-plan.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("bash", script, event, refType, rebuild, refName)
+	cmd := exec.Command("bash", script, event, refType, rebuild, refName, before)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -80,6 +92,7 @@ func TestImagesPlan(t *testing.T) {
 		ref     string
 		refName string // the branch or tag name; main when empty
 		rebuild string
+		before  string // the push's previous head, a revision in the history (or as given when not one); none when empty
 		want    string
 	}{
 		{
@@ -123,6 +136,56 @@ func TestImagesPlan(t *testing.T) {
 				r.commit("edit check", "images/packages-check.sh")
 			},
 			event: "push", ref: "branch", want: "true true",
+		},
+		{
+			// The bug in #315: the manager pushes a batch of commits at once, its
+			// STATE.md commit last. The image change is in an earlier commit of
+			// the push, which only the push's previous head shows.
+			name: "main push of several commits, build.Dockerfile changed before the last",
+			history: func(r *repo) {
+				r.commit("init", "README")
+				r.commit("edit build", "images/build.Dockerfile")
+				r.commit("state", "STATE.md")
+			},
+			event: "push", ref: "branch", before: "HEAD~2", want: "false true",
+		},
+		{
+			name: "main push of several commits, base.Dockerfile changed before the last",
+			history: func(r *repo) {
+				r.commit("init", "README")
+				r.commit("edit base", "images/base.Dockerfile")
+				r.commit("state", "STATE.md")
+			},
+			event: "push", ref: "branch", before: "HEAD~2", want: "true true",
+		},
+		{
+			// An image change already on main before the push is not rebuilt again.
+			name: "main push of several commits, image changed before the push",
+			history: func(r *repo) {
+				r.commit("init", "README")
+				r.commit("edit build", "images/build.Dockerfile")
+				r.commit("docs", "README")
+				r.commit("state", "STATE.md")
+			},
+			event: "push", ref: "branch", before: "HEAD~2", want: "false false",
+		},
+		{
+			// A new branch's push has no previous head (all zeros), and a force
+			// push's may be gone: the pushed commit's parent stands in.
+			name: "main push with no previous head, build.Dockerfile changed in the pushed commit",
+			history: func(r *repo) {
+				r.commit("init", "README")
+				r.commit("edit build", "images/build.Dockerfile")
+			},
+			event: "push", ref: "branch", before: "0000000000000000000000000000000000000000", want: "false true",
+		},
+		{
+			name: "main push with an unknown previous head, build.Dockerfile changed in the pushed commit",
+			history: func(r *repo) {
+				r.commit("init", "README")
+				r.commit("edit build", "images/build.Dockerfile")
+			},
+			event: "push", ref: "branch", before: "1111111111111111111111111111111111111111", want: "false true",
 		},
 		{
 			name: "main push, nothing under images/ changed",
@@ -219,7 +282,11 @@ func TestImagesPlan(t *testing.T) {
 			if refName == "" {
 				refName = "main"
 			}
-			if got := plan(t, r.dir, c.event, c.ref, refName, c.rebuild); got != c.want {
+			before := c.before
+			if strings.HasPrefix(before, "HEAD") {
+				before = r.rev(before)
+			}
+			if got := plan(t, r.dir, c.event, c.ref, refName, c.rebuild, before); got != c.want {
 				t.Errorf("plan = %q, want %q", got, c.want)
 			}
 		})

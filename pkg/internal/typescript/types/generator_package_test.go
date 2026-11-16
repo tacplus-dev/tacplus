@@ -532,8 +532,10 @@ func TestTypeScriptEnumValueNameMatchesBufPrefixRules(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			values := make([]model.EnumValue, 0, len(tc.values))
-			for i, name := range tc.values {
-				values = append(values, model.EnumValue{Name: name, Number: i})
+			var number int32
+			for _, name := range tc.values {
+				values = append(values, model.EnumValue{Name: name, Number: number})
+				number++
 			}
 			got := typescriptEnumValueName(model.Enum{Name: tc.enumName, Values: values}, tc.valueName)
 			if got != tc.want {

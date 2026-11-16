@@ -5,10 +5,13 @@ package proto
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 )
 
 var minGroupSizeStamp = regexp.MustCompile(`option \(spec\.min_group_size\) = (-?\d+);`)
@@ -141,4 +144,30 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// The injector narrows the record's int64 annotation to the int32 the method
+// option carries: a threshold at the bound is carried as is, one past it (only
+// expressible in a model built outside protoc, and refused earlier by
+// ValidateMinGroupSizeAnnotations) is refused by name rather than wrapped.
+func TestRecordMinGroupSizeBoundsAtInt32(t *testing.T) {
+	ann := func(n int64) map[string]model.AnnotationValue {
+		return map[string]model.AnnotationValue{"record_min_group_size": {Type: model.AnnotationTypeInt, IntValue: n}}
+	}
+	for _, n := range []int64{0, 5, math.MaxInt32} {
+		got, err := recordMinGroupSize("tasks", "TaskActivity", ann(n))
+		if err != nil || int64(got) != n {
+			t.Errorf("min_group_size %d: got (%d, %v), want (%d, nil)", n, got, err, n)
+		}
+	}
+	if got, err := recordMinGroupSize("tasks", "TaskActivity", nil); err != nil || got != 0 {
+		t.Errorf("undeclared min_group_size: got (%d, %v), want (0, nil)", got, err)
+	}
+	for _, n := range []int64{math.MaxInt32 + 1, 1<<32 + 5, math.MinInt32 - 1} {
+		_, err := recordMinGroupSize("tasks", "TaskActivity", ann(n))
+		if err == nil || !strings.Contains(err.Error(), "tasks.TaskActivity") ||
+			!strings.Contains(err.Error(), "min_group_size") || !strings.Contains(err.Error(), fmt.Sprint(n)) {
+			t.Errorf("min_group_size %d: error = %v, want one naming the record, the annotation and the value", n, err)
+		}
+	}
 }

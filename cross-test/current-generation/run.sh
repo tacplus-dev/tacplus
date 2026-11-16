@@ -13,6 +13,8 @@ source "$ROOT_DIR/cross-test/lib/java-compile.sh"
 source "$ROOT_DIR/cross-test/lib/go-compile.sh"
 # shellcheck source=../lib/retired-claims.sh
 source "$ROOT_DIR/cross-test/lib/retired-claims.sh"
+# shellcheck source=../lib/parallel-jobs.sh
+source "$ROOT_DIR/cross-test/lib/parallel-jobs.sh"
 PROTO_SRC="$ROOT_DIR/cross-test/proto"
 HEALTHONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-healthonly"
 ZERORPC_PROTO_SRC="$ROOT_DIR/cross-test/proto-zerorpc"
@@ -37,6 +39,8 @@ WORK_ROOT="${TACPLUS_CURRENT_GENERATION_WORKDIR:-$ROOT_DIR/target/cross-test/cur
 TACPLUS_BIN="${TACPLUS_BIN:-}"
 PYTHON_BIN="${TACPLUS_PYTHON:-}"
 LANG_FILTER=""
+FIXTURE_FILTER=""
+JOBS="${TACPLUS_CURRENT_GENERATION_JOBS:-}"
 KEEP=false
 
 usage() {
@@ -46,6 +50,9 @@ Usage:
 
 Options:
   --language LANG   Run one service language: go, java, rust
+  --fixture NAME    Run one fixture (base, c2sonly, ..., tenantslice-config-owner)
+  --jobs N          Run N fixture builds at once (default: the CPUs; 1 runs
+                    them one after another in this process)
   --workdir DIR     Use a specific generated-output work directory
   --tacplus BIN     Use an existing tacplus binary
   --keep            Keep generated outputs after success
@@ -55,6 +62,7 @@ Environment:
   TACPLUS_BIN                         Existing tacplus binary to use
   TACPLUS_CURRENT_GENERATION_WORKDIR  Work directory for generated outputs
   TACPLUS_PYTHON                      Python interpreter for grpc_tools.protoc
+  TACPLUS_CURRENT_GENERATION_JOBS     Default for --jobs
 USAGE
 }
 
@@ -74,6 +82,16 @@ while [[ $# -gt 0 ]]; do
     --language)
       need_value "$1" "${2:-}"
       LANG_FILTER="$2"
+      shift 2
+      ;;
+    --fixture)
+      need_value "$1" "${2:-}"
+      FIXTURE_FILTER="$2"
+      shift 2
+      ;;
+    --jobs)
+      need_value "$1" "${2:-}"
+      JOBS="$2"
       shift 2
       ;;
     --workdir)
@@ -108,6 +126,38 @@ case "$LANG_FILTER" in
   go|java|rust ) languages=("$LANG_FILTER") ;;
   * ) die "unsupported language: $LANG_FILTER" ;;
 esac
+
+# Every fixture, the longest first (a parallel run starts them in this order),
+# and the languages it builds (fixture_builds). A fixture block below builds
+# the languages fixture_languages names for it: those of this run, none if
+# --fixture names another or the run's jobs built it.
+all_fixtures=(base tenantrecord tenantroute redo recordegress recordegress-host
+  tenantslice tenantslice-owner tenantslice-config-owner accountingsink
+  requiresdevice quorumwrite epochload ownerdefault healthonly zerorpc c2sonly
+  eventbus-backpressure)
+fixture_builds() {
+  local fixture="$1" language="$2"
+  case "$fixture" in
+    c2sonly) [[ "$language" == go ]] ;;
+    healthonly|zerorpc) [[ "$language" == rust ]] ;;
+    eventbus-backpressure) [[ "$language" == java ]] ;;
+    *) return 0 ;;
+  esac
+}
+fixture_languages() {
+  local fixture="$1" language
+  [[ "${FIXTURES_BUILT:-}" != true ]] || return 0
+  [[ -z "$FIXTURE_FILTER" || "$FIXTURE_FILTER" == "$fixture" ]] || return 0
+  for language in "${languages[@]}"; do
+    if fixture_builds "$fixture" "$language"; then
+      echo "$language"
+    fi
+  done
+}
+if [[ -n "$FIXTURE_FILTER" && " ${all_fixtures[*]} " != *" $FIXTURE_FILTER "* ]]; then
+  die "unknown fixture: $FIXTURE_FILTER (one of: ${all_fixtures[*]})"
+fi
+[[ -z "$JOBS" || "$JOBS" =~ ^[1-9][0-9]*$ ]] || die "--jobs takes a positive number: $JOBS"
 
 if [[ -n "$PYTHON_BIN" && "$PYTHON_BIN" == */* && ! -x "$PYTHON_BIN" ]]; then
   die "TACPLUS_PYTHON is not executable: $PYTHON_BIN"
@@ -2430,7 +2480,81 @@ READERS_PY
   assert_no_legacy_fixture_output "$output"
 }
 
-for language in "${languages[@]}"; do
+# The fixtures are independent builds, and run one after another they took
+# 2h26m of a 2h55m gate run (tacplus#812). Unless --jobs is 1, every language of
+# every fixture runs as a job of its own, this script with --language and
+# --fixture, on a pool of workers bounded by the CPUs; each job's output is
+# printed whole, labelled with its language and fixture. The fixture blocks
+# below then build nothing in this process, and the parity checks read the
+# jobs' main fixtures from the shared work root.
+if [[ -z "$FIXTURE_FILTER" && -z "$JOBS" ]]; then
+  JOBS="$(parallel_jobs_cpus)"
+fi
+if [[ -z "$FIXTURE_FILTER" && "$JOBS" -gt 1 ]]; then
+  # separate-cargo-target: cargo locks its target directory for a whole build,
+  # so workers sharing one would build Rust one at a time. Worker 1 keeps the
+  # shared one, which the gates after this one reuse; worker N its own, -N.
+  # A cold one costs a leg about 16 CPU-minutes more than a warm one, so only
+  # rust/base builds the dependencies: once it passed, its directory is copied
+  # to the seed, and a worker's first Rust job starts from a copy of that.
+  cargo_seed="$CROSS_TEST_CARGO_TARGET-seed"
+  current_generation_job() {
+    local worker="$1" job="$2"
+    local language="${job%%/*}" fixture="${job#*/}"
+    local cargo_target="$CROSS_TEST_CARGO_TARGET"
+    ((worker == 1)) || cargo_target="$CROSS_TEST_CARGO_TARGET-$worker"
+    if [[ "$language" == rust && "$fixture" != base && ! -e "$cargo_target/.seeded" ]]; then
+      until [[ -e "$cargo_seed/.seeded" ]]; do
+        [[ ! -e "$WORK_ROOT/rust-base.failed" ]] || { echo "rust/base failed: no Rust dependencies to start from" >&2; return 1; }
+        sleep 5
+      done
+      echo "==> Copying the Rust dependencies rust/base built"
+      rm -rf "$cargo_target"
+      cp -a "$cargo_seed" "$cargo_target"
+    fi
+    local keep=()
+    [[ "$KEEP" != true ]] || keep=(--keep)
+    TACPLUS_CROSS_TEST_CARGO_TARGET="$cargo_target" bash "$0" --language "$language" --fixture "$fixture" \
+      --workdir "$WORK_ROOT" --tacplus "$TACPLUS_BIN" "${keep[@]}" \
+      || { [[ "$job" != rust/base ]] || : >"$WORK_ROOT/rust-base.failed"; return 1; }
+    if [[ "$job" == rust/base ]]; then
+      rm -rf "$cargo_seed"
+      cp -a "$cargo_target" "$cargo_seed"
+      : >"$cargo_target/.seeded"
+      : >"$cargo_seed/.seeded"
+    fi
+  }
+  # Maven's own locks of its local repository are per JVM: workers resolving
+  # the same artifact at once need its file locks.
+  export MAVEN_ARGS="${MAVEN_ARGS:-} -Daether.syncContext.named.factory=file-lock -Daether.syncContext.named.nameMapper=file-gav"
+  # rust/base first: the other Rust jobs wait for its dependencies, so the
+  # workers run Go's and Java's jobs meanwhile.
+  fixture_jobs=()
+  [[ " ${languages[*]} " != *" rust "* ]] || fixture_jobs+=(rust/base)
+  for language in go java rust; do
+    [[ " ${languages[*]} " == *" $language "* ]] || continue
+    for fixture in "${all_fixtures[@]}"; do
+      if [[ "$language/$fixture" != rust/base ]] && fixture_builds "$fixture" "$language"; then
+        fixture_jobs+=("$language/$fixture")
+      fi
+    done
+  done
+  echo "==> Running ${#fixture_jobs[@]} fixture builds, $JOBS at once"
+  rm -f "$WORK_ROOT/rust-base.failed"
+  # In the background and waited for: run as the left side of || its jobs'
+  # runner would lose set -e (cross-test/lib/parallel-jobs.sh).
+  parallel_jobs_run "$JOBS" "$WORK_ROOT/jobs" current_generation_job "${fixture_jobs[@]}" &
+  pool_rc=0
+  wait "$!" || pool_rc=$?
+  for ((worker = 2; worker <= JOBS; worker++)); do
+    rm -rf "$CROSS_TEST_CARGO_TARGET-$worker"
+  done
+  rm -rf "$cargo_seed"
+  ((pool_rc == 0)) || exit "$pool_rc"
+  FIXTURES_BUILT=true
+fi
+
+for language in $(fixture_languages base); do
   dir="$WORK_ROOT/$language"
   log="$WORK_ROOT/$language.log"
   rm -rf "$dir"
@@ -2726,7 +2850,7 @@ assert_tls_degrade_parity() {
 }
 
 # Run parity check only when all three full-service languages were generated.
-if [[ ${#languages[@]} -eq 3 ]]; then
+if [[ ${#languages[@]} -eq 3 && ( -z "$FIXTURE_FILTER" || "$FIXTURE_FILTER" == base ) ]]; then
   assert_config_defaults_parity "$WORK_ROOT"
   assert_config_defaults_behavioral "$WORK_ROOT"
   assert_tls_degrade_parity "$WORK_ROOT"
@@ -2739,8 +2863,7 @@ fi
 # now pins the exchanger variant for a server surface with no S2S rpc (see
 # assert_c2sonly_output). Go only, as before.
 if [[ -d "$C2SONLY_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    [[ "$language" == "go" ]] || continue
+  for language in $(fixture_languages c2sonly); do
     dir="$WORK_ROOT/c2sonly-$language"
     log="$WORK_ROOT/c2sonly-$language.log"
     rm -rf "$dir"
@@ -2769,8 +2892,7 @@ fi
 # This fixture tests a Rust-specific branch; other generators reject a proto with
 # no token_minter, so we only run it for Rust.
 if [[ -d "$HEALTHONLY_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    [[ "$language" == "rust" ]] || continue
+  for language in $(fixture_languages healthonly); do
     dir="$WORK_ROOT/healthonly-$language"
     log="$WORK_ROOT/healthonly-$language.log"
     rm -rf "$dir"
@@ -2798,8 +2920,7 @@ fi
 # widening the generated s2sm did not compile (E0425/E0609). Rust only: the
 # branch is in service_manager.rs.tmpl.
 if [[ -d "$ZERORPC_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    [[ "$language" == "rust" ]] || continue
+  for language in $(fixture_languages zerorpc); do
     dir="$WORK_ROOT/zerorpc-$language"
     log="$WORK_ROOT/zerorpc-$language.log"
     rm -rf "$dir"
@@ -2831,7 +2952,7 @@ fi
 # holds a client to, so the caller-side helpers are compiled too. All three
 # languages, because all three implement the gate independently.
 if [[ -d "$REQUIRESDEVICE_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
+  for language in $(fixture_languages requiresdevice); do
     dir="$WORK_ROOT/requiresdevice-$language"
     log="$WORK_ROOT/requiresdevice-$language.log"
     rm -rf "$dir"
@@ -2874,7 +2995,7 @@ fi
 # (no per-item hook to ride), so a fixture that carried one would assert the
 # refusal is a bug.
 if [[ -d "$RECORDEGRESS_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
+  for language in $(fixture_languages recordegress); do
     dir="$WORK_ROOT/recordegress-$language"
     log="$WORK_ROOT/recordegress-$language.log"
     rm -rf "$dir"
@@ -2904,7 +3025,7 @@ if [[ -d "$RECORDEGRESS_PROTO_SRC" ]]; then
   # reading from_revision off a handle that declares none, an `optional string`
   # predicate pin assigned a bare string, and a Handle<T> projection dispatch
   # emitted for a source that has none) were found in the first place.
-  for language in "${languages[@]}"; do
+  for language in $(fixture_languages recordegress-host); do
     dir="$WORK_ROOT/recordegress-host-$language"
     log="$WORK_ROOT/recordegress-host-$language.log"
     rm -rf "$dir"
@@ -2932,8 +3053,7 @@ fi
 # self-tests pin Java runtime code, and no other language emits these surfaces
 # with the same defect.
 if [[ -d "$EVENTBUS_BACKPRESSURE_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
-    [[ "$language" == java ]] || continue
+  for language in $(fixture_languages eventbus-backpressure); do
     dir="$WORK_ROOT/eventbus-backpressure-$language"
     log="$WORK_ROOT/eventbus-backpressure-$language.log"
     rm -rf "$dir"
@@ -2960,7 +3080,7 @@ fi
 # and check that an RPC completion never waits on it, that records replay in order
 # once it resumes, and that a full spool drops and counts. All three languages.
 if [[ -d "$ACCOUNTING_SINK_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
+  for language in $(fixture_languages accountingsink); do
     dir="$WORK_ROOT/accountingsink-$language"
     log="$WORK_ROOT/accountingsink-$language.log"
     rm -rf "$dir"
@@ -2988,7 +3108,7 @@ fi
 # because all three render the guard from their own generator; Java's
 # OwnerDefaultTest additionally drives the real wrapper over real signed tokens.
 if [[ -d "$OWNERDEFAULT_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
+  for language in $(fixture_languages ownerdefault); do
     dir="$WORK_ROOT/ownerdefault-$language"
     log="$WORK_ROOT/ownerdefault-$language.log"
     rm -rf "$dir"
@@ -3015,7 +3135,7 @@ fi
 # disk-store roll scheduler are compiled. Go also runs quorum_write_test.go
 # against the generated RequireCredPairQuorum; Rust runs store_roll_test.rs.
 if [[ -d "$QUORUMWRITE_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
+  for language in $(fixture_languages quorumwrite); do
     dir="$WORK_ROOT/quorumwrite-$language"
     log="$WORK_ROOT/quorumwrite-$language.log"
     rm -rf "$dir"
@@ -3040,7 +3160,7 @@ fi
 # value. The generated disk loader must accept that row after its exp has
 # passed, and must keep rejecting a non-time violation.
 if [[ -d "$EPOCHLOAD_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
+  for language in $(fixture_languages epochload); do
     dir="$WORK_ROOT/epochload-$language"
     log="$WORK_ROOT/epochload-$language.log"
     rm -rf "$dir"
@@ -3065,7 +3185,7 @@ fi
 # its route field; registry.json must carry it, and both builds must compile
 # with the route table, the per-tenant S2S client and the server's route check.
 if [[ -d "$TENANTROUTE_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
+  for language in $(fixture_languages tenantroute); do
     for self in harbor crew; do
       dir="$WORK_ROOT/tenantroute-$self-$language"
       log="$WORK_ROOT/tenantroute-$self-$language.log"
@@ -3095,7 +3215,7 @@ fi
 # redo, which hosts it by label, gets its server wrapper (a sys contract's
 # wrapper was never written in Go) with the route check and the any-tenant door.
 if [[ -d "$REDO_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
+  for language in $(fixture_languages redo); do
     for self in stratum redo; do
       dir="$WORK_ROOT/redo-$self-$language"
       log="$WORK_ROOT/redo-$self-$language.log"
@@ -3152,7 +3272,7 @@ fi
 # the writer's plane client is pooled per tenant; the store's wrapper refuses a
 # misrouted call (its self-test, run by compile_current_output).
 if [[ -d "$TENANTRECORD_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
+  for language in $(fixture_languages tenantrecord); do
     for self in tstratum tmessaging; do
       dir="$WORK_ROOT/tenantrecord-$self-$language"
       log="$WORK_ROOT/tenantrecord-$self-$language.log"
@@ -3204,7 +3324,7 @@ fi
 # solely through the generated tenant_config.TenantConfig, so the only place the
 # auto-subscription to that slice is asserted and compiled.
 if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
+  for language in $(fixture_languages tenantslice); do
     dir="$WORK_ROOT/tenantslice-$language"
     log="$WORK_ROOT/tenantslice-$language.log"
     rm -rf "$dir"
@@ -3229,7 +3349,7 @@ fi
 # registrar hosts RegistrarStateService, whose tenant_configs read RPCs serve a
 # ledger caller its own tenant's entry only, projected to ledger's slice.
 if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
+  for language in $(fixture_languages tenantslice-owner); do
     dir="$WORK_ROOT/tenantslice-owner-$language"
     log="$WORK_ROOT/tenantslice-owner-$language.log"
     rm -rf "$dir"
@@ -3254,7 +3374,7 @@ fi
 # TenancyConfigStateService, whose Config read RPCs serve a ledger caller its own
 # tenant's entry of the tenants map only, projected to ledger's slice.
 if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
-  for language in "${languages[@]}"; do
+  for language in $(fixture_languages tenantslice-config-owner); do
     dir="$WORK_ROOT/tenantslice-config-owner-$language"
     log="$WORK_ROOT/tenantslice-config-owner-$language.log"
     rm -rf "$dir"
@@ -3275,7 +3395,9 @@ if [[ -d "$TENANTSLICE_PROTO_SRC" ]]; then
   done
 fi
 
-if [[ "$KEEP" != true ]]; then
+# A run of one fixture (a job of a parallel run) leaves the work root to its
+# caller.
+if [[ "$KEEP" != true && -z "$FIXTURE_FILTER" ]]; then
   rm -rf "$WORK_ROOT"
 fi
 

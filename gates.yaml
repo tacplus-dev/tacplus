@@ -8,9 +8,12 @@
 # pkg/** runs full until per-language sets (pkg/internal/<lang>/** to that
 # language's generation, compile and cross-tests) are confirmed to cover
 # everything such a path can break (PROPOSALS.md).
+# full's minutes: 84 on an 8-CPU runner from a cold target/, current-generation
+# about 47 of them on its worker pool (tacplus#812; was 2h55m, 2h26m), and a
+# margin for a slower runner.
 full:
   run: just gates
-  minutes: 180
+  minutes: 100
   paths: [pkg/**, proto/**, cmd/**, /justfile, /dependencies.yaml, /go.mod, /go.sum, /main.go, /docs/embed.go, /docs/*.tmpl]
 # Documentation: the planning files, links, secrets and `just test`, which
 # checks README.md against README.src.md and the docs the compiler embeds

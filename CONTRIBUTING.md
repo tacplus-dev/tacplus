@@ -17,6 +17,14 @@ just gates-container  # the same, inside the base image
 just docs             # the gates of a documentation-only change (minutes)
 ```
 
+`just current-generation`, the longest gate, builds each language of each of
+its fixtures as a job of its own, on as many workers as the CPUs the job may
+use (its cgroup's quota when lower). Every line of a job's output is
+labelled with it (`[rust/tenantroute] ...`) and its last line names the jobs
+that failed. `TACPLUS_CURRENT_GENERATION_JOBS=1` runs them one after another,
+in one process; `cross-test/current-generation/run.sh --language rust
+--fixture tenantroute` runs one job alone.
+
 A land runs the gates its diff calls for: `gates.yaml` maps paths to gate sets
 (the format is tacplus-dev/looper's README, "Gates scaled to the diff"). A change
 to Markdown or `docs/` only runs `just docs`; anything the map does not name, a

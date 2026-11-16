@@ -40,6 +40,17 @@ the looper then marks it `promoted` or `declined` here with the date.
   on the runner while `build:latest` predates the tool. Once a `build:latest` carrying `tacplus-image-build` is published, the fallback
   is dead code: drop it. `just images` still builds with the host's Docker (it bootstraps an image set from
   nothing); a variant that builds inside a published build image would need BuildKit named contexts for base → build.
+- **The rest of the way to a 45-minute full gate run** (2026-11-16, #812): `current-generation` now runs each
+  language of each fixture as a job on a CPU-bounded pool; on an 8-CPU arm64 runner from a cold `target/` it took about
+  47 minutes (was 2h26m serially) and the full gates 84m16s. It is CPU-bound: a warm Rust leg is ~9 CPU-minutes, a Go
+  leg ~1.5, a Java leg ~2. Next, measured or sized: (1) build cross-test crates without debuginfo or incremental caches
+  (`CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`, `CARGO_INCREMENTAL=0` exported by
+  `cross-test/lib/cargo-target.sh`, so every leg sharing the directory shares the profile): a warm Rust leg went from
+  9.1 to 6.3 CPU-minutes; (2) the other 15 gates took ~33 minutes cold on that runner (Swift's `c2d-server` build, each
+  cross-test's own Rust and Maven builds), not the "under 3 minutes each" of the GitHub runner: run them beside
+  `current-generation` or on the same pool; (3) one `cargo test -p a -p b ...` per Rust leg instead of fifteen, if
+  per-package feature resolution is not what a test pins; (4) split the two-build fixtures (`tenantrecord`, `redo`,
+  `tenantroute`, 25–30 minutes as one Rust job) per build, to shorten the tail. `gates.yaml`'s `full: minutes` follows.
 - **A release tag never builds on another line's base** (2026-11-08, #283): a release tag's Images run starts its fresh
   `build` from its line's `base:X.Y`, else `base:latest` (main's). Before any line rebuild had pushed a `base:X.Y`, the
   v2.1.13–v2.5.13 runs took main's base (Swift 6.4.2) under their lines' Swift 6.1.3 plugins and failed the smoke test

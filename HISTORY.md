@@ -116,3 +116,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-15 looper issue accounting-identity gate: generated Java does not compile, its pom lacks the MCP SDK the generated MCP carrier needs (#474)
 - 2026-11-15 looper issue MCP session tenant and the c2s record reader read a tid from the caller's namespace claim, which holds the tenant's name (users always; services since kernel#23) (#284)
 - 2026-11-15 looper issue Release-line build images build:2.0–2.5 are never rebuilt: each carries 156 fixed HIGH Debian findings (12 ImageMagick CVEs) (#283)
+- 2026-11-16 looper issue Java chassis: CollectionRuntime synchronizes on Ring.this (SpotBugs USO_UNSAFE_OBJECT_SYNCHRONIZATION, HIGH in the fleet's security job) (#712)

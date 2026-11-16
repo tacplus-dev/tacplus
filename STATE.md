@@ -209,5 +209,5 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-18 by lo
   The record write surface stamps no `(spec.identity_spiffe_subject)` (PROPOSALS.md). A fleet's service images must be on ghcr.io from a
   github.com repo (PROPOSALS.md).
 - **Blocked on:** #195's gateway build (`tacplus fleet gateway`: the merged webapp, the clients, the image and the
-  lock's `gateway:` section) waits on tacplus-dev/gateway#6 (its first release), tacplus-dev/gateway#21 (serving
-  `/-/`) and tacplus-dev/tenantecho#7 (the example module).
+  lock's `gateway:` section) waits on tacplus-dev/gateway#6 (its first release) and tacplus-dev/gateway#21 (serving
+  `/-/`). The example module is done (tenantecho v0.2.0).

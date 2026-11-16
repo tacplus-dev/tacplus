@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-15 by looper (#315).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-16 by looper (#315).
 
 - **Version / line:** v2.6.2 (latest release, 2026-11-07, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -173,11 +173,13 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-15 by lo
   nightly is tacplus-dev/looper#74, its nightly off until #257 passes. The new build image (Kani, cargo-fuzz, the launcher) is verified by
   images.yml once pushed; the launcher and `tacplus pin` by the gates. The fleet build's image lookup on a private package is
   verified against a fake registry only: the looper's token has no `read:packages` (a public image resolves live).
-  Rootless BuildKit (#315) has not run yet: it needs a user namespace (`--security-opt seccomp=unconfined
+  Rootless BuildKit (#315) is not proven yet: it needs a user namespace (`--security-opt seccomp=unconfined
   --security-opt apparmor=unconfined`), which no looper container may have. images.yml builds base and build with
   `tacplus-image-build` in `build:latest` and runs `images/cache-determinism.sh` in each new build image (#315); its
-  first run on main is where both are proven. That run still builds with buildx on the runner, as the `build:latest`
-  it finds predates `tacplus-image-build`; the rootless path first runs in the run after it, or on a dispatch.
+  first run that rebuilds build is where both are proven. The land's own push rebuilt nothing: `scripts/images-plan.sh`
+  read only the push's last commit (STATE.md), and now diffs against the push's previous head (#315). The 2026-11-16
+  scheduled run failed `build (amd64)` under rootless BuildKit (`newuidmap: Operation not permitted`, #830), so no
+  build image with `tacplus-image-build` is published yet.
   The compiler half of `images/cache-determinism.sh` passed in a build:2.5-derived image. The build jobs in the
   `ci` project (tacplus-dev/looper, tacplus-dev/cloud) do not set the cache variables or the two security options
   yet (PROPOSALS.md).

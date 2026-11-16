@@ -120,3 +120,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-16 looper issue cert-stream Rust fixture: reserve_local_addr races between parallel tests (port TOCTOU) (#531)
 - 2026-11-16 looper issue w2s-validate Rust fixture: start_backend races between parallel tests (port TOCTOU), the gate flakes with AddrInUse (#562)
 - 2026-11-16 looper issue Security floor: a `generated` recipe so tacplus's security checks scan its generated output (the kitchensink), at the source (looper#108) (#376)
+- 2026-11-16 looper issue Build images ship gh built with golang.org/x/net v0.60.0 (CVE-2026-78661, HIGH): rebuild gh with x/net >= 0.62.0 on every supported line (#350)

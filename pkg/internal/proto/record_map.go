@@ -5,6 +5,7 @@ package proto
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -253,9 +254,9 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 			// min_group_size is declared on the RECORD; the downstream generators
 			// read it off the METHOD, so the injector propagates it onto the
 			// size-only RPCs below (never re-derived from an RPC name).
-			var minGroupSize int32
-			if m, ok := msg.Annotations["record_min_group_size"]; ok {
-				minGroupSize = int32(m.IntValue)
+			minGroupSize, err := recordMinGroupSize(fd.Package, msg.Name, msg.Annotations)
+			if err != nil {
+				return err
 			}
 			// mutability is declared on the RECORD and read by the emission
 			// guard below; carried here so "is this type append-only" has one
@@ -733,6 +734,24 @@ func appendKeyFilterCriterion(filters []recordFilter, key string, msg *parser.Me
 		return append(filters, recordFilter{name: f.Name, protoType: f.Type, rangeOp: false})
 	}
 	return filters
+}
+
+// recordMinGroupSize narrows a record's (spec.record).min_group_size annotation
+// to the int32 the stamped method option carries; 0 when it is undeclared. A
+// value past int32 is refused by name rather than wrapped into another
+// threshold: ValidateMinGroupSizeAnnotations refuses it first, and protoc
+// before that (the option is an int32), so only a model built some other way
+// reaches this error.
+func recordMinGroupSize(pkg, msgName string, annotations map[string]model.AnnotationValue) (int32, error) {
+	m, ok := annotations["record_min_group_size"]
+	if !ok {
+		return 0, nil
+	}
+	if m.IntValue < math.MinInt32 || m.IntValue > math.MaxInt32 {
+		return 0, fmt.Errorf("%s.%s: (spec.record).min_group_size is %d; it does not fit the int32 the annotation is declared as",
+			pkg, msgName, m.IntValue)
+	}
+	return int32(m.IntValue), nil
 }
 
 // minGroupSizeOption renders the stamped method option for a record declaring

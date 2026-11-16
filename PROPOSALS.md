@@ -4,6 +4,15 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **The generated Rust crates' dependencies from the generator, not from a scan** (2026-11-16, #829): cargo 1.100
+  warns on a dependency nothing in the crate uses (`cargo::unused_dependencies`) unless another dependency pulls it in,
+  and on an unused `[workspace.dependencies]` entry. The generated manifests declared every dependency any
+  configuration might need, so #829 moves the ones a crate's generated source does not reference to
+  `[dev-dependencies]` (`moveUnusedCrateDependencies`, `pkg/internal/rust/types/cargo.go`), by a textual scan for
+  `name::`, `use name` and `extern crate name`. That is exact for the generated code today, but a crate reached only
+  through a macro's expansion would read as unused. Each generator stating the crates its output uses would be exact
+  by construction. Also: no gate builds the generated Rust with a cargo older than the runner's, so a manifest key a
+  pre-1.100 cargo rejects (`[lints.cargo]` is one: "unused manifest key") would pass the gates.
 - **Point the GitLab build jobs at the `ci` cache, and give them a user namespace** (2026-11-06, #315): the
   build image reads its cache from the build's configuration, and the tacplus-dev/build jobs (looper
   `ci/build.gitlab-ci.yml`) are where that configuration belongs:

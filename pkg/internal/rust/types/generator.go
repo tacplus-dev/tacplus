@@ -727,6 +727,12 @@ func Generate(config *tactype.Config) error {
 		return fmt.Errorf("failed to update lib.rs after registry helper generation: %w", err)
 	}
 
+	// Last, once every crate's source is written: a dependency a crate does not
+	// use becomes a dev-dependency (cargo.go).
+	if err := moveUnusedCrateDependencies(config.OutputDir, strings.ReplaceAll(config.CrateBasePath, ".", "-")+"-types"); err != nil {
+		return fmt.Errorf("failed to move unused crate dependencies: %w", err)
+	}
+
 	zap.L().Info("Rust generation complete")
 	zap.L().Info("To build", zap.String("command", "cd "+config.OutputDir+" && cargo build"))
 	return nil

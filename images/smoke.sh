@@ -71,6 +71,8 @@ protoc --version; protoc-gen-swift --version; protoc-gen-grpc-swift-2 --version;
 if [[ "${TACPLUS_IMAGE:-build}" == build ]]; then
   go version; java -version 2>&1 | head -1; cargo --version; swift --version 2>&1 | head -1; dotnet --version
   jbmc --version; just --version
+  # No Debian package beyond the image's declared lists (images/*.packages, #554).
+  tacplus-packages-check /usr/local/share/tacplus/packages/base /usr/local/share/tacplus/packages/build
 else
   tacplus version
 fi

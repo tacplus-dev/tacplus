@@ -134,11 +134,20 @@ func TestPruneCargoWorkspaceKeepsSharedDependencies(t *testing.T) {
 		}
 		return string(out)
 	}
+	// Cargo before 1.100 puts a crate's rlib in debug/deps; 1.100's build-dir
+	// layout puts it in debug/build/<crate>/<hash>/out (tacplus#829).
 	artifacts := func(name string) []string {
 		t.Helper()
-		found, err := filepath.Glob(filepath.Join(target, "debug", "deps", "lib"+name+"-*.rlib"))
-		if err != nil {
-			t.Fatal(err)
+		var found []string
+		for _, pattern := range []string{
+			filepath.Join(target, "debug", "deps", "lib"+name+"-*.rlib"),
+			filepath.Join(target, "debug", "build", name, "*", "out", "lib"+name+"-*.rlib"),
+		} {
+			matches, err := filepath.Glob(pattern)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found = append(found, matches...)
 		}
 		return found
 	}

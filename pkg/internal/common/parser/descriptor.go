@@ -3069,7 +3069,7 @@ func (p *DescriptorParser) ConvertToProtoFile(path string) (model.ProtoFile, err
 		for _, valDesc := range enumDesc.Values {
 			enum.Values = append(enum.Values, model.EnumValue{
 				Name:      valDesc.Name,
-				Number:    int(valDesc.Number),
+				Number:    valDesc.Number,
 				Comment:   valDesc.Comment,
 				JsonValue: valDesc.JsonValue,
 			})

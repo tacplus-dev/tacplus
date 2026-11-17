@@ -99,6 +99,32 @@ func TestImagesPlan(t *testing.T) {
 			event: "push", ref: "branch", want: "true true",
 		},
 		{
+			// Each image installs its declared list and checks its packages
+			// against it (#554): a change to either is a change to the image.
+			name: "main push, build.packages changed in the pushed commit",
+			history: func(r *repo) {
+				r.commit("init", "README")
+				r.commit("edit build list", "images/build.packages")
+			},
+			event: "push", ref: "branch", want: "false true",
+		},
+		{
+			name: "main push, base.packages changed in the pushed commit",
+			history: func(r *repo) {
+				r.commit("init", "README")
+				r.commit("edit base list", "images/base.packages")
+			},
+			event: "push", ref: "branch", want: "true true",
+		},
+		{
+			name: "main push, the packages check changed in the pushed commit",
+			history: func(r *repo) {
+				r.commit("init", "README")
+				r.commit("edit check", "images/packages-check.sh")
+			},
+			event: "push", ref: "branch", want: "true true",
+		},
+		{
 			name: "main push, nothing under images/ changed",
 			history: func(r *repo) {
 				r.commit("init", "README")

@@ -29,8 +29,11 @@ const emitBound = time.Second
 // progressBound is how long a wait for the sink's own goroutine to make progress
 // (deliver, append, compact) may take. It is a hang guard, not a latency bound: the
 // waits return as soon as their condition holds, and on a busy runner the goroutine
-// may not be scheduled for well over emitBound.
-const progressBound = 30 * time.Second
+// may not be scheduled for well over emitBound. The durable spool's appends fsync,
+// so it bounds the disk too: on a shared runner under I/O pressure one fsync was
+// measured at 0.2s to 3s (#341), fifty appends ran 8s to over 60s, and a 60s bound
+// failed 2 runs in 10; 180s held.
+const progressBound = 180 * time.Second
 
 func sinkEvent(i int) *accounting_pb.Event {
 	return &accounting_pb.Event{RequestId: fmt.Sprintf("r%d", i), SourceId: "test", TimestampMs: 1}

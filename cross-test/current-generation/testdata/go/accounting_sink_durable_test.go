@@ -90,6 +90,10 @@ func TestDurableSpoolReplaysUnacknowledgedAfterRestart(t *testing.T) {
 	tx1 := make(chan *accountingrecord_pb.AccountingRecord, 1)
 	sink1 := durableSink(t, tx1, stop1, dir)
 	emitAll(t, sink1, 5)
+	// Emit only queues: wait until all five are in the log before acknowledging any.
+	// An ack that catches up with the log compacts it, and the records after it
+	// start a new log with its own cursor (#339).
+	waitForLines(t, dir, 5)
 	if got := receiveRequestIDs(t, sink1, tx1, 3); strings.Join(got, ",") != "r0,r1,r2" {
 		t.Fatalf("first run delivered %v, want r0,r1,r2", got)
 	}
@@ -181,18 +185,37 @@ func TestDurableSpoolDropsAndCountsOnlyPastDiskBound(t *testing.T) {
 	stop := make(chan struct{})
 	defer close(stop)
 	tx := make(chan *accountingrecord_pb.AccountingRecord, 1)
-	sink := durableSink(t, tx, stop, t.TempDir())
+	dir := t.TempDir()
+	sink := durableSink(t, tx, stop, dir)
 
 	const emitted = 40
 	emitAll(t, sink, emitted)
-	// Wait for the spool goroutine to reach the bound. Nothing reads tx yet, so it
-	// drops each record that would take the log past the bound.
+	// Wait until the spool goroutine has decided every record: appended to the log
+	// or dropped. Nothing reads tx yet, so it drops each record that would take the
+	// log past the bound. Each append fsyncs, so how long that takes is the disk's
+	// business (issue #341: on a loaded pd-standard disk the appends that fit took
+	// over a second); the wait is on that state, never on a time bound.
+	log := filepath.Join(dir, "accounting-spool", "records.log")
+	var raw []byte
+	var dropped int
 	deadline := time.Now().Add(progressBound)
-	for sink.dropped.Load() == 0 {
+	for {
+		raw, _ = os.ReadFile(log)
+		dropped = int(sink.dropped.Load())
+		if bytes.Count(raw, []byte("\n"))+dropped == emitted {
+			break
+		}
 		if time.Now().After(deadline) {
-			t.Fatalf("emitted %d records past a 1024-byte disk bound, none were dropped", emitted)
+			t.Fatalf("after %v the spool had logged %d and dropped %d of %d records",
+				progressBound, bytes.Count(raw, []byte("\n")), dropped, emitted)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	if dropped == 0 {
+		t.Fatalf("emitted %d records past a 1024-byte disk bound, none were dropped", emitted)
+	}
+	if len(raw) > 1024 {
+		t.Fatalf("spool log holds %d bytes past its 1024-byte disk bound", len(raw))
 	}
 
 	// Every record not dropped reaches the publisher once it reads, so drain until the
@@ -214,7 +237,7 @@ func TestDurableSpoolDropsAndCountsOnlyPastDiskBound(t *testing.T) {
 		delivered++
 	case <-time.After(200 * time.Millisecond):
 	}
-	dropped := int(sink.dropped.Load())
+	dropped = int(sink.dropped.Load())
 	// The record in tx is counted as delivered once it is read, so the sum is exact.
 	if delivered+dropped != emitted {
 		t.Fatalf("delivered %d + dropped %d != emitted %d: a record was lost without being counted", delivered, dropped, emitted)

@@ -671,10 +671,10 @@ func generateC2DServiceManager(config *tactype.Config, clientSvcs []service.Serv
 // warnNoW2SClients warns when a typescript client package yields no w2sm/.
 // W2S generation is a function of the proto graph only, so a pkg whose package
 // declares no grpc_w2s_client edges (or is absent from the merged proto tree)
-// otherwise exits 0 with no w2sm/ and no diagnostic. A c2s-only client is not
-// asking for w2sm and stays quiet.
-func warnNoW2SClients(config *tactype.Config, w2sServices []service.ServiceInfo) {
-	if config.SelfPackage == "" || len(w2sServices) > 0 || len(config.GrpcC2SClients) > 0 {
+// otherwise exits 0 with no w2sm/ and no diagnostic. A c2s-only or c2d-only
+// client is not asking for w2sm and stays quiet.
+func warnNoW2SClients(config *tactype.Config, w2sServices, c2dServices []service.ServiceInfo) {
+	if config.SelfPackage == "" || len(w2sServices) > 0 || len(config.GrpcC2SClients) > 0 || len(c2dServices) > 0 {
 		return
 	}
 	zap.L().Warn(fmt.Sprintf("pkg %s declares no grpc_w2s_client edges; no w2sm/ generated", config.SelfPackage))

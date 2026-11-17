@@ -501,6 +501,69 @@ assert_clean_log() {
   fi
 }
 
+# Go fixture tests: each package's test binary may take go test's -timeout,
+# twice the 10m default, since a fsync-heavy package on a loaded runner took all
+# of 10m (#723). The `go test -json` events are kept in $json, and $log gets
+# what plain `go test` would print (package lines, and the output of failed,
+# unfinished and non-test events) so assert_clean_log reads no passing test's
+# t.Log. The gate's log gets a timing line for each of the five slowest packages
+# naming its slowest tests, so a package nearing the budget shows which tests
+# used it.
+GO_FIXTURE_TEST_TIMEOUT=20m
+
+run_go_fixture_tests() {
+  local dir="$1"
+  local log="$2"
+  local json="${log%.log}.json"
+  local status=0
+  (cd "$dir" && go mod tidy && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" go test -timeout "$GO_FIXTURE_TEST_TIMEOUT" -json ./... >"$json") >"$log" 2>&1 || status=$?
+  [[ -f "$json" ]] || return "$status"
+  python3 -I - "$json" "$log" <<'GO_TEST_JSON_PY' || return 1
+import json, sys
+
+src, log = sys.argv[1], sys.argv[2]
+out = []         # lines of the plain log, in order
+held = {}        # (package, test) -> its output, until it passes or fails
+elapsed = {}     # package -> its elapsed seconds
+tests = {}       # package -> [(seconds, test)] for finished top-level tests
+for raw in open(src, encoding="utf-8", errors="replace"):
+    try:
+        ev = json.loads(raw)
+    except ValueError:
+        out.append(raw)
+        continue
+    action, pkg, test = ev.get("Action"), ev.get("Package") or ev.get("ImportPath", ""), ev.get("Test")
+    if action in ("build-output", "output") and not test:
+        text = ev.get("Output", "")
+        # A test still running when its binary died (a timeout's panic, a
+        # crash) never gets a pass or fail: its output is the failure, shown
+        # before the package's own result line.
+        if text.startswith(("FAIL\t", "ok  \t")):
+            for key in [k for k in held if k[0] == pkg]:
+                out.extend(held.pop(key))
+        out.append(text)
+    elif action == "output":
+        held.setdefault((pkg, test), []).append(ev.get("Output", ""))
+    elif test and action in ("pass", "skip", "fail"):
+        lines = held.pop((pkg, test), [])
+        if action == "fail":
+            out.extend(lines)
+        if "/" not in test and "Elapsed" in ev:
+            tests.setdefault(pkg, []).append((ev["Elapsed"], test))
+    elif not test and action in ("pass", "fail", "skip") and "Elapsed" in ev:
+        elapsed[pkg] = ev["Elapsed"]
+for lines in held.values():
+    out.extend(lines)
+with open(log, "a", encoding="utf-8") as f:
+    f.writelines(out)
+for pkg in sorted(elapsed, key=elapsed.get, reverse=True)[:5]:
+    slow = sorted(tests.get(pkg, []), reverse=True)[:3]
+    names = ", ".join(f"{t} {s:.1f}s" for s, t in slow if s >= 0.1)
+    print(f"    go test {elapsed[pkg]:7.1f}s {pkg}" + (f" (slowest: {names})" if names else ""))
+GO_TEST_JSON_PY
+  return "$status"
+}
+
 
 run_java_generated_self_tests() {
   local output="$1"
@@ -1017,7 +1080,7 @@ compile_current_output() {
       [[ -n "$go_sc" ]] || die "missing generated Go serviceconnection chassis: chassis/serviceconnection/serviceconnection.go"
 
       write_go_compile_mod "$log_dir/go.mod" "$go_module"
-      (cd "$log_dir" && go mod tidy && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" go test ./...) >"$log_dir/go-test.log" 2>&1 || {
+      run_go_fixture_tests "$log_dir" "$log_dir/go-test.log" || {
         dump_step_log "$log_dir/go-test.log"
         return 1
       }

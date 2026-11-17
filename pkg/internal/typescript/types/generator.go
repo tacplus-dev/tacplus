@@ -585,7 +585,8 @@ func Generate(config *tactype.Config) error {
 
 	// Generate c2dm (client-to-daemon) gRPC client wrappers when the proto graph
 	// declares in-scope service_c2d services (or an explicit GrpcC2DClients allowlist).
-	if c2dServices := service.ResolveC2DClientServices(config, servicesInfo); len(c2dServices) > 0 {
+	c2dServices := service.ResolveC2DClientServices(config, servicesInfo)
+	if len(c2dServices) > 0 {
 		origPrefix := config.SmPrefix
 		config.SmPrefix = "c2dm"
 		zap.L().Info("Generating TypeScript c2d gRPC client wrappers", zap.Int("count", len(c2dServices)))
@@ -649,7 +650,7 @@ func Generate(config *tactype.Config) error {
 			config.SmPrefix = origPrefix
 		}
 	}
-	warnNoW2SClients(config, w2sServices)
+	warnNoW2SClients(config, w2sServices, c2dServices)
 
 	// Collect event-bus watches from legacy subscribe, explicit event_watch,
 	// and validated store-derived watches.

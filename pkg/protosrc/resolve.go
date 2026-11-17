@@ -350,7 +350,9 @@ func gitIn(dir string, auth []string, args ...string) error {
 	return cmd.Run()
 }
 
-// findLatestPatchTag finds the latest vX.Y.* tag in a git repo.
+// findLatestPatchTag finds the latest vX.Y.PATCH tag in a git repo: the
+// line's latest patch release. Pre-releases (vX.Y.PATCH-pre) are not patch
+// releases and are never taken; one is resolved only when named exactly.
 func findLatestPatchTag(repoDir, prefix string) (string, error) {
 	cmd := exec.Command("git", "tag", "-l", prefix+".*")
 	cmd.Dir = repoDir
@@ -359,12 +361,18 @@ func findLatestPatchTag(repoDir, prefix string) (string, error) {
 		return "", fmt.Errorf("git tag -l failed: %w", err)
 	}
 
-	tags := strings.Fields(string(output))
+	patchRe := regexp.MustCompile(`^` + regexp.QuoteMeta(prefix) + `\.\d+$`)
+	var tags []string
+	for _, tag := range strings.Fields(string(output)) {
+		if patchRe.MatchString(tag) {
+			tags = append(tags, tag)
+		}
+	}
 	if len(tags) == 0 {
-		return "", fmt.Errorf("no tags found matching %s.*", prefix)
+		return "", fmt.Errorf("no release tag %s.PATCH found (pre-releases are taken only when named)", prefix)
 	}
 
-	// Sort tags by semver (simple string sort works for vX.Y.Z with same prefix)
+	// Sort by patch number (a string sort would put v1.2.10 before v1.2.9)
 	sort.Slice(tags, func(i, j int) bool {
 		return compareSemverTags(tags[i], tags[j]) < 0
 	})

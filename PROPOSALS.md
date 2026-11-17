@@ -729,6 +729,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   gave the rotation fixture a `logback-test.xml` (io.grpc, io.netty at INFO); the other Java fixtures that run under
   mvn with logback-classic (stream-expiry, memberport, cert-stream, external-token, redact, trace-carry, jwk-alg)
   would take the same file.
+- **Run `just consumer-build-typescript` in the gates** (2026-11-17, #839): `just consumer-build` is in no gate, so
+  its TypeScript leg rotted on main unseen twice over: the client-only proto lost its MCP-6 description once
+  descriptions were enforced, and the c2d case's generation log carried the generator's own w2sm WARN. #839 fixes
+  both and the leg passes (some ten minutes, mostly npm and tsc). Its python leg waits on #665, its rust leg on
+  #829 and its swift legs on the linker-warning entry above. Once each leg passes, adding it to `gates.yaml` is a
+  cost decision.
 
 ## Promoted / declined
 - **`just generated <dir>`: tacplus's security checks scan its generated output** (2026-11-09, #376): promoted

@@ -68,6 +68,11 @@ the looper then marks it `promoted` or `declined` here with the date.
   through a macro's expansion would read as unused. Each generator stating the crates its output uses would be exact
   by construction. Also: no gate builds the generated Rust with a cargo older than the runner's, so a manifest key a
   pre-1.100 cargo rejects (`[lints.cargo]` is one: "unused manifest key") would pass the gates.
+- **One version resolver for `depends`/`src` and the fleet build** (2026-11-06, #214): `pkg/protosrc/resolve.go`
+  (`findLatestPatchTag`, `compareSemverTags`, `exactVersionRe`) and `pkg/fleet/version.go` (`parseVersion`,
+  `highest`, `resolveVersion`) each parse and rank `vMAJOR.MINOR.PATCH[-pre]` tags. #214 was the protosrc copy
+  disagreeing with the fleet one on pre-releases. A small shared package (parse, compare, latest release of a line)
+  used by both would keep "a line is its latest patch release, pre-releases only when named" in one place.
 - **Point the GitLab build jobs at the `ci` cache, and give them a user namespace** (2026-11-06, #315): the
   build image reads its cache from the build's configuration, and the tacplus-dev/build jobs (looper
   `ci/build.gitlab-ci.yml`) are where that configuration belongs:

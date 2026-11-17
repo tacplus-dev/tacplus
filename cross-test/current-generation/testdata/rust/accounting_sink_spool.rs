@@ -25,6 +25,10 @@ use am::{EventBusSink, Sink};
 
 // EMIT_BOUND is how long an RPC completion may take to hand its record to the sink.
 const EMIT_BOUND: Duration = Duration::from_secs(1);
+// PROGRESS_BOUND bounds a body that also waits for the sink's drain task to deliver. It
+// is a hang guard, not a latency bound: the body ends as soon as the records arrive, and
+// on a busy runner the drain task may not be scheduled for well over EMIT_BOUND.
+const PROGRESS_BOUND: Duration = Duration::from_secs(30);
 // SPOOL_DEPTH must match SPOOL_DEPTH in chassis/am/src/am.rs.
 const SPOOL_DEPTH: usize = 4096;
 
@@ -78,7 +82,7 @@ fn rpc_is_never_held_when_publisher_is_blocked() {
 // arrives, in emit order.
 #[test]
 fn spool_replays_in_order_after_outage() {
-    run_within_bound("replay of 10 records", EMIT_BOUND, async {
+    run_within_bound("replay of 10 records", PROGRESS_BOUND, async {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<AccountingRecord>(1);
         let sink = EventBusSink::new(tx, "test-2".to_string());
         for i in 0..10 {
@@ -102,7 +106,7 @@ fn spool_replays_in_order_after_outage() {
 #[test]
 fn drops_only_when_spool_is_full() {
     let emitted = SPOOL_DEPTH + 100;
-    run_within_bound("emit past a full spool", Duration::from_secs(5), async move {
+    run_within_bound("emit past a full spool", PROGRESS_BOUND, async move {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<AccountingRecord>(1);
         let sink = EventBusSink::new(tx, "test-3".to_string());
         for i in 0..emitted {

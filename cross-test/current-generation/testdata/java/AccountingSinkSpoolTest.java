@@ -24,6 +24,11 @@ import java.util.concurrent.TimeUnit;
 public final class AccountingSinkSpoolTest {
     // EMIT_BOUND_MS is how long an RPC completion may take to hand its record to the sink.
     private static final long EMIT_BOUND_MS = 1000;
+    // PROGRESS_BOUND_MS is how long a wait for the sink's own thread to make progress
+    // (deliver, append, compact) may take. It is a hang guard, not a latency bound: the
+    // waits return as soon as their condition holds, and on a busy runner the thread
+    // may not be scheduled for well over EMIT_BOUND_MS.
+    private static final long PROGRESS_BOUND_MS = 30_000;
 
     private static Accounting.Event event(int i) {
         return Accounting.Event.newBuilder()
@@ -80,7 +85,7 @@ public final class AccountingSinkSpoolTest {
         AccountingManager.EventBusSink sink = new AccountingManager.EventBusSink(queue, "test-2", () -> false);
         emitAll(sink, 10);
         for (int i = 0; i < 10; i++) {
-            Accountingrecord.AccountingRecord rec = queue.poll(EMIT_BOUND_MS, TimeUnit.MILLISECONDS);
+            Accountingrecord.AccountingRecord rec = queue.poll(PROGRESS_BOUND_MS, TimeUnit.MILLISECONDS);
             check(rec != null, "record " + i + " did not reach the publisher after it resumed");
             check(rec.getRequestId().equals("r" + i),
                     "record " + i + " arrived as " + rec.getRequestId() + ": the spool did not replay in order");
@@ -97,8 +102,23 @@ public final class AccountingSinkSpoolTest {
         int emitted = AccountingManager.EventBusSink.SPOOL_DEPTH + 100;
         emitAll(sink, emitted);
 
+        long dropped = sink.droppedCount();
+        check(dropped > 0, "emitted " + emitted + " records past a spool of "
+                + AccountingManager.EventBusSink.SPOOL_DEPTH + " with the publisher blocked, none were dropped");
+
+        // Every record not dropped is delivered once the publisher resumes, so drain
+        // until the two account for every emit, then check nothing more arrives.
         int delivered = 0;
-        while (queue.poll(EMIT_BOUND_MS, TimeUnit.MILLISECONDS) != null) {
+        long deadline = System.currentTimeMillis() + PROGRESS_BOUND_MS;
+        while (delivered + dropped < emitted) {
+            check(System.currentTimeMillis() < deadline,
+                    "delivered " + delivered + " + dropped " + dropped + " of " + emitted + " records within "
+                            + PROGRESS_BOUND_MS + " ms: a record was lost without being counted");
+            if (queue.poll(10, TimeUnit.MILLISECONDS) != null) {
+                delivered++;
+            }
+        }
+        if (queue.poll(200, TimeUnit.MILLISECONDS) != null) {
             delivered++;
         }
         // One record sits in the queue, one in the drain thread's hand, and up to
@@ -109,6 +129,9 @@ public final class AccountingSinkSpoolTest {
                 "delivered " + delivered + " of " + emitted + " records; want between "
                         + AccountingManager.EventBusSink.SPOOL_DEPTH + " and "
                         + (AccountingManager.EventBusSink.SPOOL_DEPTH + 2) + ", and fewer than emitted");
+        check(delivered + dropped == emitted,
+                "delivered " + delivered + " + dropped " + dropped + " != emitted " + emitted
+                        + ": a record was lost without being counted");
     }
 
     public static void main(String[] args) throws InterruptedException {

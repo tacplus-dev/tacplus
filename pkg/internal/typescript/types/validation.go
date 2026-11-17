@@ -52,8 +52,32 @@ func tsRequiredZeroCheck(field model.Field, tsFieldName string) string {
 	}
 }
 
-// generateTypeScriptValidationFunction generates a validate function for a message
-func generateTypeScriptValidationFunction(b *strings.Builder, msg model.Message) error {
+// tsRequiredIfEqEnumMember returns the protobuf-es member that names value of
+// the enum sibling's type (EVICTION_POLICY_LRU is EvictionPolicy.LRU: the
+// enum's shared prefix is dropped). An enum of the same file is resolved
+// against its values, and a value it does not declare is an error; an enum
+// declared elsewhere drops the prefix when the value carries it.
+func tsRequiredIfEqEnumMember(sibling model.Field, value string, enums []model.Enum) (string, error) {
+	if sibling.TypePackage == "" {
+		for _, enum := range enums {
+			if enum.Name != sibling.Type {
+				continue
+			}
+			for _, v := range enum.Values {
+				if v.Name == value {
+					return typescriptEnumValueName(enum, value), nil
+				}
+			}
+			return "", fmt.Errorf("enum %s has no value %s", enum.Name, value)
+		}
+	}
+	return typescriptEnumValueNameByType(sibling.Type, value), nil
+}
+
+// generateTypeScriptValidationFunction generates a validate function for a message.
+// enums are the enums of the message's proto file: a required_if_eq on an enum
+// sibling names its value by the member protobuf-es generates.
+func generateTypeScriptValidationFunction(b *strings.Builder, msg model.Message, enums []model.Enum) error {
 	funcName := fmt.Sprintf("validate%s", msg.Name)
 
 	fmt.Fprintf(b, `/**
@@ -639,12 +663,16 @@ export function %s(m: %s | undefined, depth = 0): void {
 
 					if siblingField != nil && siblingField.IsEnum {
 						enumType := siblingField.Type
+						member, err := tsRequiredIfEqEnumMember(*siblingField, condValue, enums)
+						if err != nil {
+							return fmt.Errorf("required_if_eq on field %s.%s: %w", msg.Name, fieldName, err)
+						}
 						fmt.Fprintf(b, `	// Validate %s (required_if_eq: %s=%s)
 	if (m.%s === %s.%s && %s) {
 		throw newErrMissingInvalidData(undefined, `+"`field %s is required when %s is %s`"+`);
 	}
 
-`, fieldName, condFieldSnake, condValue, condFieldTS, enumType, condValue, tsRequiredZeroCheck(field, fieldName), fieldName, condFieldSnake, condValue)
+`, fieldName, condFieldSnake, condValue, condFieldTS, enumType, member, tsRequiredZeroCheck(field, fieldName), fieldName, condFieldSnake, condValue)
 					} else {
 						fmt.Fprintf(b, `	// Validate %s (required_if_eq: %s=%s)
 	if (m.%s === "%s" && %s) {

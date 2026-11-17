@@ -29,7 +29,7 @@ func TestTypeScriptUnknownValidationAnnotationIsFatal(t *testing.T) {
 			}},
 		}
 		var b strings.Builder
-		err := generateTypeScriptValidationFunction(&b, msg)
+		err := generateTypeScriptValidationFunction(&b, msg, nil)
 		if err == nil {
 			t.Errorf("%s: expected a hard error, got nil (constraint silently dropped)", annotation)
 			continue
@@ -54,7 +54,7 @@ func TestTypeScriptNonValidationAnnotationIsNotFatal(t *testing.T) {
 		}},
 	}
 	var b strings.Builder
-	if err := generateTypeScriptValidationFunction(&b, msg); err != nil {
+	if err := generateTypeScriptValidationFunction(&b, msg, nil); err != nil {
 		t.Fatalf("non-validation annotation must not fail generation: %v", err)
 	}
 }

@@ -12,7 +12,7 @@ import (
 
 func TestTypeScriptValidationEmitsDefaultCollectionBounds(t *testing.T) {
 	var b strings.Builder
-	if err := generateTypeScriptValidationFunction(&b, auditCollectionMessage()); err != nil {
+	if err := generateTypeScriptValidationFunction(&b, auditCollectionMessage(), nil); err != nil {
 		t.Fatalf("generateTypeScriptValidationFunction: %v", err)
 	}
 	rendered := b.String()
@@ -44,7 +44,7 @@ func TestTypeScriptValidationEmitsDefaultCollectionBounds(t *testing.T) {
 
 func TestTypeScriptValidationEmitsConstraintParityHandlers(t *testing.T) {
 	var b strings.Builder
-	if err := generateTypeScriptValidationFunction(&b, auditConstraintParityMessage()); err != nil {
+	if err := generateTypeScriptValidationFunction(&b, auditConstraintParityMessage(), nil); err != nil {
 		t.Fatalf("generateTypeScriptValidationFunction: %v", err)
 	}
 	rendered := b.String()
@@ -69,7 +69,7 @@ func TestTypeScriptValidationEmitsConstraintParityHandlers(t *testing.T) {
 
 func TestTypeScriptValidationEmitsOneofScalarBounds(t *testing.T) {
 	var b strings.Builder
-	if err := generateTypeScriptValidationFunction(&b, auditOneofMessage()); err != nil {
+	if err := generateTypeScriptValidationFunction(&b, auditOneofMessage(), nil); err != nil {
 		t.Fatalf("generateTypeScriptValidationFunction: %v", err)
 	}
 	rendered := b.String()
@@ -119,7 +119,7 @@ func TestTypeScriptValidationCompilesRepeatedUrlAndRequiredEnumDefined(t *testin
 	}
 
 	var b strings.Builder
-	if err := generateTypeScriptValidationFunction(&b, msg); err != nil {
+	if err := generateTypeScriptValidationFunction(&b, msg, nil); err != nil {
 		t.Fatalf("generateTypeScriptValidationFunction: %v", err)
 	}
 	rendered := b.String()

@@ -333,24 +333,13 @@ func Generate(cfg Config, allParsedFiles []model.ProtoFile, dp *parser.Descripto
 		return nil
 	})
 
-	// Marshal to JSON.
-	marshaler := protojson.MarshalOptions{
-		Multiline:     true,
-		Indent:        "  ",
-		UseProtoNames: true,
-	}
-	jsonBytes, err := marshaler.Marshal(rootNode)
+	jsonBytes, err := marshalRegistryJSON(rootNode)
 	if err != nil {
-		return fmt.Errorf("failed to marshal registry JSON: %w", err)
-	}
-
-	jsonStr := string(jsonBytes)
-	if strings.HasPrefix(jsonStr, "{\n") {
-		jsonStr = "{\n  \"$schema\": \"registry.schema.json\",\n" + jsonStr[2:]
+		return err
 	}
 
 	outputPath := filepath.Join(cfg.OutputDir, "registry.json")
-	if err := os.WriteFile(outputPath, []byte(jsonStr), 0644); err != nil {
+	if err := os.WriteFile(outputPath, jsonBytes, 0644); err != nil {
 		return fmt.Errorf("failed to write registry.json: %w", err)
 	}
 	zap.L().Info("Generated registry.json", zap.String("path", outputPath))
@@ -368,6 +357,25 @@ func Generate(cfg Config, allParsedFiles []model.ProtoFile, dp *parser.Descripto
 	}
 
 	return nil
+}
+
+// marshalRegistryJSON renders registry.json. protojson's own layout varies
+// from binary to binary (see canonicalJSON), so its output is only the value;
+// canonicalJSON lays it out. The "$schema" line keeps its single space after
+// ':', as every release has written it.
+func marshalRegistryJSON(rootNode *spec.PackageNode) ([]byte, error) {
+	jsonBytes, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(rootNode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal registry JSON: %w", err)
+	}
+	jsonBytes, err = canonicalJSON(jsonBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to format registry JSON: %w", err)
+	}
+	if bytes.HasPrefix(jsonBytes, []byte("{\n")) {
+		jsonBytes = append([]byte("{\n  \"$schema\": \"registry.schema.json\",\n"), jsonBytes[2:]...)
+	}
+	return jsonBytes, nil
 }
 
 type registryGrantMethod struct {

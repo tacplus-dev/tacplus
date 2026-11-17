@@ -10,7 +10,6 @@ import (
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
-	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
 func TestSwiftServiceNamespace(t *testing.T) {
@@ -190,10 +189,66 @@ func TestW2SMethodDataStreaming(t *testing.T) {
 	}
 }
 
-func TestDaemonDirectory(t *testing.T) {
-	got := daemonDirectory(&tactype.Config{SelfPackage: "blue_rock"}, nil)
-	if got != "blue-rock" {
-		t.Fatalf("daemonDirectory() = %q, want %q", got, "blue-rock")
+// The Swift client's default socket is the socket_path the generated daemons
+// bind for its services (issue #494); it used to be ~/.<package>/daemon.sock,
+// where no daemon listens. Services declaring different socket paths get no
+// default, and the client requires a socket path.
+func TestDefaultC2DSocketPath(t *testing.T) {
+	one := []service.ServiceInfo{
+		{ServiceName: "A", C2DSocketPath: "/run/gateway.sock"},
+		{ServiceName: "B", C2DSocketPath: "/run/gateway.sock"},
+	}
+	if got, want := defaultC2DSocketPath(one), "/run/gateway.sock"; got != want {
+		t.Fatalf("defaultC2DSocketPath = %q, want %q", got, want)
+	}
+	two := []service.ServiceInfo{
+		{ServiceName: "A", C2DSocketPath: "/run/a.sock"},
+		{ServiceName: "B", C2DSocketPath: "/run/b.sock"},
+	}
+	if got := defaultC2DSocketPath(two); got != "" {
+		t.Fatalf("defaultC2DSocketPath over two socket paths = %q, want none", got)
+	}
+	if got := defaultC2DSocketPath([]service.ServiceInfo{{ServiceName: "A"}}); got != "" {
+		t.Fatalf("defaultC2DSocketPath with no socket path = %q, want none", got)
+	}
+}
+
+func TestRenderC2DClientDefaultsToTheServicesSocketPath(t *testing.T) {
+	out, err := executeSwiftTemplate("C2DClient.swift.tmpl", c2dClientTemplateData{
+		PackageName:       "MyTacplus",
+		DefaultSocketPath: "/run/gateway.sock",
+		Services:          []c2dServiceTemplateData{{MethodName: "withProductApi", ClientType: "Product_ProductApi"}},
+	})
+	if err != nil {
+		t.Fatalf("render C2DClient: %v", err)
+	}
+	s := string(out)
+	for _, want := range []string{
+		"public init(socketPath: String = C2DClient.defaultSocketPath())",
+		`public static func defaultSocketPath() -> String {
+        "/run/gateway.sock"
+    }`,
+		"public func withProductApi<Result: Sendable>(",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("C2DClient.swift missing %q\n%s", want, s)
+		}
+	}
+	for _, unwanted := range []string{"homeDirectory", "daemon.sock"} {
+		if strings.Contains(s, unwanted) {
+			t.Errorf("C2DClient.swift still derives a default from the package (%q)\n%s", unwanted, s)
+		}
+	}
+}
+
+func TestRenderC2DClientRequiresSocketPathWithoutOneDefault(t *testing.T) {
+	out, err := executeSwiftTemplate("C2DClient.swift.tmpl", c2dClientTemplateData{PackageName: "MyTacplus"})
+	if err != nil {
+		t.Fatalf("render C2DClient: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "public init(socketPath: String) {") || strings.Contains(s, "defaultSocketPath") {
+		t.Fatalf("C2DClient.swift with no default socket must require socketPath:\n%s", s)
 	}
 }
 

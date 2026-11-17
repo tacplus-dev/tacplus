@@ -35,7 +35,7 @@ func TestTypeScriptStringValidatorsLoopOverRepeatedFields(t *testing.T) {
 	}
 
 	var b strings.Builder
-	if err := generateTypeScriptValidationFunction(&b, msg); err != nil {
+	if err := generateTypeScriptValidationFunction(&b, msg, nil); err != nil {
 		t.Fatalf("generateTypeScriptValidationFunction: %v", err)
 	}
 	rendered := b.String()
@@ -98,7 +98,7 @@ func TestTypeScriptStringValidatorsKeepScalarForm(t *testing.T) {
 	}
 
 	var b strings.Builder
-	if err := generateTypeScriptValidationFunction(&b, msg); err != nil {
+	if err := generateTypeScriptValidationFunction(&b, msg, nil); err != nil {
 		t.Fatalf("generateTypeScriptValidationFunction: %v", err)
 	}
 	rendered := b.String()

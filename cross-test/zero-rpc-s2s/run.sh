@@ -75,7 +75,7 @@ base64 = "0.21.7"
 http = "1"
 rcgen = "0.14"
 serde_json = "1"
-tokio = { version = "1.49.0", features = ["full"] }
+tokio = { version = "1.51.6", features = ["full"] }
 tokio-stream = { version = "0.1.17", features = ["net"] }
 tonic = { version = "0.14.0", features = ["tls-ring"] }
 tonic-health = "0.14.0"

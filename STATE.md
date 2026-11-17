@@ -204,7 +204,7 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-18 by lo
   The compiler half of `images/cache-determinism.sh` passed in a build:2.5-derived image. The build jobs in the
   `ci` project (tacplus-dev/looper, tacplus-dev/cloud) do not set the cache variables or the two security options
   yet (PROPOSALS.md).
-  `depends`/`src` at a line can take a pre-release (#214). The record plane's tenant checks assume a tenant's
+  The record plane's tenant checks assume a tenant's
   namespace is `/tenants/<tid>`; kernel#23's `/tenants/<name>` namespaces need #202 first (PROPOSALS.md).
   The record write surface stamps no `(spec.identity_spiffe_subject)` (PROPOSALS.md). A fleet's service images must be on ghcr.io from a
   github.com repo (PROPOSALS.md).

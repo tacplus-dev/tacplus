@@ -24,6 +24,23 @@ go_floors_check() {
   # CVE-2026-78661 (#350): gh's releases (through 2.103.3) build with x/net 0.60.0.
   go_floors "$(command -v gh)" golang.org/x/net@v0.62.0
 }
+# RootlessKit maps build's subordinate IDs with newuidmap and newgidmap, which
+# carry file capabilities, not Debian's setuid bit (build.Dockerfile, #830):
+# setuid root, they write the map as root, which needs CAP_SYS_ADMIN, and a
+# container without --privileged has none (newuidmap: write to uid_map
+# failed: Operation not permitted). As build, with only CAP_SETUID (SETGID),
+# they write it as the namespace's owner, which needs nothing more.
+# scripts/images_smoke_test.go sources this file for this function too.
+idmap_check() {
+  local name cap path
+  for name in newuidmap newgidmap; do
+    cap=cap_setuid
+    [[ $name == newgidmap ]] && cap=cap_setgid
+    path=$(command -v "$name") || { echo "missing: $name" >&2; return 1; }
+    [[ ! -u $path ]] || { echo "$name is setuid: it must carry $cap=ep instead" >&2; return 1; }
+    [[ "$(getcap "$path")" == "$path $cap=ep" ]] || { echo "$name has no $cap=ep (getcap: $(getcap "$path"))" >&2; return 1; }
+  done
+}
 (return 0 2>/dev/null) && return 0
 gen=(protoc protoc-gen-go protoc-gen-go-grpc protoc-gen-grpc-java protoc-gen-es protoc-gen-prost protoc-gen-tonic protoc-gen-prost-serde protoc-gen-prost-crate protoc-gen-swift protoc-gen-grpc-swift-2 git node gofmt python3)
 sdk=(go java mvn cargo rustc swift dotnet npm just jq jbmc gh docker gcloud black cargo-kani kani cargo-fuzz curl tacplus)
@@ -83,6 +100,7 @@ jbmc --version; just --version; cargo kani --version; cargo +"$RUST_NIGHTLY" fuz
 # foreign platform's RUN steps with its own QEMU helper (images/image-build.sh).
 buildkitd --version; buildctl --version; rootlesskit --version; sccache --version
 { grep -q '^build:' /etc/subuid && grep -q '^build:' /etc/subgid; } || { echo "user build has no subordinate IDs" >&2; exit 1; }
+idmap_check
 [[ "$(stat -c %U /run/buildkit)" == build ]] || { echo "/run/buildkit is not build's" >&2; exit 1; }
 case "$(uname -m)" in
   aarch64 | arm64) command -v buildkit-qemu-x86_64 >/dev/null ;;

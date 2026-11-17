@@ -27,7 +27,8 @@ the looper then marks it `promoted` or `declined` here with the date.
   - `eval "$(tacplus-cache env)"`, with `tacplus-cache restore` before the build and `tacplus-cache save` after it.
 
   Rootless BuildKit also needs `security_opt = ["seccomp=unconfined", "apparmor=unconfined"]` on the build jobs'
-  containers (cloud's `jobs.build`, kept apart for this) and newuidmap's setuid (no `cap_drop` of SETUID/SETGID).
+  containers (cloud's `jobs.build`, kept apart for this) and SETUID/SETGID among their capabilities (no `cap_drop`):
+  newuidmap and newgidmap carry them as file capabilities (#830).
   Two things are not verified yet: sccache's GCS backend authenticating through Workload Identity Federation
   (external_account ADC), and gcloud's for the snapshots.
 - **Hermetic base and build Dockerfiles** (2026-11-06, #315): the cache keeps an image's digest the same cold and

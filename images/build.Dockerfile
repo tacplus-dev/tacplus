@@ -265,9 +265,17 @@ RUN : "${APT_REFRESH}" && apt-get update && apt-get upgrade -y \
 # Rootless BuildKit runs as `build`, never root (images/image-build.sh): its
 # subordinate IDs are the range RootlessKit maps into the daemon's user
 # namespace, and /run/buildkit holds the daemon's socket, state and log.
+# newuidmap and newgidmap, which write that mapping, carry file capabilities
+# instead of Debian's setuid bit (#830): Debian builds them without shadow's
+# capability code, so setuid they write the map as root, which needs
+# CAP_SYS_ADMIN a container without --privileged lacks. With CAP_SETUID
+# (SETGID) alone they write it as build, the namespace's owner, which Docker's
+# default capabilities allow (tacplus-smoke checks it).
 RUN useradd --create-home --uid 1000 --user-group --shell /bin/bash build \
     && echo build:100000:65536 > /etc/subuid && echo build:100000:65536 > /etc/subgid \
-    && install -d -o build -g build -m 0755 /run/buildkit
+    && install -d -o build -g build -m 0755 /run/buildkit \
+    && chmod u-s /usr/bin/newuidmap /usr/bin/newgidmap \
+    && setcap cap_setuid=ep /usr/bin/newuidmap && setcap cap_setgid=ep /usr/bin/newgidmap
 COPY --from=fetch /opt/protoc/bin/protoc /opt/protoc/bin/protoc-gen-grpc-java /usr/local/bin/
 COPY --from=fetch /opt/protoc/include /usr/local/include
 COPY --from=fetch /opt/just/just /usr/local/bin/just

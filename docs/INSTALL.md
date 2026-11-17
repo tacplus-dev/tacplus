@@ -195,7 +195,12 @@ docker run --rm --security-opt seccomp=unconfined --security-opt apparmor=unconf
 ```
 
 - **The two `--security-opt`** give the container a user namespace, which
-  rootless BuildKit needs. Never `--privileged`, and never a socket.
+  rootless BuildKit needs. Never `--privileged`, and never a socket. Docker's
+  default capabilities are enough: the image's `newuidmap` and `newgidmap`
+  carry `cap_setuid` and `cap_setgid`, not a setuid bit. On an Ubuntu host
+  (23.10 and later, GitHub's runners among them) AppArmor also withholds user
+  namespaces from unconfined programs: the host needs
+  `sysctl kernel.apparmor_restrict_unprivileged_userns=0`.
 - **`--platform`** with several values builds a multi-arch image. A platform
   other than the machine's runs under BuildKit's own QEMU helpers, so the
   host needs no binfmt registration.

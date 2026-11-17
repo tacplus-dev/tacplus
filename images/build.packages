@@ -5,6 +5,7 @@
 dnsutils
 iproute2
 jbmc
+libcap2-bin  # setcap: newuidmap and newgidmap's file capabilities (#830)
 patch
 ripgrep
 uidmap

@@ -78,3 +78,72 @@ func TestSmokeGoFloors(t *testing.T) {
 		})
 	}
 }
+
+// idmapCheck sources images/smoke.sh and runs its idmap_check against a fake
+// newuidmap and newgidmap. Each fake's capabilities are what a fake getcap
+// prints for it: the text of <fake>.cap, nothing when there is none.
+func idmapCheck(t *testing.T, setuid bool, uidCap, gidCap string) (string, error) {
+	t.Helper()
+	smoke, err := filepath.Abs("../images/smoke.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	write := func(name, data string) {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(data), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("getcap", "#!/usr/bin/env bash\n[[ -f $1.cap ]] && echo \"$1 $(cat \"$1.cap\")\"\nexit 0\n")
+	for name, c := range map[string]string{"newuidmap": uidCap, "newgidmap": gidCap} {
+		write(name, "")
+		if c != "" {
+			write(name+".cap", c)
+		}
+		if setuid {
+			if err := os.Chmod(filepath.Join(bin, name), 0o755|os.ModeSetuid); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	cmd := exec.Command("bash", "-c", `source "$1" && idmap_check`, "smoke", smoke)
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// TestSmokeIdmapCheck (#830): rootless BuildKit's newuidmap and newgidmap
+// carry file capabilities, never Debian's setuid bit. Setuid root, they write
+// the map as root, which needs CAP_SYS_ADMIN a container without --privileged
+// lacks: on GitHub's runner the write failed, Operation not permitted.
+func TestSmokeIdmapCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		setuid         bool
+		uidCap, gidCap string
+		refused        string // empty: accepted
+	}{
+		{"file capabilities", false, "cap_setuid=ep", "cap_setgid=ep", ""},
+		{"setuid root, as Debian ships them", true, "", "", "newuidmap is setuid"},
+		{"setuid and file capabilities", true, "cap_setuid=ep", "cap_setgid=ep", "newuidmap is setuid"},
+		{"no capabilities", false, "", "", "newuidmap has no cap_setuid=ep"},
+		{"newgidmap without its capability", false, "cap_setuid=ep", "", "newgidmap has no cap_setgid=ep"},
+		{"each with the other's capability", false, "cap_setgid=ep", "cap_setuid=ep", "newuidmap has no cap_setuid=ep"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := idmapCheck(t, tc.setuid, tc.uidCap, tc.gidCap)
+			if tc.refused == "" {
+				if err != nil {
+					t.Fatalf("refused: %v\n%s", err, out)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("accepted; want refused with %q\n%s", tc.refused, out)
+			}
+			if !strings.Contains(out, tc.refused) {
+				t.Fatalf("refused with\n%s\nwant %q", out, tc.refused)
+			}
+		})
+	}
+}

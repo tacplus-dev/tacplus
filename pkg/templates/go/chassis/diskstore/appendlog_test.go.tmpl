@@ -126,7 +126,10 @@ func TestAppendLogCreatesFileWithRequestedMode(t *testing.T) {
 func TestAppendLogConcurrentAppendsStayWholeLines(t *testing.T) {
 	base := t.TempDir()
 	const rel = "concurrent.jsonl"
-	const writers, each = 8, 50
+	// Every append is an fsync under one lock: 8x4 still races eight writers,
+	// where 8x50 was most of the package's time and, on a loaded runner, all of
+	// go test's budget (#723).
+	const writers, each = 8, 4
 	var wg sync.WaitGroup
 	for w := 0; w < writers; w++ {
 		wg.Add(1)

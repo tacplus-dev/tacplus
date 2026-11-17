@@ -31,7 +31,9 @@ import java.security.cert.X509Certificate;
 import java.security.spec.ECGenParameterSpec;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -43,6 +45,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
@@ -192,16 +197,35 @@ class MemberPortBehaviorTest {
 
     // ---- Fixture plumbing ----
 
+    /** Held here: java.util.logging keeps its loggers weakly, and a new one would drop the handler. */
+    static final Logger MEMBER_PORT_LOG = Logger.getLogger(MemberPort.class.getName());
+
     Fleet fleet;
     final List<AutoCloseable> closers = new ArrayList<>();
+    /** What the member ports logged in this test: their refusals and dropped connections, with the reason. */
+    final List<String> memberPortLog = Collections.synchronizedList(new ArrayList<>());
+    final Handler memberPortLogHandler = new Handler() {
+        @Override
+        public void publish(LogRecord r) {
+            memberPortLog.add(r.getLevel() + " " + r.getMessage());
+        }
+
+        @Override
+        public void flush() {}
+
+        @Override
+        public void close() {}
+    };
 
     @BeforeEach
     void setUp() throws Exception {
         fleet = new Fleet();
+        MEMBER_PORT_LOG.addHandler(memberPortLogHandler);
     }
 
     @AfterEach
     void tearDown() {
+        MEMBER_PORT_LOG.removeHandler(memberPortLogHandler);
         for (int i = closers.size() - 1; i >= 0; i--) {
             try {
                 closers.get(i).close();
@@ -214,6 +238,23 @@ class MemberPortBehaviorTest {
     <T extends AutoCloseable> T track(T c) {
         closers.add(c);
         return c;
+    }
+
+    /**
+     * The member ports' log so far, for a failure's message: a reset connection
+     * is attributed to the member port's reason (a refusal, an admission that
+     * timed out, a dropped connection), not only "Connection reset" (#722).
+     */
+    String memberPortLog() {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        synchronized (memberPortLog) {
+            for (String line : memberPortLog) {
+                counts.merge(line, 1, Integer::sum);
+            }
+        }
+        List<String> lines = new ArrayList<>();
+        counts.forEach((line, n) -> lines.add(n == 1 ? line : line + " (x" + n + ")"));
+        return lines.isEmpty() ? "nothing" : String.join("; ", lines);
     }
 
     MemberPort member(MemberPort.TokenSource tokens, AtomicReference<MemberPort.Material> cert,
@@ -337,6 +378,12 @@ class MemberPortBehaviorTest {
         MemberPort b = member(X);
         MemberportPeer.Server echo = echo();
         InetSocketAddress fwd = tunnel(a, b, echo);
+        // One connection first: on a loaded host the first TLS handshake and
+        // admission, with their code still cold, can outlast the admission
+        // bound of the connections behind it (#722). The burst is what this
+        // test is about.
+        MemberportPeer.Result warm = MemberportPeer.exchange(fwd, 9_999, 1024, 9_999);
+        assertTrue(warm.ok(1024), "the first connection: " + warm + "; the member ports logged: " + memberPortLog());
         ExecutorService pool = Executors.newFixedThreadPool(32);
         try {
             List<Future<MemberportPeer.Result>> results = new ArrayList<>();
@@ -346,9 +393,10 @@ class MemberPortBehaviorTest {
             }
             for (int i = 0; i < results.size(); i++) {
                 MemberportPeer.Result r = results.get(i).get(120, TimeUnit.SECONDS);
-                assertTrue(r.ok(256 * 1024 + 10_000 + i), "connection " + i + ": " + r);
+                assertTrue(r.ok(256 * 1024 + 10_000 + i),
+                        "connection " + i + ": " + r + "; the member ports logged: " + memberPortLog());
             }
-            assertEquals(48, echo.accepted.get());
+            assertEquals(49, echo.accepted.get());
         } finally {
             pool.shutdownNow();
         }

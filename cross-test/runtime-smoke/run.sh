@@ -138,7 +138,7 @@ trap cleanup EXIT
 if [[ -z "$TACPLUS_BIN" ]]; then
   TACPLUS_BIN="$WORK_ROOT/tacplus-local"
   echo "==> Building local tacplus binary"
-  (cd "$ROOT_DIR" && go build -o "$TACPLUS_BIN" .)
+  (cd "$ROOT_DIR" && go generate ./pkg/internal/proto/spec/... && go build -o "$TACPLUS_BIN" .)
 fi
 
 if [[ "$TACPLUS_BIN" == */* ]]; then
@@ -150,7 +150,11 @@ assert_clean_log() {
   if [[ ! -s "$log" ]]; then
     return
   fi
-  if rg -n '(WARN|WARNING|warning:|npm warn|ERROR|panic:|fatal:|error TS[0-9]+|JsonWebKey)' "$log"; then
+  # The one exception: the canonical consumer-contract proto still exercises the
+  # legacy (spec.redact) on purpose until 3.0 removes it (#274), and generation
+  # names it deprecated.
+  if rg -n '(WARN|WARNING|warning:|npm warn|ERROR|panic:|fatal:|error TS[0-9]+|JsonWebKey)' "$log" \
+    | rg -v 'warning: deprecated: .*\(spec\.(redact|data_entitlement)\)'; then
     die "warning/error output found in $log"
   fi
 }
@@ -203,9 +207,9 @@ prepare_client_proto() {
   cp -R "$CLIENT_PROTO_TEMPLATE/." "$dst/"
   cp "$SERVER_PROTO_SRC/dependencies.yaml" "$dst/dependencies.yaml"
   # C2S client generation injects ServiceHealthState (clients resolve service
-  # instances via health); reuse the canonical minimal ServiceHealth fixture.
-  mkdir -p "$dst/platform"
-  cp "$SERVER_PROTO_SRC/platform/health.proto" "$dst/platform/health.proto"
+  # instances via health); the ServiceHealth root is the sys
+  # servicehealth.ServiceHealth (routing label "kernel"), so the tree needs no
+  # copy of its own.
   cat > "$dst/registry.yaml" <<'EOF'
 # Managed by tacplus — do not edit IDs manually.
 services:
@@ -225,6 +229,13 @@ pkg: "com.gitlab.example.tacplus.consumer.contractclient"
 src: "$proto_src"
 output-dir: "model"
 EOF
+  # The go server generates from the canonical consumer-contract tree, which
+  # holds several services (contractclient, contractfixtures, eventbus, ...);
+  # unset, generation is scoped to contractclient's own contract file and
+  # contract/contract.proto (ContractApi) is dropped.
+  if [[ "$language" == go ]]; then
+    echo "grpc-servers: all" >> "$dir/tacplus.yaml"
+  fi
 }
 
 generate_model() {

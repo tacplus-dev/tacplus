@@ -354,6 +354,7 @@ tacplus generates typed client wrappers for each declared dependency and makes t
 ### Local Daemon Services
 
 Services marked with `(spec.service_c2d) = {socket_path: "/run/mydaemon.sock"};` are local daemon RPC surfaces. `socket_path` is required — there is no default (a shared default would collide between daemons on the same host).
+The Swift `C2DClient()` dials the services' `socket_path` by default; when its services declare several, it has no default and `socketPath` is required.
 When a package's proto graph declares in-scope `(spec.service_c2d)` services,
 full-service targets emit a `c2dm` manager and client-only targets emit their
 language-specific C2D helpers for those services (no YAML flag is involved). C2D

@@ -275,6 +275,11 @@ the looper then marks it `promoted` or `declined` here with the date.
   scan found advisories in exactly those: #312 (TypeScript, Rust, Go), #309 (Python build/dev floors), #308
   (rustls-pemfile), after #264. A recipe that generates the cross-test models for every language into `<dir>`, with a
   lock-resolved manifest per language, would make OSV-Scanner and cargo-deny catch the next one in the build.
+- **golang.org/x/crypto back on a tag** (2026-11-09, #312): GO-2026-5932 (openpgp, unmaintained) is fixed only in
+  v0.58.1-0.20261009181718-2f1f834330b2, after v0.58.0, the newest tag, so five fixture dependencies.yaml and eight
+  harness go.mods pin that pseudo-version, and `scripts/go_dependency_floor_test.go` floors it. Nothing generated
+  imports openpgp. x/crypto tagged v0.59.0 on 2026-11-11 (OSV: clean, go 1.26.0 like the pseudo-version,
+  x/net v0.62.0 like the pins): move the pins, `cross-test/lib/go-compile.sh` and the floor to it, and the backports.
 - **SpotBugs over the rendered Java chassis, in the `generated` recipe (#376)** (2026-11-14, #712): no gate runs
   SpotBugs on the Java chassis templates, so kernel's security job found `USO_UNSAFE_OBJECT_SYNCHRONIZATION` in the
   generated `CollectionRuntime` (HIGH, failing the fleet's policy) in a consumer's build, not here. #712 fixes it and

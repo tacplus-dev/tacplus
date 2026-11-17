@@ -306,6 +306,7 @@ message ContractEvent {
 service ContractApi {
   option (spec.service_c2s) = {auth_entitled_users: true};
 
+  // Return the contract for one tenant namespace.
   rpc GetContract(ContractRequest) returns (ContractResponse) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ENTITLED_USERS], target_namespace_field: "tenant_namespace"};
     option (spec.rest_method) = {methods: [REST_METHOD_GET]};
@@ -822,7 +823,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/soheilhy/cmux v0.1.5
 	go.uber.org/zap v1.27.1
-	golang.org/x/crypto v0.47.0
+	golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2
 	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.19.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa
@@ -3558,7 +3559,7 @@ prost = "0.14.1"
 prost-wkt-types = "0.7.1"
 serde_json = "1.0.149"
 servicemanager = { path = "$output/chassis/servicemanager" }
-tokio = { version = "1.49.0", features = ["rt-multi-thread", "net", "sync", "time"] }
+tokio = { version = "1.51.6", features = ["rt-multi-thread", "net", "sync", "time"] }
 tokio-stream = { version = "0.1.17", features = ["net"] }
 tokio-tungstenite = "0.30.0"
 tonic = "0.14.0"

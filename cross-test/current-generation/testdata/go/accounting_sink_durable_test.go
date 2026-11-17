@@ -26,13 +26,6 @@ import (
 	accountingrecord_pb "gitlab.com/example/dummy/agentsensor/tacplus/model/types/vservices/accountingrecord"
 )
 
-// spoolSettleBound is how long the spool goroutine may take to append or drop the
-// records a test emitted. Every append fsyncs, so it bounds the disk, not the RPC:
-// it is a hang detector, not a timing assertion, and a passing run never waits
-// for it. It is sized for a shared runner under I/O pressure, where one fsync was
-// measured at 0.2s to 3s (issue #341), so fifty appends can take minutes.
-const spoolSettleBound = 180 * time.Second
-
 // durableSink opens a durable sink over dir with the given publisher queue.
 func durableSink(t *testing.T, tx chan *accountingrecord_pb.AccountingRecord, stop <-chan struct{}, dir string) *EventBusSink {
 	t.Helper()
@@ -53,7 +46,7 @@ func receiveRequestIDs(t *testing.T, sink *EventBusSink, tx <-chan *accountingre
 		case rec := <-tx:
 			got = append(got, rec.RequestId)
 			sink.Ack()
-		case <-time.After(spoolSettleBound):
+		case <-time.After(progressBound):
 			t.Fatalf("record %d of %d did not reach the publisher; got %v", i, n, got)
 		}
 	}
@@ -74,7 +67,7 @@ func expectNoMore(t *testing.T, tx <-chan *accountingrecord_pb.AccountingRecord)
 // cursor on shutdown and at intervals, so a restart must wait for it.
 func waitForCursor(t *testing.T, dir string, want int) {
 	t.Helper()
-	deadline := time.Now().Add(spoolSettleBound)
+	deadline := time.Now().Add(progressBound)
 	for {
 		raw, _ := os.ReadFile(filepath.Join(dir, "accounting-spool", "cursor"))
 		if n, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && n == want {
@@ -97,6 +90,10 @@ func TestDurableSpoolReplaysUnacknowledgedAfterRestart(t *testing.T) {
 	tx1 := make(chan *accountingrecord_pb.AccountingRecord, 1)
 	sink1 := durableSink(t, tx1, stop1, dir)
 	emitAll(t, sink1, 5)
+	// Emit only queues: wait until all five are in the log before acknowledging any.
+	// An ack that catches up with the log compacts it, and the records after it
+	// start a new log with its own cursor (#339).
+	waitForLines(t, dir, 5)
 	if got := receiveRequestIDs(t, sink1, tx1, 3); strings.Join(got, ",") != "r0,r1,r2" {
 		t.Fatalf("first run delivered %v, want r0,r1,r2", got)
 	}
@@ -131,7 +128,7 @@ func TestDurableSpoolHoldsRPCWhenPublisherBlocked(t *testing.T) {
 // waitForLines polls the spool log until it holds want lines.
 func waitForLines(t *testing.T, dir string, want int) {
 	t.Helper()
-	deadline := time.Now().Add(spoolSettleBound)
+	deadline := time.Now().Add(progressBound)
 	log := filepath.Join(dir, "accounting-spool", "records.log")
 	for {
 		raw, _ := os.ReadFile(log)
@@ -165,7 +162,7 @@ func TestDurableSpoolReplaysOutageInOrderAndCompacts(t *testing.T) {
 	expectNoMore(t, tx)
 
 	logPath := filepath.Join(dir, "accounting-spool", "records.log")
-	deadline := time.Now().Add(spoolSettleBound)
+	deadline := time.Now().Add(progressBound)
 	for {
 		if _, err := os.Stat(logPath); os.IsNotExist(err) {
 			break
@@ -194,13 +191,14 @@ func TestDurableSpoolDropsAndCountsOnlyPastDiskBound(t *testing.T) {
 	const emitted = 40
 	emitAll(t, sink, emitted)
 	// Wait until the spool goroutine has decided every record: appended to the log
-	// or dropped. Each append fsyncs, so how long that takes is the disk's business
-	// (issue #341: on a loaded pd-standard disk the appends that fit took over a
-	// second); the wait is on that state, never on a time bound.
+	// or dropped. Nothing reads tx yet, so it drops each record that would take the
+	// log past the bound. Each append fsyncs, so how long that takes is the disk's
+	// business (issue #341: on a loaded pd-standard disk the appends that fit took
+	// over a second); the wait is on that state, never on a time bound.
 	log := filepath.Join(dir, "accounting-spool", "records.log")
 	var raw []byte
 	var dropped int
-	deadline := time.Now().Add(spoolSettleBound)
+	deadline := time.Now().Add(progressBound)
 	for {
 		raw, _ = os.ReadFile(log)
 		dropped = int(sink.dropped.Load())
@@ -209,7 +207,7 @@ func TestDurableSpoolDropsAndCountsOnlyPastDiskBound(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("after %v the spool had logged %d and dropped %d of %d records",
-				spoolSettleBound, bytes.Count(raw, []byte("\n")), dropped, emitted)
+				progressBound, bytes.Count(raw, []byte("\n")), dropped, emitted)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -220,16 +218,26 @@ func TestDurableSpoolDropsAndCountsOnlyPastDiskBound(t *testing.T) {
 		t.Fatalf("spool log holds %d bytes past its 1024-byte disk bound", len(raw))
 	}
 
+	// Every record not dropped reaches the publisher once it reads, so drain until the
+	// two account for every emit, then check nothing more arrives.
 	delivered := 0
-	for drained := false; !drained; {
+	for delivered+int(sink.dropped.Load()) < emitted {
 		select {
 		case <-tx:
 			delivered++
 			sink.Ack()
-		case <-time.After(emitBound):
-			drained = true
+		case <-time.After(10 * time.Millisecond):
+			if time.Now().After(deadline) {
+				t.Fatalf("delivered %d + dropped %d of %d records within %v: a record was lost without being counted", delivered, sink.dropped.Load(), emitted, progressBound)
+			}
 		}
 	}
+	select {
+	case <-tx:
+		delivered++
+	case <-time.After(200 * time.Millisecond):
+	}
+	dropped = int(sink.dropped.Load())
 	// The record in tx is counted as delivered once it is read, so the sum is exact.
 	if delivered+dropped != emitted {
 		t.Fatalf("delivered %d + dropped %d != emitted %d: a record was lost without being counted", delivered, dropped, emitted)

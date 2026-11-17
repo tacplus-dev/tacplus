@@ -49,7 +49,9 @@ import java.security.cert.X509Certificate;
 import java.security.spec.ECGenParameterSpec;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -63,6 +65,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSocket;
@@ -211,16 +216,35 @@ class MemberPortBehaviorTest {
 
     // ---- Fixture plumbing ----
 
+    /** Held here: java.util.logging keeps its loggers weakly, and a new one would drop the handler. */
+    static final Logger MEMBER_PORT_LOG = Logger.getLogger(MemberPort.class.getName());
+
     Fleet fleet;
     final List<AutoCloseable> closers = new ArrayList<>();
+    /** What the member ports logged in this test: their refusals and dropped sessions, with the reason. */
+    final List<String> memberPortLog = Collections.synchronizedList(new ArrayList<>());
+    final Handler memberPortLogHandler = new Handler() {
+        @Override
+        public void publish(LogRecord r) {
+            memberPortLog.add(r.getLevel() + " " + r.getMessage());
+        }
+
+        @Override
+        public void flush() {}
+
+        @Override
+        public void close() {}
+    };
 
     @BeforeEach
     void setUp() throws Exception {
         fleet = new Fleet();
+        MEMBER_PORT_LOG.addHandler(memberPortLogHandler);
     }
 
     @AfterEach
     void tearDown() {
+        MEMBER_PORT_LOG.removeHandler(memberPortLogHandler);
         for (int i = closers.size() - 1; i >= 0; i--) {
             try {
                 closers.get(i).close();
@@ -233,6 +257,23 @@ class MemberPortBehaviorTest {
     <T extends AutoCloseable> T track(T c) {
         closers.add(c);
         return c;
+    }
+
+    /**
+     * The member ports' log so far, for a failure's message: a reset connection
+     * is attributed to the member port's reason (a refusal, an admission that
+     * timed out, a dropped session), not only "Connection reset" (#722).
+     */
+    String memberPortLog() {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        synchronized (memberPortLog) {
+            for (String line : memberPortLog) {
+                counts.merge(line, 1, Integer::sum);
+            }
+        }
+        List<String> lines = new ArrayList<>();
+        counts.forEach((line, n) -> lines.add(n == 1 ? line : line + " (x" + n + ")"));
+        return lines.isEmpty() ? "nothing" : String.join("; ", lines);
     }
 
     MemberPort member(MemberPort.TokenSource tokens, AtomicReference<MemberPort.Material> cert,
@@ -436,6 +477,11 @@ class MemberPortBehaviorTest {
         MemberPort b = member(X);
         MemberportPeer.Server echo = echo();
         InetSocketAddress fwd = tunnel(a, b, echo);
+        // One connection first: the tunnel's TLS connect is made once, and on a
+        // loaded host a cold one outlasts the admission of the streams waiting
+        // on it (#722). The burst is what this test is about.
+        MemberportPeer.Result warm = MemberportPeer.exchange(fwd, 9_999, 1024, 9_999);
+        assertTrue(warm.ok(1024), "the first connection: " + warm + "; the member ports logged: " + memberPortLog());
         ExecutorService pool = Executors.newFixedThreadPool(32);
         try {
             List<Future<MemberportPeer.Result>> results = new ArrayList<>();
@@ -445,9 +491,10 @@ class MemberPortBehaviorTest {
             }
             for (int i = 0; i < results.size(); i++) {
                 MemberportPeer.Result r = results.get(i).get(120, TimeUnit.SECONDS);
-                assertTrue(r.ok(256 * 1024 + 10_000 + i), "connection " + i + ": " + r);
+                assertTrue(r.ok(256 * 1024 + 10_000 + i),
+                        "connection " + i + ": " + r + "; the member ports logged: " + memberPortLog());
             }
-            assertEquals(48, echo.accepted.get());
+            assertEquals(49, echo.accepted.get());
         } finally {
             pool.shutdownNow();
         }
@@ -471,23 +518,27 @@ class MemberPortBehaviorTest {
 
     @Test
     void byteSessionRunsAcrossSeveralTokenLifetimesBothWaysAtOnce() throws Exception {
-        // 3-second tokens renewed with 2 seconds left: the client rotates at 75%
-        // of each lifetime, about every 2.25 seconds.
-        Minter am = new Minter(fleet, X, 3, 2);
-        Minter bm = new Minter(fleet, X, 3, 2);
+        // 6-second tokens renewed with 4 seconds left: a stream lives 4 to 6
+        // seconds and the client rotates at 75% of it, so a cutover has a second
+        // or more before the old stream's exp. With 3-second tokens it had half a
+        // second, which a loaded runner outlasted (#737).
+        Minter am = new Minter(fleet, X, 6, 4);
+        Minter bm = new Minter(fleet, X, 6, 4);
         MemberPort a = member(am, new AtomicReference<>(fleet.leaf(X, SVC, "Ed25519")), fleet.jwks::get);
         MemberPort b = member(bm, new AtomicReference<>(fleet.leaf(X, SVC, "Ed25519")), fleet.jwks::get);
-        // Both directions trickle at once for about 8 seconds, so every cutover
+        // Both directions trickle at once for about 16 seconds, so every cutover
         // has bytes in flight each way.
-        MemberportPeer.Server server = track(new MemberportPeer.Server(MemberportPeer.Mode.PUSH, 21, 800_000, 22, 4096, 20));
+        MemberportPeer.Server server = track(new MemberportPeer.Server(MemberportPeer.Mode.PUSH, 21, 1_600_000, 22, 4096, 20));
         InetSocketAddress fwd = tunnel(a, b, server);
         long start = System.currentTimeMillis();
-        MemberportPeer.Result r = MemberportPeer.exchange(fwd, 22, 800_000, 21, 4096, 20, 0);
+        MemberportPeer.Result r = MemberportPeer.exchange(fwd, 22, 1_600_000, 21, 4096, 20, 0);
         long elapsed = System.currentTimeMillis() - start;
-        assertTrue(r.ok(800_000), "client: no loss, duplication or reordering: " + r);
+        assertTrue(r.ok(1_600_000), "client: no loss, duplication or reordering: " + r
+                + "; the member ports logged: " + memberPortLog());
         waitFor("server result", 10_000, () -> server.results.size() == 1);
-        assertTrue(server.results.get(1).ok(800_000), "server: " + server.results.get(1));
-        assertTrue(elapsed > 6_500, "the session must outlive two token lifetimes, took " + elapsed + "ms");
+        assertTrue(server.results.get(1).ok(1_600_000), "server: " + server.results.get(1)
+                + "; the member ports logged: " + memberPortLog());
+        assertTrue(elapsed > 12_500, "the session must outlive two token lifetimes, took " + elapsed + "ms");
         assertEquals(1, server.accepted.get(), "one byte session: the target was dialled once");
         assertTrue(am.mints.get() >= 3, "the client rotated onto new tokens: " + am.mints.get() + " mints");
     }
@@ -805,17 +856,21 @@ class MemberPortBehaviorTest {
     void aRotationCarriesTheReceiversRenewedToken() throws Exception {
         // The receiver's tokens are short and the sender's long: the sender
         // rotates for the receiver's renewals, and the session outlives several.
-        Minter bm = new Minter(fleet, X, 3, 2);
+        // 6-second tokens renewed with 4 seconds left, as in
+        // byteSessionRunsAcrossSeveralTokenLifetimesBothWaysAtOnce (#737).
+        Minter bm = new Minter(fleet, X, 6, 4);
         MemberPort b = member(bm, new AtomicReference<>(fleet.leaf(X, SVC, "Ed25519")), fleet.jwks::get);
-        MemberportPeer.Server server = track(new MemberportPeer.Server(MemberportPeer.Mode.PUSH, 45, 800_000, 46, 4096, 20));
+        MemberportPeer.Server server = track(new MemberportPeer.Server(MemberportPeer.Mode.PUSH, 45, 1_600_000, 46, 4096, 20));
         InetSocketAddress fwd = tunnel(member(X), b, server);
         long start = System.currentTimeMillis();
-        MemberportPeer.Result r = MemberportPeer.exchange(fwd, 46, 800_000, 45, 4096, 20, 0);
+        MemberportPeer.Result r = MemberportPeer.exchange(fwd, 46, 1_600_000, 45, 4096, 20, 0);
         long elapsed = System.currentTimeMillis() - start;
-        assertTrue(r.ok(800_000), "client: no loss, duplication or reordering: " + r);
+        assertTrue(r.ok(1_600_000), "client: no loss, duplication or reordering: " + r
+                + "; the member ports logged: " + memberPortLog());
         waitFor("server result", 10_000, () -> server.results.size() == 1);
-        assertTrue(server.results.get(1).ok(800_000), "server: " + server.results.get(1));
-        assertTrue(elapsed > 6_000, "the session must outlive two of the receiver's tokens, took " + elapsed + "ms");
+        assertTrue(server.results.get(1).ok(1_600_000), "server: " + server.results.get(1)
+                + "; the member ports logged: " + memberPortLog());
+        assertTrue(elapsed > 12_000, "the session must outlive two of the receiver's tokens, took " + elapsed + "ms");
         assertEquals(1, server.accepted.get(), "one byte session: the target was dialled once");
     }
 

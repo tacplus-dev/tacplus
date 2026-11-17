@@ -220,6 +220,24 @@ the looper then marks it `promoted` or `declined` here with the date.
   With two gate runs on one 8-CPU runner it took 10010ms and failed `memberport-java`; the same image, uncontended,
   passed it. A shorter token lifetime with a bound relative to it, or an injected clock, would keep it from
   flaking on a loaded runner.
+- **The member port's client counts the channel's connect against its 10s attach wait** (2026-11-15, #722): in the
+  Java `MemberPort.OutboundSession.openOnce`, the `ADMISSION_TIMEOUT_MS` wait for the receiver to attach a stream
+  starts before the channel to the peer has connected, so every stream opened on a cold channel shares its one TLS
+  connect. With the JVM starved of CPU (the member port test pinned to one core beside 16 spinners), the connect
+  alone outlasted 10s and 31 of 48 tunnels were refused ("did not attach the stream in time"). When the receiver had
+  already attached, the cancel also dropped its session ("stream ended without last (CANCELLED)"), which is how #722
+  first showed it. The server side bounds the handshake on its own (`handshakeTimeout`). Starting the client's clock
+  once the transport is ready, or a configurable admission deadline, is a product decision; #722 only warmed the
+  test's tunnel before its burst.
+- **The member port's rotation leaves a quarter of what is left of a stream, with no floor** (2026-11-15, #737): the
+  Java `MemberPort.OutboundSession.schedule` rotates at 75% of the stream's remaining lifetime, measured once the
+  stream is attached, and the receiver drops the session if the client's `last` has not reached it by the old
+  stream's `exp` (API.md, Expiry). A slow open shrinks that remainder: with the test's 3-second tokens on a loaded
+  runner, a first open left 1074ms, the rotation got 270ms, and the cutover landed 22ms before `exp`, too late for
+  the receiver. With real token lifetimes (minutes) the quarter is ample; #737 gave the two rotation tests 6-second
+  tokens. A floor on the time the rotation leaves (say, rotate at least a few seconds before `exp` when the
+  lifetime allows), or an early warning when a stream is attached with little of its lifetime left, would make the
+  margin hold for short-lived tokens too.
 - **Cargo's retried network errors fail the clean-log check** (2026-11-01, #255): `assert_clean_log` in
   `cross-test/current-generation/run.sh` (and its copies in the other cross-tests) fails on any `warning:` line, so
   cargo's `warning: spurious network error (3 tries remaining): [16] Error in the HTTP2 framing layer`, which cargo
@@ -507,6 +525,9 @@ the looper then marks it `promoted` or `declined` here with the date.
   same pressure is behind #539, #721 and #723. A standing fix for all of them: run the fixtures' disk tests on a
   tmpfs (`TMPDIR`, which `t.TempDir` and `Files.createTempDirectory` honour), where fsync is a no-op and the
   self-tests test the code, not the host's disk queue.
+  One instance left after #341 and #690 landed together (#804): the Rust durable twin,
+  `cross-test/current-generation/testdata/rust/accounting_sink_durable.rs`, yields on its own `BOUND` of 10s for the
+  same fsync'd appends (Go and Java now wait on a 180s progress bound), so it is the next to fail on that runner.
 - **Return the Swift clients to grpc-swift's `withGRPCClient` once Swift 6.3.1 is every consumer's floor** (2026-11-15,
   #803): the generated Swift `C2DClient` and `C2SClient` run each call's `GRPCClient` on a plain `withThrowingTaskGroup`
   (run the connections, call, `beginGracefulShutdown`, wait) because `withGRPCClient` does the same on a
@@ -528,6 +549,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   look for the compiler's diagnostics (`error:`, `warning:` from swiftc on a generated source), not for any line with
   the word in it, or the leg says nothing on a runner with a recent binutils. It is not in `just gates`, so #803
   compile-checked the generated `C2SClient` by reading that log instead.
+- **Cut the Java AppendLog concurrency self-test's fsyncs too** (2026-11-15, #723): #723 cut the Go
+  `TestAppendLogConcurrentAppendsStayWholeLines` from 8x50 to 8x4 appends (each an fsync under one lock: 42s of
+  the Go diskstore package's 61s on an unloaded runner, all of go test's 10m on a load-200 one) and still fails
+  every time without the lock. Java's `AppendLogTest.testConcurrentAppendsStayWholeAndComplete`
+  (`pkg/templates/java/chassis/diskstore/AppendLogTest.java.tmpl`) does 4x200, twice Go's old count, with no
+  timeout to hit but the same minutes spent on a loaded `current-generation` run.
 
 ## Promoted / declined
 - **`just generated <dir>`: tacplus's security checks scan its generated output** (2026-11-09, #376): promoted

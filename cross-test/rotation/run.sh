@@ -99,6 +99,7 @@ case "$LANGUAGE" in
     grep -q 'rotation.NewConn(conn, tokenProvider)' "$CLIENT" \
       || die "the go TickerServiceClient does not rotate its streams"
     cp "$TESTDATA/rotation_behavior_test.go" "$WRAPPER_DIR/rotation_behavior_test.go"
+    cp "$ROOT_DIR/cross-test/stream-expiry/testdata/grpcserver_serve_on.go" "$OUT/chassis/grpcserver/serve_on_fixture.go"
 
     cat > "$OUT/go.mod" <<'EOF'
 module example.com/rotationfixture/tacplus/model

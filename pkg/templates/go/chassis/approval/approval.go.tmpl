@@ -127,6 +127,19 @@ func appendField(dst []byte, fd protoreflect.FieldDescriptor, v protoreflect.Val
 	}
 }
 
+// twosComplement64 is the protobuf wire encoding of a signed 64-bit value (int32,
+// int64, enum varints and sfixed64): its two's complement bits, a negative value
+// becoming a large one by design.
+func twosComplement64(v int64) uint64 {
+	return uint64(v) // #nosec G115 -- the wire format's two's complement, not an overflow
+}
+
+// twosComplement32 is the protobuf wire encoding of an sfixed32: the two's
+// complement bits of its 32-bit value (v is that int32, widened by protoreflect).
+func twosComplement32(v int64) uint32 {
+	return uint32(v) // #nosec G115 -- the wire format's two's complement, not an overflow
+}
+
 // appendSingular appends one value under fd's wire type.
 func appendSingular(dst []byte, fd protoreflect.FieldDescriptor, v protoreflect.Value) ([]byte, error) {
 	num := fd.Number()
@@ -138,23 +151,24 @@ func appendSingular(dst []byte, fd protoreflect.FieldDescriptor, v protoreflect.
 		}
 		return protowire.AppendVarint(protowire.AppendTag(dst, num, protowire.VarintType), n), nil
 	case protoreflect.EnumKind:
-		return protowire.AppendVarint(protowire.AppendTag(dst, num, protowire.VarintType), uint64(v.Enum())), nil
+		return protowire.AppendVarint(protowire.AppendTag(dst, num, protowire.VarintType), twosComplement64(int64(v.Enum()))), nil
 	case protoreflect.Int32Kind, protoreflect.Int64Kind:
-		return protowire.AppendVarint(protowire.AppendTag(dst, num, protowire.VarintType), uint64(v.Int())), nil
+		return protowire.AppendVarint(protowire.AppendTag(dst, num, protowire.VarintType), twosComplement64(v.Int())), nil
 	case protoreflect.Uint32Kind, protoreflect.Uint64Kind:
 		return protowire.AppendVarint(protowire.AppendTag(dst, num, protowire.VarintType), v.Uint()), nil
 	case protoreflect.Sint32Kind, protoreflect.Sint64Kind:
 		return protowire.AppendVarint(protowire.AppendTag(dst, num, protowire.VarintType), protowire.EncodeZigZag(v.Int())), nil
 	case protoreflect.Fixed32Kind:
+		// #nosec G115 -- a fixed32 field's value is a uint32, widened by protoreflect.
 		return protowire.AppendFixed32(protowire.AppendTag(dst, num, protowire.Fixed32Type), uint32(v.Uint())), nil
 	case protoreflect.Sfixed32Kind:
-		return protowire.AppendFixed32(protowire.AppendTag(dst, num, protowire.Fixed32Type), uint32(v.Int())), nil
+		return protowire.AppendFixed32(protowire.AppendTag(dst, num, protowire.Fixed32Type), twosComplement32(v.Int())), nil
 	case protoreflect.FloatKind:
 		return protowire.AppendFixed32(protowire.AppendTag(dst, num, protowire.Fixed32Type), math.Float32bits(float32(v.Float()))), nil
 	case protoreflect.Fixed64Kind:
 		return protowire.AppendFixed64(protowire.AppendTag(dst, num, protowire.Fixed64Type), v.Uint()), nil
 	case protoreflect.Sfixed64Kind:
-		return protowire.AppendFixed64(protowire.AppendTag(dst, num, protowire.Fixed64Type), uint64(v.Int())), nil
+		return protowire.AppendFixed64(protowire.AppendTag(dst, num, protowire.Fixed64Type), twosComplement64(v.Int())), nil
 	case protoreflect.DoubleKind:
 		return protowire.AppendFixed64(protowire.AppendTag(dst, num, protowire.Fixed64Type), math.Float64bits(v.Float())), nil
 	case protoreflect.StringKind:

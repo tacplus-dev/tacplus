@@ -4,6 +4,12 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **gosec on the generated Go in tacplus's own gates** (2026-11-08, #359): #359 cleared G402, G123, G115, G404,
+  G703 and G704 from the generated example service (fixed or `#nosec`-annotated with a reason in the templates),
+  but nothing here keeps them out: tacplus-dev/looper#108's scan sees a regression only after a release. A gate
+  (or a step of `current-generation`) that runs a pinned gosec over the generated Go of cross-test/proto and the
+  example, failing on those rules, would catch it at land. The other rules gosec reports there (G103 in protoc's
+  gencode, G104, G304, G101, G117, G301/G302) need a decision on each before they join it.
 - **The generated Rust crates' dependencies from the generator, not from a scan** (2026-11-16, #829): cargo 1.100
   warns on a dependency nothing in the crate uses (`cargo::unused_dependencies`) unless another dependency pulls it in,
   and on an unused `[workspace.dependencies]` entry. The generated manifests declared every dependency any

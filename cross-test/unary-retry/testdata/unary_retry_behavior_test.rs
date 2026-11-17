@@ -30,11 +30,12 @@ async fn serve_down_peer() -> (Arc<DownPeer>, Channel) {
     let peer = Arc::new(DownPeer {
         attempts: AtomicUsize::new(0),
     });
-    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = probe.local_addr().unwrap();
-    drop(probe);
+    // The server keeps the listener bound here: releasing the port and binding
+    // it again would race the tests running in parallel for it (#531).
+    let incoming = tonic::transport::server::TcpIncoming::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let addr = incoming.local_addr().unwrap();
     let server = RetryServiceServer::from_arc(peer.clone());
-    tokio::spawn(Server::builder().add_service(server).serve(addr));
+    tokio::spawn(Server::builder().add_service(server).serve_with_incoming(incoming));
     tokio::time::sleep(Duration::from_millis(100)).await;
     let channel = Endpoint::from_shared(format!("http://{addr}")).unwrap().connect_lazy();
     (peer, channel)

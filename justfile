@@ -287,6 +287,13 @@ subscriber-clean-close:
 endpoint-latency:
   {{lock}} bash cross-test/endpoint-latency/run.sh
 
+# Three-hop chain of generated Rust ContractApi servers and clients (issue #38):
+# leaf receives no more than the root's budget, its handler stops at the root's
+# deadline, and it receives the root's trace_id through mid (#310). Not in
+# `gates` yet (PROPOSALS.md).
+outbound-deadline: generate
+  {{lock}} bash cross-test/outbound-deadline/run.sh
+
 # Fault-injection coverage of the generated unary client retry path (issue #57):
 # retries are jittered, capped by a retry budget, and never start past the
 # caller's deadline.
@@ -422,7 +429,8 @@ w2s-validate-java:
 
 # Behavioral coverage of the generated Go, Java and Rust C2D server: starts a
 # cluster-less daemon through the generated standalone host entry on its
-# declared unix socket and calls it through the generated c2dm client.
+# declared unix socket and calls it through the generated c2dm client, and
+# through the generated Swift C2DClient's default socket.
 c2d-server:
   {{lock}} bash cross-test/c2d-server/run.sh
 
@@ -441,6 +449,9 @@ c2d-server-java:
 
 c2d-server-rust:
   {{lock}} bash cross-test/c2d-server/run.sh --language rust
+
+c2d-server-swift:
+  {{lock}} bash cross-test/c2d-server/run.sh --language swift
 
 # Compiles the generated Rust MCP dispatch against the EXACT rmcp version
 # tacplus declares (rmcpCrateVersion), so a floor lower than the emitted code

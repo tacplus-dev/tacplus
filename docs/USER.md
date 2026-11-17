@@ -356,6 +356,7 @@ tacplus generates typed client wrappers for each declared dependency and makes t
 ### Local Daemon Services
 
 Services marked with `(spec.service_c2d) = {socket_path: "/run/mydaemon.sock"};` are local daemon RPC surfaces. `socket_path` is required — there is no default (a shared default would collide between daemons on the same host).
+The Swift `C2DClient()` dials the services' `socket_path` by default; when its services declare several, it has no default and `socketPath` is required.
 When a package's proto graph declares in-scope `(spec.service_c2d)` services,
 full-service targets emit a `c2dm` manager and client-only targets emit their
 language-specific C2D helpers for those services (no YAML flag is involved). C2D
@@ -748,7 +749,7 @@ Fields annotated with `(spec.quorum_write) = true` require a write to be durable
 
 For a `service_store`, the generated disk helpers carry the store's floor (the strictest declared on any of its fields, since a row is written whole) and a gate the store's write path calls with the number of durable copies it can reach: `MinDurableCopies<Type>` / `Require<Type>Quorum(n)` (Go), `MIN_DURABLE_COPIES_<TYPE>` / `require<Type>Quorum(n)` (Java), `MIN_DURABLE_COPIES_<TYPE>` / `require_<type>_quorum(n)` (Rust). A store whose rows are partitioned across a cluster narrows its disk-log roll baseline to its own rows by implementing `diskstore.LocalRows` (Go, Java), or by overriding `Handler::<store>_local_rows` (Rust).
 
-Java can also ship the redo log to a Google Cloud Storage bucket: set `grpcconfig.disk_persistence.archive` (`gcs_bucket`, `prefix`, `checkpoint_interval_seconds`) and pin `com.google.cloud:google-cloud-storage` in `dependencies.yaml`. Restore uses `ArchiveRestore.restore`. See `docs/API.md`, Archive to an object store.
+Java can also ship the redo log to a Google Cloud Storage bucket: set `grpcconfig.disk_persistence.archive` (`gcs_bucket`, `prefix`, `checkpoint_interval_seconds`) and pin `com.google.cloud:google-cloud-storage` in `dependencies.yaml` (2.76.0 or later: 2.75.0 resolves jackson-databind 2.18.3, with seventeen advisories). The SDK still declares guava 33.6.0-jre (GHSA-xxph-c9ww-hj94) and opentelemetry-api 1.62.0 (GHSA-ccrj-gw8r-854m): pin guava 33.7.2-jre and import the `io.opentelemetry:opentelemetry-bom` 1.67.0 under your build's `<dependencyManagement>` (Gradle: a platform or constraint), as `cross-test/lib/java-compile.sh` does. Restore uses `ArchiveRestore.restore`. See `docs/API.md`, Archive to an object store.
 
 ### Commands
 

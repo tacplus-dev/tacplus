@@ -67,6 +67,12 @@ type GrpcServer struct {
 	// rebuild of a renewed serving certificate is reported to the fleet health
 	// plane as well as logged (PC-L-1). Serving continues on the last good cert.
 	reportCertDegraded func(reason string)
+
+	// keepaliveUnit, when set, is what the keepalive seconds (the platform's
+	// and the config override) are applied in instead of a second. Unexported:
+	// only the chassis' keepalive test sets it, so the enforcement it proves
+	// runs in a second of real time rather than minutes (#842).
+	keepaliveUnit time.Duration
 }
 
 // SetCertProvider installs the live certificate provider. Call before Listen.
@@ -277,10 +283,14 @@ func (ps *GrpcServer) Listen(ctx context.Context) error {
 	// keepaliveconst.TimeSecs (the interval generated clients ping at). A larger
 	// minimum makes the server GOAWAY those clients with too_many_pings, so it is
 	// replaced by the permit minimum and logged.
-	keepaliveMinTime := time.Duration({{.KeepalivePermitMinTimeSecs}}) * time.Second
+	keepaliveUnit := time.Second
+	if ps.keepaliveUnit > 0 {
+		keepaliveUnit = ps.keepaliveUnit
+	}
+	keepaliveMinTime := time.Duration({{.KeepalivePermitMinTimeSecs}}) * keepaliveUnit
 	if override := ps.config.KeepaliveMinTimeSeconds; override > 0 {
 		if override <= {{.KeepaliveTimeSecs}} {
-			keepaliveMinTime = time.Duration(override) * time.Second
+			keepaliveMinTime = time.Duration(override) * keepaliveUnit
 		} else {
 			zap.L().Warn("keepalive_min_time_seconds exceeds the client ping interval; using the platform minimum",
 				zap.Int64("configured", override),

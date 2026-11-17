@@ -20,7 +20,10 @@ FROM eclipse-temurin:${JDK_VERSION}-jdk-noble AS jdk
 FROM maven:${MAVEN_VERSION}-eclipse-temurin-25 AS maven
 FROM node:${NODE_VERSION}-trixie-slim AS node
 
-FROM rust:${RUST_VERSION}-trixie
+# rust's slim image, not rust:X-trixie: that one is buildpack-deps, whose
+# ImageMagick -dev packages brought in OpenEXR (CVE-2026-42216/-42217) and
+# some two hundred other packages nothing here uses (#554).
+FROM rust:${RUST_VERSION}-slim-trixie
 ARG MAVEN_GUAVA_VERSION
 ARG MAVEN_GUAVA_SHA256
 ARG NPM_VERSION
@@ -29,8 +32,15 @@ LABEL org.opencontainers.image.title="tacplus base" \
       org.opencontainers.image.description="OS and language runtimes (Go, JDK, Maven, Node, Rust, Python) for tacplus builds" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus"
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
-    bash ca-certificates curl file git jq libssl-dev pkg-config python3 unzip \
+# The Debian packages are images/base.packages, and nothing else is installed
+# (tacplus-packages-check, the last step). APT_REFRESH is unique to each
+# images.yml run, so the registry cache never hands back an older run's
+# upgrade (#369; build.Dockerfile says why).
+COPY images/base.packages /usr/local/share/tacplus/packages/base
+COPY images/packages-check.sh /usr/local/bin/tacplus-packages-check
+ARG APT_REFRESH=
+RUN : "${APT_REFRESH}" && apt-get update && apt-get upgrade -y \
+    && sed 's/#.*//' /usr/local/share/tacplus/packages/base | xargs apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=go /usr/local/go /usr/local/go
 COPY --from=jdk /opt/java/openjdk /opt/java/openjdk
@@ -77,4 +87,7 @@ ENV JAVA_HOME=/opt/java/openjdk \
     MAVEN_HOME=/usr/share/maven \
     MAVEN_OPTS=--sun-misc-unsafe-memory-access=allow \
     PATH="/usr/local/go/bin:/opt/java/openjdk/bin:${PATH}"
+# No Debian package beyond images/base.packages, Debian's base system and
+# their dependencies (#554).
+RUN tacplus-packages-check /usr/local/share/tacplus/packages/base
 WORKDIR /workspace

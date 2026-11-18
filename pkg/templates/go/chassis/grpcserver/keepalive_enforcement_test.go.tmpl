@@ -7,26 +7,31 @@
 // generated clients' keepalive pings. A larger enforced minimum makes grpc-go
 // count every {{.KeepaliveTimeSecs}} s ping as too frequent, and after the
 // third strike the server GOAWAYs the client with too_many_pings.
+//
+// The test runs the server's keepalive in keepaliveTestUnit rather than
+// seconds and pings it over raw HTTP/2 at the generated clients' interval in
+// the same unit: grpc-go's client never pings more often than every 10 s, so a
+// real client made each run of this test wait 140 s (#842).
 
 package grpcserver
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
 	stdx509 "crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"net"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/connectivity"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/keepalive"
 
 	pb "{{.ModuleBasePath}}/types/sys/grpcconfig"
 	x509_pb "{{.ModuleBasePath}}/types/sys/x509"
@@ -37,9 +42,14 @@ import (
 // interval ({{.KeepaliveTimeSecs}} s), which the server must not enforce.
 const keepaliveTestOverrideSecs = 60
 
-// keepaliveTestWindow covers the fourth ping ({{.KeepaliveTimeSecs}} s apart),
-// the first one that GOAWAYs a server enforcing a 60 s minimum.
-const keepaliveTestWindow = 140 * time.Second
+// keepaliveTestUnit stands in for a second: the server applies the platform's
+// keepalive seconds and the override in it, and the test pings every
+// {{.KeepaliveTimeSecs}} of it: four ping intervals take about a second.
+const keepaliveTestUnit = 10 * time.Millisecond
+
+// keepaliveTestPings is one past the fourth ping, the first one that GOAWAYs a
+// server enforcing the override: the fifth's ack follows that GOAWAY.
+const keepaliveTestPings = 5
 
 type keepaliveNoServices struct{}
 
@@ -81,9 +91,40 @@ func keepaliveTestListener(t *testing.T) net.Listener {
 	return l
 }
 
+// HTTP/2 frame types and flags the raw pinger uses (RFC 9113, section 6).
+const (
+	http2FrameSettings = 0x4
+	http2FramePing     = 0x6
+	http2FrameGoAway   = 0x7
+	http2FlagAck       = 0x1
+)
+
+// writeHTTP2Frame writes one frame on stream 0, the connection's own.
+func writeHTTP2Frame(w io.Writer, typ, flags byte, payload []byte) error {
+	hdr := make([]byte, 9, 9+len(payload))
+	hdr[0], hdr[1], hdr[2] = byte(len(payload)>>16), byte(len(payload)>>8), byte(len(payload))
+	hdr[3], hdr[4] = typ, flags
+	_, err := w.Write(append(hdr, payload...))
+	return err
+}
+
+// readHTTP2Frame reads one frame's type, flags and payload.
+func readHTTP2Frame(r io.Reader) (typ, flags byte, payload []byte, err error) {
+	hdr := make([]byte, 9)
+	if _, err = io.ReadFull(r, hdr); err != nil {
+		return 0, 0, nil, err
+	}
+	payload = make([]byte, int(hdr[0])<<16|int(hdr[1])<<8|int(hdr[2]))
+	if _, err = io.ReadFull(r, payload); err != nil {
+		return 0, 0, nil, err
+	}
+	return hdr[3], hdr[4], payload, nil
+}
+
 // TestKeepaliveOverrideDoesNotGOAWAYGeneratedClient runs the real GrpcServer
-// with an oversized keepalive override and a client that pings with the same
-// parameters as the generated clients. The connection must stay READY.
+// with an oversized keepalive override and pings it, with no stream open, at
+// the generated clients' interval. Every ping must be acked and none answered
+// with GOAWAY.
 func TestKeepaliveOverrideDoesNotGOAWAYGeneratedClient(t *testing.T) {
 	cert, key := keepaliveTestCert(t)
 	lis := keepaliveTestListener(t)
@@ -96,35 +137,53 @@ func TestKeepaliveOverrideDoesNotGOAWAYGeneratedClient(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	ps.listener = lis
+	ps.keepaliveUnit = keepaliveTestUnit
 	go func() { _ = ps.Listen(ctx) }()
 
 	// The certificate identity is not under test; keepalive is.
-	conn, err := grpc.NewClient(lis.Addr().String(),
-		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})),
-		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                {{.KeepaliveTimeSecs}} * time.Second,
-			Timeout:             {{.KeepaliveTimeoutSecs}} * time.Second,
-			PermitWithoutStream: true,
-		}))
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	conn, err := tls.DialWithDialer(dialer, "tcp", lis.Addr().String(),
+		&tls.Config{InsecureSkipVerify: true, NextProtos: []string{"h2"}})
 	if err != nil {
-		t.Fatalf("NewClient: %v", err)
+		t.Fatalf("Dial: %v", err)
 	}
 	defer conn.Close()
-
-	readyCtx, cancelReady := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelReady()
-	conn.Connect()
-	for state := conn.GetState(); state != connectivity.Ready; state = conn.GetState() {
-		if !conn.WaitForStateChange(readyCtx, state) {
-			t.Fatalf("client never reached READY (state %s)", state)
-		}
+	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatalf("SetDeadline: %v", err)
+	}
+	if _, err := io.WriteString(conn, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"); err != nil {
+		t.Fatalf("write preface: %v", err)
+	}
+	if err := writeHTTP2Frame(conn, http2FrameSettings, 0, nil); err != nil {
+		t.Fatalf("write SETTINGS: %v", err)
 	}
 
-	// No RPCs are in flight, so only keepalive pings cross the connection.
-	// Any state change from READY means the server dropped the connection.
-	windowCtx, cancelWindow := context.WithTimeout(context.Background(), keepaliveTestWindow)
-	defer cancelWindow()
-	if conn.WaitForStateChange(windowCtx, connectivity.Ready) {
-		t.Fatalf("connection left READY (now %s) while idle: server enforced a keepalive minimum above the client ping interval", conn.GetState())
+	interval := {{.KeepaliveTimeSecs}} * keepaliveTestUnit
+	for i := 1; i <= keepaliveTestPings; i++ {
+		if i > 1 {
+			time.Sleep(interval)
+		}
+		data := make([]byte, 8)
+		binary.BigEndian.PutUint64(data, uint64(i))
+		if err := writeHTTP2Frame(conn, http2FramePing, 0, data); err != nil {
+			t.Fatalf("ping %d: write: %v", i, err)
+		}
+		// Read up to this ping's ack, acking the server's SETTINGS on the way.
+		for acked := false; !acked; {
+			typ, flags, payload, err := readHTTP2Frame(conn)
+			if err != nil {
+				t.Fatalf("ping %d: connection dropped before its ack (%v): server enforced a keepalive minimum above the client ping interval", i, err)
+			}
+			switch {
+			case typ == http2FrameGoAway:
+				t.Fatalf("ping %d: server sent GOAWAY %q: it enforced a keepalive minimum above the client ping interval", i, payload[min(8, len(payload)):])
+			case typ == http2FrameSettings && flags&http2FlagAck == 0:
+				if err := writeHTTP2Frame(conn, http2FrameSettings, http2FlagAck, nil); err != nil {
+					t.Fatalf("ack SETTINGS: %v", err)
+				}
+			case typ == http2FramePing && flags&http2FlagAck != 0:
+				acked = bytes.Equal(payload, data)
+			}
+		}
 	}
 }

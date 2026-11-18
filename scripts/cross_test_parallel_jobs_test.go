@@ -36,14 +36,18 @@ func parallelJobs(t *testing.T, env []string, body, script string) (string, bool
 // current-generation ran its languages one after another for 2h26m of a 2h55m
 // gate run (tacplus#812). Its jobs run in a pool of workers: every job runs,
 // never more at once than the pool holds, and the pool is used.
+//
+// Each job appends its start and its end to one event log, and the test counts
+// the jobs running from it: an append of one short line is atomic, so the
+// log's order is the events' order. No job looks at another's live state: a
+// job listing the others' markers raced their removal (tacplus#852).
 func TestParallelJobsRunsEveryJobBoundedByThePool(t *testing.T) {
 	dir := t.TempDir()
+	events := filepath.Join(dir, "events")
 	runner := `job() {
-  local d="` + dir + `"
-  mkdir "$d/running.${2//\//-}"
-  ls -d "$d"/running.* | wc -l >> "$d/concurrency"
+  echo "start $2" >> "` + events + `"
   sleep 0.4
-  rmdir "$d/running.${2//\//-}"
+  echo "end $2" >> "` + events + `"
   echo "ran $2 on worker $1"
 }`
 	jobs := []string{"rust/base", "rust/redo", "go/base", "go/redo", "java/base", "java/redo", "go/c2sonly"}
@@ -56,17 +60,33 @@ func TestParallelJobsRunsEveryJobBoundedByThePool(t *testing.T) {
 			t.Errorf("job %s did not run, or its output is not labelled with it:\n%s", j, out)
 		}
 	}
-	counts, err := os.ReadFile(filepath.Join(dir, "concurrency"))
+	log, err := os.ReadFile(events)
 	if err != nil {
 		t.Fatal(err)
 	}
-	most := 0
-	for _, f := range strings.Fields(string(counts)) {
-		n, err := strconv.Atoi(f)
-		if err != nil {
-			t.Fatal(err)
+	started, ended := map[string]int{}, map[string]int{}
+	running, most := 0, 0
+	for _, line := range strings.Split(strings.TrimSpace(string(log)), "\n") {
+		event, job, _ := strings.Cut(line, " ")
+		switch event {
+		case "start":
+			started[job]++
+			running++
+			most = max(most, running)
+		case "end":
+			if started[job] == ended[job] {
+				t.Fatalf("job %s ended before it started:\n%s", job, log)
+			}
+			ended[job]++
+			running--
+		default:
+			t.Fatalf("event log line %q is neither a start nor an end:\n%s", line, log)
 		}
-		most = max(most, n)
+	}
+	for _, j := range jobs {
+		if started[j] != 1 || ended[j] != 1 {
+			t.Errorf("job %s started %d times and ended %d times, not once each:\n%s", j, started[j], ended[j], log)
+		}
 	}
 	if most > 3 {
 		t.Errorf("%d jobs ran at once in a pool of 3", most)

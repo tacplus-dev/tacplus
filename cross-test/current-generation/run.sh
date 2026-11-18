@@ -1797,16 +1797,6 @@ install_ownerdefault_selftest() {
   cp "$SELFTESTS_SRC/java/OwnerDefaultTest.java" "$dest/"
 }
 
-# assert_requiresdevice_output checks that the (spec.rpc).requires_device gate was
-# actually GENERATED, not merely that a tree with the annotation in it compiled.
-# Every one of these has failed at least once during development in at least one
-# language, and each failure compiled:
-#   - the wrapper hashing the request AFTER consuming it,
-#   - the broker call naming the unqualified method,
-#   - the caller-side hash helper resolving to a function that was never emitted,
-#   - the broker's S2S client not being auto-injected at all.
-# The ungated sibling rpc (GetSecret) is here for the same reason: a gate spliced
-# onto every unary method instead of the declared one also compiles.
 # assert_statequeue_output checks the state-queue fixture (#456): the state
 # client of a state root with a (spec.queue) and a (spec.priority_queue)
 # boundary has the queue accessors (offer, consume, peek, size) in Go and Java,
@@ -1852,6 +1842,16 @@ assert_statequeue_output() {
   fi
 }
 
+# assert_requiresdevice_output checks that the (spec.rpc).requires_device gate was
+# actually GENERATED, not merely that a tree with the annotation in it compiled.
+# Every one of these has failed at least once during development in at least one
+# language, and each failure compiled:
+#   - the wrapper hashing the request AFTER consuming it,
+#   - the broker call naming the unqualified method,
+#   - the caller-side hash helper resolving to a function that was never emitted,
+#   - the broker's S2S client not being auto-injected at all.
+# The ungated sibling rpc (GetSecret) is here for the same reason: a gate spliced
+# onto every unary method instead of the declared one also compiles.
 assert_requiresdevice_output() {
   local output="$1"
   local language="$2"

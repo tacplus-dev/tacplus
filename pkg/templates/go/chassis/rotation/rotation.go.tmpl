@@ -797,6 +797,9 @@ type clientSession struct {
 	trailer metadata.MD
 
 	rotatingNow atomic.Bool
+	// refused is the code a rotation was refused with (0: none): the stream
+	// rotates no more and ends with its current leg (tacplus#877).
+	refused     atomic.Uint32
 	timerMu     sync.Mutex
 	rotation    *time.Timer
 }
@@ -892,7 +895,12 @@ func (s *clientSession) read() {
 		e := &rotation_pb.Envelope{}
 		if err := l.cs.RecvMsg(e); err != nil {
 			// A leg that ends without last ends the logical stream with its
-			// status: the handler's own end, or a fault. Never spliced.
+			// status: the handler's own end, or a fault. Never spliced. After
+			// a refused rotation, the server's end of the leg at its exp is
+			// the refusal's.
+			if c := codes.Code(s.refused.Load()); c != codes.OK && status.Code(err) == codes.Unauthenticated {
+				err = status.Error(c, "")
+			}
 			s.finish(err, l)
 			return
 		}
@@ -967,7 +975,10 @@ func (s *clientSession) later(delay time.Duration) {
 // rotate is make-before-break: a new token, a new leg joining this session,
 // then the cutover. A mint that fails or returns no newer token is retried
 // every second; the current leg ends at its token's exp regardless (fail
-// closed). A refused rotation ends the logical stream.
+// closed). A refused rotation is the last: the stream ends with its current
+// leg, at the handler's end if that comes first (the refusal may only say the
+// session has ended, its end still on the way), else at the leg's exp with the
+// refusal's code (tacplus#877).
 func (s *clientSession) rotate() {
 	if s.done.Load() || !s.rotatingNow.CompareAndSwap(false, true) {
 		return
@@ -997,7 +1008,8 @@ func (s *clientSession) rotate() {
 			return
 		}
 		if c := status.Code(err); c == codes.Unauthenticated || c == codes.PermissionDenied {
-			s.fault(c, "")
+			zap.L().Info("rotation: rotation refused, the stream ends with its current leg", zap.String("method", s.method), zap.String("code", c.String()))
+			s.refused.Store(uint32(c))
 			return
 		}
 		zap.L().Warn("rotation: rotation failed, retrying", zap.String("method", s.method), zap.Error(err))

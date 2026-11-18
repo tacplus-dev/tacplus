@@ -1,0 +1,19 @@
+<!-- Copyright (c) 2026 Jody Scott
+     SPDX-License-Identifier: Apache-2.0
+
+     The Java rotation fixture's test logging: the generated code's own lines
+     (rotation, refusals, faults) at DEBUG, gRPC's and Netty's at INFO. Without
+     it logback logs everything at DEBUG, and io.grpc's netty frame lines alone
+     (some 10,500 a run) cut the gate's job log at GitLab's 4 MiB (tacplus#877). -->
+<configuration>
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+  <logger name="io.grpc" level="INFO"/>
+  <logger name="io.netty" level="INFO"/>
+  <root level="DEBUG">
+    <appender-ref ref="STDOUT"/>
+  </root>
+</configuration>

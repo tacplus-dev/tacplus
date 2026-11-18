@@ -443,6 +443,11 @@ whole life, and the caller one stream: no user code mentions rotation.
 - `UNAUTHENTICATED` on an open or a rotation is retried once with a fresh
   token; `PERMISSION_DENIED` never. On the sibling, neither carries a
   description: the reason is logged by the server.
+- A refused rotation is the stream's last: the stream ends with its current
+  leg, with the handler's own end if that comes first, else at the leg's `exp`
+  with the refusal's code. A rotation that reaches the server just after the
+  handler returned is refused (the session is over), and the handler's end
+  still stands (tacplus#877).
 - A mint that fails, or gives no newer token, is retried every second while the
   old leg lasts; the server still ends every leg at its own token's `exp`, so a
   caller that cannot renew (revoked) is cut off within one lifetime.

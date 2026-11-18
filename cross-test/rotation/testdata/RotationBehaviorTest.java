@@ -60,6 +60,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -501,7 +502,7 @@ class RotationBehaviorTest {
     }
 
     /** A caller's view of a stream: what arrived and how it ended. */
-    static final class Recorder implements ClientResponseObserver<Tick, Tick> {
+    static class Recorder implements ClientResponseObserver<Tick, Tick> {
         final List<Long> got = new CopyOnWriteArrayList<>();
         final List<String> texts = new CopyOnWriteArrayList<>();
         final CompletableFuture<Status> ended = new CompletableFuture<>();
@@ -951,6 +952,49 @@ class RotationBehaviorTest {
         Status st = rec.await(5_000);
         assertFalse(st.isOk(), "the cut stream ended OK, want a failure status");
         assertTrue(f.handlerEnd(5_000).cancelled, "the handler's Context was not cancelled by the cut");
+    }
+
+    /**
+     * A rotation that reaches the server after the handler has returned is
+     * refused (no such live session), and the refusal does not override the
+     * end the handler gave: the caller gets every tick, then the clean end
+     * (tacplus#877). The caller requests nothing until the rotation has been
+     * refused, so the client's reader is held short of the leg's end.
+     */
+    @Test
+    void refusedAfterTheEndKeepsTheEnd() throws Exception {
+        Fixture f = new Fixture().serve();
+        TokenSource src = new TokenSource(f);
+        TickerServiceGrpcClient c = f.client(f.dial(f.port), src);
+        int n = 5;
+        CountDownLatch hold = new CountDownLatch(1);
+        Recorder rec = new Recorder() {
+            @Override
+            public void onNext(Tick m) {
+                // The caller takes the first tick, then nothing until released:
+                // with no new credit, the client's reader stops short of the end.
+                try {
+                    hold.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                super.onNext(m);
+            }
+        };
+        c.generateTicks(Tick.newBuilder().setSeq(n).build(), rec);
+        HandlerEnd end = f.handlerEnd(TOKEN_LIFETIME_MS);
+        assertNull(end.status, "handler ended with " + end.status);
+        long until = System.currentTimeMillis() + TOKEN_LIFETIME_MS;
+        while (src.mints.get() < 2) {
+            assertTrue(System.currentTimeMillis() < until, "no rotation within " + TOKEN_LIFETIME_MS + " ms ("
+                    + src.mints.get() + " mints, the stream " + rec.ended.getNow(null) + ")");
+            Thread.sleep(5);
+        }
+        // The refusal's round trip.
+        Thread.sleep(200);
+        hold.countDown();
+        assertEquals(Status.Code.OK, rec.await(5_000).getCode(), "the stream's end");
+        checkSequence("ticks", rec.got, n);
     }
 
     /**

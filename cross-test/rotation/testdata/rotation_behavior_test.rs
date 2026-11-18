@@ -430,6 +430,37 @@ async fn rust_rotation_server_streaming_across_lifetimes() {
     assert!(src.mints() >= 3, "{} tokens minted: the stream did not rotate", src.mints());
 }
 
+/// A rotation that reaches the server after the handler has returned is
+/// refused (no such live session), and the refusal does not override the end
+/// the handler gave: the caller gets every tick, then the clean end
+/// (tacplus#877). The caller reads nothing until the rotation has been
+/// refused, so the client's reader is held short of the leg's end.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rust_rotation_refused_after_the_end_keeps_the_end() {
+    let f = serve(false).await;
+    let (c, src) = f.client(f.addr).await;
+    const N: usize = 5;
+    let mut s = c.generate_ticks(Tick { seq: N as i64, ..Default::default() }).await.expect("GenerateTicks").into_inner();
+    let end = f.tracker.handler_end(TOKEN_TTL).await;
+    assert!(end.err.is_none() && !end.cancelled, "handler ended with {end:?}, want a clean end");
+    let deadline = Instant::now() + TOKEN_TTL;
+    while src.mints() < 2 {
+        assert!(Instant::now() < deadline, "no rotation within {TOKEN_TTL:?}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // The refusal's round trip.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let mut got = Vec::new();
+    loop {
+        match s.message().await {
+            Ok(Some(t)) => got.push(t.seq),
+            Ok(None) => break,
+            Err(st) => panic!("Recv after {} ticks: {st:?}", got.len()),
+        }
+    }
+    check_sequence("ticks", &got, N);
+}
+
 /// 160 ticks at 50 ms, across several lifetimes; the handler counts them all,
 /// in order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

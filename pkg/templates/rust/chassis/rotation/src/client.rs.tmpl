@@ -141,6 +141,9 @@ struct ClientSession {
     next: Mutex<Option<tonic::Streaming<Envelope>>>,
     /// Ends the caller's response stream at once with a fault's status.
     out_abort: Mutex<Option<oneshot::Sender<Status>>>,
+    /// The code a rotation was refused with: the stream rotates no more and
+    /// ends with its current leg (tacplus#877).
+    refused: Mutex<Option<Code>>,
     done: AtomicBool,
     cancel: CancellationToken,
 }
@@ -157,6 +160,7 @@ impl ClientSession {
             send_leg: AtomicU64::new(0),
             next: Mutex::new(None),
             out_abort: Mutex::new(None),
+            refused: Mutex::new(None),
             done: AtomicBool::new(false),
             cancel: CancellationToken::new(),
         })
@@ -308,6 +312,13 @@ impl ClientSession {
                     return;
                 }
                 Err(status) => {
+                    // After a refused rotation, the server's end of the leg at
+                    // its exp is the refusal's.
+                    let refused = *self.refused.lock().unwrap();
+                    let status = match refused {
+                        Some(code) if status.code() == Code::Unauthenticated => Status::new(code, ""),
+                        _ => status,
+                    };
                     let _ = out.send(Err(status)).await;
                     self.close();
                     return;
@@ -413,7 +424,10 @@ impl ClientSession {
     /// Make-before-break: a new token, a new leg joining this session, then the
     /// cutover. A mint that fails or returns no newer token is retried every
     /// second; the current leg ends at its token's exp regardless (fail
-    /// closed). A refused rotation ends the logical stream.
+    /// closed). A refused rotation is the last: the stream ends with its
+    /// current leg, at the handler's end if that comes first (the refusal may
+    /// only say the session has ended, its end still on the way), else at the
+    /// leg's exp with the refusal's code (tacplus#877).
     async fn rotate(self: &Arc<Self>, current_exp: i64) -> Rotation {
         let token = match (self.tokens)().await {
             Ok(token) if !token.is_empty() => token,
@@ -443,7 +457,8 @@ impl ClientSession {
             Ok(leg) => leg,
             Err(_) if self.is_done() => return Rotation::Dropped,
             Err(e) if matches!(e.code(), Code::Unauthenticated | Code::PermissionDenied) => {
-                self.fault(e.code(), "rotation refused");
+                tracing::info!(method = %self.method, code = ?e.code(), "rotation: rotation refused, the stream ends with its current leg");
+                *self.refused.lock().unwrap() = Some(e.code());
                 return Rotation::Dropped;
             }
             Err(e) => {

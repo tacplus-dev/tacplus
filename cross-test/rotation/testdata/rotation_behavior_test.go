@@ -470,6 +470,46 @@ func TestGoRotationServerStreamingAcrossLifetimes(t *testing.T) {
 	}
 }
 
+// TestGoRotationRefusedAfterTheEndKeepsTheEnd: a rotation that reaches the
+// server after the handler has returned is refused (no such live session),
+// and the refusal does not override the end the handler gave: the caller gets
+// every tick, then the clean end (tacplus#877). The caller receives nothing
+// until the rotation has been refused, so the client's reader is held short
+// of the leg's end.
+func TestGoRotationRefusedAfterTheEndKeepsTheEnd(t *testing.T) {
+	f := startServer(t)
+	c, src := f.client(t, f.addr, tlsCreds())
+	const n = 5
+	s, err := c.GenerateTicks(context.Background(), &types.Tick{Seq: n})
+	if err != nil {
+		t.Fatalf("GenerateTicks: %v", err)
+	}
+	if end := f.handlerEnd(t, tokenLifetime); end.err != nil {
+		t.Fatalf("handler ended with %v, want a clean end", end.err)
+	}
+	deadline := time.Now().Add(tokenLifetime)
+	for src.mints.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("no rotation within %s", tokenLifetime)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// The refusal's round trip.
+	time.Sleep(200 * time.Millisecond)
+	var got []int64
+	for {
+		m, err := s.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Recv after %d ticks: %v", len(got), err)
+		}
+		got = append(got, m.Seq)
+	}
+	checkSequence(t, "ticks", got, n)
+}
+
 // TestGoRotationClientStreamingAcrossLifetimes: 160 ticks at 50 ms, across
 // several lifetimes; the handler counts them all, in order.
 func TestGoRotationClientStreamingAcrossLifetimes(t *testing.T) {

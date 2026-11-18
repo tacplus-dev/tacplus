@@ -1380,6 +1380,11 @@ public final class StreamRotation {
 
         final AtomicBoolean done = new AtomicBoolean();
         final AtomicBoolean rotatingNow = new AtomicBoolean();
+        /**
+         * The code a rotation was refused with (null: none): the stream rotates
+         * no more and ends with its current leg (tacplus#877).
+         */
+        volatile Status.Code refused;
         volatile ScheduledFuture<?> rotation;
         volatile Thread reader;
 
@@ -1524,7 +1529,13 @@ public final class StreamRotation {
                     if (item instanceof End end) {
                         // A leg that ends without last ends the logical stream
                         // with its status: the handler's own end, or a fault.
-                        // Never spliced.
+                        // Never spliced. After a refused rotation, the server's
+                        // end of the leg at its exp is the refusal's.
+                        Status.Code r = refused;
+                        if (r != null && end.status.getCode() == Status.Code.UNAUTHENTICATED) {
+                            finish(Status.fromCode(r), end.trailers);
+                            return;
+                        }
                         finish(end.status, end.trailers);
                         return;
                     }
@@ -1631,7 +1642,10 @@ public final class StreamRotation {
          * Make-before-break: a new token, a new leg joining this session, then
          * the cutover. A mint that fails or returns no newer token is retried
          * every second; the current leg ends at its token's exp regardless
-         * (fail closed). A refused rotation ends the logical stream.
+         * (fail closed). A refused rotation is the last: the stream ends with
+         * its current leg, at the handler's end if that comes first (the
+         * refusal may only say the session has ended, its end still on the
+         * way), else at the leg's exp with the refusal's code (tacplus#877).
          */
         private void rotate() {
             if (done.get() || !rotatingNow.compareAndSet(false, true)) {
@@ -1687,7 +1701,9 @@ public final class StreamRotation {
                     }
                     Status.Code c = e.status.getCode();
                     if (c == Status.Code.UNAUTHENTICATED || c == Status.Code.PERMISSION_DENIED) {
-                        fault(c, "");
+                        LOG.info("rotation: rotation of {} refused ({}), the stream ends with its current leg",
+                                method.getFullMethodName(), c);
+                        refused = c;
                         return;
                     }
                     LOG.warn("rotation: rotation of {} failed, retrying: {}", method.getFullMethodName(), e.getMessage());

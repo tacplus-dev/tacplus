@@ -673,6 +673,18 @@ the looper then marks it `promoted` or `declined` here with the date.
   the generated `pyproject.toml`), and a C# `packages.lock.json` (`dotnet restore --use-lock-file`) and Swift
   `Package.resolved` for one set, would let the build's OSV-Scanner read all three. This complements "A floor check
   over every version tacplus emits" above (the floors) with the resolved versions.
+- **The member port's refused rotation can overtake its session's clean end** (2026-11-18, #877): #877 found the
+  generated stream rotation's clients (Go, Java, Rust) faulting a stream PERMISSION_DENIED when a rotation reached the
+  server just after the handler returned (the session forgotten: "no such live session"), over the handler's own
+  end, and made a refused rotation end the stream with its current leg instead. The member port (`memberport.go`
+  `rotation refused` fault, `MemberPort.java`, Rust `session.rs`) has the same shape: a session whose both `fin`s
+  have just closed it on the server, with a rotation on the way, ends in a reset instead of a clean close. Same
+  fix: a refused rotation stops rotating and lets the current stream end (clean, or at its `exp`).
+- **Java fixtures' gRPC and Netty logs at INFO** (2026-11-18, #877): logback with no configuration logs at DEBUG,
+  and io.grpc's netty frame lines (some 10,500 in one rotation run) cut a gate job's log at GitLab's 4 MiB. #877
+  gave the rotation fixture a `logback-test.xml` (io.grpc, io.netty at INFO); the other Java fixtures that run under
+  mvn with logback-classic (stream-expiry, memberport, cert-stream, external-token, redact, trace-carry, jwk-alg)
+  would take the same file.
 
 ## Promoted / declined
 - **`just generated <dir>`: tacplus's security checks scan its generated output** (2026-11-09, #376): promoted

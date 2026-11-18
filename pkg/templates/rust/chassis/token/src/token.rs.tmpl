@@ -425,6 +425,7 @@ impl Token {
     pub const CLAIM_PRINCIPAL: &'static str = "principal";
     pub const CLAIM_AZP: &'static str = "azp";
     pub const CLAIM_ACT: &'static str = "act";
+    pub const CLAIM_TID: &'static str = "tid";
     pub const CLAIM_PROFILES: &'static str = "profiles";
     pub const CLAIM_ENTITLEMENTS: &'static str = "entitlements";
     pub const CLAIM_LINKED: &'static str = "linked";
@@ -481,6 +482,19 @@ impl Token {
     /// Sets the act (actor) claim.
     pub fn set_actor(&mut self, actor: impl Into<String>) -> Result<&mut Self> {
         self.set_custom_field(Self::CLAIM_ACT, Value::String(actor.into()))
+    }
+
+    /// Gets the tid claim: the tid of the tenant the token's namespace is in,
+    /// stamped by kernel at mint. `None` when the token is in no tenant. The
+    /// namespace claim names the tenant (`/tenants/<name>`), never its tid, so
+    /// this claim is the only source of a caller's tid.
+    pub fn tid(&self) -> Option<&str> {
+        self.payload.custom.get(Self::CLAIM_TID).and_then(|v| v.as_str())
+    }
+
+    /// Sets the tid claim.
+    pub fn set_tid(&mut self, tid: impl Into<String>) -> Result<&mut Self> {
+        self.set_custom_field(Self::CLAIM_TID, Value::String(tid.into()))
     }
 
     /// Gets the service_name claim.

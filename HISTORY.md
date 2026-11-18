@@ -136,3 +136,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-11 looper issue Java GCS archive pin google-cloud-storage 2.75.0 resolves jackson 2.18.3 (17 GHSAs), guava 33.6.0-jre and opentelemetry-api 1.62.0 (#263)
 - 2026-11-11 looper issue Generated registry.json formatting flips between patch releases (2.5.3/2.5.6/2.5.8): generated output must be byte-identical across a line (#307)
 - 2026-11-11 looper issue outbound-deadline fixture: mid forwards the trace_id to leaf but no test asserts it arrives; the gate has no just recipe (#310)
+- 2026-11-11 looper issue Generated Rust httpclient declares an unused backoff 0.4 crate, which locks two unmaintained crates (RUSTSEC-2025-0012, RUSTSEC-2024-0384) (#319)

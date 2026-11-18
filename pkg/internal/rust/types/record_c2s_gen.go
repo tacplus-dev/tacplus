@@ -85,8 +85,9 @@ type recordC2SFile struct {
 	ServiceName string // "ScottyRecords"
 	SelfPackage string
 	// Routed: the plane's host is a tenant-owned record store (#207). The
-	// handler reads its own caller's tenant, the tid of the caller's namespace
-	// claim, and routes the store calls there; a caller of no tenant is refused.
+	// handler reads its own caller's tenant, the caller's tid claim (never
+	// derived from its namespace, #284), and routes the store calls there; a
+	// caller whose token carries no tid claim is refused.
 	Routed bool
 }
 

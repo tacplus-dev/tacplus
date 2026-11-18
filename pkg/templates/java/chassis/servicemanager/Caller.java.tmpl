@@ -59,6 +59,17 @@ public final class Caller {
     }
 
     /**
+     * Returns the caller's tid claim: the tid kernel stamps on every token
+     * whose namespace is in a tenant. Empty when the token carries no tid
+     * claim. It is the ONLY source of a caller's tid: the namespace names the
+     * tenant ({@code /tenants/<name>}), and no tid is ever derived from it
+     * (tacplus#284). Validate it with {@code RouteTenant.callerTenant}.
+     */
+    public String getTid() {
+        return tokenPayload == null ? "" : Auth.claimFromPayload(tokenPayload, "tid");
+    }
+
+    /**
      * Returns the caller's sub claim — the authenticated principal, as the
      * SPIFFE URI EventBus stamps into a record's owner field at publish time.
      * Empty when the token carries no sub claim.

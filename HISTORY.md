@@ -138,3 +138,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-11 looper issue outbound-deadline fixture: mid forwards the trace_id to leaf but no test asserts it arrives; the gate has no just recipe (#310)
 - 2026-11-11 looper issue Generated Rust httpclient declares an unused backoff 0.4 crate, which locks two unmaintained crates (RUSTSEC-2025-0012, RUSTSEC-2024-0384) (#319)
 - 2026-11-12 looper issue Generated Rust and TypeScript chassis hardcode floors outside dependencies.yaml that admit known advisories (@grpc/grpc-js ^1.9.0, rustls "0.23", tokio "1", regex "1", bzip2 "0.4", chrono "0.4", rand "0.8") (#338)
+- 2026-11-13 looper issue release/2.0: cross-test/TESTS.md carries an unresolved merge conflict (markers committed) (#329)

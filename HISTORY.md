@@ -125,3 +125,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-16 looper issue Nightly gates have failed five nights running: the runner runs out of disk (~2h in) before just gates finishes (#282)
 - 2026-11-16 looper issue c2d-server gate: the Swift C2DDefaultDial consumer aborts ("freed pointer was not the last allocation") (#803)
 - 2026-11-17 looper issue Rust 1.100 on the runner turns main's gates red: unused-dependency lints in the generated Cargo manifests (current-generation) and the new build-dir layout (TestPruneCargoWorkspaceKeepsSharedDependencies) (#829)
+- 2026-11-17 looper issue Generated S2S streams survive token expiry by make-before-break rotation in the Go, Java and Rust chassis (<Svc>Rotating sibling, last, session binding) (#322)

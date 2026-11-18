@@ -573,6 +573,16 @@ the looper then marks it `promoted` or `declined` here with the date.
   every time without the lock. Java's `AppendLogTest.testConcurrentAppendsStayWholeAndComplete`
   (`pkg/templates/java/chassis/diskstore/AppendLogTest.java.tmpl`) does 4x200, twice Go's old count, with no
   timeout to hit but the same minutes spent on a loaded `current-generation` run.
+- **`just generated`: a resolved Python lock, and the C# and Swift trees, for the build's advisory checks**
+  (2026-11-18, nightly scan, #854): `scripts/generated.sh` gives OSV-Scanner a lock for Go, Rust, Java (pom.xml) and
+  TypeScript (package-lock.json), but Python gets only its sources and `pyproject.toml` (Bandit), and C# (`.csproj`)
+  and Swift (`Package.swift`) are not generated into the tree at all. So no advisory check sees what a generated Python,
+  C# or Swift client resolves to: the nightly scan queries OSV by hand (2026-11-18: PyPI floors only #264's and #309's
+  advisories; the NuGet `Google.Protobuf 3.27.2`, `Grpc.* 2.65.0` and the Swift `swift-protobuf 1.38.0`,
+  `grpc-swift-* 2.4.0` defaults clean). A `requirements.lock` per Python tree (`pip-compile` or `uv pip compile` of
+  the generated `pyproject.toml`), and a C# `packages.lock.json` (`dotnet restore --use-lock-file`) and Swift
+  `Package.resolved` for one set, would let the build's OSV-Scanner read all three. This complements "A floor check
+  over every version tacplus emits" above (the floors) with the resolved versions.
 
 ## Promoted / declined
 - **`just generated <dir>`: tacplus's security checks scan its generated output** (2026-11-09, #376): promoted

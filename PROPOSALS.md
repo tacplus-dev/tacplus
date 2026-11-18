@@ -32,6 +32,13 @@ the looper then marks it `promoted` or `declined` here with the date.
   generate` writes, and govulncheck fails `loading packages` (a Problem) for it and every module whose `replace`
   points at generated code. It hides the real cause behind a second failure; keeping built/ on a red run too, or
   generating the descriptors in the scan (tacplus-dev/looper), would leave only the gates' failure.
+- **Java state client topics: read which RPCs the state service declares** (2026-11-09, #454): the Go state client now
+  calls only the topic RPCs `proto.StateTopicRPCSurface` says the state service declares. The Java one
+  (`pkg/internal/java/types/statewrapper_gen.go`, the topic case) classifies a topic before its private check and calls
+  both `publishTo<F>` and `subscribeTo<F>` unconditionally, so a private topic, or an event-C2S state service (a
+  record/event topic with a `c2s` surface, or an exported root) that omits one of them, would not compile. Unverified
+  by a build: no fixture declares those shapes. Read the same surface there and add the shape to the
+  eventbus-backpressure fixture (or #196's kitchensink).
 - **Concurrent legs inside the other cross-test runners** (2026-11-06, #300): `just gates` runs gates and their
   language legs concurrently, and current-generation its fixtures (#812), but the runners that run several fixtures or
   peers one after another inside one leg (memberport, redact, determinism, ...) still do. The gate wall-time table

@@ -28,14 +28,15 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class AccountingSinkDurableTest {
-    // EMIT_BOUND_MS is how long an RPC completion may take to hand its record to the sink.
-    private static final long EMIT_BOUND_MS = 1000;
-    // PROGRESS_BOUND_MS is how long a wait for the sink's own thread to make progress
-    // (deliver, append, compact) may take. It is a hang guard, not a latency bound: the
-    // waits return as soon as their condition holds, and on a busy runner the thread
-    // may not be scheduled for well over EMIT_BOUND_MS. Every append fsyncs, so it
-    // bounds the disk too: on a shared runner under I/O pressure one fsync was measured
-    // at 0.2s to 3s (issue #341), so fifty appends can take minutes.
+    // PROGRESS_BOUND_MS is how long a wait for a thread to make progress (an emit to
+    // return; the sink's own thread to deliver, append, compact) may take. It is a hang
+    // guard, not a latency bound: the waits return as soon as their condition holds,
+    // and on a busy runner a thread may not be scheduled for well over a second (#851).
+    // An emit that waits on the publisher never returns, since the tests keep it
+    // blocked for the whole wait, so the guard catches it however loaded the runner.
+    // Every append fsyncs, so it bounds the disk too: on a shared runner under I/O
+    // pressure one fsync was measured at 0.2s to 3s (issue #341), so fifty appends can
+    // take minutes.
     private static final long PROGRESS_BOUND_MS = 180_000;
 
     private static Accounting.Event event(int i) {
@@ -61,7 +62,8 @@ public final class AccountingSinkDurableTest {
         return AccountingManager.EventBusSink.durable(queue, "test-durable", stop::get, dir);
     }
 
-    // emitAll runs n emits on one thread and checks they all return within the bound.
+    // emitAll runs n emits on one thread and checks they all return while the
+    // publisher is blocked.
     private static void emitAll(AccountingManager.EventBusSink sink, int n) throws InterruptedException {
         Thread emitter = new Thread(() -> {
             for (int i = 0; i < n; i++) {
@@ -70,8 +72,8 @@ public final class AccountingSinkDurableTest {
         }, "emitter");
         emitter.setDaemon(true);
         emitter.start();
-        emitter.join(EMIT_BOUND_MS);
-        check(!emitter.isAlive(), n + " emits did not return within " + EMIT_BOUND_MS + " ms while the publisher was blocked");
+        emitter.join(PROGRESS_BOUND_MS);
+        check(!emitter.isAlive(), n + " emits did not return within " + PROGRESS_BOUND_MS + " ms while the publisher was blocked");
     }
 
     // receive reads n records from the queue, acknowledging each as a publisher

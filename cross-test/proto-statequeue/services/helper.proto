@@ -13,9 +13,10 @@ package helper;
 
 import "sys/spec.proto";
 
-// No gRPC service, so the fixture declares its own backing-store identity:
-// without it no service serves the routing label its state names.
-option (spec.service) = {name: "helper", store: true};
+// A gRPC service, not a store identity of its own ({name: "helper", store:
+// true}): on this line a service that is its own store generates a Go
+// audienceFromMethod with a duplicate case and does not build (PROPOSALS.md).
+option (spec.service) = {name: "helper"};
 
 message Task {
   string task_id = 1;
@@ -31,4 +32,12 @@ message HelperState {
 
   Task  tasks  = 5 [(spec.queue) = true];
   Alert alerts = 6 [(spec.priority_queue) = "severity"];
+}
+
+service HelperApi {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  rpc Ping(Task) returns (Task) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_PUBLIC_NO_AUTH]};
+  }
 }

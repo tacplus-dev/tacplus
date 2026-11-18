@@ -66,6 +66,35 @@ func TestGoRecordC2SHandlerPinsCallerAndCopiesCriteria(t *testing.T) {
 	}
 }
 
+// On a plane routed by tenant, a read goes to the caller's own tenant: its
+// token's tid claim, never a tid read off its namespace, which names the tenant
+// (/tenants/<name>, kernel#23) and is not its tid (#284). A caller without the
+// claim is refused before any instance is asked.
+func TestGoRecordC2SRoutedReadsTheCallersTidClaim(t *testing.T) {
+	f := goRecordC2SFixture()
+	f.Routed = true
+	out, err := renderGoRecordC2SPlane(f)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	src := string(out)
+	for _, want := range []string{
+		"func recordC2STenant(method string, caller *servicemanager.Caller) (string, error) {",
+		"serviceconnection.CallerTenant(caller.Token().GetTid())",
+		`status.Error(codes.PermissionDenied, method+": the caller's token carries no tid claim, and the record store is one instance per tenant")`,
+		`tenant, err := recordC2STenant("GetScottyActivity", caller)`,
+		`tenant, err := recordC2STenant("GetScottyActivityPage", caller)`,
+		"g.sm.ScottyActivityRecordReader().List(ctx, tenant, filter, 1, \"\")",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("routed plane handler missing %q:\n%s", want, src)
+		}
+	}
+	if strings.Contains(src, "NamespaceTenant") {
+		t.Fatalf("a routed plane handler must never derive the caller's tid from its namespace:\n%s", src)
+	}
+}
+
 func TestGoHandlerInterfaceOmitsGeneratedRecordC2SGetter(t *testing.T) {
 	src := readGoTemplate(t, "go/types/handler.go.tmpl")
 	if !strings.Contains(src, "{{- if .IsGeneratedRecordC2S}}") {

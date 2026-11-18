@@ -112,15 +112,17 @@ func TestRustMcpRoutedDispatchRefusesAndStampsTheRouteField(t *testing.T) {
 		"self.handler.send_message(caller, req).await?;")
 }
 
-// The session tenant is the tid of the caller's token namespace, and a caller
-// whose namespace names none cannot open a session; a frame's tenant is
-// stamped when empty and refused when it names another tenant.
+// The session tenant is the caller's tid claim, never derived from its
+// namespace (which names the tenant, #284), and a caller with no tid claim
+// cannot open a session; a frame's tenant is stamped when empty and refused
+// when it names another tenant.
 func TestRustMcpRoutedSessionHelpers(t *testing.T) {
 	svc, _, _ := rustMcpRouteService()
 	got := mustRustMcpRouteDispatch(t, svc)
 	for _, want := range []string{
 		"pub fn crew_service_mcp_session_tenant(caller: &servicemanager::auth::Caller) -> Result<String, tonic::Status> {",
-		"servicemanager::tenant_route::tenant_of_caller_namespace(",
+		"servicemanager::tenant_route::caller_tenant(caller.tid())",
+		"an MCP session on a tenant-owned service needs a caller in a tenant; this caller's token carries no tid claim",
 		"fn crew_service_mcp_stamp_frame_tenant(frame: &mut crate::types::mcp::McpRequest, session_tenant: &str) -> Result<(), tonic::Status> {",
 		"if frame.tenant.is_empty() {",
 		"frame.tenant = session_tenant.to_string();",
@@ -129,6 +131,11 @@ func TestRustMcpRoutedSessionHelpers(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("routed MCP dispatch is missing %q\ngot:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"tenant_of_caller_namespace", "caller.namespace()"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("routed MCP dispatch derives the session tenant from the namespace (%q):\n%s", unwanted, got)
 		}
 	}
 }
@@ -153,7 +160,15 @@ func TestRustMcpRoutedDispatchGeneratesItsOwnTests(t *testing.T) {
 	got := mustRustMcpRouteDispatch(t, svc)
 	for _, want := range []string{
 		`const MCP_TEST_TENANT: &str = "acme0001";`,
-		`.set_namespace(format!("/tenants/{MCP_TEST_TENANT}/users/alice"))`,
+		`.set_namespace("/tenants/acme/users/alice")`,
+		".set_tid(MCP_TEST_TENANT)",
+		`const MCP_TEST_OTHER_TENANT: &str = "zzzzzzzz";`,
+		"fn mcp_test_caller_in(namespace: &str, tid: Option<&str>) -> servicemanager::auth::Caller {",
+		"fn the_mcp_session_tenant_is_the_tid_claim_not_a_tid_shaped_namespace()",
+		`mcp_test_caller_in(&format!("/tenants/{MCP_TEST_OTHER_TENANT}"), Some(MCP_TEST_TENANT))`,
+		"fn an_mcp_caller_with_a_tid_shaped_namespace_and_no_tid_claim_is_refused()",
+		"fn an_mcp_caller_at_system_with_no_tid_claim_is_refused()",
+		"fn an_mcp_caller_with_a_malformed_tid_claim_is_refused()",
 		"async fn send_message_refuses_a_client_supplied_target_tenant()",
 		"async fn send_message_takes_target_tenant_from_the_session()",
 		`"target_tenant: \"acme0001\""`,

@@ -127,14 +127,16 @@ func TestGoMcpDispatchFillsTheRouteFieldFromTheSessionTenant(t *testing.T) {
 	}
 }
 
-// The session tenant is the tenant of the token's namespace claim; a caller
-// with none cannot reach a tenant-routed tool, and a frame naming any other
+// The session tenant is the token's tid claim, never a tid read off its
+// namespace claim, which names the tenant (#284); a caller with none cannot
+// reach a tenant-routed tool, and a frame naming any other
 // tenant is refused while an empty one is stamped.
 func TestGoMcpSessionTenantComesFromTheToken(t *testing.T) {
 	rendered := goMcpTenantRender(t, goMcpTenantTestService())
 	for _, want := range []string{
 		"func ticketApiMcpSessionTenant(caller *servicemanager.Caller) (string, error) {",
-		"serviceconnection.NamespaceTenant(ns)",
+		"serviceconnection.CallerTenant(tid)",
+		"tid = caller.Token().GetTid()",
 		"codes.PermissionDenied",
 		"func ticketApiMcpStampFrameTenant(caller *servicemanager.Caller, frame *mcp_pb.McpRequest) error {",
 		"if frame.Tenant == \"\" {",

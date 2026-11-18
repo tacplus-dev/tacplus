@@ -252,13 +252,15 @@ public class ServiceConnectionTest {
                 "/tenants/aaaaaaaa/workspaces/dev", "/tenants/AAAAAAAA", "/system/tenants/aaaaaaaa"}) {
             expect(RouteTenant.tenantOfNamespace(ns).isEmpty(), "namespace \"" + ns + "\" names no routable tenant");
         }
-        // A caller's tenant: its namespace claim's /tenants/<tid>, at or below it.
-        for (String ns : List.of("/tenants/aaaaaaaa", "/tenants/aaaaaaaa/workspaces/dev")) {
-            expect(RouteTenant.tenantOfCaller(ns).equals("aaaaaaaa"), "a caller in " + ns + " belongs to tenant aaaaaaaa");
+        // A caller's tenant: its token's tid claim, never its namespace (which
+        // names the tenant, /tenants/<name>), and no claim or a malformed one is
+        // no tenant.
+        for (String tid : List.of("aaaaaaaa", "00000001", "a1b2c3d4")) {
+            expect(RouteTenant.callerTenant(tid).equals(tid), "a caller whose tid claim is " + tid + " belongs to tenant " + tid);
         }
-        for (String ns : new String[] {null, "", "/", "/system", "/tenants", "/tenants/", "/tenants/acme",
-                "/tenants/acme/workspaces/dev", "/tenants/aaaaaaaa/", "/tenants/AAAAAAAA", "/system/tenants/aaaaaaaa"}) {
-            expect(RouteTenant.tenantOfCaller(ns).isEmpty(), "a caller in \"" + ns + "\" belongs to no tenant");
+        for (String tid : new String[] {null, "", "ACME0001", "acme", "/tenants/aaaaaaaa",
+                "/tenants/aaaaaaaa/workspaces/dev", " aaaaaaaa", "aaaaaaaa ", "aaaaaaaaa"}) {
+            expect(RouteTenant.callerTenant(tid).isEmpty(), "a caller whose tid claim is \"" + tid + "\" belongs to no tenant");
         }
         expect(RouteTenant.tenantOfInstance("spiffe://example.com/tenants/aaaaaaaa/services/crew").equals("aaaaaaaa"),
                 "a tenant service instance belongs to its tenant");

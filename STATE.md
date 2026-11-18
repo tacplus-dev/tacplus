@@ -1,8 +1,8 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-18 by looper (#300).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-18 by looper (#340).
 
-- **Version / line:** v2.6.2 (latest release, 2026-11-07, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
+- **Version / line:** v2.6.13 (latest release, 2026-11-15, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
   generated write surface on the record query plane's S2S half (Get/Put/InsertIfAbsent/ReplaceIfUnchanged/Delete,
   Watch<T>Changes, the atomic Apply with canonical lock order), per-record-type durability (MEMORY/LOCAL/REMOTE),
@@ -58,7 +58,11 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-18 by lo
   2.6 gets none); `build:X.Y` per line, rebuilt on every release as an immutable `build:X.Y.Z`, carries Kani and
   cargo-fuzz too, and its `tacplus` is `images/tacplus.sh`, which runs exactly the pinned binary, checked against
   `checksums.txt`, and refuses a repository with no pin or a pin of another line. `tacplus verify` reports Go as
-  skipped.
+  skipped. This repository, the compiler and no tacplus project, pins its own gates' build image by digest in
+  `build.lock` (#340: `build:2.6.13`, what `build:latest` resolves to), which the build pipeline (tacplus-dev/build)
+  plans from, so every land runs the gates and the security checks there; `security-exceptions.yaml` accepts the
+  first pinned build's 122 HIGH findings rule-wide until 2026-12-31 (Jody, #340), each under its bug issue
+  (#565–#584, #753–#756, #813), and the build fails from 2027-01-01 on whatever is left.
   `registry.json`'s layout is tacplus's own (#307): before, protojson chose one or two spaces after each `:` from a
   hash of the binary, so it flipped between patches and between amd64 and arm64. Now it is always two (2.5.8's
   format), pinned by a golden test on every supported line.

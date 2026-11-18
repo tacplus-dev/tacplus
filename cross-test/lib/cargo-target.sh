@@ -24,6 +24,15 @@ fi
 # Exported so a bare `cargo test` in a leg lands here too.
 export CARGO_TARGET_DIR="$CROSS_TEST_CARGO_TARGET"
 
+# Every leg rebuilds its own generated members from new sources, so the
+# incremental cache never pays back, and debug info is most of what linking a
+# test binary costs: without both, a warm leg took 6.3 CPU-min, not 9.1
+# (tacplus#812, #841). A caller's own value is kept (CARGO_PROFILE_*_DEBUG=2 to
+# debug a leg's test binary). The output is the same code either way.
+export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
+export CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}"
+export CARGO_PROFILE_TEST_DEBUG="${CARGO_PROFILE_TEST_DEBUG:-0}"
+
 # Once a leg passes, remove its own crates from the shared directory. A
 # generated workspace's members (the model and chassis crates) build under a
 # new path in every leg, so no later leg reuses them, and their test binaries

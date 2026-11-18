@@ -563,12 +563,21 @@ assert_clean_log() {
 # used it.
 GO_FIXTURE_TEST_TIMEOUT=20m
 
+# The generated grpcserver keepalive test waits a real-time 140 s for the
+# fourth keepalive ping and reads nothing fixture-specific: in every Go fixture
+# it was 42 of the gate's 47 Go minutes (#841). The base fixture runs it and
+# asserts that it passed; every later Go fixture skips it.
+GO_KEEPALIVE_TEST='TestKeepaliveOverrideDoesNotGOAWAYGeneratedClient'
+GO_KEEPALIVE_TEST_SKIP=false
+
 run_go_fixture_tests() {
   local dir="$1"
   local log="$2"
   local json="${log%.log}.json"
   local status=0
-  (cd "$dir" && go mod tidy && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" go test -timeout "$GO_FIXTURE_TEST_TIMEOUT" -json ./... >"$json") >"$log" 2>&1 || status=$?
+  local skip=()
+  [[ "$GO_KEEPALIVE_TEST_SKIP" == true ]] && skip=(-skip "^${GO_KEEPALIVE_TEST}\$")
+  (cd "$dir" && go mod tidy && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" go test -timeout "$GO_FIXTURE_TEST_TIMEOUT" "${skip[@]}" -json ./... >"$json") >"$log" 2>&1 || status=$?
   [[ -f "$json" ]] || return "$status"
   python3 -I - "$json" "$log" <<'GO_TEST_JSON_PY' || return 1
 import json, sys
@@ -616,6 +625,24 @@ GO_TEST_JSON_PY
   return "$status"
 }
 
+# The one Go fixture that runs the keepalive test must have run it: a rename or
+# a template that stops emitting it would otherwise leave no fixture running it.
+assert_go_keepalive_test_passed() {
+  local json="$1"
+  python3 -I - "$json" "$GO_KEEPALIVE_TEST" <<'GO_KEEPALIVE_PY' || die "base Go fixture: $GO_KEEPALIVE_TEST did not run and pass (see $json)"
+import json, sys
+
+src, name = sys.argv[1], sys.argv[2]
+for raw in open(src, encoding="utf-8", errors="replace"):
+    try:
+        ev = json.loads(raw)
+    except ValueError:
+        continue
+    if ev.get("Test") == name and ev.get("Action") == "pass":
+        sys.exit(0)
+sys.exit(1)
+GO_KEEPALIVE_PY
+}
 
 run_java_generated_self_tests() {
   local output="$1"
@@ -2574,9 +2601,14 @@ for language in $(fixture_languages base); do
   install_json_key_selftest "$output_root" "$language"
   echo "==> Compiling $language cross-test fixture"
   compile_current_output "$output_root" "$language" "$dir/tacplus"
+  if [[ "$language" == go ]]; then
+    assert_go_keepalive_test_passed "$dir/go-test.json"
+  fi
   echo "    PASS $language"
   prune_fixture "$dir" "$output_root" keep-sources
 done
+# The base fixture ran the keepalive test; the rest skip it (#841).
+GO_KEEPALIVE_TEST_SKIP=true
 
 # Config-defaults cross-language parity: for every proto message that has
 # spec.default_int / spec.default_string / etc. annotations, verify that

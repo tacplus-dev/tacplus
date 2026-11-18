@@ -1,0 +1,43 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// State-queue cross-test fixture (#456): a state root with a FIFO queue and a
+// priority queue boundary. The state service backs both with the
+// OfferTo*/ConsumeFrom*/Peek*/Size* RPCs (pkg/internal/proto/state.go). The
+// Java StateClient took both for singletons and called getTasks/watchTasks,
+// which do not exist, so the generated model did not compile. Generated and
+// compiled in Go, Java and Rust by cross-test/current-generation.
+
+syntax = "proto3";
+
+package helper;
+
+import "sys/spec.proto";
+
+// A gRPC service, not a store identity of its own ({name: "helper", store:
+// true}): on this line a service that is its own store generates a Go
+// audienceFromMethod with a duplicate case and does not build (PROPOSALS.md).
+option (spec.service) = {name: "helper"};
+
+message Task {
+  string task_id = 1;
+}
+
+message Alert {
+  string alert_id = 1;
+  int32  severity = 2;
+}
+
+message HelperState {
+  option (spec.service_state) = {label: ["helper"]};
+
+  Task  tasks  = 5 [(spec.queue) = true];
+  Alert alerts = 6 [(spec.priority_queue) = "severity"];
+}
+
+service HelperApi {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+
+  rpc Ping(Task) returns (Task) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_PUBLIC_NO_AUTH]};
+  }
+}

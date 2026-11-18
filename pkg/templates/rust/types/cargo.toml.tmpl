@@ -60,7 +60,6 @@ schemars = "{{.SchemarsVersion}}"
 tonic-health = { workspace = true }
 rustls = { workspace = true }
 {{- if or .HasAutoTls .HasSmb}}
-rustls-pemfile = { workspace = true }
 {{- if .HasAutoTls}}
 tokio-rustls = { workspace = true }
 {{- end}}

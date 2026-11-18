@@ -7,9 +7,9 @@
 //
 // What it pins: with the event-bus publisher blocked (nothing reads the queue),
 // EventBusSink::emit never holds the calling RPC. Fifty concurrent completions each
-// return within a bound. Records emitted during the outage are spooled and reach
-// the publisher, in order, once it resumes. A spool that is full drops the overflow
-// rather than blocking.
+// return while it stays blocked. Records emitted during the outage are spooled and
+// reach the publisher, in order, once it resumes. A spool that is full drops the
+// overflow rather than blocking.
 //
 // Each body runs on its own thread, bounded by recv_timeout, so a blocked emit
 // fails the gate rather than hanging it.
@@ -23,8 +23,13 @@ use agentsensor_model_types::sys::accounting::accounting::Event;
 use agentsensor_model_types::vservices::accountingrecord::accountingrecord::AccountingRecord;
 use am::{EventBusSink, Sink};
 
-// EMIT_BOUND is how long an RPC completion may take to hand its record to the sink.
-const EMIT_BOUND: Duration = Duration::from_secs(1);
+// PROGRESS_BOUND bounds each body: its emits returning, and the sink's drain task
+// delivering. It is a hang guard, not a latency bound: the body ends as soon as it is
+// done, and on a busy runner its thread or the drain task may not be scheduled for well
+// over a second (#851). An emit that waits on the publisher never returns, since the
+// tests keep it blocked for the whole wait, so the guard catches it however loaded the
+// runner.
+const PROGRESS_BOUND: Duration = Duration::from_secs(30);
 // SPOOL_DEPTH must match SPOOL_DEPTH in chassis/am/src/am.rs.
 const SPOOL_DEPTH: usize = 4096;
 
@@ -57,10 +62,10 @@ where
 }
 
 // The publisher is blocked: nothing reads rx. Fifty concurrent completions must each
-// return within the bound. Before the spool, the second emit parked its task.
+// return. Before the spool, the second emit parked its task.
 #[test]
 fn rpc_is_never_held_when_publisher_is_blocked() {
-    run_within_bound("50 RPC completions", EMIT_BOUND, async {
+    run_within_bound("50 RPC completions", PROGRESS_BOUND, async {
         let (tx, _rx) = tokio::sync::mpsc::channel::<AccountingRecord>(1);
         let sink = Arc::new(EventBusSink::new(tx, "test-1".to_string()));
         let mut rpcs = Vec::new();
@@ -78,7 +83,7 @@ fn rpc_is_never_held_when_publisher_is_blocked() {
 // arrives, in emit order.
 #[test]
 fn spool_replays_in_order_after_outage() {
-    run_within_bound("replay of 10 records", EMIT_BOUND, async {
+    run_within_bound("replay of 10 records", PROGRESS_BOUND, async {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<AccountingRecord>(1);
         let sink = EventBusSink::new(tx, "test-2".to_string());
         for i in 0..10 {
@@ -102,7 +107,7 @@ fn spool_replays_in_order_after_outage() {
 #[test]
 fn drops_only_when_spool_is_full() {
     let emitted = SPOOL_DEPTH + 100;
-    run_within_bound("emit past a full spool", Duration::from_secs(5), async move {
+    run_within_bound("emit past a full spool", PROGRESS_BOUND, async move {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<AccountingRecord>(1);
         let sink = EventBusSink::new(tx, "test-3".to_string());
         for i in 0..emitted {

@@ -4,6 +4,7 @@
 package types
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/packages"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
+	"github.com/tacplus-dev/tacplus/templates"
 )
 
 func TestCreateWorkspaceCargoTomlFailsOnMissingWorkspaceDependency(t *testing.T) {
@@ -307,5 +309,76 @@ func TestMoveUnusedCrateDependencies(t *testing.T) {
 	}
 	if strings.Contains(dependencies, "\nhmac = ") || !strings.Contains(devDependencies, "\nhmac = ") {
 		t.Errorf("types kept hmac, which it does not use, as a dependency:\n%s", manifest)
+	}
+}
+
+// pbjson-types names chrono as a non-optional dependency, and chrono 0.4 is
+// unmaintained (RUSTSEC-2026-0543): no generated source names pbjson_types, so
+// no generated crate depends on it, even with dependencies.yaml pinning it, and
+// the logger chassis, which never names chrono, does not depend on chrono
+// (tacplus#855).
+func TestGeneratedCratesDoNotDependOnPbjsonTypes(t *testing.T) {
+	depsDir := t.TempDir()
+	deps := `rust:
+  dependencies:
+    async-trait: 0.1.89
+    axum: 0.8.8
+    base64: 0.21.7
+    bytes: 1.11.1
+    futures: 0.3.31
+    pbjson: 0.8.0
+    pbjson-types: 0.8.0
+    prost: 0.14.1
+    prost-types: 0.14.1
+    prost-wkt-types: 0.7.1
+    regex: 1.12.3
+    reqwest: 0.12.18
+    rustls: 0.23.35
+    rustls-pemfile: 2.2.0
+    serde: 1.0.228
+    serde_json: 1.0.149
+    serde_yaml: 0.9.34
+    tinyvec: "=1.12.0"
+    tokio: 1.49.0
+    tokio-rustls: 0.26.4
+    tokio-stream: 0.1.17
+    tokio-util: 0.7.15
+    toml: 0.8.23
+    tonic: 0.14.0
+    tonic-health: 0.14.0
+    tonic-prost: 0.14.0
+    tracing: 0.1.44
+`
+	if err := os.WriteFile(filepath.Join(depsDir, "dependencies.yaml"), []byte(deps), 0644); err != nil {
+		t.Fatalf("write dependencies.yaml: %v", err)
+	}
+	packages.SetProtoDir(depsDir)
+	defer packages.SetProtoDir("")
+
+	out := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(out, "types"), 0755); err != nil {
+		t.Fatalf("mkdir types: %v", err)
+	}
+	if err := createWorkspaceCargoToml(&tactype.Config{
+		CrateBasePath: "current-generation",
+	}, out, true, false, false); err != nil {
+		t.Fatalf("createWorkspaceCargoToml: %v", err)
+	}
+	for _, manifest := range []string{"Cargo.toml", "types/Cargo.toml"} {
+		data, err := os.ReadFile(filepath.Join(out, manifest))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "pbjson-types") {
+			t.Errorf("%s depends on pbjson-types:\n%s", manifest, data)
+		}
+	}
+
+	logger, err := fs.ReadFile(templates.FS, "rust/chassis/logger/Cargo.toml.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(logger), "chrono") {
+		t.Errorf("the logger chassis depends on chrono:\n%s", logger)
 	}
 }

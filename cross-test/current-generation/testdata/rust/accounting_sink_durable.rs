@@ -85,6 +85,12 @@ fn cursor_reads(dir: &Path, want: usize) -> bool {
         == Some(want)
 }
 
+fn log_lines(dir: &Path) -> usize {
+    std::fs::read_to_string(dir.join("accounting-spool").join("records.log"))
+        .map(|raw| raw.lines().count())
+        .unwrap_or(0)
+}
+
 // recv_n reads n records, acknowledging each as a publisher does, and returns their
 // request IDs in arrival order.
 async fn recv_n(rx: &mut Receiver<AccountingRecord>, ack: &UnboundedSender<()>, n: usize) -> Vec<String> {
@@ -110,6 +116,10 @@ fn durable_spool_replays_unacknowledged_after_restart() {
         for i in 0..5 {
             sink1.emit(&event(i)).await;
         }
+        // Emit only queues: wait until all five are in the log before acknowledging any.
+        // An ack that catches up with the log compacts it, and the records after it
+        // start a new log with its own cursor (#339).
+        yield_until("five records in the log", || log_lines(&dir) == 5).await;
         assert_eq!(recv_n(&mut rx1, &ack1, 3).await, vec!["r0", "r1", "r2"]);
         // The stop: the sink and the publisher's queue go away. The spool task writes its
         // cursor as it exits.

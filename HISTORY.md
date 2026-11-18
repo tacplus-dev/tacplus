@@ -128,3 +128,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-17 looper issue Generated S2S streams survive token expiry by make-before-break rotation in the Go, Java and Rust chassis (<Svc>Rotating sibling, last, session binding) (#322)
 - 2026-11-17 looper issue Land the load-flake fixes as one land: main's gates cannot go green while each fix queues behind the others (#804)
 - 2026-11-18 looper issue Generated Go chassis TLS: InsecureSkipVerify (G402) and VerifyPeerCertificate with session resumption, no VerifyConnection (G123) (#359)
+- 2026-11-18 looper issue Full gates use ~1.5 of 16 CPUs: run independent gates and cross-test legs concurrently (bounded), keep the verdict deterministic (#300)

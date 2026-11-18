@@ -10,9 +10,9 @@ use crate::error::{ClientError, Result};
 use crate::retry::RetryConfig;
 use {{.CrateBasePathUnderscore}}_types::sys::httpclient::HttpClientConfig as ProtoHttpClientConfig;
 use reqwest::ClientBuilder;
+use rustls::pki_types::pem::{self, PemObject};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig, RootCertStore};
-use std::io::Cursor;
 use std::time::Duration;
 
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -148,32 +148,19 @@ fn decode_base64(encoded: &str) -> Result<Vec<u8>> {
 
 /// Parse PEM-encoded certificates
 fn parse_pem_certificates(pem_bytes: &[u8]) -> Result<Vec<CertificateDer<'static>>> {
-    let mut cursor = Cursor::new(pem_bytes);
-    rustls_pemfile::certs(&mut cursor)
+    CertificateDer::pem_slice_iter(pem_bytes)
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| ClientError::config_error(format!("Failed to parse PEM certificates: {}", e)))
 }
 
-/// Parse PEM-encoded private key
+/// Parse PEM-encoded private key: the first PKCS#8, PKCS#1 or SEC1 key
 fn parse_pem_private_key(pem_bytes: &[u8]) -> Result<PrivateKeyDer<'static>> {
-    let mut cursor = Cursor::new(pem_bytes);
-
-    // Try parsing as PKCS8 first
-    for item in rustls_pemfile::read_all(&mut cursor)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| ClientError::config_error(format!("Failed to read PEM data: {}", e)))?
-    {
-        match item {
-            rustls_pemfile::Item::Pkcs8Key(key) => return Ok(PrivateKeyDer::Pkcs8(key)),
-            rustls_pemfile::Item::Pkcs1Key(key) => return Ok(PrivateKeyDer::Pkcs1(key)),
-            rustls_pemfile::Item::Sec1Key(key) => return Ok(PrivateKeyDer::Sec1(key)),
-            _ => continue,
+    PrivateKeyDer::from_pem_slice(pem_bytes).map_err(|e| match e {
+        pem::Error::NoItemsFound => {
+            ClientError::config_error("No valid private key found in PEM data".to_string())
         }
-    }
-
-    Err(ClientError::config_error(
-        "No valid private key found in PEM data".to_string(),
-    ))
+        e => ClientError::config_error(format!("Failed to read PEM data: {}", e)),
+    })
 }
 
 /// Extract RetryConfig from proto config
@@ -226,5 +213,46 @@ mod tests {
     fn test_decode_base64_invalid() {
         let result = decode_base64("not-valid-base64!!!");
         assert!(result.is_err());
+    }
+
+    // PEM sections with a stand-in body: parsing routes on the label and
+    // base64-decodes the body; the DER itself is validated later, by rustls.
+    fn pem(label: &str, body: &str) -> String {
+        format!("-----BEGIN {label}-----\n{body}\n-----END {label}-----\n")
+    }
+
+    #[test]
+    fn test_parse_pem_certificates() {
+        let bundle = pem("CERTIFICATE", "AQID") + &pem("CERTIFICATE", "BAUG");
+        let certs = parse_pem_certificates(bundle.as_bytes()).unwrap();
+        assert_eq!(certs.len(), 2);
+        assert_eq!(certs[0].as_ref(), &[1, 2, 3]);
+        assert_eq!(certs[1].as_ref(), &[4, 5, 6]);
+        assert!(parse_pem_certificates(pem("CERTIFICATE", "!!").as_bytes()).is_err());
+    }
+
+    #[test]
+    fn test_parse_pem_private_key_formats() {
+        // A key after a certificate is still found, as in a combined PEM file.
+        let pkcs8 = pem("CERTIFICATE", "AQID") + &pem("PRIVATE KEY", "BAUG");
+        match parse_pem_private_key(pkcs8.as_bytes()).unwrap() {
+            PrivateKeyDer::Pkcs8(k) => assert_eq!(k.secret_pkcs8_der(), &[4, 5, 6]),
+            other => panic!("want PKCS#8, got {other:?}"),
+        }
+        match parse_pem_private_key(pem("RSA PRIVATE KEY", "BwgJ").as_bytes()).unwrap() {
+            PrivateKeyDer::Pkcs1(k) => assert_eq!(k.secret_pkcs1_der(), &[7, 8, 9]),
+            other => panic!("want PKCS#1, got {other:?}"),
+        }
+        match parse_pem_private_key(pem("EC PRIVATE KEY", "CgsM").as_bytes()).unwrap() {
+            PrivateKeyDer::Sec1(k) => assert_eq!(k.secret_sec1_der(), &[10, 11, 12]),
+            other => panic!("want SEC1, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_pem_private_key_missing() {
+        let err = parse_pem_private_key(pem("CERTIFICATE", "AQID").as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("No valid private key found"), "{err}");
+        assert!(parse_pem_private_key(b"not a pem at all").is_err());
     }
 }

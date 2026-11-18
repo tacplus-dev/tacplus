@@ -22,6 +22,7 @@ use tokio::task::JoinHandle;
 use tonic::transport::Channel;
 use tracing::info;
 {{- if .HasAutoTls}}
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
@@ -227,12 +228,17 @@ fn certified_key_from_pem(
     key_pem: &str,
 ) -> Result<Arc<CertifiedKey>, Box<dyn std::error::Error + Send + Sync>> {
     let certs: Vec<CertificateDer<'static>> =
-        rustls_pemfile::certs(&mut cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>()?;
+        CertificateDer::pem_slice_iter(cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>()?;
     if certs.is_empty() {
         return Err("TLS cert chain PEM did not contain any certificates".into());
     }
-    let key: PrivateKeyDer<'static> = rustls_pemfile::private_key(&mut key_pem.as_bytes())?
-        .ok_or("TLS private key PEM did not contain a private key")?;
+    let key: PrivateKeyDer<'static> = match PrivateKeyDer::from_pem_slice(key_pem.as_bytes()) {
+        Ok(key) => key,
+        Err(rustls::pki_types::pem::Error::NoItemsFound) => {
+            return Err("TLS private key PEM did not contain a private key".into())
+        }
+        Err(e) => return Err(e.into()),
+    };
     let certified_key = CertifiedKey::from_der(
         certs,
         key,

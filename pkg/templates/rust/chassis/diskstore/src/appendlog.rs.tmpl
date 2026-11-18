@@ -46,6 +46,7 @@ impl AppendLog {
         }
         let mut f = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&path)

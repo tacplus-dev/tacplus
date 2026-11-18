@@ -27,6 +27,10 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-17 by lo
   Marvin) and the elliptic-curve 0.13 stack (crypto-bigint 0.5, RUSTSEC-2026-0387) are gone from the generated
   lockfile, which current-generation checks (#186; backported to release/2.0 through release/2.5 by pull request, as
   v2.0.12, v2.1.5, v2.2.2, v2.3.4, v2.4.3 and v2.5.2 once they merge).
+  The generated Rust types crate no longer depends on `pbjson-types`, nor the logger chassis on `chrono` (#855;
+  backported to release/2.0 through release/2.6 by pull request, #863-#869). chrono 0.4 (RUSTSEC-2026-0543,
+  unmaintained) is still in the generated lockfile, through `prost-wkt-types` and the token chassis's public
+  `expires_in()`; removing it changes the generated surface, so it waits for the next minor or major (#862).
   The generated Rust chassis is on the digest 0.11 stack (ed25519-dalek 3, sha2 0.11, hmac 0.13, x509-cert 0.3,
   pkcs8 0.11, signature 3), so no generated lockfile locks block-buffer 0.10 (GHSA-qwgh-2vcv-g2f7), which
   current-generation checks; the model crate pins x509-cert 0.3 itself, and the fixtures and the example pin

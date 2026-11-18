@@ -21,7 +21,8 @@ depends=(
   cross-test/proto/         # the fixture verification generates
   cross-test/dependencies.yaml
   images/base.Dockerfile    # the toolchain pins: the SDKs,
-  images/build.Dockerfile   # Kani and JBMC
+  images/build.Dockerfile   # Kani and OpenJML
+  cross-test/lib/java-compile.sh  # the pom the Java fixture compiles under
   scripts/verify.sh scripts/verify-changed.sh
 )
 

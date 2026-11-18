@@ -4,6 +4,27 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **OpenJML in the arm64 build image** (2026-11-07, #257): `images/build.Dockerfile` installs the
+  `openjml-ubuntu-latest` release on both platforms, and that release's JDK and solvers are x86-64: on
+  `build:2.6` for arm64 (the looper's runners) `openjml` fails with `Exec format error`, so Java verification runs
+  only on amd64 (the GitHub release and nightly runners). OpenJML publishes no Linux arm64 build. Options: the image
+  installs `qemu-user` and wraps `openjml` and its z3 in it (how #257 ran it locally: ~5x slower), or OpenJML is
+  built from source for arm64 with an arm64 z3 4.7.1.
+- **ESC times out on validators with element loops** (2026-11-07, #257): under qemu emulation (~5x slower than
+  amd64), OpenJML ESC proved the kitchensink's `Bounds`, `Level2` and `Level3` validators and 11 of the first 16 of
+  cross-test/proto's `product` package, but ended UNKNOWN at the five-minute limit per attempt on validators that
+  loop over elements and check each one's UTF-8 size (`Sizes`, `RepeatedScalars`, `Maps`, `Product`, `Supplier`,
+  ...). Unmeasured on amd64, where `just verify` runs. If they still time out there: give each element loop a
+  `maintaining` invariant (the bound so far), or check element sizes in a helper with its own spec, so ESC proves
+  one iteration instead of the whole loop.
+- **Retire JBMC from the build image** (2026-11-07, #257): `tacplus verify` runs OpenJML ESC for Java, not JBMC;
+  `images/build.Dockerfile` still installs JBMC and `images/smoke.sh` still checks it. #196 removes the Java
+  generator's JBMC harnesses (`pkg/internal/java/types/proof.go`).
+- **JML specs for string byte bounds** (2026-11-07, #257): the Java validator measures a string with
+  `getBytes(UTF_8).length`, which allocates, so no pure JML expression states `assert_max_size`/`assert_min_size` on
+  a string and `jmlSpecs` writes none: they are fuzzed only. A validator that measures `getXBytes().size()` (the same
+  bytes; protobuf-java caches them) would let ESC prove them. The same holds for `assert_float` (`in`/`not_in` still
+  stream over a lambda) and the element bounds of repeated fields (checked in a loop ESC needs an invariant for).
 - **CI's own jobs read `build.lock` instead of floating `build:latest`** (2026-11-12, #340): the build pipeline
   (tacplus-dev/build) runs this repository's gates in the image `build.lock` pins by digest, but
   `.github/workflows/nightly-gates.yml`, `nightly-security.yml`, `nightly-fixes.yml`, `site.yml` and

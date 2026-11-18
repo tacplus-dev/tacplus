@@ -237,7 +237,7 @@ docs:
   echo "=== test ==="
   just test
 
-# Formal verification (#275): Kani on the generated Rust and JBMC on the
+# Formal verification (#275): Kani on the generated Rust and OpenJML ESC on the
 # generated Java of cross-test/proto (Go is not formally verified, by decision).
 # NOT a gate, and `just gates` must never reach it (scripts/verify_test.go): it
 # needs the build image's verifiers and far more memory and time than a land.

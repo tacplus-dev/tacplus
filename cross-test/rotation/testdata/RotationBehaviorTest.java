@@ -75,6 +75,7 @@ import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -86,19 +87,25 @@ import org.junit.jupiter.api.Test;
  * TickerServiceRotating sibling) behind the generated Authorizer, served by the
  * generated GrpcServer (TLS, #260's expiry interceptor), and called by the
  * generated TickerServiceGrpcClient over the generated
- * ServiceConnection.ChannelProvider. Tokens live 4 s. Neither the handler nor
+ * ServiceConnection.ChannelProvider. Tokens live 6 s. Neither the handler nor
  * the caller code below mentions rotation.
  */
 class RotationBehaviorTest {
     /**
-     * Every token's lifetime; exp is whole seconds, so a token may expire up to a
-     * second sooner. 4 s, not the Go and Rust legs' 3 s: the client rotates at 75%
-     * of what is left, and a 3 s token floored to 2 s left a cutover 0.5 s, which
-     * a loaded runner's JVM overran (tacplus#300).
+     * Every token's lifetime; exp is whole seconds, so a token may expire up to
+     * a second sooner. The client rotates at ROTATE_AT (75%) of what is left, so
+     * a cutover has a quarter of it before the old leg's exp: 6 s tokens leave
+     * it 1.25 s or more, where 3 s left a loaded runner as little as 0.5 s and
+     * 4 s (tacplus#300) still 0.75 s (#840). A rotation that misses still ends
+     * the stream at exp.
      */
-    private static final long TOKEN_LIFETIME_MS = 4_000;
-    /** How long the transparency tests run a stream: several lifetimes. */
-    private static final long STREAM_FOR_MS = 12_000;
+    private static final long TOKEN_LIFETIME_MS = 6_000;
+    /** How long the transparency tests run a stream: more than two lifetimes. */
+    private static final long STREAM_FOR_MS = 14_000;
+    /** The transparency tests' ticks at 50 ms: STREAM_FOR_MS of them. */
+    private static final int TICKS = (int) (STREAM_FOR_MS / 50);
+    /** How many of the bidi test's ticks may be on their way, not yet echoed. */
+    private static final int IN_FLIGHT = 10;
     private static final Metadata.Key<String> AUTHORIZATION =
             Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
 
@@ -316,6 +323,47 @@ class RotationBehaviorTest {
         cleanups.clear();
     }
 
+    private static boolean warmed;
+
+    /**
+     * Once per JVM, before the first test: one throwaway stream, carried across
+     * a rotation, so the first test's opening leg and cutover do not also pay
+     * for loading and compiling the TLS, Authorizer, generated wrapper, client
+     * and StreamRotation paths. On a loaded runner that cold start spent most
+     * of a 6 s token before the first tick reached the handler (#840). Nothing
+     * is asserted here: every test still judges its own stream.
+     */
+    @BeforeEach
+    void warmUp() throws Exception {
+        if (warmed) {
+            return;
+        }
+        warmed = true;
+        try {
+            Fixture f = new Fixture().serve();
+            TokenSource src = new TokenSource(f);
+            TickerServiceGrpcClient c = f.client(f.dial(f.port), src);
+            Recorder rec = new Recorder();
+            StreamObserver<Tick> up = c.assistTicks(rec);
+            long until = System.currentTimeMillis() + 30_000;
+            int n = 0;
+            while (System.currentTimeMillis() < until && !rec.ended.isDone()
+                    && (src.mints.get() < 2 || rec.got.size() < n)) {
+                if (rec.got.size() == n) {
+                    n++;
+                    up.onNext(Tick.newBuilder().setSeq(n).setM("warm").build());
+                }
+                Thread.sleep(50);
+            }
+            up.onCompleted();
+            rec.ended.get(10, TimeUnit.SECONDS);
+        } catch (Exception | AssertionError ignored) {
+            // best effort
+        } finally {
+            cleanUp();
+        }
+    }
+
     final class Fixture {
         final ImmutableKey key = ImmutableKey.from(KeyHelpers.newEd25519Key());
         final TickerHandler handler = new TickerHandler();
@@ -511,8 +559,11 @@ class RotationBehaviorTest {
 
     /**
      * The caller sends a tick every 2 ms for STREAM_FOR_MS while the handler
-     * echoes each back, both directions at once, across several 4 s token
-     * lifetimes. Every tick arrives at the handler and back exactly once, in
+     * echoes each back, both directions at once, across several token
+     * lifetimes, with at most IN_FLIGHT ticks not yet echoed: the cutover's
+     * last follows what is in flight on the old leg, so a backlog the runner
+     * cannot drain before the old leg's exp ends the stream there (#840).
+     * Every tick arrives at the handler and back exactly once, in
      * order, on one handler call with one live Context; the tokens were renewed
      * several times.
      */
@@ -526,6 +577,10 @@ class RotationBehaviorTest {
         long start = System.currentTimeMillis();
         int n = 0;
         while (System.currentTimeMillis() - start < STREAM_FOR_MS) {
+            if (n - rec.got.size() >= IN_FLIGHT) {
+                Thread.sleep(1);
+                continue;
+            }
             n++;
             up.onNext(Tick.newBuilder().setSeq(n).setM("up").build());
             Thread.sleep(2);
@@ -534,7 +589,8 @@ class RotationBehaviorTest {
         while (rec.got.size() < n && System.currentTimeMillis() < deadline && !rec.ended.isDone()) {
             Thread.sleep(10);
         }
-        assertFalse(rec.ended.isDone(), "the stream ended mid-way: " + rec.ended.getNow(null));
+        assertFalse(rec.ended.isDone(), "the stream ended mid-way, " + rec.got.size() + " of " + n
+                + " ticks echoed: " + rec.ended.getNow(null));
         up.onCompleted();
         assertEquals(Status.Code.OK, rec.await(5_000).getCode(), "the stream's end");
         checkSequence("echoed", rec.got, n);
@@ -543,20 +599,20 @@ class RotationBehaviorTest {
         assertNull(end.status, "handler ended with " + end.status + ", want a clean end");
         assertTrue(end.contextHeld, "the handler's Context was cancelled during the stream");
         assertEquals(1, f.handler.calls.get(), "handler calls (one logical stream)");
-        assertTrue(src.mints.get() >= 4, src.mints.get() + " tokens minted over " + STREAM_FOR_MS
-                + " ms of " + TOKEN_LIFETIME_MS + " ms tokens, want at least 4 (the stream did not rotate)");
+        assertTrue(src.mints.get() >= 3, src.mints.get() + " tokens minted over " + STREAM_FOR_MS
+                + " ms of " + TOKEN_LIFETIME_MS + " ms tokens, want at least 3 (the stream did not rotate)");
     }
 
-    /** 160 ticks at 50 ms, across several lifetimes, all delivered in order, then a clean end. */
+    /** TICKS ticks at 50 ms, across several lifetimes, all delivered in order, then a clean end. */
     @Test
     void serverStreamingAcrossLifetimes() throws Exception {
         Fixture f = new Fixture().serve();
         TokenSource src = new TokenSource(f);
         TickerServiceGrpcClient c = f.client(f.dial(f.port), src);
-        int n = 160;
+        int n = TICKS;
         Recorder rec = new Recorder();
         c.generateTicks(Tick.newBuilder().setSeq(n).build(), rec);
-        assertEquals(Status.Code.OK, rec.await(20_000).getCode(), "the stream's end");
+        assertEquals(Status.Code.OK, rec.await(STREAM_FOR_MS + 15_000).getCode(), "the stream's end");
         checkSequence("ticks", rec.got, n);
         HandlerEnd end = f.handlerEnd(5_000);
         assertNull(end.status, "handler ended with " + end.status);
@@ -564,13 +620,13 @@ class RotationBehaviorTest {
         assertTrue(src.mints.get() >= 3, src.mints.get() + " tokens minted, want at least 3 (the stream did not rotate)");
     }
 
-    /** 160 ticks at 50 ms, across several lifetimes; the handler counts them all, in order. */
+    /** TICKS ticks at 50 ms, across several lifetimes; the handler counts them all, in order. */
     @Test
     void clientStreamingAcrossLifetimes() throws Exception {
         Fixture f = new Fixture().serve();
         TokenSource src = new TokenSource(f);
         TickerServiceGrpcClient c = f.client(f.dial(f.port), src);
-        int n = 160;
+        int n = TICKS;
         Recorder rec = new Recorder();
         StreamObserver<Tick> up = c.sendTicks(rec);
         for (int i = 1; i <= n; i++) {

@@ -8,7 +8,8 @@
 # <Svc>Rotating sibling, and the generated client carries its streams across
 # token lifetimes on it. The REAL generated server (generated wrapper,
 # generated Authorizer, generated grpcserver with #260's expiry interceptor)
-# meets the REAL generated client, with 3 s tokens:
+# meets the REAL generated client, with 3 s tokens (6 s on the Java leg, whose
+# cutover a loaded runner can slow past a 3 s token's exp: #840):
 #   - a handler and its caller, neither mentioning rotation, run one stream of
 #     each shape across several lifetimes, both directions at once, with no
 #     loss, duplication or reordering, on one handler call and one context;

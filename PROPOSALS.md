@@ -619,6 +619,19 @@ the looper then marks it `promoted` or `declined` here with the date.
   look for the compiler's diagnostics (`error:`, `warning:` from swiftc on a generated source), not for any line with
   the word in it, or the leg says nothing on a runner with a recent binutils. It is not in `just gates`, so #803
   compile-checked the generated `C2SClient` by reading that log instead.
+- **The generated clients' stream rotation leaves a quarter of a leg's lifetime, with no floor** (2026-11-17, #840):
+  `StreamRotation.ClientSession.schedule` (Java; Go's `rotation.RotateAt` and Rust's `ROTATE_AT` alike) rotates a leg at 75% of
+  what is left of its token, so the mint, the new leg's open and the cutover get the last quarter before the server
+  ends the old leg at its `exp`. With 3-second tokens (exp in whole seconds: 2 to 3 s left) that is 0.5 to 0.75 s,
+  and a loaded runner's Java bidi stream at 2 ms ticks missed it 6 times in 6 (`UNAUTHENTICATED, stream credential
+  expired`). The quarter must also drain what is in flight: the old leg's `last` comes back behind every message
+  queued on it, and a sender that outruns the runner (that test's, unpaced) queues seconds of them; with 6-second
+  tokens alone it still missed 1 in 6. #840 gave the Java rotation test 6-second tokens and at most 100 ticks in
+  flight (10 in 10 at the same load); at a load average of 100 on 8 CPUs (2026-11-18) that still missed twice, once
+  on a cold JVM's opening leg and once on 100 ticks echoed at 20 a second, so it also warms the JVM with one
+  throwaway rotated stream before the first test and keeps at most 10 ticks in flight (3 in 3). With real lifetimes (minutes) the quarter is ample; a floor on the time the
+  rotation leaves before `exp` (when the lifetime allows) would make it hold for short-lived tokens too. Same shape
+  as the member port's entry from #737.
 - **Cut the Java AppendLog concurrency self-test's fsyncs too** (2026-11-15, #723): #723 cut the Go
   `TestAppendLogConcurrentAppendsStayWholeLines` from 8x50 to 8x4 appends (each an fsync under one lock: 42s of
   the Go diskstore package's 61s on an unloaded runner, all of go test's 10m on a load-200 one) and still fails

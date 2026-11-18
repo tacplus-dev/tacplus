@@ -721,8 +721,10 @@ run_java_generated_self_tests() {
 # release) at all, nor the elliptic-curve 0.13 line, whose crypto-bigint 0.5 is
 # RUSTSEC-2026-0387 (fixed in 0.7.6). Issue #215: nor block-buffer below
 # 0.12.1 (GHSA-qwgh-2vcv-g2f7, the digest 0.10 line; a GitHub advisory with no
-# RUSTSEC id, so cargo-audit would not report it). Checked on the lockfile, so
-# it needs neither cargo-audit nor the advisory database.
+# RUSTSEC id, so cargo-audit would not report it). Issue #308: nor rustls's
+# old PEM-file crate (RUSTSEC-2025-0134, unmaintained, no fix; its name is
+# split so a grep of the tree for it finds nothing). Checked on the lockfile,
+# so it needs neither cargo-audit nor the advisory database.
 assert_rust_lock_advisory_free() {
   local lock="$1"
   [[ -f "$lock" ]] || die "missing generated Rust Cargo.lock: $lock"
@@ -742,6 +744,8 @@ for name, ver in re.findall(r'\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"
         bad.append(f"elliptic-curve {ver} (crypto-bigint 0.5, RUSTSEC-2026-0387)")
     elif name == "block-buffer" and version(ver) < (0, 12, 1):
         bad.append(f"block-buffer {ver} (GHSA-qwgh-2vcv-g2f7)")
+    elif name == "rustls" "-pemfile":
+        bad.append(f"{name} {ver} (RUSTSEC-2025-0134)")
     elif name == "backoff":
         bad.append(f"backoff {ver} (unmaintained, RUSTSEC-2025-0012)")
     elif name == "instant":

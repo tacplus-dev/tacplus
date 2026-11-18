@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
 
-// Package verification runs formal verification tools (Kani, JBMC)
+// Package verification runs formal verification tools (Kani, OpenJML ESC)
 // on generated source code and produces structured results for registry.json
 // and a human-readable verification-report.md.
 package verification
@@ -24,7 +24,7 @@ func Run(language, outputDir string) ([]*spec.VerificationReport, error) {
 	case "rust":
 		runner = runKani
 	case "java":
-		runner = runJbmc
+		runner = runOpenJml
 	default:
 		zap.L().Debug("no verification tool for language", zap.String("language", language))
 		return nil, nil

@@ -136,7 +136,7 @@ service runtime code.
 | `cmd/` | CLI command definitions (cobra) |
 | `cmd/build/` | Code regeneration (`tacplus build`) |
 | `cmd/validate/` | Proto validation (`tacplus validate`) |
-| `cmd/verify/` | Formal verification of a repository's harnesses: Kani for Rust, JBMC for Java (`tacplus verify`) |
+| `cmd/verify/` | Formal verification of a repository's harnesses: Kani for Rust, OpenJML ESC over the validators' JML specs for Java (`tacplus verify`) |
 | `cmd/registry/` | Service-registry management (`tacplus registry`) |
 | `cmd/upgrade/` | Self-upgrade (`tacplus upgrade`) |
 | `cmd/version/` | Version info (`tacplus version`) |
@@ -486,7 +486,7 @@ Current durable gates:
 
 ### Formal verification is not a gate
 
-Kani (Rust) and JBMC (Java) run in `just verify` (`scripts/verify.sh`), never
+Kani (Rust) and OpenJML ESC (Java) run in `just verify` (`scripts/verify.sh`), never
 in `just gates` (#275): they need the build image's verifiers and far more
 memory and time than a land, and they add nothing to a change that leaves the
 generated code alone. `scripts/verify_test.go` fails if anything `just gates`
@@ -496,6 +496,17 @@ reaches runs a verifier. The build pipeline (tacplus-dev/looper#74) runs
 `run`. A new input of `scripts/verify.sh` (a fixture, a kitchensink proto set,
 a toolchain pin) goes into the `depends` list of `scripts/verify-changed.sh` too.
 The kitchensink release gate (#196) follows the same split.
+
+Java's verifier (`pkg/verification/openjml.go`, #257) runs OpenJML ESC over the
+JML specs `jmlSpecs` (`pkg/internal/java/types/validation.go`) writes on each
+strict validator, with spec stubs that model every message getter as pure,
+returning a final ghost field. So the generated `Helpers.java` must typecheck
+under OpenJML, not only javac (no method reference or lambda returning a
+primitive into `Stream.map`: `Integer::valueOf`, not `Integer::parseInt`), and
+each `ensures` must state its bound in the comparison the validator's own code
+makes, through calls ESC can read (no stream over a lambda in a checked bound).
+The build image's OpenJML is x86-64 only: on an arm64 host, run it under qemu
+user emulation or on an amd64 machine.
 
 Open soundness work belongs in `../roadmap/README.md` or the local
 `todo/` ledger, not in standalone report files.

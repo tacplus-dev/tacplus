@@ -273,9 +273,10 @@ export class Authorizer {
   }
 
   /**
-   * Registers a method declaring RPC_FLAG_ANY_TENANT: a caller of ANY tenant
+   * Registers a method declaring RPC_FLAG_ANY_TENANT: a user of ANY tenant
    * passes this tenant-owned instance's door on it ("any authenticated user of
-   * any tenant may call this"). It widens nothing else: the token, its
+   * any tenant may call this"); another tenant's service never does (S2S never
+   * crosses tenants). It widens nothing else: the token, its
    * audience, auth_services, entitlements and target_namespace_field are
    * checked exactly as before. Every other method keeps the default door
    * ("members of the instance's tenant"). Keyed by the same service-qualified
@@ -286,14 +287,23 @@ export class Authorizer {
     this._methodAnyTenant.add(methodKey);
   }
 
-  /** The tenant-owned instance's door check, open on an RPC_FLAG_ANY_TENANT method. */
-  private checkHostTenant(callerNamespace: string, methodKey?: string): void {
+  /**
+   * The tenant-owned instance's door check, open to users of any tenant on an
+   * RPC_FLAG_ANY_TENANT method. S2S never crosses tenants: another tenant's
+   * service or workload is refused on every method, that one included.
+   */
+  private checkHostTenant(tw: TokenWrapper, methodKey?: string): void {
     const host = this._hostTenant;
     if (host === '') return;
-    if (methodKey !== undefined && this._methodAnyTenant.has(methodKey)) return;
+    const callerNamespace = tw.getNamespace();
     if (isAtOrBelow('/system', callerNamespace) || isAtOrBelow(callerNamespace, host)) {
       return;
     }
+    const subType = tw.getSubType();
+    if (subType === 'service' || subType === 'workload') {
+      throw AuthError.permissionDenied(`service caller namespace "${callerNamespace}" is not at-or-above this instance's tenant "${host}": S2S never crosses tenants`);
+    }
+    if (methodKey !== undefined && this._methodAnyTenant.has(methodKey)) return;
     throw AuthError.permissionDenied(`caller namespace "${callerNamespace}" is not at-or-above this instance's tenant "${host}"`);
   }
 
@@ -383,8 +393,8 @@ export class Authorizer {
       throw AuthError.permissionDenied(`token audience "${aud}" is not accepted by service "${Authorizer.SERVICE_NAME}"`);
     }
     // Tenant-owned instance: refuse another tenant's caller at the door
-    // (open on an RPC_FLAG_ANY_TENANT method).
-    this.checkHostTenant(tw.getNamespace(), qualifiedMethodKey(fullMethod));
+    // (open to users of any tenant on an RPC_FLAG_ANY_TENANT method).
+    this.checkHostTenant(tw, qualifiedMethodKey(fullMethod));
 
     // S2S path: service/workload tokens carry structured identity claims
     // (sub_type, sub, service_name). Authorization is receiver-side via
@@ -492,8 +502,8 @@ export class Authorizer {
       throw AuthError.permissionDenied(`token audience "${aud}" is not accepted by service "${Authorizer.SERVICE_NAME}"`);
     }
     // Tenant-owned instance: refuse another tenant's caller at the door
-    // (open on an RPC_FLAG_ANY_TENANT method).
-    this.checkHostTenant(tw.getNamespace(), fullMethod ? qualifiedMethodKey(fullMethod) : undefined);
+    // (open to users of any tenant on an RPC_FLAG_ANY_TENANT method).
+    this.checkHostTenant(tw, fullMethod ? qualifiedMethodKey(fullMethod) : undefined);
 
     if (targetNamespace !== undefined) {
       const target = targetNamespace === '' ? '/' : targetNamespace;

@@ -544,15 +544,42 @@ func rustGrpcInitialStreamAuthBlock(authRequired bool) string {
 }
 
 // rustClientRouteTenant reads a routed rpc's (spec.rpc).route_field off the
-// request held by `reqVar` (a tonic::Request) and refuses an empty or
-// malformed one, INVALID_ARGUMENT, before any network call. Empty for a
-// platform rpc.
+// request held by `reqVar` (a mutable tonic::Request) and checks it against
+// the caller's own token, read off `tpExpr` (an Option<TokenProvider>), before
+// any network call (#258, S2S never crosses tenants; see
+// servicemanager::tenant_route::caller_route_tenant): a tenant's service's
+// empty field is filled with its own tid and another tenant's is refused,
+// PERMISSION_DENIED; anyone else's must name a tid, INVALID_ARGUMENT. The
+// request sent carries the tenant routed to. Empty for a platform rpc.
 func rustClientRouteTenant(method *parser.MethodInfo, reqVar, indent string) string {
 	if method.RouteField == nil {
 		return ""
 	}
-	return fmt.Sprintf("%slet route_tenant = servicemanager::tenant_route::route_tenant(%s, &%s.get_ref().%s)?;\n",
-		indent, rustQuote(method.RouteField.Field), reqVar, rustRequestFieldIdent(method.RouteField.Field))
+	ident := rustRequestFieldIdent(method.RouteField.Field)
+	return rustOwnRouteToken("self.token_provider.as_ref()", indent) +
+		fmt.Sprintf("%slet route_tenant = servicemanager::tenant_route::caller_route_tenant(%s, &%s.get_ref().%s, own_token.as_deref())?;\n",
+			indent, rustQuote(method.RouteField.Field), reqVar, ident) +
+		fmt.Sprintf("%s%s.get_mut().%s = route_tenant.clone();\n", indent, reqVar, ident)
+}
+
+// rustOwnRouteToken binds `own_token`, the caller's own token for the route
+// check, from `tpExpr` (an Option<&TokenProvider>): no provider is no token,
+// and a provider that fails refuses the call rather than skip the check.
+func rustOwnRouteToken(tpExpr, indent string) string {
+	return fmt.Sprintf(`%[1]slet own_token = match %[2]s {
+%[1]s    Some(tp) => Some((tp)().await.map_err(|e| tonic::Status::unauthenticated(format!("auth token: {e}")))?),
+%[1]s    None => None,
+%[1]s};
+`, indent, tpExpr)
+}
+
+// rustRouteRequestMut is "mut " for a routed rpc, whose client writes the
+// tenant routed to back into the request; see rustClientRouteTenant.
+func rustRouteRequestMut(method *parser.MethodInfo, reqMut string) string {
+	if method.RouteField != nil {
+		return "mut "
+	}
+	return reqMut
 }
 
 // rustClientStreamRouteCheck is a routed stream handle's per-message check:
@@ -692,7 +719,7 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
 		// WATCH collection: server-streaming envelope on the wire, surfaced as the
 		// tonic Streaming<{Method}WatchEvent>; dropping it cancels the call.
 		auth := rustAuthSnippet("req", authRequired)
-		reqMut := rustGrpcRequestMut(authRequired)
+		reqMut := rustRouteRequestMut(method, rustGrpcRequestMut(authRequired))
 		return grpcMethodResult{method: fmt.Sprintf(`    /// %s calls %s.%s (WATCH collection over server streaming).
     pub async fn %s(
         &self,
@@ -710,7 +737,7 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
 
 		// Server streaming
 		auth := rustAuthSnippet("req", authRequired)
-		reqMut := rustGrpcRequestMut(authRequired)
+		reqMut := rustRouteRequestMut(method, rustGrpcRequestMut(authRequired))
 		return grpcMethodResult{method: fmt.Sprintf(`    /// %s calls %s.%s (server streaming).
     pub async fn %s(
         &self,
@@ -734,7 +761,12 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
 		streamChannel := "cp.channel()"
 		handleOpen, handleTenant, handleClose := handleType+" {", "", "        }"
 		tenantField := ""
+		streamRouteCheck := ""
 		if routed {
+			// The open is not async: the caller's own token is checked in the
+			// stream's task, before the channel is asked for (#258).
+			streamRouteCheck = rustOwnRouteToken("token_provider.as_ref()", "                ") +
+				"                servicemanager::tenant_route::caller_route_tenant(\"tenant\", &stream_tenant, own_token.as_deref())?;\n"
 			openSig = fmt.Sprintf("pub fn %s(&self, tenant: &str) -> Result<%s, tonic::Status> {\n"+
 				"        let tenant = servicemanager::tenant_route::route_tenant(\"tenant\", tenant)?;\n"+
 				"        let stream_tenant = tenant.clone();", methodSnake, handleType)
@@ -755,7 +787,7 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
             let result = async {
                 let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
                 let mut req = tonic::Request::new(outbound);
-%s
+%s%s
                 let channel = %s.await?;
                 let mut client = %s::new(channel);
                 let response = client.%s(req).await?;
@@ -772,7 +804,7 @@ func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.Method
             auth_required: %t,
 %s%s
     }`, method.Name, svc.Name, method.Name, openSig, inputType, outputType,
-			rustGrpcInitialStreamAuthBlock(authRequired), streamChannel, tonicClientName, methodSnake, rustGrpcResponseValidation(method, "response"), handleOpen, authRequired, handleTenant, handleClose)
+			streamRouteCheck, rustGrpcInitialStreamAuthBlock(authRequired), streamChannel, tonicClientName, methodSnake, rustGrpcResponseValidation(method, "response"), handleOpen, authRequired, handleTenant, handleClose)
 
 		handleStruct := fmt.Sprintf(`
 /// Handle for the managed %s client-streaming call.
@@ -901,7 +933,7 @@ impl %s {
 	        &self,
 	        request: impl tonic::IntoRequest<%s>,
 	    ) -> Result<tonic::Response<%s>, tonic::Status> {
-	        let req_base = request.into_request();
+	        let %sreq_base = request.into_request();
 %s%s
 	        let req_message = req_base.get_ref().clone();
 	        let req_metadata = req_base.metadata().clone();
@@ -922,5 +954,5 @@ impl %s {
 %s
                 Ok(response)
             })
-	    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, rustGrpcRequestValidation(method, "req_base"), rustClientRouteTenant(method, "req_base", "        "), retrySafe, reqMut, routeTenantClone, auth, channelResolve, methodSnake, rustGrpcResponseValidation(method, "response")), usesOutboundTimeout: true, usesUnaryRetry: true}, nil
+	    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, rustRouteRequestMut(method, ""), rustGrpcRequestValidation(method, "req_base"), rustClientRouteTenant(method, "req_base", "        "), retrySafe, reqMut, routeTenantClone, auth, channelResolve, methodSnake, rustGrpcResponseValidation(method, "response")), usesOutboundTimeout: true, usesUnaryRetry: true}, nil
 }

@@ -324,11 +324,8 @@ func requiredWorkspaceDependencyRefs(rustRootDir string, hasServiceWrappers, has
 	if hasServiceWrappers || hasGrpcClients {
 		add("async-trait", "axum", "base64", "regex")
 	}
-	if hasCertStreams {
-		add("rustls-pemfile")
-		if hasServiceWrappers {
-			add("tokio-rustls")
-		}
+	if hasCertStreams && hasServiceWrappers {
+		add("tokio-rustls")
 	}
 
 	rootCargo := filepath.Join(rustRootDir, "Cargo.toml")

@@ -4,6 +4,11 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **chrono out of the generated Rust graph, the breaking half** (2026-11-18, #855, #862): 2.6.2 drops the unused
+  `pbjson-types` and the logger chassis's unused `chrono`. chrono 0.4 (RUSTSEC-2026-0543) still reaches every
+  generated Rust service through `prost-wkt-types` (the sys protos' WKT fields) and the `token` chassis's public
+  `expires_in() -> Option<chrono::Duration>`. Replacing them changes the generated surface, so it is #862, for the
+  next minor or major, on ROADMAP.md at Jody's request.
 - **gosec on the generated Go in tacplus's own gates** (2026-11-08, #359): #359 cleared G402, G123, G115, G404,
   G703 and G704 from the generated example service (fixed or `#nosec`-annotated with a reason in the templates),
   but nothing here keeps them out: tacplus-dev/looper#108's scan sees a regression only after a release. A gate

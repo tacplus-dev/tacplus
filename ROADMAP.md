@@ -42,6 +42,7 @@ Release lines with branches: 2.0 through 2.4.
 -  (#257). Agent, at Jody's request, 2026-11-06.
 - Security floor: a `generated` recipe, so tacplus's security checks scan its generated output (the kitchensink) once, at the source (#376; looper#108). Agent, at Jody's request, 2026-11-08 (hub triage under Jody's delegation).
 - current-generation runs a chassis self-test once per gate when its rendered source is identical across fixtures (content hash), so full gates fit under 45 min (#843). Hub, at Jody's request (tacplus speed is the top priority), 2026-11-17.
+- Generated Rust without chrono (RUSTSEC-2026-0543): a chrono-free WKT crate in place of prost-wkt-types, `Token::expires_in` on a std type, a test that the generated Cargo.lock has no chrono; next minor or major, not a patch (#862). Agent, at Jody's request, 2026-11-18 (#855's split).
 
 ## Later
 - Generated S2S clients to a peer service in another cluster or deployment (#204): parked (Jody, 2026-11-06). Cross-deployment work is a future item and needs a deeper huddle with Jody before any design or build. (Was: redo site-to-site, redo#1 option A, 2026-10-28; flock gossip.)

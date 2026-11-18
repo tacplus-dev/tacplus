@@ -923,224 +923,84 @@ sys.exit(1 if bad else 0)
 PY
 }
 
+# The packages run_rust_spiffe_self_tests tests, as cargo -p arguments: the
+# generated root package (its unit tests and the self-tests the fixtures install
+# in its tests/) and the chassis crates whose tests no other gate runs:
+#   key, jwk, token  #186: every key family generated, signed, verified, converted
+#   spiffe           the shared SPIFFE vectors (SPIFFE_VECTOR_FIXTURE)
+#   httpclient       #36: GET retries, Retry-After against a live local server
+#   x509             SEC-1: verify_service_name, the SPIFFE identity pin
+#   servicemanager   SEC-1: SpiffeServerCertVerifier fail-loud, build_root_store
+#   grpcconfig       SEC-2: load_config installs the logger; config defaults
+#   grpcserver       PC-W-1: the Authorizer's decisions over real Ed25519 JWTs
+#   collection       PC-C-2: the page-token codec's cross-language vectors
+#   approval         requires_device: the canonicalization vector Go and Java pin
+#   diskstore        PC-L-7: compress, path, snapshot, redolog, schedule
+#   logger           credential redaction (unit tests only: see below)
+#   am               #34: the accounting sink's spool, where the fixture installs it
+rust_self_test_packages() {
+  local output="$1" crate root
+  root="$(sed -n '/^\[package\]/,/^\[/s/^name *= *"\([^"]*\)".*/\1/p' "$output/Cargo.toml" | head -1)"
+  [[ -z "$root" ]] || echo "-p $root"
+  for crate in key jwk token spiffe httpclient x509 servicemanager grpcconfig grpcserver collection approval diskstore logger; do
+    [[ -f "$output/chassis/$crate/Cargo.toml" ]] || die "missing generated Rust $crate crate"
+    echo "-p $crate"
+  done
+  [[ ! -f "$output/chassis/am/tests/accounting_sink_spool.rs" ]] || echo "-p am"
+}
+
 run_rust_spiffe_self_tests() {
   local output="$1"
   local log_dir="$2"
-  [[ -f "$output/chassis/spiffe/Cargo.toml" ]] || die "missing generated Rust spiffe crate"
+  local packages doc_packages
+  packages="$(rust_self_test_packages "$output")"
+  [[ -n "$packages" ]] || return 1
 
-  # Issue #186: RSA and ECDSA keys are aws-lc-rs's. The key, jwk and token
-  # crates' tests generate, sign, verify and convert every key family.
-  for crate in key jwk token; do
-    [[ -f "$output/chassis/$crate/Cargo.toml" ]] || die "missing generated Rust $crate crate"
-  done
-  (cd "$output" && cargo test -p key -p jwk -p token) >"$log_dir/rust-key-test.log" 2>&1 || {
-      dump_step_log "$log_dir/rust-key-test.log"
+  # One cargo call for every crate's unit and integration tests. A cargo test
+  # of each crate on its own resolved the dependencies' features for that crate
+  # alone, so each compiled the generated types crate again: a minute each,
+  # thirteen times a fixture, most of current-generation's time (tacplus#812).
+  # --no-fail-fast so one crate's failures do not hide the next one's.
+  # shellcheck disable=SC2086 # $packages is -p NAME pairs
+  (cd "$output" && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" \
+    cargo test --no-fail-fast $packages --lib --bins --tests) >"$log_dir/rust-test.log" 2>&1 || {
+      dump_step_log "$log_dir/rust-test.log"
       return 1
     }
-  assert_clean_log "$log_dir/rust-key-test.log"
+  assert_clean_log "$log_dir/rust-test.log"
 
-  (cd "$output" && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" cargo test -p spiffe) >"$log_dir/rust-spiffe-test.log" 2>&1 || {
-      dump_step_log "$log_dir/rust-spiffe-test.log"
-      return 1
-    }
-  assert_clean_log "$log_dir/rust-spiffe-test.log"
-
-  # Issue #36: the httpclient crate's GET retry tests, including the Retry-After
-  # hold-back against a live local server.
-  [[ -f "$output/chassis/httpclient/Cargo.toml" ]] || die "missing generated Rust httpclient crate"
-  (cd "$output" && cargo test -p httpclient) >"$log_dir/rust-httpclient-test.log" 2>&1 || {
-      dump_step_log "$log_dir/rust-httpclient-test.log"
-      return 1
-    }
-  assert_clean_log "$log_dir/rust-httpclient-test.log"
-
-  # SEC-1: the x509 crate's tests pin verify_service_name (the SPIFFE identity
-  # pin behind ServiceNameServerVerifier) with certs minted by the crate's own
-  # signer. Without this step a revert of the pin (or of the tests) is silent —
-  # no other gate runs rust x509 tests.
-  [[ -f "$output/chassis/x509/Cargo.toml" ]] || die "missing generated Rust x509 crate"
-  (cd "$output" && cargo test -p x509) >"$log_dir/rust-x509-test.log" 2>&1 || {
-      dump_step_log "$log_dir/rust-x509-test.log"
-      return 1
-    }
-  assert_clean_log "$log_dir/rust-x509-test.log"
-
-  # SEC-1 (verifier leg): SpiffeServerCertVerifier construction fail-loud (OF-12
-  # malformed trust domain) + build_root_store parsing, minted via the x509
-  # crate's signer (dev-dependency of the servicemanager crate).
-  [[ -f "$output/chassis/servicemanager/Cargo.toml" ]] || die "missing generated Rust servicemanager crate"
-  (cd "$output" && cargo test -p servicemanager) >"$log_dir/rust-servicemanager-test.log" 2>&1 || {
-      dump_step_log "$log_dir/rust-servicemanager-test.log"
-      return 1
-    }
-  assert_clean_log "$log_dir/rust-servicemanager-test.log"
-
-  # SEC-2: the grpcconfig crate's loader test verifies that load_config() calls
-  # logger::Logger::default().install(), catching the "generated but never wired"
-  # defect where credential redaction exists but is never installed on the startup path.
-  [[ -f "$output/chassis/grpcconfig/Cargo.toml" ]] || die "missing generated Rust grpcconfig crate"
-  (cd "$output" && cargo test -p grpcconfig) >"$log_dir/rust-grpcconfig-test.log" 2>&1 || {
-      dump_step_log "$log_dir/rust-grpcconfig-test.log"
-      return 1
-    }
-  assert_clean_log "$log_dir/rust-grpcconfig-test.log"
-
-  # PC-W-1: the grpcserver crate's authorizer behavioral tests mint real
-  # Ed25519 JWTs against the REAL Authorizer verify path (signature, audience,
-  # expiry, unknown-kid, tamper, auth_services, entitlements presence,
-  # namespace rule). Without this step a decision-logic regression in the Rust
-  # Authorizer is silent — no other gate runs rust grpcserver tests.
-  [[ -f "$output/chassis/grpcserver/Cargo.toml" ]] || die "missing generated Rust grpcserver crate"
-  (cd "$output" && cargo test -p grpcserver) >"$log_dir/rust-grpcserver-test.log" 2>&1 || {
-      dump_step_log "$log_dir/rust-grpcserver-test.log"
-      return 1
-    }
-  assert_clean_log "$log_dir/rust-grpcserver-test.log"
-
-  # Issue #34: the accounting sink's spool self-test, installed only in the
-  # accounting-sink fixture (tests/accounting_sink_spool.rs). Nothing else in the
-  # gate runs the am crate's tests.
-  if [[ -f "$output/chassis/am/tests/accounting_sink_spool.rs" ]]; then
-    (cd "$output" && cargo test -p am) >"$log_dir/rust-am-test.log" 2>&1 || {
-      dump_step_log "$log_dir/rust-am-test.log"
-      return 1
-    }
-    assert_clean_log "$log_dir/rust-am-test.log"
-  fi
-
-  # NEW-21: the model crate's own unit tests, which include the generated
-  # ServiceManager's startup error classifier (identity_error_tests). Nothing ran
-  # them before (cargo check only), so the run must also prove they are there.
-  # Only a service build has a ServiceManager (the main fixture is not one).
-  if [[ -f "$output/s2sm/mod.rs" ]] && grep -qF 'fn is_permanent_identity_init_error' "$output/s2sm/mod.rs"; then
-    (cd "$output" && cargo test --lib) >"$log_dir/rust-model-lib-test.log" 2>&1 || {
-        dump_step_log "$log_dir/rust-model-lib-test.log"
-        return 1
-      }
-    assert_clean_log "$log_dir/rust-model-lib-test.log"
-    grep -qF 'identity_error_tests::missing_token_minter_is_permanent ... ok' "$log_dir/rust-model-lib-test.log" \
-      || die "NEW-21: the generated ServiceManager's identity_error_tests did not run (log: $log_dir/rust-model-lib-test.log)"
-    # #284: a routed c2s reader's and a routed MCP session's tenant self-tests
-    # are generated beside them; when they are, they must have run.
-    if grep -rqF --include='record_c2s.rs' 'mod record_c2s_tenant_tests' "$output/s2sm"; then
-      grep -qF 'record_c2s_tenant_tests::a_tid_shaped_namespace_never_names_the_tenant ... ok' "$log_dir/rust-model-lib-test.log" \
-        || die "#284: the generated c2s reader's tenant self-tests did not run (log: $log_dir/rust-model-lib-test.log)"
-    fi
-    if grep -rqF --include='*.rs' 'fn the_mcp_session_tenant_is_the_tid_claim_not_a_tid_shaped_namespace' "$output/s2sm"; then
-      grep -qF '_mcp_tests::the_mcp_session_tenant_is_the_tid_claim_not_a_tid_shaped_namespace ... ok' "$log_dir/rust-model-lib-test.log" \
-        || die "#284: the generated MCP session tenant self-tests did not run (log: $log_dir/rust-model-lib-test.log)"
-    fi
-  fi
-
-  # The main fixture's JSON-key self-test, copied in by
-  # install_json_key_selftest, so it is present exactly in that build.
-  if [[ -f "$output/tests/json_key_test.rs" ]]; then
-    (cd "$output" && cargo test --test json_key_test) >"$log_dir/rust-json-key-test.log" 2>&1 || {
-        dump_step_log "$log_dir/rust-json-key-test.log"
-        return 1
-      }
-    assert_clean_log "$log_dir/rust-json-key-test.log"
-  fi
-
-  # The record-egress HOST fixture's record write surface self-test (#163),
-  # copied in by install_record_write_guard_selftest.
-  if [[ -f "$output/tests/record_write_guard_test.rs" ]]; then
-    (cd "$output" && cargo test --test record_write_guard_test) >"$log_dir/rust-record-write-guard-test.log" 2>&1 || {
-        dump_step_log "$log_dir/rust-record-write-guard-test.log"
-        return 1
-      }
-    assert_clean_log "$log_dir/rust-record-write-guard-test.log"
-  fi
-
-  # The tenant-record HOST fixture's route self-test (#207), copied in by
-  # install_tenant_record_route_selftest.
-  if [[ -f "$output/tests/tenant_record_route_test.rs" ]]; then
-    (cd "$output" && cargo test --test tenant_record_route_test) >"$log_dir/rust-tenant-record-route-test.log" 2>&1 || {
-        dump_step_log "$log_dir/rust-tenant-record-route-test.log"
-        return 1
-      }
-    assert_clean_log "$log_dir/rust-tenant-record-route-test.log"
-  fi
-
-  # The quorum-write fixture's hosted store service + roll scheduler self-test,
-  # copied in by assert_quorumwrite_output, so it is present exactly in that build.
-  if [[ -f "$output/tests/store_roll_test.rs" ]]; then
-    (cd "$output" && cargo test --test store_roll_test) >"$log_dir/rust-store-roll-test.log" 2>&1 || {
-        dump_step_log "$log_dir/rust-store-roll-test.log"
-        return 1
-      }
-    assert_clean_log "$log_dir/rust-store-roll-test.log"
-  fi
-
-  # The epoch-load fixture's disk-loader self-test, copied in by
-  # assert_epochload_output, so it is present exactly in that build.
-  if [[ -f "$output/tests/epoch_load_test.rs" ]]; then
-    (cd "$output" && cargo test --test epoch_load_test) >"$log_dir/rust-epoch-load-test.log" 2>&1 || {
-        dump_step_log "$log_dir/rust-epoch-load-test.log"
-        return 1
-      }
-    assert_clean_log "$log_dir/rust-epoch-load-test.log"
-  fi
-
-  # PC-C-2: the collection crate's page-token codec tests pin the
-  # cross-language byte-identity vectors (shared verbatim with the go and java
-  # codec tests). Never previously executed by any gate (cargo check only).
-  [[ -f "$output/chassis/collection/Cargo.toml" ]] || die "missing generated Rust collection crate"
-  (cd "$output" && cargo test -p collection) >"$log_dir/rust-collection-test.log" 2>&1 || {
-      dump_step_log "$log_dir/rust-collection-test.log"
-      return 1
-    }
-  assert_clean_log "$log_dir/rust-collection-test.log"
-
-  # (spec.rpc).requires_device: the approval crate carries the cross-language
-  # canonicalization vector — the GENERATOR's own emitted code, run against the
-  # same pinned canonical bytes and SHA-256 that Go's and Java's tests assert.
-  # Rust generates the canonicalization rather than reflecting over a descriptor,
-  # so this is the only place its bytes are proven equal to the other two.
-  [[ -f "$output/chassis/approval/Cargo.toml" ]] || die "missing generated Rust approval crate"
-  (cd "$output" && cargo test -p approval) >"$log_dir/rust-approval-test.log" 2>&1 || {
-      dump_step_log "$log_dir/rust-approval-test.log"
-      return 1
-    }
-  assert_clean_log "$log_dir/rust-approval-test.log"
-
-  # PC-L-7: the diskstore crate's tests (compress/path/snapshot/redolog/
-  # schedule) existed in the templates but were never executed by any gate
-  # (cargo check only).
-  [[ -f "$output/chassis/diskstore/Cargo.toml" ]] || die "missing generated Rust diskstore crate"
-  (cd "$output" && cargo test -p diskstore) >"$log_dir/rust-diskstore-test.log" 2>&1 || {
-      dump_step_log "$log_dir/rust-diskstore-test.log"
-      return 1
-    }
-  assert_clean_log "$log_dir/rust-diskstore-test.log"
-
-  # The logger crate's credential-redaction tests. These existed in the templates
-  # and were executed by NO gate (cargo check only), so rust's redaction had no
-  # runtime coverage at all while go and java both did. That is how the JSON
-  # structured-field gap survived in rust: redaction runs on already-encoded
-  # output, every test used the `key: value` header shape, and nothing ran them.
-  #
-  # --lib restricts this to the unit tests. It is NOT a claim that the crate's
-  # doc examples pass: six of them do not compile, because they import a bare
+  # The doc tests, built against what the call above built. Not the logger
+  # crate's: six of its doc examples do not compile, because they import a bare
   # `types` crate that has never existed (the real dependency is
   # <crate-base>_types). They have been broken since they were written and were
   # invisible while no gate ran this crate. Fixing them is separate work; this
   # gate deliberately does not pretend to cover them.
-  [[ -f "$output/chassis/logger/Cargo.toml" ]] || die "missing generated Rust logger crate"
-  (cd "$output" && cargo test -p logger --lib) >"$log_dir/rust-logger-test.log" 2>&1 || {
-      dump_step_log "$log_dir/rust-logger-test.log"
+  doc_packages="$(grep -vx -- '-p logger' <<<"$packages")"
+  # shellcheck disable=SC2086 # $doc_packages is -p NAME pairs
+  (cd "$output" && cargo test $doc_packages --doc) >"$log_dir/rust-doc-test.log" 2>&1 || {
+      dump_step_log "$log_dir/rust-doc-test.log"
       return 1
     }
-  assert_clean_log "$log_dir/rust-logger-test.log"
+  assert_clean_log "$log_dir/rust-doc-test.log"
 
-  # Behavioral config_defaults test: empty Config → health_probe_port == 8444.
-  # Covers the state-authority (kernel) path where no typed-config fetch occurs.
-  [[ -f "$output/chassis/grpcconfig/Cargo.toml" ]] || die "missing generated Rust grpcconfig crate"
-  (cd "$output" && cargo test -p grpcconfig) >"$log_dir/rust-grpcconfig-test.log" 2>&1 || {
-      dump_step_log "$log_dir/rust-grpcconfig-test.log"
-      return 1
-    }
-  assert_clean_log "$log_dir/rust-grpcconfig-test.log"
+  # NEW-21: the model crate's own unit tests include the generated
+  # ServiceManager's startup error classifier (identity_error_tests). Nothing ran
+  # them before (cargo check only), so the run must also prove they are there.
+  # Only a service build has a ServiceManager (the main fixture is not one).
+  if [[ -f "$output/s2sm/mod.rs" ]] && grep -qF 'fn is_permanent_identity_init_error' "$output/s2sm/mod.rs"; then
+    grep -qF 'identity_error_tests::missing_token_minter_is_permanent ... ok' "$log_dir/rust-test.log" \
+      || die "NEW-21: the generated ServiceManager's identity_error_tests did not run (log: $log_dir/rust-test.log)"
+    # #284: a routed c2s reader's and a routed MCP session's tenant self-tests
+    # are generated beside them; when they are, they must have run.
+    if grep -rqF --include='record_c2s.rs' 'mod record_c2s_tenant_tests' "$output/s2sm"; then
+      grep -qF 'record_c2s_tenant_tests::a_tid_shaped_namespace_never_names_the_tenant ... ok' "$log_dir/rust-test.log" \
+        || die "#284: the generated c2s reader's tenant self-tests did not run (log: $log_dir/rust-test.log)"
+    fi
+    if grep -rqF --include='*.rs' 'fn the_mcp_session_tenant_is_the_tid_claim_not_a_tid_shaped_namespace' "$output/s2sm"; then
+      grep -qF '_mcp_tests::the_mcp_session_tenant_is_the_tid_claim_not_a_tid_shaped_namespace ... ok' "$log_dir/rust-test.log" \
+        || die "#284: the generated MCP session tenant self-tests did not run (log: $log_dir/rust-test.log)"
+    fi
+  fi
 }
 
 compile_current_output() {
@@ -2227,7 +2087,7 @@ install_tenant_record_c2s_selftest() {
       ;;
     rust)
       # Generated beside the reader (#[cfg(test)] record_c2s_tenant_tests),
-      # run by compile_current_output's `cargo test --lib`, which checks they ran.
+      # run by run_rust_spiffe_self_tests' cargo test, which checks they ran.
       grep -qF 'mod record_c2s_tenant_tests' "$c2s" \
         || die "tenant-record fixture (rust): the generated c2s record reader carries no tenant self-test"
       ;;

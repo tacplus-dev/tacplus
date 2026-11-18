@@ -166,3 +166,40 @@ func TestPruneCargoWorkspaceKeepsSharedDependencies(t *testing.T) {
 	// A directory without a Cargo.toml (a leg that generated no Rust) is not an error.
 	run(`prune_cargo_workspace "` + root + `"`)
 }
+
+// A cross-test leg builds its generated crates once, under a path no later leg
+// reuses: their incremental caches are never read, and debuginfo makes every
+// test binary slower to link. cargo-target.sh turns both off for every leg that
+// shares the directory (tacplus#812), unless the caller set them.
+func TestCrossTestCargoTargetBuildsWithoutIncrementalOrDebuginfo(t *testing.T) {
+	lib, err := filepath.Abs("../cross-test/lib/cargo-target.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vars := []string{"CARGO_INCREMENTAL", "CARGO_PROFILE_DEV_DEBUG", "CARGO_PROFILE_TEST_DEBUG"}
+	run := func(env ...string) string {
+		t.Helper()
+		script := "set -euo pipefail; ROOT_DIR=" + t.TempDir() + "; source " + lib + "; bash -c 'for v in " + strings.Join(vars, " ") + "; do echo \"$v=${!v-unset}\"; done'"
+		cmd := exec.Command("bash", "-c", script)
+		cmd.Env = append(os.Environ(), "TACPLUS_CROSS_TEST_CARGO_TARGET="+t.TempDir())
+		for _, v := range vars {
+			cmd.Env = append(cmd.Env, v+"=")
+		}
+		cmd.Env = append(cmd.Env, env...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return string(out)
+	}
+	// An empty value is unset to cargo too.
+	out := run()
+	for _, v := range vars {
+		if !strings.Contains(out, v+"=0\n") {
+			t.Errorf("%s is not 0 for the legs:\n%s", v, out)
+		}
+	}
+	if out := run("CARGO_INCREMENTAL=1"); !strings.Contains(out, "CARGO_INCREMENTAL=1\n") {
+		t.Errorf("the caller's CARGO_INCREMENTAL was overridden:\n%s", out)
+	}
+}

@@ -20,6 +20,8 @@ import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
 
 public final class AccountingSinkSpoolTest {
     // EMIT_BOUND_MS is how long an RPC completion may take to hand its record to the sink.
@@ -46,17 +48,25 @@ public final class AccountingSinkSpoolTest {
 
     // emitAll runs n emits on one thread and checks they all return within the bound.
     // A blocked emit leaves the thread parked, which is the failure this gate exists
-    // to catch.
+    // to catch: the join is a hang guard, and the bound is on the emits' own time,
+    // measured on the thread once it runs. On a busy runner (current-generation runs
+    // its fixtures at once, #812) a new thread was not scheduled within the bound
+    // (#851); main warms the emit path first (warmUp).
     private static void emitAll(AccountingManager.EventBusSink sink, int n) throws InterruptedException {
+        AtomicLong tookNanos = new AtomicLong();
         Thread emitter = new Thread(() -> {
+            long start = System.nanoTime();
             for (int i = 0; i < n; i++) {
                 sink.emit(event(i));
             }
+            tookNanos.set(System.nanoTime() - start);
         }, "emitter");
         emitter.setDaemon(true);
         emitter.start();
-        emitter.join(EMIT_BOUND_MS);
-        check(!emitter.isAlive(), n + " emits did not return within " + EMIT_BOUND_MS + " ms while the publisher was blocked");
+        emitter.join(PROGRESS_BOUND_MS);
+        check(!emitter.isAlive(), n + " emits did not return within " + PROGRESS_BOUND_MS + " ms while the publisher was blocked");
+        long tookMs = TimeUnit.NANOSECONDS.toMillis(tookNanos.get());
+        check(tookMs <= EMIT_BOUND_MS, n + " emits took " + tookMs + " ms while the publisher was blocked, over " + EMIT_BOUND_MS + " ms");
     }
 
     // The publisher is blocked: nothing drains queue. Fifty concurrent completions
@@ -65,16 +75,26 @@ public final class AccountingSinkSpoolTest {
     private static void checkRpcNeverHeldWhenPublisherBlocked() throws InterruptedException {
         BlockingQueue<Accountingrecord.AccountingRecord> queue = new ArrayBlockingQueue<>(1);
         AccountingManager.EventBusSink sink = new AccountingManager.EventBusSink(queue, "test-1", () -> false);
+        // As in emitAll: a hang guard on the join, the bound on each emit's own time.
         List<Thread> rpcs = new ArrayList<>();
+        AtomicLongArray tookNanos = new AtomicLongArray(50);
         for (int i = 0; i < 50; i++) {
-            Thread rpc = new Thread(() -> sink.emit(event(0)), "rpc-" + i);
+            int n = i;
+            Thread rpc = new Thread(() -> {
+                long start = System.nanoTime();
+                sink.emit(event(0));
+                tookNanos.set(n, System.nanoTime() - start);
+            }, "rpc-" + i);
             rpc.setDaemon(true);
             rpcs.add(rpc);
             rpc.start();
         }
-        for (Thread rpc : rpcs) {
-            rpc.join(EMIT_BOUND_MS);
-            check(!rpc.isAlive(), "an RPC completion did not return within " + EMIT_BOUND_MS + " ms while the publisher was blocked");
+        for (int i = 0; i < 50; i++) {
+            Thread rpc = rpcs.get(i);
+            rpc.join(PROGRESS_BOUND_MS);
+            check(!rpc.isAlive(), "an RPC completion did not return within " + PROGRESS_BOUND_MS + " ms while the publisher was blocked");
+            long tookMs = TimeUnit.NANOSECONDS.toMillis(tookNanos.get(i));
+            check(tookMs <= EMIT_BOUND_MS, "an RPC completion took " + tookMs + " ms while the publisher was blocked, over " + EMIT_BOUND_MS + " ms");
         }
     }
 
@@ -134,12 +154,20 @@ public final class AccountingSinkSpoolTest {
                         + ": a record was lost without being counted");
     }
 
+    // warmUp emits one record on a sink of its own before the checks: the JVM's
+    // first emit loads and initializes the record and protobuf classes, which on a
+    // busy runner took over EMIT_BOUND_MS by itself (#851). The bound is the emit's.
+    private static void warmUp() {
+        new AccountingManager.EventBusSink(new ArrayBlockingQueue<>(1), "warm-up", () -> false).emit(event(0));
+    }
+
     public static void main(String[] args) throws InterruptedException {
         // The spool-full checks drop records on purpose, and each drop logs at ERROR.
         // The checks read the queue, not the log, so silence the accounting logger
         // to keep the gate's clean-log rule meaningful for the rest of the build.
         ((ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("accounting"))
                 .setLevel(ch.qos.logback.classic.Level.OFF);
+        warmUp();
         checkRpcNeverHeldWhenPublisherBlocked();
         checkSpoolReplaysInOrderAfterOutage();
         checkDropsOnlyWhenSpoolFull();

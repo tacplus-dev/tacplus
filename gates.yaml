@@ -8,9 +8,9 @@
 # pkg/** runs full until per-language sets (pkg/internal/<lang>/** to that
 # language's generation, compile and cross-tests) are confirmed to cover
 # everything such a path can break (PROPOSALS.md).
-# full's minutes: 84 on an 8-CPU runner from a cold target/, current-generation
-# about 47 of them on its worker pool (tacplus#812; was 2h55m, 2h26m), and a
-# margin for a slower runner.
+# full's minutes: 79 on an 8-CPU runner from a cold target/cross-test,
+# current-generation about 33 of them on its worker pool with one cargo test per
+# Rust fixture (tacplus#812; was 2h55m, 2h26m), and a margin for a slower runner.
 full:
   run: just gates
   minutes: 100

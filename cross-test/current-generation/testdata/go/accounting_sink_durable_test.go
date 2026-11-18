@@ -111,8 +111,8 @@ func TestDurableSpoolReplaysUnacknowledgedAfterRestart(t *testing.T) {
 }
 
 // TestDurableSpoolHoldsRPCWhenPublisherBlocked: nothing reads tx, so the
-// publisher is blocked. Fifty completions must all return within the bound, as
-// the memory spool guarantees, while the records go to disk.
+// publisher is blocked. Fifty completions must all return, as the memory spool
+// guarantees, while the records go to disk.
 func TestDurableSpoolHoldsRPCWhenPublisherBlocked(t *testing.T) {
 	dir := t.TempDir()
 	stop := make(chan struct{})

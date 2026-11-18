@@ -7,9 +7,9 @@
 //
 // What it pins: with the event-bus publisher blocked (nothing drains the queue),
 // AccountingManager.EventBusSink.emit never holds the calling RPC. Fifty
-// concurrent completions each return within a bound. Records emitted during the
-// outage are spooled and reach the publisher, in order, once it resumes. A spool
-// that is full drops the overflow rather than blocking.
+// concurrent completions each return while it stays blocked. Records emitted
+// during the outage are spooled and reach the publisher, in order, once it
+// resumes. A spool that is full drops the overflow rather than blocking.
 
 package com.gitlab.example.dummy.agentsensor.model.chassis.am;
 
@@ -22,12 +22,12 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 public final class AccountingSinkSpoolTest {
-    // EMIT_BOUND_MS is how long an RPC completion may take to hand its record to the sink.
-    private static final long EMIT_BOUND_MS = 1000;
-    // PROGRESS_BOUND_MS is how long a wait for the sink's own thread to make progress
-    // (deliver, append, compact) may take. It is a hang guard, not a latency bound: the
-    // waits return as soon as their condition holds, and on a busy runner the thread
-    // may not be scheduled for well over EMIT_BOUND_MS.
+    // PROGRESS_BOUND_MS is how long a wait for a thread to make progress (an emit to
+    // return; the sink's own thread to deliver, append, compact) may take. It is a hang
+    // guard, not a latency bound: the waits return as soon as their condition holds,
+    // and on a busy runner a thread may not be scheduled for well over a second (#851).
+    // An emit that waits on the publisher never returns, since the tests keep it
+    // blocked for the whole wait, so the guard catches it however loaded the runner.
     private static final long PROGRESS_BOUND_MS = 30_000;
 
     private static Accounting.Event event(int i) {
@@ -44,9 +44,9 @@ public final class AccountingSinkSpoolTest {
         }
     }
 
-    // emitAll runs n emits on one thread and checks they all return within the bound.
-    // A blocked emit leaves the thread parked, which is the failure this gate exists
-    // to catch.
+    // emitAll runs n emits on one thread and checks they all return while the
+    // publisher is blocked. A blocked emit leaves the thread parked, which is the
+    // failure this gate exists to catch.
     private static void emitAll(AccountingManager.EventBusSink sink, int n) throws InterruptedException {
         Thread emitter = new Thread(() -> {
             for (int i = 0; i < n; i++) {
@@ -55,12 +55,12 @@ public final class AccountingSinkSpoolTest {
         }, "emitter");
         emitter.setDaemon(true);
         emitter.start();
-        emitter.join(EMIT_BOUND_MS);
-        check(!emitter.isAlive(), n + " emits did not return within " + EMIT_BOUND_MS + " ms while the publisher was blocked");
+        emitter.join(PROGRESS_BOUND_MS);
+        check(!emitter.isAlive(), n + " emits did not return within " + PROGRESS_BOUND_MS + " ms while the publisher was blocked");
     }
 
     // The publisher is blocked: nothing drains queue. Fifty concurrent completions
-    // must each return within the bound. Before the spool, the second emit parked
+    // must each return. Before the spool, the second emit parked
     // its handler thread.
     private static void checkRpcNeverHeldWhenPublisherBlocked() throws InterruptedException {
         BlockingQueue<Accountingrecord.AccountingRecord> queue = new ArrayBlockingQueue<>(1);
@@ -73,8 +73,8 @@ public final class AccountingSinkSpoolTest {
             rpc.start();
         }
         for (Thread rpc : rpcs) {
-            rpc.join(EMIT_BOUND_MS);
-            check(!rpc.isAlive(), "an RPC completion did not return within " + EMIT_BOUND_MS + " ms while the publisher was blocked");
+            rpc.join(PROGRESS_BOUND_MS);
+            check(!rpc.isAlive(), "an RPC completion did not return within " + PROGRESS_BOUND_MS + " ms while the publisher was blocked");
         }
     }
 

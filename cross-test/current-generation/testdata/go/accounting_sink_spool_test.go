@@ -6,9 +6,9 @@
 //
 // What it pins: with the event-bus publisher blocked (nothing reads the queue),
 // EventBusSink.Emit never holds the calling RPC. N concurrent completions each
-// return within a bound. Records emitted during the outage are spooled and reach
-// the publisher, in order, once it resumes. A spool that is full drops and counts
-// the overflow rather than blocking.
+// return while it stays blocked. Records emitted during the outage are spooled
+// and reach the publisher, in order, once it resumes. A spool that is full drops
+// and counts the overflow rather than blocking.
 
 package am
 
@@ -23,16 +23,15 @@ import (
 	accountingrecord_pb "gitlab.com/example/dummy/agentsensor/tacplus/model/types/vservices/accountingrecord"
 )
 
-// emitBound is how long an RPC completion may take to hand its record to the sink.
-const emitBound = time.Second
-
-// progressBound is how long a wait for the sink's own goroutine to make progress
-// (deliver, append, compact) may take. It is a hang guard, not a latency bound: the
-// waits return as soon as their condition holds, and on a busy runner the goroutine
-// may not be scheduled for well over emitBound. The durable spool's appends fsync,
-// so it bounds the disk too: on a shared runner under I/O pressure one fsync was
-// measured at 0.2s to 3s (#341), fifty appends ran 8s to over 60s, and a 60s bound
-// failed 2 runs in 10; 180s held.
+// progressBound is how long a wait for a goroutine to make progress (an emit to
+// return; the sink's own goroutine to deliver, append, compact) may take. It is a
+// hang guard, not a latency bound: the waits return as soon as their condition
+// holds, and on a busy runner a goroutine may not be scheduled for well over a
+// second (#851). An emit that waits on the publisher never returns, since the tests
+// keep it blocked for the whole wait, so the guard catches it however loaded the
+// runner. The durable spool's appends fsync, so it bounds the disk too: on a
+// shared runner under I/O pressure one fsync was measured at 0.2s to 3s (#341),
+// fifty appends ran 8s to over 60s, and a 60s bound failed 2 runs in 10; 180s held.
 const progressBound = 180 * time.Second
 
 func sinkEvent(i int) *accounting_pb.Event {
@@ -40,8 +39,8 @@ func sinkEvent(i int) *accounting_pb.Event {
 }
 
 // emitAll runs n emits on one goroutine and reports whether they all returned
-// within emitBound. A blocked emit leaves the goroutine parked, which is the
-// failure this gate exists to catch.
+// while the publisher was blocked. A blocked emit leaves the goroutine parked,
+// which is the failure this gate exists to catch.
 func emitAll(t *testing.T, sink *EventBusSink, n int) {
 	t.Helper()
 	done := make(chan struct{})
@@ -53,14 +52,14 @@ func emitAll(t *testing.T, sink *EventBusSink, n int) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(emitBound):
-		t.Fatalf("%d emits did not return within %v while the publisher was blocked", n, emitBound)
+	case <-time.After(progressBound):
+		t.Fatalf("%d emits did not return within %v while the publisher was blocked", n, progressBound)
 	}
 }
 
 // TestEventBusSinkNeverHoldsRPCWhenPublisherBlocked: nothing reads tx, so the
-// publisher is blocked. Fifty concurrent completions must all return within the
-// bound. Before the spool, the second emit parked its handler goroutine.
+// publisher is blocked. Fifty concurrent completions must all return. Before the
+// spool, the second emit parked its handler goroutine.
 func TestEventBusSinkNeverHoldsRPCWhenPublisherBlocked(t *testing.T) {
 	stop := make(chan struct{})
 	defer close(stop)
@@ -82,8 +81,8 @@ func TestEventBusSinkNeverHoldsRPCWhenPublisherBlocked(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(emitBound):
-		t.Fatalf("50 RPC completions did not return within %v while the publisher was blocked", emitBound)
+	case <-time.After(progressBound):
+		t.Fatalf("50 RPC completions did not return within %v while the publisher was blocked", progressBound)
 	}
 }
 

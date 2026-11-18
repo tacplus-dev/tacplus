@@ -1,0 +1,355 @@
+= init
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash git status --short && git diff --stat && gh issue view 855 --repo tacplus-dev/tacplus --comments | tail -20
+< 2. Ship the full replacement as 2.6.2 anyway, as an explicit exception to VERSIONING.md, and accept that mailbox's tests (and any consumer naming `prost_wkt_types::*` or `chrono::Duration` from `expires_in`) break on a patch. 3. Accept the advisory everywhere and change nothing until an upstream (pr...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue view 855 --repo tacplus-dev/tacplus --json labels -q '.labels[].name'; grep -rn "pbjson" --include=* -r . 2>/dev/null | grep -v "^./.git/" | grep -v "Cargo.lock" | head -30; grep -n "chrono" pkg/templates/rust -r | head
+< bug approved looper:in-progress ./pkg/internal/rust/types/jsonname_test.go:15:// (spec.json_key) reaches pbjson as the field's json_name; a comment quoting ./pkg/internal/rust/types/jsonname_test.go:53:// the key pbjson writes, which for a json_key'd field is the json_key. ./pkg/internal/rust/types/...
+= thinking_tokens
+= thinking_tokens
+> Bash cat pkg/templates/rust/types/types_cargo.toml.tmpl && sed -n 1,140p pkg/internal/rust/types/cargo_regression_test.go && grep -rn "pbjson" pkg --include=*.go | grep -v _test | grep -v "rust/types/serial\|jsonname\|generator.go:44"
+< {{- /* Rust types crate Cargo.toml template */ -}} [package] name = "{{.CrateName}}-types" version = "1.0.0" edition = "2021" description = "Generated Protocol Buffer types"  [lib] path = "mod.rs"  [dependencies] prost = { workspace = true } prost-types = { workspace = true } prost-wkt-types = { wor...
+= thinking_tokens
+= thinking_tokens
+> Bash grep -rn "pbjson.types\|pbjson_types" pkg cmd internal 2>/dev/null | grep -v "_test.go" ; grep -rln "pbjson_types" --include=*.rs --include=*.tmpl . | grep -v .git/ | head; sed -n 140,260p pkg/internal/rust/types/cargo_regression_test.go
+< pkg/templates/rust/types/types_cargo.toml.tmpl:16:pbjson-types = { workspace = true } 	if err := createWorkspaceCargoToml(&tactype.Config{ 		CrateBasePath: "current-generation", 		States:        []tactype.StateEntry{{}}, 	}, out, false, false, false); err != nil { 		t.Fatalf("createWorkspaceCargoTom...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash grep -rln "pbjson-types" . --exclude-dir=.git | grep -v Cargo.lock; grep -n chrono pkg/templates/rust/chassis/logger -r; grep -rn "types_cargo.toml.tmpl" pkg --include=*.go
+< ./pkg/internal/rust/types/cargo_regression_test.go ./pkg/templates/rust/types/types_cargo.toml.tmpl ./example/proto/dependencies.yaml ./cross-test/proto-zerorpc/dependencies.yaml ./cross-test/wire-corpus/proto/dependencies.yaml ./cross-test/external-token/proto/dependencies.yaml ./cross-test/memberp...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash sed -n 130,200p pkg/internal/rust/types/cargo.go; grep -rn "logger/Cargo.toml.tmpl\|chassis.*Cargo.toml.tmpl" pkg --include=*_test.go | head
+< 	// A spec.smb service reuses the shared key-generation helper for its member 	// keypair, so the cert crates (aws-lc-rs/ed25519/rand) must be in Cargo.toml even 	// when the service has no TLS gRPC of its own (SPIFFE plan D7). 	autoTlsKeyType := config.AutoTlsKeyType() 	if autoTlsKeyType == "" && (...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash sed -n 130,160p pkg/internal/rust/types/rotation_gen_test.go; grep -n "^func read\|read := " pkg/internal/rust/types/rotation_gen_test.go; cat pkg/templates/rust/chassis/logger/Cargo.toml.tmpl
+< }  // The rotation chassis keeps its fail-closed rules: the wire's message rule, // rotation at 75%, mint retries every second, refusals with no description, // make-before-break on the stream's own channel, sibling names. func TestRustRotationChassisTemplates(t *testing.T) { 	read := func(path stri...
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n "templates\"" pkg/internal/rust/types/rotation_gen_test.go && cat >> pkg/internal/rust/types/cargo_regression_test.go <<'EOF'  // pbjson-types names chrono as a non-optional dependency, and chrono 0.4 is // unmaintained (RUSTSEC-2026-0543): no generated source names pbjson_types, so // no ge...
+< 12:	"github.com/tacplus-dev/tacplus/templates" # github.com/tacplus-dev/tacplus/pkg/internal/rust/types pkg/internal/common/parser/descriptor.go:20:2: no required module provides package github.com/tacplus-dev/tacplus/target/proto/spec/sys; to add it: 	go get github.com/tacplus-dev/tacplus/target/pr...
+Needs the generated proto bindings first; checking the justfile.
+> Bash grep -n "^[a-z-]*:" justfile | head -40
+< 33:default: install 35:generate: 38:build: generate 42:install: generate 54:test: generate soundness 58:soundness: 61:vet: 66:example: 74:site: site-venv 81:site-serve: site-venv 85:site-venv: 94:current-generation: 97:current-generation-go: 100:current-generation-java: 103:current-generation-rust: ...
+> Bash just generate > /tmp/gen.log 2>&1; tail -3 /tmp/gen.log; sed -i 's|^import (|import (\n\t"io/fs"|' pkg/internal/rust/types/cargo_regression_test.go && sed -i 's|"github.com/tacplus-dev/tacplus/pkg/internal/tactype"|"github.com/tacplus-dev/tacplus/pkg/internal/tactype"\n\t"github.com/tacplus-dev/tacp...
+= task_started
+= task_notification
+< bash scripts/with-tree-lock.sh go generate ./pkg/internal/proto/spec/... --- FAIL: TestGeneratedCratesDoNotDependOnPbjsonTypes (0.00s)     cargo_regression_test.go:350: createWorkspaceCargoToml: rust dependencies.yaml missing required workspace dependency versions: async-trait, axum, futures, reqwes...
+= thinking_tokens
+= thinking_tokens
+> Bash python3 - <<'EOF' p='pkg/internal/rust/types/cargo_regression_test.go' s=open(p).read() i=s.index('func TestGeneratedCratesDoNotDependOnPbjsonTypes') old=s[s.index('    base64: 0.21.7\n',i):s.index('`\n',i)] new='''    async-trait: 0.1.89     axum: 0.8.8     base64: 0.21.7     bytes: 1.11.1     futu...
+<     cargo_regression_test.go:382: the logger chassis depends on chrono:         {{- if .Author}}         {{- end}}         # Proto types dependency         {{.CrateBasePath}}-types = { path = "../../types" } FAIL FAIL	github.com/tacplus-dev/tacplus/pkg/internal/rust/types	0.013s FAIL
+> Bash go test ./pkg/internal/rust/types/ -run TestGeneratedCratesDoNotDependOnPbjsonTypes 2>&1 | grep "depends on"; sed -i '/^pbjson-types = { workspace = true }$/d' pkg/templates/rust/types/types_cargo.toml.tmpl; sed -i '/^chrono = { workspace = true }$/d' pkg/templates/rust/chassis/logger/Cargo.toml.tmp...
+= task_started
+= task_notification
+<     cargo_regression_test.go:373: Cargo.toml depends on pbjson-types:         # cannot finish formatting a validate() error message, and no harness depends on     cargo_regression_test.go:373: types/Cargo.toml depends on pbjson-types:         # cannot finish formatting a validate() error message, an...
+= thinking_tokens
+= thinking_tokens
+Test fails before the change and passes after. Now checking for committed generated lock files and docs that mention it.
+> Bash git ls-files | grep -i "cargo.lock" | head; cat generated.yaml 2>/dev/null | head -30; grep -rn "pbjson-types\|pbjson_types" docs STATE.md README.md 2>/dev/null | head
+< (Bash completed with no output)
+No committed locks or docs to update. Starting the full gates in the background.
+> Bash sed -n 171,204p justfile; nohup just gates > /tmp/gates.log 2>&1 & echo $!
+< gates:   #!/usr/bin/env bash   set -uo pipefail   # Hold the tree lock across the WHOLE suite, not once per gate: taking it per   # gate would let another job interleave a regeneration between two of them.   # The nested `just` calls below re-enter this same lock.   if [[ "${TACPLUS_TREE_LOCK:-}" !=...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+While the gates run, I'll prepare follow-up (b). First, reading the roadmaps as rule 11 requires.
+> Bash wc -l ROADMAP.md && grep -n "^#\|chrono\|wkt\|WKT\|RUSTSEC" ROADMAP.md | head -60; gh api repos/tacplus-dev/roadmap/contents/ROADMAP.md -H 'Accept: application/vnd.github.raw' | grep -in "chrono\|wkt\|rustsec" | head; gh api repos/tacplus-dev/roadmap/contents/items --jq '.[].name' | grep -i "chrono\...
+< 57 ROADMAP.md 1:# Roadmap: tacplus 5:## Now 10:## Next 46:## Later 56:## Not doing
+> Bash cat ROADMAP.md; head -40 PROPOSALS.md; gh issue list --repo tacplus-dev/tacplus --search "chrono OR prost-wkt" --state all --limit 10
+< # Roadmap: tacplus  Owned by Jody; changed only by an agent at Jody's request. Loopers propose in PROPOSALS.md.  ## Now tacplus compiles annotated proto definitions into complete services (Go, Rust, Java) and clients (TypeScript, Python, Swift, C#). Latest release: v2.4.1 (2026-10-27). 2.4 is the li...
+= thinking_tokens
+= thinking_tokens
+Opening follow-up (b) as a `feature` issue. Jody asked for that in this issue.
+> Bash cat > /tmp/b.md <<'EOF' Split from #855, at Jody's request ([comment](https://github.com/tacplus-dev/tacplus/issues/855): "option 1, split it … (b) the prost-wkt-types replacement and `Token::expires_in` on a std type go in the next minor/major per docs/VERSIONING.md — open that as a feature with a ...
+< https://github.com/tacplus-dev/tacplus/issues/862
+Adding the ROADMAP line Jody asked for, and a PROPOSALS entry.
+> Bash python3 - <<'EOF' p='ROADMAP.md' s=open(p).read() anchor="Hub, at Jody's request (tacplus speed is the top priority), 2026-11-17.\n" line="- Generated Rust without chrono (RUSTSEC-2026-0543): a chrono-free WKT crate in place of prost-wkt-types, `Token::expires_in` on a std type, a test that the gene...
+<  PROPOSALS.md                                      |  5 ++  ROADMAP.md                                        |  1 +  pkg/internal/rust/types/cargo_regression_test.go  | 73 +++++++++++++++++++++++  pkg/templates/rust/chassis/logger/Cargo.toml.tmpl |  1 -  pkg/templates/rust/types/types_cargo.toml.tm...
+= thinking_tokens
+= thinking_tokens
+Checkpointing, then checking what main has taken since v2.6.1 to choose where the patch gets cut.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 855 --checkpoint "Jody chose option 1. Done (uncommitted): dropped pbjson-types from the types crate template and the unused chrono from the logger chassis, test TestGeneratedCratesDoNotDependOnPbjsonTypes; opened #862 (feature, part b); ROADMAP line...
+= task_started
+= task_notification
+< 94 34cf450b Build image: newuidmap and newgidmap carry file capabilities, not setuid (#830) 217ff3aa current-generation: run each language of each fixture on a CPU-bounded worker pool (#812) 8c4ee337 ROADMAP: self-tests once per identical chassis source (#843) 5b05ce15 Generated Go chassis TLS verif...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for b in $(git branch -r | grep -o 'release/[0-9.]*'); do v=${b#release/}; t0=$(git log -1 --format=%cs v$v.0 2>/dev/null); last=$(git tag -l "v$v.*" --sort=-v:refname | head -1); has=$(git show origin/$b:pkg/templates/rust/types/types_cargo.toml.tmpl 2>/dev/null | grep -c pbjson-types); lg=$(git sh...
+< release/2.0 .0=2026-10-15 last=v2.0.32 pbjson=1 loggerchrono=1 release/2.1 .0=2026-10-20 last=v2.1.25 pbjson=1 loggerchrono=1 release/2.2 .0=2026-10-25 last=v2.2.22 pbjson=1 loggerchrono=1 release/2.3 .0=2026-10-25 last=v2.3.24 pbjson=1 loggerchrono=1 release/2.4 .0=2026-10-27 last=v2.4.24 pbjson=1 ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+`release/2.6` is at v2.6.13, so its patch is **v2.6.14**, not the v2.6.2 the prompt named. Lines 2.0 through 2.6 are all under twelve months old and all have the bug. Reading the backport procedure.
+> Bash sed -n 50,110p CONTRIBUTING.md; gh pr list --repo tacplus-dev/tacplus --base release/2.6 --state all --limit 3 --json number,title,headRefName,body -q '.[] | "\(.number) \(.headRefName) \(.title)\n\(.body[0:600])\n---"'
+< The **fix looper** takes the oldest open request and triages it first, whatever its label: anything that adds or changes a generated surface, annotation, CLI flag or option is a feature; anything else is a bug.  - A **bug** is reproduced with a failing test, fixed in the generator, run   through the...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$v: $(git show origin/release/$v:templates/embed.go 2>/dev/null | grep -c 'var FS') $(git ls-tree origin/release/$v pkg/internal/rust/types/cargo_regression_test.go | wc -l) $(git show origin/release/$v:pkg/templates/rust/types/types_cargo.toml.tmpl | g...
+< 2.0: 0 1 16:pbjson-types = { workspace = true } | 14:chrono = { workspace = true } 2.1: 0 1 16:pbjson-types = { workspace = true } | 14:chrono = { workspace = true } 2.2: 0 1 16:pbjson-types = { workspace = true } | 14:chrono = { workspace = true } 2.3: 0 1 16:pbjson-types = { workspace = true } | 1...
+= thinking_tokens
+= thinking_tokens
+> Bash head -1 go.mod; ls pkg/templates/*.go; for v in 2.0 2.6; do git show origin/release/$v:go.mod | head -1; git ls-tree --name-only origin/release/$v pkg/templates/ | grep '\.go$'; done
+< module github.com/tacplus-dev/tacplus pkg/templates/embed.go module github.com/tacplus-dev/tacplus pkg/templates/embed.go module github.com/tacplus-dev/tacplus pkg/templates/embed.go
+= thinking_tokens
+= thinking_tokens
+> Bash for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$v $(git grep -l 'tacplus/templates"' origin/release/$v -- pkg/internal/rust/types | head -1)"; done
+< 2.0 origin/release/2.0:pkg/internal/rust/types/approval_canonical_test.go 2.1 origin/release/2.1:pkg/internal/rust/types/approval_canonical_test.go 2.2 origin/release/2.2:pkg/internal/rust/types/approval_canonical_test.go 2.3 origin/release/2.3:pkg/internal/rust/types/approval_canonical_test.go 2.4 ...
+= thinking_tokens
+= thinking_tokens
+Paths match on every line. Setting up a worktree per release branch, each test-first (test fails, apply fix, test passes), run as a background script.
+> Bash mkdir -p /builds/looper/tacplus/homes/looper-855/bp && cat > /builds/looper/tacplus/homes/looper-855/bp/test.go.txt <<'EOF' // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0  package types  import ( 	"io/fs" 	"strings" 	"testing"  	"github.com/tacplus-dev/tacplus/templates" )  ...
+< 26498
+= thinking_tokens
+= thinking_tokens
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Bash until grep -q "^DONE" /tmp/bp.log; do sleep 5; done; cat /tmp/bp.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bn26k3u7v. Output is being written to: /builds/looper/tacplus/homes/looper-855/tmp/claude-61000/-builds-looper-tacplus-issues-855/cf2d5330-3c10-404b-a960-aba603c11268/tasks/bn26k3u7v.output. You will be notified when it completes. To check interim output, use R...
+> Monitor tail -n0 -F /tmp/gates.log | grep -E --line-buffered "^=== .* rc=|OVERALL|^--- FAIL|panic:|Killed"
+= permission_denied
+< This Bash command contains multiple operations. The following part requires approval: tail -n0 -F /tmp/gates.log
+> Bash sleep 240; grep -E "^=== .* rc=|OVERALL|^--- FAIL" /tmp/gates.log; cat /tmp/bp.log
+< <tool_use_error>Blocked: sleep 240 followed by: grep -E "^=== .* rc=|OVERALL|^--- FAIL" /tmp/gates.log cat /tmp/bp.log. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain short...
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n -i "chrono\|RUSTSEC\|pbjson" STATE.md | head; grep -E "^=== .* rc=" /tmp/gates.log
+< 26:  The generated Rust chassis signs and verifies RSA and ECDSA with aws-lc-rs: the `rsa` crate (RUSTSEC-2023-0071, 27:  Marvin) and the elliptic-curve 0.13 stack (crypto-bigint 0.5, RUSTSEC-2026-0387) are gone from the generated === protoc-check rc=0 === === soundness rc=0 === === test rc=0 ===
+> Bash git add pkg && git commit -q -F - <<'EOF' Generated Rust: drop the unused pbjson-types and logger chrono dependencies (#855)  pbjson-types depends on chrono 0.4 unconditionally, and chrono 0.4 is unmaintained (RUSTSEC-2026-0543). The consumers' scans report it. The generated types crate declared pbj...
+< acb1d65c ROADMAP, PROPOSALS: chrono out of the generated Rust graph, the breaking half (#862) af5a38e8 Generated Rust: drop the unused pbjson-types and logger chrono dependencies (#855) 6605c07e PROPOSALS.md: the nightly scan's proposals (looper)
+The fix and the planning-file changes are committed locally. The gates have passed soundness and test so far, and the backports are building. Checking whether STATE.md needs a line.
+> Bash sed -n 20,32p STATE.md
+<   The `linked` claim is retired: the generated namespace backstop (record egress, page/Watch, query predicate, record   write tenant pin) accepts the caller's own `namespace` only, no language generates a `linked` accessor, and   `JwtPayloadType` 29 is reserved (#171).   The fetch layer authenticate...
+I'll add that STATE line last, once the backport PRs exist. Waiting for the backport runs.
+> Bash until grep -q "^DONE" /tmp/bp.log; do sleep 5; done; cat /tmp/bp.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === 2.0 === 2.0: fails before fix (ok) ok  	github.com/tacplus-dev/tacplus/pkg/internal/rust/types	32.440s  M pkg/templates/rust/chassis/logger/Cargo.toml.tmpl  M pkg/templates/rust/types/types_cargo.toml.tmpl ?? pkg/internal/rust/types/pbjson_types_test.go === 2.1 === 2.1: fails before fix (ok) ok ...
+= thinking_tokens
+= thinking_tokens
+All seven lines fail before the fix and pass after. Committing, pushing the backport branches, and opening the PRs.
+> Bash bp=/builds/looper/tacplus/homes/looper-855/bp; cd /builds/looper/tacplus/issues/855; for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do last=$(git tag -l "v$v.*" --sort=-v:refname | head -1); n=$(( ${last##*.} + 1 )); next="v$v.$n"; cd $bp/$v; git add pkg/templates/rust/chassis/logger/Cargo.toml.tmpl pkg/temp...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= vcs_state_changed
+= code_change_published
+< remote:  https://github.com/tacplus-dev/tacplus/pull/863 remote:  https://github.com/tacplus-dev/tacplus/pull/864 remote:  https://github.com/tacplus-dev/tacplus/pull/865 remote:  https://github.com/tacplus-dev/tacplus/pull/866 remote:  https://github.com/tacplus-dev/tacplus/pull/867 remote:  https:...
+> Bash for p in 863 869; do gh pr view $p --repo tacplus-dev/tacplus --json baseRefName,body -q '.baseRefName + " " + (.body|split("\n")[2])'; done; grep -E "^=== .* rc=" /tmp/gates.log
+< release/2.0 **Patch to cut once this merges: the next unused 2.0 tag, `v2.0.33` as of 2026-11-18** (`v2.0.32` is the newest tag on release/2.0; other open backports may name the same next tag, so take whichever is unused when this merges). release/2.6 **Patch to cut once this merges: the next unused...
+Now the STATE.md line, in its own commit, then a checkpoint.
+> Bash python3 - <<'EOF' p='STATE.md' s=open(p).read() a="  The generated Rust chassis is on the digest 0.11 stack" e="""  The generated Rust types crate no longer depends on `pbjson-types`, nor the logger chassis on `chrono` (#855;   backported to release/2.0 through release/2.6 by pull request, #863-#869...
+= task_started
+= task_notification
+< [2026-11-18T16:15:29Z] checkpoint of #855 (a step) pushed to looper/tacplus-855:  8 files changed, 467 insertions(+), 2 deletions(-)
+= thinking_tokens
+= thinking_tokens
+> Bash git status --short | head; /usr/local/bin/looper-trace check 2>&1 | tail -3
+= task_started
+= task_notification
+< FINDING dropped-trace cross-test/server-runtime/client/go/main.go:138: checkFailClosed's call GetContract is caused by the request but does not carry its trace_id (api); propagate it, or, if the request does not cause the call, say so where it is made: `// trace: unrelated: <why>` FINDING untested c...
+= thinking_tokens
+= thinking_tokens
+The trace check reports 8 findings, all in code this change doesn't touch. Checking whether they're already filed.
+> Bash /usr/local/bin/looper-trace check 2>&1 | grep FINDING | cut -c1-140; gh issue list --repo tacplus-dev/tacplus --state open --search "trace_id cross-test in:title" --limit 10
+= task_started
+= task_notification
+< FINDING dropped-trace cross-test/server-runtime/client/go/main.go:74: checkUnary's call GetPublicContract is caused by the request but does  FINDING untested cross-test/server-runtime/client/go/main.go:73: checkUnary makes causal downstream calls (GetPublicContract) but no test as FINDING dropped-tr...
+> Bash sed -n 60,80p cross-test/server-runtime/client/go/main.go; gh issue list --repo tacplus-dev/tacplus --state all --search "server-runtime trace" --limit 5
+< 	defer cancel()  	checkUnary(ctx, api, lang) 	checkServerStream(ctx, api, lang) 	checkPage(ctx, api, lang) 	checkFailClosed(ctx, api, lang)  	fmt.Printf("go generated client OK against %s generated server (%s)\n", lang, addr) }  // checkUnary: auth_disabled unary. The generated remote wrapper valida...
+Those findings are already filed as #311 and aren't handlers this change touches. Waiting for the full gates to finish.
+> Bash until grep -q "OVERALL" /tmp/gates.log || ! kill -0 6505 2>/dev/null; do sleep 10; done; grep -E "^=== .* rc=|OVERALL" /tmp/gates.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: btz7uz4l9. Output is being written to: /builds/looper/tacplus/homes/looper-855/tmp/claude-61000/-builds-looper-tacplus-issues-855/cf2d5330-3c10-404b-a960-aba603c11268/tasks/btz7uz4l9.output. You will be notified when it completes. To check interim output, use R...
+> Bash until grep -q "OVERALL" /tmp/gates.log || ! kill -0 6505 2>/dev/null; do sleep 10; done; grep -E "^=== .* rc=|OVERALL" /tmp/gates.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b8c0lpv9o). Output is being written to: /builds/looper/tacplus/homes/looper-855/tmp/claude-61000/-builds-looper-tacplus-issues-855/cf2d5330-3c10-404b-a960-aba603c11268/tasks/b8c0lpv9o.output. You will be notified w...
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'until grep -q "OVERALL" /tmp/gates.log; do sleep 10; done'; grep -E "^=== .* rc=|OVERALL" /tmp/gates.log
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=1 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=0 === === rotation rc=0 ===
+current-generation failed. Finding out why.
+> Bash awk '/^=== current-generation ===/,/^=== current-generation rc=/' /tmp/gates.log | grep -n -iE "error|FAIL|panic|warning: unused|pbjson|chrono" | head -40
+< 22:==> [go/base] FAILED (exit 1) after 195s 33:==> [go/tenantslice] FAILED (exit 1) after 198s 44:==> [go/recordegress-host] FAILED (exit 1) after 203s 55:==> [go/recordegress] FAILED (exit 1) after 209s 75:==> [go/redo] FAILED (exit 1) after 366s 95:==> [go/tenantroute] FAILED (exit 1) after 367s 1...
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash awk '/^=== current-generation ===/,/^=== current-generation rc=/' /tmp/gates.log | sed -n 1,122p | cut -c1-300 | grep -v "^\s*$" | head -130
+< === current-generation === bash scripts/with-tree-lock.sh bash cross-test/current-generation/run.sh ==> Building local tacplus binary ==> Running 46 fixture builds, 8 at once ==> [rust/base] started on worker 1 ==> [go/base] started on worker 3 ==> [go/tenantrecord] started on worker 4 ==> [go/tenan...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'until grep -q "OVERALL" /tmp/gates.log; do sleep 10; done'; grep -E "^=== .* rc=|OVERALL" /tmp/gates.log | tail -12
+= task_started
+= task_notification
+< === protoc-check rc=0 === === soundness rc=0 === === test rc=0 === === current-generation rc=1 === === determinism rc=0 === === cert-stream rc=0 === === stream-expiry rc=0 === === rotation rc=0 === === memberport rc=0 === === claims-provenance rc=0 === === accounting-identity rc=0 ===
+> Bash timeout 590 bash -c 'until grep -q "OVERALL" /tmp/gates.log; do sleep 10; done'; grep -E "^=== .* rc=|OVERALL" /tmp/gates.log | tail -8
+= task_started
+= task_notification
+< === stream-expiry rc=0 === === rotation rc=0 === === memberport rc=0 === === claims-provenance rc=0 === === accounting-identity rc=0 === === w2s-validate rc=0 === === c2d-server rc=0 === === zero-rpc-s2s rc=0 ===
+> Bash timeout 590 bash -c 'until grep -q "OVERALL" /tmp/gates.log; do sleep 10; done'; grep -E "^=== .* rc=|OVERALL" /tmp/gates.log | tail -6
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< === zero-rpc-s2s rc=0 === === jwk-alg rc=0 === === redact rc=0 === === trace-carry rc=0 === === tacplus-script rc=0 === === OVERALL fail=1 ===
+Every gate except current-generation passed. Re-running current-generation on the now-unchanged tree.
+> Bash git status --short | head -3; nohup just current-generation > /tmp/cg.log 2>&1 & echo $!
+< 141455
+> Bash timeout 590 bash -c 'while kill -0 141455 2>/dev/null; do sleep 10; done'; grep -E "FAILED|jobs failed|tree guard|^error" /tmp/cg.log | head; tail -2 /tmp/cg.log
+= task_started
+= task_notification
+< ==> [java/eventbus-backpressure] passed in 102s ==> [rust/tenantslice-config-owner] started on worker 3
+> Bash timeout 590 bash -c 'while kill -0 141455 2>/dev/null; do sleep 10; done'; grep -E "FAILED|jobs failed|tree guard|^error" /tmp/cg.log | head; tail -2 /tmp/cg.log
+= task_started
+= task_notification
+< ==> [java/eventbus-backpressure] passed in 102s ==> [rust/tenantslice-config-owner] started on worker 3
+Still running (the Rust fixtures are the slow ones). Waiting again.
+> Bash timeout 590 bash -c 'while kill -0 141455 2>/dev/null; do sleep 10; done'; grep -E "FAILED|jobs failed|tree guard|^error" /tmp/cg.log | head; grep -c "passed in" /tmp/cg.log; tail -2 /tmp/cg.log
+= task_started
+= task_notification
+< 36 ==> [rust/recordegress-host] passed in 1049s ==> [rust/ownerdefault] started on worker 7
+> Bash timeout 590 bash -c 'while kill -0 141455 2>/dev/null; do sleep 10; done'; grep -E "FAILED|jobs failed|tree guard|^error" /tmp/cg.log | head; grep -c "passed in" /tmp/cg.log; tail -3 /tmp/cg.log
+= task_started
+= task_notification
+< 46     SKIP TLS-degrade seam parity — NOT COVERAGE (fixture generates no ServiceManager;          real coverage is pkg/internal/java/types/tls_degrade_template_test.go) ==> Current cross-test generation and compile passed
+= thinking_tokens
+= thinking_tokens
+current-generation passes on the re-run, 46 of 46 fixtures. So the full gate set is green on this tree. Landing.
+> Bash git log --oneline origin/main..HEAD; /usr/local/bin/repo-looper --repo tacplus --issue 855 --land 2>&1 | tail -5
+= task_started
+= task_notification
+< 63c0d33f STATE.md: the generated Rust drops pbjson-types; chrono waits for #862 (#855) acb1d65c ROADMAP, PROPOSALS: chrono out of the generated Rust graph, the breaking half (#862) af5a38e8 Generated Rust: drop the unused pbjson-types and logger chrono dependencies (#855) [2026-11-18T17:38:03Z] chec...
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 855 --checkpoint "Land queued: af5a38e8 (fix + test TestGeneratedCratesDoNotDependOnPbjsonTypes), acb1d65c (ROADMAP line at Jody's request + PROPOSALS), 63c0d33f (STATE.md). Full gates green on this tree: all gates rc=0; current-generation re-run alo...
+< [2026-11-18T17:38:14Z] checkpoint of #855 (a step) pushed to looper/tacplus-855:  9 files changed, 576 insertions(+), 2 deletions(-)
+= thinking_tokens
+= thinking_tokens
+The part of #855 that can ship as a patch is queued for landing on main. The rest is split out to #862, as Jody decided (option 1). The full gates passed: current-generation had to be re-run on its own, after the first full run aborted it.
+
+**What changed** (three commits queued with the manager):
+- **`af5a38e8`, the fix:** the generated types crate no longer depends on `pbjson-types`, and the logger chassis no longer depends on `chrono`. Neither one was used by any generated code, so the generated surface doesn't change.
+- **The test:** `TestGeneratedCratesDoNotDependOnPbjsonTypes` failed before the change and passes after it.
+- **`acb1d65c`, planning files:** a ROADMAP.md line for #862, which Jody asked for in his comment, and a PROPOSALS.md entry.
+- **`63c0d33f`:** STATE.md, in a commit of its own.
+
+**What's still open:** chrono is still in the generated Cargo.lock, so the issue's "no chrono in the lock" test isn't met yet. It still comes in through `prost-wkt-types` and the token chassis's public `expires_in()`. Removing those changes the generated surface, so it goes in the next minor or major. That is #862, opened as a `feature`.
+
+**Gates:** every gate in `just gates` returned 0 except current-generation. Its first run failed 8 fixtures on the tree guard: I committed and edited planning files in the checkout while it ran. All 8 had printed PASS first. Re-run alone on the unchanged tree, all 46 fixtures passed.
+
+**Release:**
+- **No tag from main:** main has taken features since v2.6.1 (#321, #322 and others), so rule 7 rules out cutting the patch there.
+- **The 2.6 tag is v2.6.14, not v2.6.2:** `release/2.6` is already at v2.6.13.
+- **Backport PRs:** one per release line from 2.0 to 2.6, #863 to #869. Each one's test fails without the fix and passes with it. Each PR names its next patch tag (v2.0.33 through v2.6.14). Those tags are cut after the PRs merge, which needs human review.
+
+**Trace check:** this change touches no handlers. `looper-trace check` reports 8 findings in `cross-test/server-runtime/client/go/main.go`, which this change doesn't touch. #311 already covers that file.
+
+**Next run of this issue:** after the manager's verdict, post the outcome comment and close #855.
+= success: The part of #855 that can ship as a patch is queued for landing on main. The rest is split out to #862, as Jody decided (option 1). The full gates passed: current-generation had to be re-run on its own, after the first full run aborted it.
+
+**What changed** (three commits queued with the manager):
+- **`af5a38e8`, the fix:** the generated types crate no longer depends on `pbjson-types`, and the logger chassis no longer depends on `chrono`. Neither one was used by any generated code, so the generated surface doesn't change.
+- **The test:** `TestGeneratedCratesDoNotDependOnPbjsonTypes` failed before the change and passes after it.
+- **`acb1d65c`, planning files:** a ROADMAP.md line for #862, which Jody asked for in his comment, and a PROPOSALS.md entry.
+- **`63c0d33f`:** STATE.md, in a commit of its own.
+
+**What's still open:** chrono is still in the generated Cargo.lock, so the issue's "no chrono in the lock" test isn't met yet. It still comes in through `prost-wkt-types` and the token chassis's public `expires_in()`. Removing those changes the generated surface, so it goes in the next minor or major. That is #862, opened as a `feature`.
+
+**Gates:** every gate in `just gates` returned 0 except current-generation. Its first run failed 8 fixtures on the tree guard: I committed and edited planning files in the checkout while it ran. All 8 had printed PASS first. Re-run alone on the unchanged tree, all 46 fixtures passed.
+
+**Release:**
+- **No tag from main:** main has taken features since v2.6.1 (#321, #322 and others), so rule 7 rules out cutting the patch there.
+- **The 2.6 tag is v2.6.14, not v2.6.2:** `release/2.6` is already at v2.6.13.
+- **Backport PRs:** one per release line from 2.0 to 2.6, #863 to #869. Each one's test fails without the fix and passes with it. Each PR names its next patch tag (v2.0.33 through v2.6.14). Those tags are cut after the PRs merge, which needs human review.
+
+**Trace check:** this change touches no handlers. `looper-trace check` reports 8 findings in `cross-test/server-runtime/client/go/main.go`, which this change doesn't touch. #311 already covers that file.
+
+**Next run of this issue:** after the manager's verdict, post the outcome comment and close #855.
+= usage: {"claude-opus-5-5":{"inputTokens":108,"outputTokens":21568,"cacheReadInputTokens":3314197,"cacheCreationInputTokens":76260,"webSearchRequests":0,"costUSD":1.7047113999999994,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":4899,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}

@@ -24,6 +24,7 @@ import com.example.rotationfixture.model.types.sys.x509.X509;
 import io.grpc.CallOptions;
 import io.grpc.Channel;
 import io.grpc.ClientCall;
+import io.grpc.ConnectivityState;
 import io.grpc.Context;
 import io.grpc.ManagedChannel;
 import io.grpc.Metadata;
@@ -85,14 +86,19 @@ import org.junit.jupiter.api.Test;
  * TickerServiceRotating sibling) behind the generated Authorizer, served by the
  * generated GrpcServer (TLS, #260's expiry interceptor), and called by the
  * generated TickerServiceGrpcClient over the generated
- * ServiceConnection.ChannelProvider. Tokens live 3 s. Neither the handler nor
+ * ServiceConnection.ChannelProvider. Tokens live 4 s. Neither the handler nor
  * the caller code below mentions rotation.
  */
 class RotationBehaviorTest {
-    /** Every token's lifetime; exp is whole seconds, so a token may expire up to a second sooner. */
-    private static final long TOKEN_LIFETIME_MS = 3_000;
+    /**
+     * Every token's lifetime; exp is whole seconds, so a token may expire up to a
+     * second sooner. 4 s, not the Go and Rust legs' 3 s: the client rotates at 75%
+     * of what is left, and a 3 s token floored to 2 s left a cutover 0.5 s, which
+     * a loaded runner's JVM overran (tacplus#300).
+     */
+    private static final long TOKEN_LIFETIME_MS = 4_000;
     /** How long the transparency tests run a stream: several lifetimes. */
-    private static final long STREAM_FOR_MS = 9_000;
+    private static final long STREAM_FOR_MS = 12_000;
     private static final Metadata.Key<String> AUTHORIZATION =
             Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
 
@@ -400,6 +406,14 @@ class RotationBehaviorTest {
                 ch.shutdownNow();
                 ch.awaitTermination(5, TimeUnit.SECONDS);
             });
+            // Connected before a stream opens: its token is minted as the call
+            // starts, so a TLS handshake slowed by a loaded runner would
+            // otherwise spend the opening leg's lifetime (tacplus#300).
+            long until = System.currentTimeMillis() + 30_000;
+            while (ch.getState(true) != ConnectivityState.READY) {
+                assertTrue(System.currentTimeMillis() < until, "the channel to port " + toPort + " did not connect");
+                Thread.sleep(10);
+            }
             return ch;
         }
 
@@ -497,7 +511,7 @@ class RotationBehaviorTest {
 
     /**
      * The caller sends a tick every 2 ms for STREAM_FOR_MS while the handler
-     * echoes each back, both directions at once, across several 3 s token
+     * echoes each back, both directions at once, across several 4 s token
      * lifetimes. Every tick arrives at the handler and back exactly once, in
      * order, on one handler call with one live Context; the tokens were renewed
      * several times.

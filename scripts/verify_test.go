@@ -19,7 +19,7 @@ import (
 var (
 	recipeHeader = regexp.MustCompile(`^([a-z][a-z0-9-]*)( [^:=]*)?:([^=].*)?$`)
 	justCall     = regexp.MustCompile(`\bjust "?\$?([a-z][a-z0-9-]*)`)
-	gateLoop     = regexp.MustCompile(`for g in ([a-z0-9 -]+); do`)
+	gateList     = regexp.MustCompile(`scripts/gates\.sh ([a-z0-9 -]+)`)
 	scriptRef    = regexp.MustCompile(`[A-Za-z0-9_./-]+\.sh\b`)
 	// What runs a verifier: the verifiers themselves, `tacplus verify` (a
 	// built binary or the launcher), and the verify recipe and its script.
@@ -53,7 +53,7 @@ func justRecipes(t *testing.T, path string) map[string]string {
 }
 
 // reached returns every recipe `start` runs: its dependencies, the recipes its
-// body calls with `just`, and the gate list of the gates loop.
+// body calls with `just`, and the gate list it passes scripts/gates.sh.
 func reached(recipes map[string]string, start string) []string {
 	seen := map[string]bool{}
 	var order []string
@@ -72,7 +72,7 @@ func reached(recipes map[string]string, start string) []string {
 		for _, m := range justCall.FindAllStringSubmatch(body, -1) {
 			walk(m[1])
 		}
-		if m := gateLoop.FindStringSubmatch(body); m != nil {
+		if m := gateList.FindStringSubmatch(body); m != nil {
 			for _, g := range strings.Fields(m[1]) {
 				walk(g)
 			}

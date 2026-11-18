@@ -25,7 +25,10 @@ use agentsensor_model_types::vservices::accountingrecord::accountingrecord::Acco
 use am::{EventBusSink, Sink};
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
 
-const BOUND: Duration = Duration::from_secs(10);
+// A test that hangs fails at BOUND; one that passes returns as soon as it is done.
+// Wide for a loaded runner (the gates run concurrently, tacplus#300), where the
+// spool's fsyncs once took the restart replay past 10s.
+const BOUND: Duration = Duration::from_secs(60);
 
 fn event(i: usize) -> Event {
     Event {

@@ -4,6 +4,27 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Concurrent legs inside the other cross-test runners** (2026-11-06, #300): `just gates` runs gates and their
+  language legs concurrently, and current-generation its fixtures (#812), but the runners that run several fixtures or
+  peers one after another inside one leg (memberport, redact, determinism, ...) still do. The gate wall-time table
+  `just gates` prints names the longest; that one would move to a worker pool next.
+- **One job scheduler for the gates** (2026-11-18, #300): `scripts/gates.sh` runs the gates on
+  `cross-test/lib/jobs.sh` (dependencies, output in the order added, per-slot state, wall times), and
+  current-generation its fixtures on `cross-test/lib/parallel-jobs.sh` (#812: labelled output in the order finished,
+  stop on the first failure, per-worker cargo directories). The two landed side by side; one library would do both,
+  with each caller choosing ordered or labelled output.
+- **Ports and timing in cross-tests that now run side by side** (2026-11-06, #300): the first concurrent `just gates`
+  (load ~22 on 8 CPUs) failed stream-expiry twice: the Go test dialled before its server listened, and the Java test
+  minted a 3 s token before its TLS channel was up, so its streams reached the server after exp. #300 fixed both,
+  and the DiskStoreTest flake below as far as a wall-clock bound allows (10 appends, a 60s bound, the writer joined
+  before `close()`); the second run hit that flake, and the third a 1s bound in the Java cert-stream test (widened to
+  20s). Other self-tests share the pattern of picking a free port, releasing it and binding it later (`freePort`),
+  which two concurrent legs can race for; binding port 0 and reading the port back would remove it. And more
+  wall-clock bounds sized for an idle machine may surface as concurrent gates load the runner. The rotation fixture's
+  Java leg (#322) was one: 3 s tokens floored to whole seconds left its cutover ~0.5 s; it now uses 4 s tokens and a
+  connected channel. Its Go and Rust legs keep 3 s and passed under the same load, but share that margin.
+- **Land time per gate set in the nightly recap** (2026-11-06, #300): `just gates` now prints each gate's wall time
+  and the total; tacplus-dev/looper#57's recap could read them from the land's log to show the gain per gate set.
 - **gosec on the generated Go in tacplus's own gates** (2026-11-08, #359): #359 cleared G402, G123, G115, G404,
   G703 and G704 from the generated example service (fixed or `#nosec`-annotated with a reason in the templates),
   but nothing here keeps them out: tacplus-dev/looper#108's scan sees a regression only after a release. A gate

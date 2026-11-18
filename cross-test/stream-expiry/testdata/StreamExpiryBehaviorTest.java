@@ -346,30 +346,43 @@ class StreamExpiryBehaviorTest {
                     .sslContext(GrpcSslContexts.forClient().trustManager(tls.cert).build())
                     .build();
 
+            // The control stream opens first and the short token is minted once
+            // it receives: the TLS connection is up and the server warm. On a
+            // loaded machine (the gates run concurrently, tacplus#300) a cold
+            // first call can take longer than the short token lives, and a
+            // stream that reaches the server after exp is refused at open, its
+            // handler never invoked.
+            Metadata longAuth = new Metadata();
+            longAuth.put(AUTHORIZATION, "Bearer " + serviceToken(key, System.currentTimeMillis() / 1000 + 3600));
+            StreamerServiceGrpc.StreamerServiceStub longStub = StreamerServiceGrpc.newStub(channel)
+                    .withInterceptors(MetadataUtils.newAttachHeadersInterceptor(longAuth));
+            Recorder control = new Recorder();
+            all.add(control);
+            longStub.generateTicks(Tick.newBuilder().setM("control").build(), control);
+            long warmDeadline = System.currentTimeMillis() + 20_000;
+            while (control.received.get() == 0 && !control.ended.isDone()
+                    && System.currentTimeMillis() < warmDeadline) {
+                Thread.sleep(20);
+            }
+            assertTrue(control.received.get() > 0, "control stream (long-lived token) received no tick");
+
             long expSecs = System.currentTimeMillis() / 1000 + 3;
             long expMs = expSecs * 1000;
             Metadata shortAuth = new Metadata();
             shortAuth.put(AUTHORIZATION, "Bearer " + serviceToken(key, expSecs));
-            Metadata longAuth = new Metadata();
-            longAuth.put(AUTHORIZATION, "Bearer " + serviceToken(key, expSecs + 3600));
             StreamerServiceGrpc.StreamerServiceStub shortStub = StreamerServiceGrpc.newStub(channel)
                     .withInterceptors(MetadataUtils.newAttachHeadersInterceptor(shortAuth));
-            StreamerServiceGrpc.StreamerServiceStub longStub = StreamerServiceGrpc.newStub(channel)
-                    .withInterceptors(MetadataUtils.newAttachHeadersInterceptor(longAuth));
 
             Recorder send = new Recorder();
             Recorder generate = new Recorder();
             Recorder assist = new Recorder();
-            Recorder control = new Recorder();
             all.add(send);
             all.add(generate);
             all.add(assist);
-            all.add(control);
 
             keepSending(sched, shortStub.sendTicks(send), send);
             shortStub.generateTicks(Tick.newBuilder().setM("short").build(), generate);
             keepSending(sched, shortStub.assistTicks(assist), assist);
-            longStub.generateTicks(Tick.newBuilder().setM("control").build(), control);
 
             // Bound: exp + 5 s, plus a little slack for the wait itself. A
             // server that never ends the streams fails here instead of hanging.

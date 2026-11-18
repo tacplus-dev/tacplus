@@ -1743,7 +1743,7 @@ class CertStreamBehaviorTest {
 
         waitForRetrySleep(thread, label);
         thread.interrupt();
-        thread.join(1_000);
+        thread.join(20_000);
 
         assertFalse(thread.isAlive(), label + " did not exit after interrupt");
         assertNull(failure.get(), label + " loop returned an unexpected failure");
@@ -1751,8 +1751,12 @@ class CertStreamBehaviorTest {
         assertEquals(expectedReadyCount, ready.getCount(), label + " ready count changed");
     }
 
+    // This bound, and the join after the interrupt, return as soon as the
+    // thread gets there; they are wide for a
+    // loaded runner (the gates run concurrently, tacplus#300), where a cold
+    // thread once took over a second to reach its retry sleep.
     private static void waitForRetrySleep(Thread thread, String label) throws InterruptedException {
-        long deadline = System.nanoTime() + 1_000_000_000L;
+        long deadline = System.nanoTime() + 20_000_000_000L;
         while (System.nanoTime() < deadline) {
             if (thread.getState() == Thread.State.TIMED_WAITING) {
                 return;

@@ -64,6 +64,10 @@ Everything else:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
+This repository's own builds run `just gates` in the build image that
+[`build.lock`](build.lock) pins by digest; to move it, change that digest in a
+commit like any other, which lands on the full gates.
+
 **Is this related to TACACS+ or tac_plus?** No. Different project, different
 problem; the name collision is a coincidence.
 

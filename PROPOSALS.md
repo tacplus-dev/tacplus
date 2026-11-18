@@ -4,6 +4,34 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **CI's own jobs read `build.lock` instead of floating `build:latest`** (2026-11-12, #340): the build pipeline
+  (tacplus-dev/build) runs this repository's gates in the image `build.lock` pins by digest, but
+  `.github/workflows/nightly-gates.yml`, `nightly-security.yml`, `nightly-fixes.yml`, `site.yml` and
+  `just gates-container` still run in `build:latest`, which moves on every release and every main push of
+  `images/`. Reading the pin instead makes every gate run in the same image, and moving it one reviewed commit;
+  the cost is a pin to bump after each release (a pin older than `images/` on main gates against an image that does
+  not match the Dockerfile in the tree).
+- **The G115 exception of #340 ends with the last of its four issues** (2026-11-15, #340): `security-exceptions.yaml`
+  accepts each rule as a whole (the scanner knows no path key), so a rule's entry stays until every finding of
+  the rule is fixed, and a new finding of an excepted rule is accepted silently until 2026-12-31. The issue of
+  each entry's reason is the list to work down; the scanner growing a path key (tacplus-dev/looper) would let an
+  entry shrink as its issues close instead of lapsing at once.
+- **#340's 2026-12-31 also ends #376's G115, G404, G703 and gRPC-plaintext entries** (2026-11-16, #340): one id has
+  one entry for both trees the build scans (the scanner takes the first of a repeated id, and fails on any expired
+  one), so the rules #376 accepted in the generated code until 2027-02-14 or 2027-05-14 and #340 in the compiler's
+  source until 2026-12-31 share #340's earlier date, Jody's. If #359 has not fixed the generated Go by then, renewing
+  the generated code's part is a decision of its own; a path or tree key in the scanner would keep the two apart.
+- **`prune_cargo_workspace` and its test assume cargo's old `target/debug/deps` layout** (2026-11-16, #340): with
+  cargo 1.100 (the looper hosts' toolchain) a build leaves its rlibs under `debug/build/<crate>/<hash>/out/`, so
+  `TestPruneCargoWorkspaceKeepsSharedDependencies` fails on the host ("the build left no rlib to prune") on main as
+  well; the build image's pinned Rust still uses the old layout. The cross-test's pruning stops pruning, silently,
+  the day the image's Rust reaches the new layout: teach `cross-test/lib/cargo-target.sh` both layouts.
+- **A red gates run's security job cannot load the Go modules** (2026-11-18, #340): looper-build keeps the gates'
+  built files (built/) only when the gates pass, so after a red run (pipeline 3085075375, the #840 flake) the
+  security job scans a bare checkout, where the root module lacks the ignored `target/proto/spec/sys` that `just
+  generate` writes, and govulncheck fails `loading packages` (a Problem) for it and every module whose `replace`
+  points at generated code. It hides the real cause behind a second failure; keeping built/ on a red run too, or
+  generating the descriptors in the scan (tacplus-dev/looper), would leave only the gates' failure.
 - **Concurrent legs inside the other cross-test runners** (2026-11-06, #300): `just gates` runs gates and their
   language legs concurrently, and current-generation its fixtures (#812), but the runners that run several fixtures or
   peers one after another inside one leg (memberport, redact, determinism, ...) still do. The gate wall-time table

@@ -5,6 +5,19 @@
 # (`just generated`, generated/), so a rule accepted for the generated code is
 # accepted in the compiler's own source too: each reason says why that holds.
 # The generated tree's secrets are decided in scripts/generated.gitleaks.toml.
+#
+# The bridge of #340, decided by Jody on 2026-11-15 (#340, "Yes do all of this
+# as you recommend"): the first pinned build of this repository (tacplus-dev/build
+# pipeline 3068905492) failed its policy on 122 HIGH findings in the compiler's
+# source, each being fixed under the issue its entry names. Those entries expire on
+# 2026-12-31, and from the day after the build fails on what is left of their rule:
+# an exception with an end date, not a waiver. Every entry is rule-wide, none
+# scoped by path: the scanner matches an exception by the finding's id or alias
+# alone and an entry carries exactly id, reason, decided_by and expires, no path
+# (looper-scan read_exceptions); path scoping needs the scanner to grow a key for
+# it (tacplus-dev/looper). So a rule both trees fail (G115, G404, G703, the gRPC
+# plaintext server) has one entry for both, and #340's earlier expiry is its own.
+# Comments stay on their own lines: the parser takes the rest of a line as its value.
 exceptions:
   # Generated Go (#359): fixed in the generator by #359, queued to land.
   - id: G402
@@ -19,26 +32,26 @@ exceptions:
   # reason in the generator. Until then the same rule is accepted in the
   # compiler's source, where it was already failing the scan before #376.
   - id: G115
-    reason: "integer conversions in the generated Go (proto int32/uint32 fields, lengths, durations), each to be bounded or annotated in the generator, #359's Also list. The same rule in the compiler's source (its testdata chassis) is not reviewed by this exception."
-    decided_by: looper, tacplus#376 (triage; #359's Also list)
-    expires: 2027-02-14
+    reason: "integer conversions in the generated Go (proto int32/uint32 fields, lengths, durations), each to be bounded or annotated in the generator, #359's Also list. In the compiler's source, the #340 bridge (11 sites): integer conversions of values the compiler reads from the user's own schema or writes as protobuf wire encoding, bounded under #565 (llmdesc.go:236), #755 (the Go approval chassis template, 5 sites), #756 (the Java generator's utf16Units, 2 sites) and #813 (registry.go:928 and :954, record_map.go:291)."
+    decided_by: jodydadescott (#340, the compiler's source; 2026-11-15) and looper, tacplus#376 (triage; #359's Also list)
+    expires: 2026-12-31
   - id: G404
-    reason: "math/rand for retry and health jitter in the generated Go, not for secrets; #359's Also list. The compiler's source uses it in the chaos cross-test only."
-    decided_by: looper, tacplus#376 (triage; #359's Also list)
-    expires: 2027-02-14
+    reason: "math/rand for retry and health jitter in the generated Go, not for secrets; #359's Also list. In the compiler's source, the #340 bridge (2 sites): the chaos cross-test's fault schedule is seeded math/rand for reproducibility, not secrecy; #570 (fault.go:125) and #571 (orchestrator.go:77)."
+    decided_by: jodydadescott (#340, the compiler's source; 2026-11-15) and looper, tacplus#376 (triage; #359's Also list)
+    expires: 2026-12-31
   - id: G703
-    reason: "generated Go chassis (diskstore fsutil, service_im, grpcconfig) opens and writes paths from the service's own configuration (its data directory, token and config files), not from a request; #359's Also list. In the compiler's source, paths from its CLI and tacplus.yaml."
-    decided_by: looper, tacplus#376 (triage; #359's Also list)
-    expires: 2027-02-14
+    reason: "generated Go chassis (diskstore fsutil, service_im, grpcconfig) opens and writes paths from the service's own configuration (its data directory, token and config files), not from a request; #359's Also list. In the compiler's source, the #340 bridge (48 sites): a code generator writes the files its tacplus.yaml names into the output directory the user names; confined under #573-#579 (cmd/sitegen, cmd/sysrename, the indenter, the proto merge) and #754 (the 43 sites in pkg/, through os.Root)."
+    decided_by: jodydadescott (#340, the compiler's source; 2026-11-15) and looper, tacplus#376 (triage; #359's Also list)
+    expires: 2026-12-31
   - id: G704
     reason: "generated Go service_im posts to the AWS STS endpoint of the region the deployment sets (AWS_REGION), not a request's URL; #359's Also list"
     decided_by: looper, tacplus#376 (triage; #359's Also list)
     expires: 2027-02-14
   # By design in every generated Go service (docs/API.md).
   - id: go.grpc.security.grpc-server-insecure-connection.grpc-server-insecure-connection
-    reason: "generated Go: the C2D server listens on an owner-only (0600) unix socket, its access boundary, and the health probe server serves only grpc.health.v1 in plaintext for the orchestrator's probe; in the checkout, only the runtime-smoke test fixture"
-    decided_by: looper, tacplus#376 (triage, by design: docs/API.md, C2D server auth-skip scope)
-    expires: 2027-05-14
+    reason: "generated Go: the C2D server listens on an owner-only (0600) unix socket, its access boundary, and the health probe server serves only grpc.health.v1 in plaintext for the orchestrator's probe. In the checkout, the #340 bridge (3 sites): the runtime-smoke fixture and the example server serve plaintext gRPC to their own tests on loopback; #581 and #582 (the fixture), #583 (example/server)."
+    decided_by: jodydadescott (#340, the compiler's source; 2026-11-15) and looper, tacplus#376 (triage, by design: docs/API.md, C2D server auth-skip scope)
+    expires: 2026-12-31
   # Generated Java.
   - id: USO_UNSAFE_OBJECT_SYNCHRONIZATION
     reason: "generated Java chassis (memberport, collection): synchronized methods and blocks on private nested classes (MemberPort's sessions, CollectionRuntime's Ring and WatchHub), whose monitors no code outside the chassis can reach. SpotBugs has no Java of the compiler's source to read."
@@ -222,6 +235,10 @@ exceptions:
     reason: "a crate tacplus generates, which declares no license yet (#368)"
     decided_by: looper, tacplus#376 (triage; #368 is the fix)
     expires: 2027-01-15
+  - id: cargo-deny:unlicensed:rotation@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368): the rotation chassis crate (#322), new since #376's triage"
+    decided_by: looper, tacplus#340 (#376's triage of the generated crates; #368 is the fix)
+    expires: 2027-01-15
   - id: cargo-deny:unlicensed:service_im@0.1.0
     reason: "a crate tacplus generates, which declares no license yet (#368)"
     decided_by: looper, tacplus#376 (triage; #368 is the fix)
@@ -294,3 +311,20 @@ exceptions:
     reason: "a crate tacplus generates, which declares no license yet (#368)"
     decided_by: looper, tacplus#376 (triage; #368 is the fix)
     expires: 2027-01-15
+  # The compiler's source only, the bridge of #340 (above).
+  - id: G122
+    reason: "#340 bridge, rule-wide: Walk and WalkDir callbacks read and write the user's own source and output trees with the user's rights (55 sites); moved to root-scoped reads under #566-#569 (cmd/soundness, cmd/sysrename, pkg/protosrc) and #753 (the 51 sites in pkg/, one os.Root-scoped walk helper)"
+    decided_by: jodydadescott
+    expires: 2026-12-31
+  - id: G702
+    reason: "#340 bridge, rule-wide (1 site): cmd/sitegen runs the protoc that PROTOC_BINARY names, a documentation tool CI runs; #572"
+    decided_by: jodydadescott
+    expires: 2026-12-31
+  - id: dockerfile.security.missing-user.missing-user
+    reason: "#340 bridge, rule-wide (1 site): the root Dockerfile is the deprecated tacplus image's, never pushed again (#193); #580 retires or fixes it"
+    decided_by: jodydadescott
+    expires: 2026-12-31
+  - id: yaml.github-actions.security.run-shell-injection.run-shell-injection
+    reason: "#340 bridge, rule-wide (1 site): images.yml:74 interpolates github.event.inputs.rebuild into a run: step; #584 moves it to an env variable"
+    decided_by: jodydadescott
+    expires: 2026-12-31

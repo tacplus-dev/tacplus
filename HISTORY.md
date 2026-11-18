@@ -129,3 +129,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-17 looper issue Land the load-flake fixes as one land: main's gates cannot go green while each fix queues behind the others (#804)
 - 2026-11-18 looper issue Generated Go chassis TLS: InsecureSkipVerify (G402) and VerifyPeerCertificate with session resumption, no VerifyConnection (G123) (#359)
 - 2026-11-18 looper issue Full gates use ~1.5 of 16 CPUs: run independent gates and cross-test legs concurrently (bounded), keep the verdict deterministic (#300)
+- 2026-11-18 jody issue Pin tacplus's build image in build.lock, landed by hand at Jody's direction (all gates green but the rotation flake #840/#877) so tacplus lands through the merge train (#340, 4b850790)

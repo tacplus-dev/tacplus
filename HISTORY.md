@@ -156,3 +156,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue gosec G122 (HIGH, CWE-367) at cmd/sysrename/main.go:93: os.ReadFile on a filepath.Walk path (symlink TOCTOU) (#567)
 - 2026-11-19 looper issue gosec G115 (HIGH, CWE-190) at pkg/internal/common/llmdesc/llmdesc.go:236: unchecked int64 -> int32 conversion of timeseries_cardinality_hint (#565)
 - 2026-11-19 looper issue semgrep grpc-server-insecure-connection (HIGH) at cross-test/runtime-smoke/fixture/main.go:798: plaintext gRPC server in the runtime-smoke test fixture (#582)
+- 2026-11-19 looper issue JBMC cannot verify the generated Java validators: the kitchensink's Java has no formal verification (#196) (#257)

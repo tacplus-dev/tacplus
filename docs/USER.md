@@ -1520,14 +1520,19 @@ dependencies at the floors `dependencies.yaml` sets, and
 `example/proto/dependencies.yaml` does: these are the newest releases that
 install on 3.8, and older floors admit releases with more known advisories,
 which a lockfile or another constraint holding the package back would install.
-A regeneration over an existing `pyproject.toml` raises these floors in place.
+Its build backend and the types packages' `dev` extra are tacplus's own
+floors, not `dependencies.yaml`'s: `setuptools>=75.3.4` and `pytest>=8.3.5`,
+the newest releases that install on 3.8 (#309). A regeneration over an
+existing root `pyproject.toml` raises the root floors and `setuptools` in place; a
+types package's is rewritten.
 
 The releases that clear every advisory need Python 3.10, so on this line these
 remain at the floors, accepted (#264). **Move to tacplus 2.6+ / Python 3.10+
 to clear them**: 2.6 requires Python 3.10 and raises the floors to
 cryptography 50.0.0, requests 2.33.0 and urllib3 2.8.0. A consumer on Python
 3.10 or later clears them on this line too, by setting those floors in its own
-`dependencies.yaml`.
+`dependencies.yaml`. 2.6 also raises the build and dev floors to
+setuptools 84.1.0 and pytest 9.0.3 (#309).
 
 | Package | Floor | Advisory | Fixed in |
 |---------|-------|----------|----------|
@@ -1544,6 +1549,10 @@ cryptography 50.0.0, requests 2.33.0 and urllib3 2.8.0. A consumer on Python
 | urllib3 | 2.2.3 | PYSEC-2026-141 (CVE-2026-44431) | 2.7.0 |
 | urllib3 | 2.2.3 | PYSEC-2026-4175 (CVE-2026-97687) | 2.8.0 |
 | urllib3 | 2.2.3 | PYSEC-2026-4177 (CVE-2026-97689) | 2.8.0 |
+| setuptools (build) | 75.3.4 | GHSA-5rjg-fvgr-3xxf (CVE-2025-47273), HIGH | 78.1.1 |
+| setuptools (build) | 75.3.4 | GHSA-h35f-9h28-mq5c (CVE-2026-59890) | 83.0.0 |
+| setuptools (build) | 75.3.4 | GHSA-xmj3-9gf7-h52w | 84.1.0 |
+| pytest (`dev` extra) | 8.3.5 | GHSA-6w46-j5rx-g56g (CVE-2025-71176) | 9.0.3 |
 
 ---
 

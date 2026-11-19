@@ -147,3 +147,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue STATE.md Blocked on names tacplus-dev/tenantecho#7, closed 2026-11-15: drop it from #195's line (#828)
 - 2026-11-19 looper issue Java fixtures log io.grpc at DEBUG: the gates job's trace hits GitLab's 4 MiB cap mid-run, hiding which gate fails or hangs (#893)
 - 2026-11-19 looper issue Java AccountingSinkSpoolTest: an RPC completion's 1 s emit bound fails on a loaded runner (#851)
+- 2026-11-19 looper issue gosec G702 (HIGH, CWE-78) at cmd/sitegen/annotations.go:99: exec.Command runs the protoc that PROTOC_BINARY names (#572)

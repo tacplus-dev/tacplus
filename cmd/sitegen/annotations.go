@@ -79,16 +79,38 @@ func annotationPages(root string) (map[string][]byte, error) {
 	return pages, nil
 }
 
-// loadSpec compiles spec.proto with protoc into a descriptor set that keeps
-// the source comments. Like tacplus itself, it runs $PROTOC_BINARY if set,
-// else protoc from PATH.
-func loadSpec(root string) (protoreflect.FileDescriptor, error) {
-	protoc := os.Getenv("PROTOC_BINARY")
-	if protoc == "" {
-		var err error
-		if protoc, err = exec.LookPath("protoc"); err != nil {
-			return nil, fmt.Errorf("protoc not found in PATH (or set PROTOC_BINARY): %w", err)
+// protocBinary returns the protoc to run. Like tacplus itself, it takes
+// $PROTOC_BINARY if set, else protoc from PATH. PROTOC_BINARY must be an
+// absolute path to an existing executable regular file: it is checked here,
+// before anything runs, and run as argv[0], never through a shell.
+func protocBinary() (string, error) {
+	env := os.Getenv("PROTOC_BINARY")
+	if env == "" {
+		protoc, err := exec.LookPath("protoc")
+		if err != nil {
+			return "", fmt.Errorf("protoc not found in PATH (or set PROTOC_BINARY): %w", err)
 		}
+		return protoc, nil
+	}
+	if !filepath.IsAbs(env) {
+		return "", fmt.Errorf("PROTOC_BINARY=%q: not an absolute path", env)
+	}
+	fi, err := os.Stat(env)
+	if err != nil {
+		return "", fmt.Errorf("PROTOC_BINARY=%q: %w", env, err)
+	}
+	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+		return "", fmt.Errorf("PROTOC_BINARY=%q: not an executable file", env)
+	}
+	return filepath.Clean(env), nil
+}
+
+// loadSpec compiles spec.proto with protoc into a descriptor set that keeps
+// the source comments.
+func loadSpec(root string) (protoreflect.FileDescriptor, error) {
+	protoc, err := protocBinary()
+	if err != nil {
+		return nil, err
 	}
 	tmp, err := os.MkdirTemp("", "sitegen-")
 	if err != nil {

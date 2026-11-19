@@ -8,6 +8,7 @@ package llmdesc
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/collection"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
@@ -232,7 +233,9 @@ func BuildTypeDescriptor(msg model.Message, pkg string, msgIdx map[string]Messag
 			if ann, ok := field.Annotations["timeseries_partition_key"]; ok && ann.BoolValue {
 				fd.TimeseriesPartitionKey = true
 			}
-			if ann, ok := field.Annotations["timeseries_cardinality_hint"]; ok && ann.IntValue > 0 {
+			// Bounded before narrowing: a hint past int32 is not emitted rather
+			// than wrapped into another (or a negative) value.
+			if ann, ok := field.Annotations["timeseries_cardinality_hint"]; ok && ann.IntValue > 0 && ann.IntValue <= math.MaxInt32 {
 				fd.TimeseriesCardinality = int32(ann.IntValue)
 			}
 		}

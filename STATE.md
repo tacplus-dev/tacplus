@@ -58,7 +58,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-18 by lo
   2.6 gets none); `build:X.Y` per line, rebuilt on every release as an immutable `build:X.Y.Z`, carries Kani and
   cargo-fuzz too, and its `tacplus` is `images/tacplus.sh`, which runs exactly the pinned binary, checked against
   `checksums.txt`, and refuses a repository with no pin or a pin of another line. `tacplus verify` reports Go as
-  skipped. This repository, the compiler and no tacplus project, pins its own gates' build image by digest in
+  skipped. For Java it runs OpenJML ESC (no longer JBMC, #257) over the JML specs on each generated validator, in
+  the Maven module that compiles them; the build image's OpenJML runs on amd64 only (PROPOSALS.md).
+  This repository, the compiler and no tacplus project, pins its own gates' build image by digest in
   `build.lock` (#340: `build:2.6.13`, what `build:latest` resolves to), which the build pipeline (tacplus-dev/build)
   plans from, so every land runs the gates and the security checks there; `security-exceptions.yaml` accepts the
   first pinned build's 122 HIGH findings rule-wide until 2026-12-31 (Jody, #340), each under its bug issue
@@ -191,7 +193,8 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-18 by lo
   rust` verifies all 52 on cross-test/proto (Kani 0.68); messages with regex-backed, nested-message, map or sensitive
   checks get none, and #196 still moves verification to a kitchensink proto set. Formal verification is not a gate (#275): `just verify` runs it,
   `just verify-changed <sha>` says whether the nightly needs it; the pipeline that runs them on release tags and
-  nightly is tacplus-dev/looper#74, its nightly off until #257 passes. The new build image (Kani, cargo-fuzz, the launcher) is verified by
+  nightly is tacplus-dev/looper#74, its nightly off until #257 passes. Java's (#257) covers
+  cross-test/proto until the kitchensink (#196) lands; string byte bounds have no spec (PROPOSALS.md). The new build image (Kani, cargo-fuzz, the launcher) is verified by
   images.yml once pushed; the launcher and `tacplus pin` by the gates. The fleet build's image lookup on a private package is
   verified against a fake registry only: the looper's token has no `read:packages` (a public image resolves live).
   Rootless BuildKit (#315) needs a user namespace (`--security-opt seccomp=unconfined

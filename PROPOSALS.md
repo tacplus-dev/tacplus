@@ -65,6 +65,9 @@ the looper then marks it `promoted` or `declined` here with the date.
   the rule is fixed, and a new finding of an excepted rule is accepted silently until 2026-12-31. The issue of
   each entry's reason is the list to work down; the scanner growing a path key (tacplus-dev/looper) would let an
   entry shrink as its issues close instead of lapsing at once.
+- **Retire the run-shell-injection bridge entry now that #584 has landed** (2026-11-19, #580): its reason names #584
+  as the fix, and the 2026-11-19 scan of main reports no `run-shell-injection` finding. #580 retired its own
+  `missing-user` entry the same way; this one is #584's to retire.
 - **#340's 2026-12-31 also ends #376's G115, G404, G703 and gRPC-plaintext entries** (2026-11-16, #340): one id has
   one entry for both trees the build scans (the scanner takes the first of a repeated id, and fails on any expired
   one), so the rules #376 accepted in the generated code until 2027-02-14 or 2027-05-14 and #340 in the compiler's

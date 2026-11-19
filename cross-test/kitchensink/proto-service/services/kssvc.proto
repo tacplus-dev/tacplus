@@ -1,0 +1,149 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// The kitchensink's service member (tacplus#196): the service-level features
+// the fleet's services use and the kitchensink's own member (a types-and-API
+// proto) does not reach: records and events with their lifecycle and
+// audiences, state with automatic TLS, config defaults, the S2S surface's
+// audiences, and the credential-minting and namespace-bound RPC shapes.
+
+syntax = "proto3";
+
+package kssvc;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "kssvc"};
+
+// Config: (spec.default_float) and (spec.assert_file_path) = PATH_DIR, and
+// the service's own use of KsSignal's topic: (spec.event_publish) and
+// (spec.event_watch) with its method_s2s audience, each by topic_ref.
+message Config {
+  option (spec.grpc_config) = {service_name: "kssvc"};
+  option (spec.event_publish) = {topic_ref: "kssvc.KsSignalBus.stream"};
+  option (spec.event_watch) = {
+    topic_ref: "kssvc.KsSignalBus.stream"
+    method_s2s: {auth_services: ["kssvc"]}
+  };
+
+  double poll_rate = 1 [(spec.default_float) = 2.0];
+  string data_dir = 2 [(spec.default_string) = "/var/lib/kssvc", (spec.assert_file_path) = PATH_DIR];
+}
+
+// KsEntry is a record with a residency lifecycle (idle_seconds,
+// deleted_max_age_seconds), DURABILITY_LOCAL, a (spec.deleted_flag) bool and
+// a (spec.identity_spiffe_actor) provenance field; its topic's consumer is
+// the store ((spec.record).s2s_subscribe).
+message KsEntry {
+  option (spec.record) = {
+    key: "entry_id"
+    owner: "owner"
+    s2s: {auth_services: ["kssvc"]}
+    s2s_subscribe: {auth_services: ["ksstratum"]}
+    durability: DURABILITY_LOCAL
+    residency: {idle_seconds: 86400 deleted_max_age_seconds: 2592000}
+  };
+
+  string entry_id = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 64];
+  string owner = 2 [(spec.assert_max_size) = 256];
+  bool deleted = 3 [(spec.deleted_flag) = true];
+  string spiffe_actor = 4 [(spec.identity_spiffe_actor) = true, (spec.assert_max_size) = 1024];
+  string namespace = 5 [(spec.store_namespace) = true, (spec.assert_max_size) = 512];
+}
+
+// KsSignal is an event with a consumer audience: (spec.event).s2s_subscribe.
+message KsSignal {
+  option (spec.event) = {
+    s2s: {auth_services: ["kssvc"]}
+    s2s_subscribe: {auth_services: ["kssvc", "ksgateway"]}
+  };
+
+  string run_id = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 32];
+}
+
+// KsNodes is state with automatic TLS on an ECDSA key (auto_tls =
+// TLS_KEY_TYPE_ECDSA), subscribed to KsSignal's topic ((spec.subscribe).source).
+message KsNodes {
+  option (spec.service_state) = {label: ["kssvc"], auto_tls: TLS_KEY_TYPE_ECDSA};
+  option (spec.subscribe) = {source: "kssvc.KsSignalBus.stream"};
+
+  repeated KsNode nodes = 1 [(spec.assert_max_size) = 32];
+}
+
+message KsNode {
+  string node_id = 1 [(spec.indexed) = true, (spec.assert_max_size) = 64];
+}
+
+// Offsets carries the two counter maps: map<int32, int64> and map<string, int64>.
+message Offsets {
+  map<int32, int64> by_partition = 1 [(spec.assert_max_size) = 256];
+  map<string, int64> by_name = 2 [(spec.assert_max_size) = 256];
+}
+
+// GrantRequest binds the caller's tenant: (spec.namespace), beside (spec.principal).
+message GrantRequest {
+  string subject = 1 [(spec.principal) = true, (spec.assert_max_size) = 256];
+  string namespace = 2 [(spec.namespace) = true, (spec.assert_max_size) = 256];
+}
+
+message GrantResponse {
+  string credential = 1 [(spec.assert_max_size) = 4096];
+}
+
+message ListNodesRequest {}
+
+message ListNodesResponse {
+  repeated KsNode nodes = 1 [(spec.assert_max_size) = 16];
+}
+
+// NoteRequest names the namespace an S2S call acts in: (spec.rpc).target_namespace_field.
+message NoteRequest {
+  string namespace = 1 [(spec.assert_required) = true, (spec.assert_max_size) = 256];
+  string text = 2 [(spec.assert_max_size) = 256];
+}
+
+message NoteResponse {}
+
+// KsPeer is an S2S service with a literal audience: (spec.service_s2s).auth_services.
+service KsPeer {
+  option (spec.service_s2s) = {auth_services: ["ksgateway"]};
+
+  rpc GetOffsets(Offsets) returns (Offsets);
+
+  rpc CreateNote(NoteRequest) returns (NoteResponse) {
+    option (spec.rpc) = {
+      principal: RPC_PRINCIPAL_SERVICE
+      auth_services: ["ksgateway"]
+      target_namespace_field: "namespace"
+    };
+  }
+}
+
+// KsShared takes its audience from the fleet: (spec.service_s2s).auth_services_from_fleet.
+service KsShared {
+  option (spec.service_s2s) = {auth_services_from_fleet: true};
+
+  rpc GetShared(Offsets) returns (Offsets);
+}
+
+// KsUser mints a credential for its caller: RPC_FLAG_MINTS_CREDENTIAL.
+service KsUser {
+  option (spec.service_c2s) = {};
+
+  rpc MintGrant(GrantRequest) returns (GrantResponse) {
+    option (spec.rpc) = {
+      principal: RPC_PRINCIPAL_USER,
+      exposure: RPC_EXPOSURE_EXTERNAL,
+      flags: [RPC_FLAG_AUTH_ANY_USER, RPC_FLAG_MINTS_CREDENTIAL]
+    };
+  }
+
+  // ListNodes is a bounded snapshot collection served as a REST GET:
+  // (spec.method_collection) mode SNAPSHOT with max_items, (spec.rest_method)
+  // GET and (spec.rest_path).
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
+    option (spec.method_collection) = {mode: COLLECTION_MODE_SNAPSHOT, order_by: ["node_id"], max_items: 16};
+    option (spec.rest_method) = {methods: [REST_METHOD_GET]};
+    option (spec.rest_path) = "kssvc/nodes";
+  }
+}

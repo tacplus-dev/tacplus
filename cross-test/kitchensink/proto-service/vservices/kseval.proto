@@ -1,0 +1,24 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// An OPA evaluation definition, as the fleet's entitlements one: the input
+// (spec.opa_import) in services/kskernel.proto names.
+
+syntax = "proto3";
+
+package kseval;
+
+import "sys/spec.proto";
+
+// (spec.opa_eval): entry_point and result.
+message KsEvalInput {
+  option (spec.opa_eval) = {
+    entry_point: "data.kitchensink.eval"
+    result: "KsEvalResult"
+  };
+
+  string namespace = 1 [(spec.assert_max_size) = 256];
+}
+
+message KsEvalResult {
+  bool allowed = 1;
+}

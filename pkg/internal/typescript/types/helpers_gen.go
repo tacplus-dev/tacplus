@@ -847,6 +847,10 @@ func writeMerge(b *strings.Builder, pf model.ProtoFile) {
 			tsFieldName := snakeToCamelCase(field.Name)
 
 			switch {
+			case field.IsOptional && !field.IsMap && !field.IsRepeated && !field.IsMessage:
+				// A proto3 optional scalar is `x?: T`: absent is undefined.
+				fmt.Fprintf(b, "if (dst.%s === undefined) { dst.%s = src.%s; }\n",
+					tsFieldName, tsFieldName, tsFieldName)
 			case field.IsMap:
 				if field.MapValueIsMessage && field.MapValueTypePackage == "" && msgHasFields[field.MapValueType] {
 					// Map with same-package message value: merge matching entries

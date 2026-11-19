@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/coverage"
 	"github.com/tacplus-dev/tacplus/pkg/formatter"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/collection"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/metadata"
@@ -132,6 +133,9 @@ func (b *Builder) BuildLanguage(ctx context.Context) error {
 	if err := b.validateSemanticAnnotations(); err != nil {
 		return err
 	}
+	if err := b.checkCoverage(); err != nil {
+		return err
+	}
 
 	langDir := b.config.LangDir()
 	zap.L().Info("generating output", zap.String("lang", lang), zap.String("dir", langDir))
@@ -149,6 +153,36 @@ func (b *Builder) BuildLanguage(ctx context.Context) error {
 	zap.L().Info("build complete", zap.String("output", langDir), zap.String("mode", versionStr))
 
 	return nil
+}
+
+// checkCoverage compares the features this build uses with the kitchensink's
+// coverage manifest (tacplus#196): a feature no kitchensink member covers in
+// this language was not verified or fuzzed by this release, so the build is
+// refused, naming it, or warned about under --allow-uncovered.
+func (b *Builder) checkCoverage() error {
+	mode := b.config.Coverage
+	if mode == "" {
+		return nil
+	}
+	manifest, err := coverage.Release()
+	if err != nil {
+		return err
+	}
+	used, err := coverage.ProtoDirFeatures(b.config.FlatProtoDir)
+	if err != nil {
+		return fmt.Errorf("coverage check: %w", err)
+	}
+	uncovered := manifest.Uncovered(b.config.Language, used)
+	if len(uncovered) == 0 {
+		return nil
+	}
+	if mode == tactype.CoverageWarn {
+		zap.L().Warn("coverage: this build uses features the kitchensink does not cover; this release did not verify or fuzz them (--allow-uncovered)",
+			zap.String("language", b.config.Language), zap.Strings("uncovered", uncovered))
+		return nil
+	}
+	return fmt.Errorf("coverage: this build uses %d feature(s) the kitchensink of this tacplus release does not cover in %s, so the release's verification and fuzzing do not vouch for them:\n  %s\nAdd them to the kitchensink (docs/USER.md, Verification), or build with --allow-uncovered to warn instead while the gap is added",
+		len(uncovered), b.config.Language, strings.Join(uncovered, "\n  "))
 }
 
 func (b *Builder) validateSemanticAnnotations() error {

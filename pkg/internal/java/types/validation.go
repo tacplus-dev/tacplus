@@ -91,13 +91,6 @@ func writeValidateMethods(b *strings.Builder, msg model.Message, outerClassName 
 		}
 	}
 
-	formatIntLiteral := func(value int64, fieldType string) string {
-		if fieldType == "int64" || value > 2147483647 || value < -2147483648 {
-			return fmt.Sprintf("%dL", value)
-		}
-		return fmt.Sprintf("%d", value)
-	}
-
 	for _, field := range msg.Fields {
 		// Oneof members are inherently optional (only one case is active), but a
 		// set string/bytes case must still honor its declared scalar byte bound —
@@ -400,7 +393,7 @@ func writeValidateMethods(b *strings.Builder, msg model.Message, outerClassName 
 					}
 					fmt.Fprintf(b, "// Validate %s (assert_gt: %d)\n", javaFieldName, annotationValue.IntValue)
 					presenceGuarded := javaOpenOptionalPresenceGuard(b, field, javaFieldName)
-					fmt.Fprintf(b, "if (%s <= %s) {\n", valueExpr, formatIntLiteral(annotationValue.IntValue, field.Type))
+					fmt.Fprintf(b, "if (%s) {\n", javaIntBoundCheck(field.Type, valueExpr, "<=", annotationValue.IntValue))
 					fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s must be > %d, got: %%s\", msg.%s()));\n", javaFieldName, annotationValue.IntValue, getterName)
 					b.WriteString("}\n")
 					if presenceGuarded {
@@ -419,7 +412,7 @@ func writeValidateMethods(b *strings.Builder, msg model.Message, outerClassName 
 					}
 					fmt.Fprintf(b, "// Validate %s (assert_ge: %d)\n", javaFieldName, annotationValue.IntValue)
 					presenceGuarded := javaOpenOptionalPresenceGuard(b, field, javaFieldName)
-					fmt.Fprintf(b, "if (%s < %s) {\n", valueExpr, formatIntLiteral(annotationValue.IntValue, field.Type))
+					fmt.Fprintf(b, "if (%s) {\n", javaIntBoundCheck(field.Type, valueExpr, "<", annotationValue.IntValue))
 					fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s must be >= %d, got: %%s\", msg.%s()));\n", javaFieldName, annotationValue.IntValue, getterName)
 					b.WriteString("}\n")
 					if presenceGuarded {
@@ -438,7 +431,7 @@ func writeValidateMethods(b *strings.Builder, msg model.Message, outerClassName 
 					}
 					fmt.Fprintf(b, "// Validate %s (assert_lt: %d)\n", javaFieldName, annotationValue.IntValue)
 					presenceGuarded := javaOpenOptionalPresenceGuard(b, field, javaFieldName)
-					fmt.Fprintf(b, "if (%s >= %s) {\n", valueExpr, formatIntLiteral(annotationValue.IntValue, field.Type))
+					fmt.Fprintf(b, "if (%s) {\n", javaIntBoundCheck(field.Type, valueExpr, ">=", annotationValue.IntValue))
 					fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s must be < %d, got: %%s\", msg.%s()));\n", javaFieldName, annotationValue.IntValue, getterName)
 					b.WriteString("}\n")
 					if presenceGuarded {
@@ -457,7 +450,7 @@ func writeValidateMethods(b *strings.Builder, msg model.Message, outerClassName 
 					}
 					fmt.Fprintf(b, "// Validate %s (assert_le: %d)\n", javaFieldName, annotationValue.IntValue)
 					presenceGuarded := javaOpenOptionalPresenceGuard(b, field, javaFieldName)
-					fmt.Fprintf(b, "if (%s > %s) {\n", valueExpr, formatIntLiteral(annotationValue.IntValue, field.Type))
+					fmt.Fprintf(b, "if (%s) {\n", javaIntBoundCheck(field.Type, valueExpr, ">", annotationValue.IntValue))
 					fmt.Fprintf(b, "throw new ProtoException(ProtoException.INVALID_ARGUMENT,String.format(\"field %s must be <= %d, got: %%s\", msg.%s()));\n", javaFieldName, annotationValue.IntValue, getterName)
 					b.WriteString("}\n")
 					if presenceGuarded {
@@ -1166,4 +1159,12 @@ func jmlIntegerBound(value, protoType, op string, bound int64) string {
 		return fmt.Sprintf("%s %s %dL", value, op, bound)
 	}
 	return ""
+}
+
+// formatIntLiteral renders an annotation bound as a Java int or long literal.
+func formatIntLiteral(value int64, fieldType string) string {
+	if fieldType == "int64" || value > 2147483647 || value < -2147483648 {
+		return fmt.Sprintf("%dL", value)
+	}
+	return fmt.Sprintf("%d", value)
 }

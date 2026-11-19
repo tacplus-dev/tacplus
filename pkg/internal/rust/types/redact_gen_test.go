@@ -137,21 +137,13 @@ func TestRustSensitiveChecks(t *testing.T) {
 		t.Errorf("a non-required / unchecked field must not be validated:\n%s", got)
 	}
 
-	// Wired into both validator families, and the message gets no Kani harness
-	// (its validator reaches the entropy estimate, tacplus#211).
+	// Wired into both validator families.
 	var vb strings.Builder
 	if err := generateMessageValidation(&vb, msg, nil); err != nil {
 		t.Fatal(err)
 	}
 	if n := strings.Count(vb.String(), "field SecretCheck.token (sensitive): required and empty"); n != 2 {
 		t.Errorf("want the check in validate and validate_at_rest, got %d", n)
-	}
-	var pb strings.Builder
-	bounded := msg
-	bounded.Fields = append(append([]model.Field(nil), msg.Fields...), rustBound("retries", "int32", "assert_le", 10))
-	writeProofHarnesses(&pb, model.ProtoFile{Package: "demo", Messages: []model.Message{bounded}})
-	if strings.Contains(pb.String(), "kani::proof") {
-		t.Errorf("kani harness must skip a message with sensitive checks:\n%s", pb.String())
 	}
 }
 

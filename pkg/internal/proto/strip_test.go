@@ -664,3 +664,37 @@ func TestStripFieldAnnotations(t *testing.T) {
 		})
 	}
 }
+
+// A spec option named in a comment does not keep the spec import: the C#
+// target copies only the import closure of its services, without
+// sys/spec.proto, so a stripped sys/mcp.proto that still imported it (its
+// comments name "(spec.rpc)") did not compile (the kitchensink found it,
+// tacplus#196).
+func TestStripSpecOptionsDropsTheImportWhenOnlyCommentsNameSpec(t *testing.T) {
+	in := `syntax = "proto3";
+package mcp;
+
+// A service that declares (spec.rpc) principal: RPC_PRINCIPAL_MCP
+import "sys/spec.proto";
+
+message McpRequest {
+  string payload = 1 [(spec.assert_required) = true]; // checked by (spec.assert_required)
+}
+`
+	got := StripSpecOptions(in)
+	if strings.Contains(got, `import "sys/spec.proto"`) {
+		t.Errorf("the spec import survived though only comments name spec:\n%s", got)
+	}
+	if !strings.Contains(got, "// A service that declares (spec.rpc)") {
+		t.Errorf("the comment was removed:\n%s", got)
+	}
+	keep := StripSpecOptions(`syntax = "proto3";
+import "sys/spec.proto";
+message M {
+  spec.SqlPermit permit = 1;
+}
+`)
+	if !strings.Contains(keep, `import "sys/spec.proto"`) {
+		t.Errorf("the spec import was dropped though a field uses a spec type:\n%s", keep)
+	}
+}

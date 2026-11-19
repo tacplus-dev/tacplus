@@ -768,7 +768,9 @@ func main() {
 	s := newStats()
 
 	// Main C2S gRPC server: real generated wrappers, auth wired.
-	grpcSrv := grpc.NewServer()
+	// Plaintext on purpose (#581): a loopback-only test fixture, never shipped;
+	// TLS is the chassis', tested by cert-stream.
+	grpcSrv := grpc.NewServer() // nosemgrep: go.grpc.security.grpc-server-insecure-connection.grpc-server-insecure-connection
 	apiWrapper := server.NewContractApi(apiHandler{s: s})
 	wireAuth(apiWrapper, s)
 	if err := apiWrapper.RegisterServices(grpcSrv); err != nil {

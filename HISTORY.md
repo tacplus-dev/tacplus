@@ -162,3 +162,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue semgrep grpc-server-insecure-connection (HIGH) at example/server/main.go:161: the example server serves plaintext gRPC on any NOTES_ADDR (#583)
 - 2026-11-19 looper issue Generated Go chassis tests carry token-shaped literals that gitleaks flags in every project that generates them (looper#145) (#628)
 - 2026-11-19 looper issue Generated TypeScript and Rust floors (axios ^1.13.5, js-yaml ^4.1.0, zod ^4.3.6, rustls 0.23.25, tokio 1.49.0, webpki-roots 0.26.8) and three fixtures' x/crypto v0.47.0 admit known advisories (#312)
+- 2026-11-19 looper issue semgrep grpc-server-insecure-connection (HIGH) at cross-test/runtime-smoke/fixture/main.go:771: plaintext gRPC server in the runtime-smoke test fixture (#581)

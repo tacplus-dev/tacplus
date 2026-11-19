@@ -140,7 +140,7 @@ that differ only in segments before the last (e.g. `com.a.identity` vs
 Proto package names must be globally unique; choose last segments that are
 unique across the system to avoid collisions in these languages.
 | `src` | string | No | Primary proto source — local path or git URL. No default — must be supplied via `--src` or `tacplus.yaml`. In a GitLab CI job an `https://` URL on `CI_SERVER_HOST` is fetched with `CI_JOB_TOKEN`; no other host receives a credential. |
-| `sources` | string list | No | Additional proto sources merged with `src` into one generation (e.g. a shared base plus a reusable service's protos). All sources form one proto tree; a file at the same path in two sources must be byte-identical (deduplicated) or it is a hard error, and `dependencies.yaml` is merged across sources (conflicting pins error). Repeatable `--src` on the CLI overrides `src`+`sources`. |
+| `sources` | string list | No | Additional proto sources merged with `src` into one generation (e.g. a shared base plus a reusable service's protos). All sources form one proto tree; a file at the same path in two sources must be byte-identical (deduplicated) or it is a hard error, and `dependencies.yaml` is merged across sources (conflicting pins error). A source is read only inside itself: a symlink in it that resolves outside the source (or is absolute) fails the merge with an error naming it; a relative symlink to a file inside the same source merges. Repeatable `--src` on the CLI overrides `src`+`sources`. |
 | `import` | string | No | Path to base config to import (resolved relative to this file) |
 
 ### Client Transport Surfaces

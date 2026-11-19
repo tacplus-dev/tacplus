@@ -164,3 +164,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue Generated TypeScript and Rust floors (axios ^1.13.5, js-yaml ^4.1.0, zod ^4.3.6, rustls 0.23.25, tokio 1.49.0, webpki-roots 0.26.8) and three fixtures' x/crypto v0.47.0 admit known advisories (#312)
 - 2026-11-19 looper issue semgrep grpc-server-insecure-connection (HIGH) at cross-test/runtime-smoke/fixture/main.go:771: plaintext gRPC server in the runtime-smoke test fixture (#581)
 - 2026-11-19 looper issue Generated-output, staged-proto, fleet and fetch-layer writes go through unconfined joined paths (gosec G703, HIGH, 43 sites): write through os.Root (#754)
+- 2026-11-19 looper issue Java generator: utf16Units' bounded rune -> uint16 conversions trip gosec G115 (HIGH, 2 sites) (#756)

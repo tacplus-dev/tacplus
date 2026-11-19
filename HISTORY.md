@@ -158,3 +158,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue semgrep grpc-server-insecure-connection (HIGH) at cross-test/runtime-smoke/fixture/main.go:798: plaintext gRPC server in the runtime-smoke test fixture (#582)
 - 2026-11-19 looper issue JBMC cannot verify the generated Java validators: the kitchensink's Java has no formal verification (#196) (#257)
 - 2026-11-19 looper issue Go: a service_state topic boundary ((spec.topic)) generates a state client that does not compile (#454)
+- 2026-11-19 looper issue gosec G703 (HIGH, CWE-22) at pkg/protosrc/merge.go:122: merged proto files written through an unconfined destination path (#579)

@@ -52,12 +52,14 @@ func TestTypeScriptWarnsWhenPkgDeclaresNoW2SClients(t *testing.T) {
 		name     string
 		config   *tactype.Config
 		w2s      []service.ServiceInfo
+		c2d      []service.ServiceInfo
 		wantWarn bool
 	}{
-		{"no w2s edges", &tactype.Config{SelfPackage: "web"}, nil, true},
-		{"w2s services generated", &tactype.Config{SelfPackage: "web"}, []service.ServiceInfo{{ServiceName: "Dashboard"}}, false},
-		{"c2s-only client", &tactype.Config{SelfPackage: "cli", GrpcC2SClients: []tactype.GrpcEntry{{ServiceName: "Dashboard"}}}, nil, false},
-		{"no pkg", &tactype.Config{}, nil, false},
+		{"no w2s edges", &tactype.Config{SelfPackage: "web"}, nil, nil, true},
+		{"w2s services generated", &tactype.Config{SelfPackage: "web"}, []service.ServiceInfo{{ServiceName: "Dashboard"}}, nil, false},
+		{"c2s-only client", &tactype.Config{SelfPackage: "cli", GrpcC2SClients: []tactype.GrpcEntry{{ServiceName: "Dashboard"}}}, nil, nil, false},
+		{"c2d-only client", &tactype.Config{SelfPackage: "web"}, nil, []service.ServiceInfo{{ServiceName: "Daemon"}}, false},
+		{"no pkg", &tactype.Config{}, nil, nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -66,7 +68,7 @@ func TestTypeScriptWarnsWhenPkgDeclaresNoW2SClients(t *testing.T) {
 			zap.ReplaceGlobals(zap.New(core))
 			defer zap.ReplaceGlobals(restore)
 
-			warnNoW2SClients(tc.config, tc.w2s)
+			warnNoW2SClients(tc.config, tc.w2s, tc.c2d)
 
 			warned := logs.FilterMessage("pkg web declares no grpc_w2s_client edges; no w2sm/ generated").Len() == 1
 			if warned != tc.wantWarn || (!tc.wantWarn && logs.Len() != 0) {

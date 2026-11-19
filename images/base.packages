@@ -1,0 +1,21 @@
+# The Debian packages of the base image (images/base.Dockerfile installs
+# them): the common build basics the runtimes and the generated code's builds
+# use. The image carries nothing else but Debian's base system and what these
+# depend on: tacplus-packages-check (images/packages-check.sh) fails its build
+# otherwise (#554). Add a package here, never through an image it starts from.
+# build-essential (the C toolchain Rust links with and the cc crates build
+# with), procps, xz-utils and zlib1g-dev came from buildpack-deps before.
+bash
+build-essential
+ca-certificates
+curl
+file
+git
+jq
+libssl-dev
+pkg-config
+procps
+python3
+unzip
+xz-utils
+zlib1g-dev

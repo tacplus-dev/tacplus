@@ -69,16 +69,18 @@ impl RestDispatcher for FixtureDispatcher {
 }
 
 async fn start_backend() -> (FixtureDispatcher, RecordingSignin) {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback port");
-    let addr: SocketAddr = listener.local_addr().expect("resolve loopback port");
-    drop(listener);
+    // The server keeps the listener bound here: releasing the port and binding
+    // it again would race the tests running in parallel for it (#531).
+    let incoming = tonic::transport::server::TcpIncoming::bind("127.0.0.1:0".parse().unwrap())
+        .expect("bind loopback port");
+    let addr: SocketAddr = incoming.local_addr().expect("resolve loopback port");
 
     let backend = RecordingSignin::default();
     let serving = backend.clone();
     tokio::spawn(async move {
         Server::builder()
             .add_service(SigninServiceServer::new(serving))
-            .serve(addr)
+            .serve_with_incoming(incoming)
             .await
             .expect("serve generated SigninService");
     });

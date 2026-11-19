@@ -76,7 +76,9 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   requests and constraint-breaking responses are rejected server-side, server
   streaming works, the socket is 0600, a stale file at the path is replaced,
   and on stop the socket is removed and the handler's shutdown runs once.
-  Does not run `Run()` itself (`docs/KNOWN_TEST_GAPS.md` C2D-1). Local
+  Its swift leg builds a consumer of the generated Swift package whose
+  `C2DClient()`, with no argument, calls the generated Go daemon over its
+  declared socket (#494). Does not run `Run()` itself (`docs/KNOWN_TEST_GAPS.md` C2D-1). Local
   (`just c2d-server`, part of `just gates`); not yet in CI.
 - `zero-rpc-s2s` (`cross-test/zero-rpc-s2s/run.sh`): behavioral gate for a
   zero-rpc (client-only) Rust host (#94). Generates `cross-test/proto-zerorpc`
@@ -166,9 +168,11 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
 - `outbound-deadline` (`cross-test/outbound-deadline/run.sh`): outbound deadline
   regression for the generated RUST server (issue #38). A three-hop chain of
   generated servers and clients (root 5 s -> mid -> leaf) on loopback. The leaf
-  must receive a `grpc-timeout` no larger than the root's budget, and its
-  handler must stop by the root's deadline. Local/manual (`just -f
-  cross-test/justfile outbound-deadline-rust`); cargo-bound, so not in `just test`.
+  must receive a `grpc-timeout` no larger than the root's budget, its
+  handler must stop by the root's deadline, and it must receive the root's
+  `trace_id` through mid (#310). The chain is one Rust test, run with `cargo
+  test`. `just outbound-deadline` (or `just -f cross-test/justfile
+  outbound-deadline-rust`); cargo-bound, so not in `just test` or `gates`.
 - `wire-corpus` (`cross-test/wire-corpus/run.sh`): cross-language
   SERIALIZATION-EQUIVALENCE gate. One `CorpusRecord` message is encoded ONCE by
   go, deterministically, into checked-in golden bytes

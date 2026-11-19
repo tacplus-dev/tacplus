@@ -124,6 +124,88 @@ func TestJavaGcsArchiveDependencyJoinsTheProjectDependencies(t *testing.T) {
 	}
 }
 
+// TestJavaGcsArchivePomMeetsItsFloors: google-cloud-storage brings in jackson
+// 2, guava -jre and opentelemetry-api (#263). The SDK pin must be one whose
+// jackson is past its advisories, and the pom a GcsArchiveSink build compiles
+// under must pin the other two under <dependencyManagement>, as the harness
+// poms pin theirs (#200). The pin is the one dependencies.yaml carries.
+func TestJavaGcsArchivePomMeetsItsFloors(t *testing.T) {
+	const (
+		// 2.75.0 resolves jackson 2.18.3 (17 GHSAs, fixed in 2.18.11);
+		// 2.76.0 resolves 2.22.4. Both still declare guava 33.6.0-jre and
+		// opentelemetry-api 1.62.0.
+		sdkFloor = "2.76.0"
+		// GHSA-xxph-c9ww-hj94. The SDK needs the -jre flavour: the pom's
+		// -android pin for grpc-java gives way to it.
+		guavaFloor = "33.7.2"
+		// GHSA-ccrj-gw8r-854m, tracestate parsing in opentelemetry-api.
+		otelFloor = "1.67.0"
+	)
+	pom := filepath.Join(t.TempDir(), "pom.xml")
+	script := `. ../cross-test/lib/java-compile.sh && write_java_compile_pom "$1" /nonexistent && add_java_gcs_archive_dependency "$1" && printf %s "$GCS_ARCHIVE_SDK_VERSION"`
+	out, err := exec.Command("bash", "-c", script, "bash", pom).Output()
+	if err != nil {
+		t.Fatalf("writing the compile pom: %v\n%s", err, out)
+	}
+	sdk := string(out)
+	data, err := os.ReadFile(pom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type dependency struct {
+		GroupID    string `xml:"groupId"`
+		ArtifactID string `xml:"artifactId"`
+		Version    string `xml:"version"`
+		Type       string `xml:"type"`
+		Scope      string `xml:"scope"`
+	}
+	var project struct {
+		Dependencies []dependency `xml:"dependencies>dependency"`
+		Managed      []dependency `xml:"dependencyManagement>dependencies>dependency"`
+	}
+	if err := xml.Unmarshal(data, &project); err != nil {
+		t.Fatalf("parsing %s: %v", pom, err)
+	}
+	find := func(deps []dependency, group, artifact string) []dependency {
+		var found []dependency
+		for _, d := range deps {
+			if d.GroupID == group && d.ArtifactID == artifact {
+				found = append(found, d)
+			}
+		}
+		return found
+	}
+
+	if compareMavenVersions(sdk, sdkFloor) < 0 {
+		t.Errorf("GCS_ARCHIVE_SDK_VERSION %s is below its floor %s", sdk, sdkFloor)
+	}
+	if got := find(project.Dependencies, "com.google.cloud", "google-cloud-storage"); len(got) != 1 || got[0].Version != sdk {
+		t.Errorf("the pom declares google-cloud-storage %v, want one at %s", got, sdk)
+	}
+	guava := find(project.Managed, "com.google.guava", "guava")
+	if len(guava) != 1 || !strings.HasSuffix(guava[0].Version, "-jre") || compareMavenVersions(guava[0].Version, guavaFloor) < 0 {
+		t.Errorf("the pom pins guava %v under <dependencyManagement>, want one -jre at %s or above", guava, guavaFloor)
+	}
+	otel := find(project.Managed, "io.opentelemetry", "opentelemetry-bom")
+	if len(otel) != 1 || otel[0].Type != "pom" || otel[0].Scope != "import" || compareMavenVersions(otel[0].Version, otelFloor) < 0 {
+		t.Errorf("the pom imports opentelemetry-bom %v under <dependencyManagement>, want one at %s or above", otel, otelFloor)
+	}
+
+	for _, path := range []string{
+		"../cross-test/proto-quorumwrite/dependencies.yaml",
+		"../cross-test/proto-epochload/dependencies.yaml",
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := regexp.MustCompile(`(?m)^\s*com\.google\.cloud:google-cloud-storage:\s*(\S+)\s*$`).FindStringSubmatch(string(data))
+		if m == nil || m[1] != sdk {
+			t.Errorf("%s pins google-cloud-storage %v, want GCS_ARCHIVE_SDK_VERSION %s", path, m, sdk)
+		}
+	}
+}
+
 // compareMavenVersions orders the numeric release of two versions
 // ("33.7.2-android" is 33.7.2): the floors differ from a pin only there.
 func compareMavenVersions(a, b string) int {

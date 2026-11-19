@@ -9,6 +9,8 @@ source "$ROOT_DIR/cross-test/lib/tree-guard.sh"
 tree_guard_begin "$ROOT_DIR"
 # shellcheck source=../lib/java-compile.sh
 source "$ROOT_DIR/cross-test/lib/java-compile.sh"
+# shellcheck source=../lib/retired-claims.sh
+source "$ROOT_DIR/cross-test/lib/retired-claims.sh"
 PROTO_SRC="$ROOT_DIR/cross-test/proto"
 HEALTHONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-healthonly"
 ZERORPC_PROTO_SRC="$ROOT_DIR/cross-test/proto-zerorpc"
@@ -742,6 +744,10 @@ for name, ver in re.findall(r'\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"
         bad.append(f"elliptic-curve {ver} (crypto-bigint 0.5, RUSTSEC-2026-0387)")
     elif name == "block-buffer" and version(ver) < (0, 12, 1):
         bad.append(f"block-buffer {ver} (GHSA-qwgh-2vcv-g2f7)")
+    elif name == "backoff":
+        bad.append(f"backoff {ver} (unmaintained, RUSTSEC-2025-0012)")
+    elif name == "instant":
+        bad.append(f"instant {ver} (unmaintained, RUSTSEC-2024-0384)")
 for b in bad:
     print(f"advised crate in the generated lock: {b}", file=sys.stderr)
 sys.exit(1 if bad else 0)
@@ -2185,12 +2191,12 @@ PLANE_PY
   # namespace backstop on any seam, not a token or caller accessor. A token that
   # still carries one is not widened by it (the record write guard self-tests
   # drive that); this keeps the claim from coming back in one language.
+  # linked_claim_readers (cross-test/lib/retired-claims.sh) excludes build
+  # output inside $output and descriptor string literals, not the work root.
   local linked_hits
-  linked_hits="$(grep -rnE --include='*.go' --include='*.java' --include='*.rs' \
-    'GetLinked\(|SetLinked\(|LinkedFromContext|getLinked\(|setLinked\(|\.linked\(\)|set_linked\(|CLAIM_LINKED|JWT_PAYLOAD_TYPE_LINKED|_linked\b' \
-    "$output" 2>/dev/null | grep -v '/target/' || true)"
+  linked_hits="$(linked_claim_readers "$output")"
   [[ -z "$linked_hits" ]] \
-    || die "record-egress fixture ($language): the generated output still reads the retired linked claim (#171):
+    || die "record-egress fixture ($language): the generated output under $output still reads the retired linked claim (#171):
 $linked_hits"
 
   # The fourth caller shape: a SERVICE identity reading the private record with

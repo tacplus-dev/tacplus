@@ -69,4 +69,6 @@ go version; java -version 2>&1 | head -1; cargo --version; swift --version 2>&1 
 jbmc --version; just --version; cargo kani --version; cargo +"$RUST_NIGHTLY" fuzz --version
 # tacplus is the launcher (a POSIX sh script), never a compiler binary.
 [[ "$(head -n 1 "$(command -v tacplus)")" == '#!/bin/sh' ]] || { echo "tacplus is not the launcher (images/tacplus.sh)" >&2; exit 1; }
+# No Debian package beyond the image's declared lists (images/*.packages, #554).
+tacplus-packages-check /usr/local/share/tacplus/packages/base /usr/local/share/tacplus/packages/build
 echo "tacplus-smoke: OK (build image, line ${TACPLUS_LINE:-none})"

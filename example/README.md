@@ -69,12 +69,16 @@ generated from the same annotation.
 
 ## What this example does not do
 
-- It hosts the generated wrapper on a plain gRPC server and verifies one demo
-  token. A deployed service calls `s2sm.New()` and `sm.Run(handler)` instead,
-  which brings up identity, TLS, health and state, and needs the platform's
-  token mint and state store to be running. Those services are declared in
-  `proto/platform/` so generation has their contracts, but this example does
-  not run them, so the state service is generated and not exercised.
+- It hosts the generated wrapper on a plain gRPC server, without TLS, and
+  verifies one demo token. So it binds loopback only: the default `NOTES_ADDR`
+  is `127.0.0.1:0`, and the server refuses to start on an address whose host is
+  not a loopback IP (`127.0.0.0/8`, `::1`) or `localhost`: a bearer token sent
+  in clear text must not cross the network. A deployed service calls
+  `s2sm.New()` and `sm.Run(handler)` instead, which brings up identity, TLS,
+  health and state, and needs the platform's token mint and state store to be
+  running. Those services are declared in `proto/platform/` so generation has
+  their contracts, but this example does not run them, so the state service is
+  generated and not exercised.
 - `run.sh` writes the generated Go module's `go.mod` with no pins and lets
   `go mod tidy` resolve versions, which is simplest for an example and not what
   a real service would do.

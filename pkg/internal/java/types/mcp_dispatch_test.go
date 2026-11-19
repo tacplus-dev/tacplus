@@ -387,6 +387,11 @@ func TestJavaQuoteEscapesForJava(t *testing.T) {
 		"line\nbreak":      `"line\nbreak"`,
 		"caf\u00e9":        `"caf\u00e9"`,
 		"emoji \U0001F600": `"emoji \ud83d\ude00"`,
+		"A\x01":            `"A\u0001"`,
+		"\uffff":           `"\uffff"`,
+		"\U00010000":       `"\ud800\udc00"`,
+		"\U0010FFFF":       `"\udbff\udfff"`,
+		"bad\xff":          `"bad\ufffd"`,
 	}
 	for in, want := range cases {
 		if got := javaQuote(in); got != want {

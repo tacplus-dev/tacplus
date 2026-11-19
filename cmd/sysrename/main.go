@@ -18,6 +18,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -43,7 +45,7 @@ var (
 // denyDirs are directory names never descended into.
 var denyDirs = map[string]bool{
 	".git": true, "target": true, "todo": true, "node_modules": true,
-	"roadmap": true, // planning docs describe the rename; do not rewrite them
+	"roadmap":   true, // planning docs describe the rename; do not rewrite them
 	"sysrename": true, // this tool's own source carries the from/to literals
 }
 
@@ -77,20 +79,60 @@ func main() {
 	flag.Parse()
 	_ = downstream // path-segment rules are identical today; reserved for future divergence
 
-	var files, hits int
-	var singularBefore, singularAfter int
+	st, err := sweep(*root, *apply, os.Stdout)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "walk error:", err)
+		os.Exit(1)
+	}
 
-	err := filepath.Walk(*root, func(path string, info os.FileInfo, err error) error {
+	fmt.Printf("\nfiles changed: %d, libs-token occurrences: %d\n", st.files, st.hits)
+	fmt.Printf("singular lib/Lib tokens: before=%d after=%d\n", st.singularBefore, st.singularAfter)
+	if st.singularBefore != st.singularAfter {
+		fmt.Fprintln(os.Stderr, "FATAL: singular lib/Lib token count changed — the rename corrupted a lib-singular identifier")
+		os.Exit(2)
+	}
+	if !*apply {
+		fmt.Println("(dry-run; re-run with --apply to write)")
+	}
+}
+
+// stats are a sweep's totals.
+type stats struct {
+	files, hits                   int
+	singularBefore, singularAfter int
+}
+
+// sweep renames under root, writing each file it would change to w in a dry
+// run, or rewriting it with apply. Every read and write goes through an
+// os.Root, so no path resolves outside root, and only regular files are
+// touched: a symlink, in-tree or swapped in mid-walk, is neither read nor
+// written through (gosec G122, G703; tacplus#567).
+func sweep(root string, apply bool, w io.Writer) (stats, error) {
+	var st stats
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return st, err
+	}
+	defer r.Close()
+
+	err = fs.WalkDir(r.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
-			if denyDirs[info.Name()] {
-				return filepath.SkipDir
+		if d.IsDir() {
+			if rel != "." && denyDirs[d.Name()] {
+				return fs.SkipDir
 			}
 			return nil
 		}
-		b, err := os.ReadFile(path)
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		b, err := r.ReadFile(rel)
 		if err != nil || !isText(b) {
 			return nil
 		}
@@ -103,32 +145,15 @@ func main() {
 		if out == orig {
 			return nil
 		}
-		files++
-		hits += strings.Count(orig, "libs") + strings.Count(orig, "Libs") + strings.Count(orig, "LIBS")
-		singularBefore += len(reSingularLib.FindAllString(orig, -1))
-		singularAfter += len(reSingularLib.FindAllString(out, -1))
-		if *apply {
-			if werr := os.WriteFile(path, []byte(out), info.Mode()); werr != nil {
-				return werr
-			}
-		} else {
-			rel, _ := filepath.Rel(*root, path)
-			fmt.Printf("%s\n", rel)
+		st.files++
+		st.hits += strings.Count(orig, "libs") + strings.Count(orig, "Libs") + strings.Count(orig, "LIBS")
+		st.singularBefore += len(reSingularLib.FindAllString(orig, -1))
+		st.singularAfter += len(reSingularLib.FindAllString(out, -1))
+		if apply {
+			return r.WriteFile(rel, []byte(out), info.Mode().Perm())
 		}
+		fmt.Fprintf(w, "%s\n", filepath.FromSlash(rel))
 		return nil
 	})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "walk error:", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("\nfiles changed: %d, libs-token occurrences: %d\n", files, hits)
-	fmt.Printf("singular lib/Lib tokens: before=%d after=%d\n", singularBefore, singularAfter)
-	if singularBefore != singularAfter {
-		fmt.Fprintln(os.Stderr, "FATAL: singular lib/Lib token count changed — the rename corrupted a lib-singular identifier")
-		os.Exit(2)
-	}
-	if !*apply {
-		fmt.Println("(dry-run; re-run with --apply to write)")
-	}
+	return st, err
 }

@@ -152,3 +152,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue gosec G404 (HIGH, CWE-338) at cross-test/chaos/fault/fault.go:125: math/rand for the seeded chaos fault schedule (#570)
 - 2026-11-19 looper issue gosec G115 (HIGH, CWE-190) at registry.go:928, registry.go:954 and record_map.go:291: unbounded int/int64 -> int32 conversions of schema values (order key, enum number, record_min_group_size) (#813)
 - 2026-11-19 looper issue gosec G122 (HIGH, CWE-367) at cmd/soundness/main.go:1979: os.ReadFile on a WalkDir path (symlink TOCTOU) (#566)
+- 2026-11-19 looper issue Python floors cryptography>=42.0.0, requests>=2.31.0, urllib3>=2.0.0 admit 22 known advisories; the fixed releases need Python >=3.10 (#264)

@@ -1,0 +1,265 @@
+= init
+> Bash cd /builds/looper/tacplus/issues/309; gh issue view 309 --repo tacplus-dev/tacplus --comments | tail -50; gh issue view 264 --repo tacplus-dev/tacplus --json state,title,closedAt; git log --oneline -15 origin/main; git tag --sort=-v:refname | head -5; git branch -r
+< author:	tacplus-looper association:	none edited:	false status:	none -- The looper of tacplus starts this issue on `claude-opus-5-5`, the default model. Its limit 4h is capped at 4h by this job (https://gitlab.com/tacplus-dev/looper/-/jobs/18201446233), which ends sooner: the run stops by itself befo...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/309; git describe --tags origin/main; git tag --merged origin/main --sort=-v:refname | head -3; git log --oneline -3 v2.6.13; git log --oneline --grep='#264' origin/main | head; grep -rn 'setuptools\|pytest>=' pkg/ --include=*.go | grep -v _test | head -20; grep -rn ...
+< v2.6.1-195-g7b179b5d v2.6.1 v2.6.0 v2.5.0 2ffadddf Rust cross-test fixtures keep the listener they bind (#531) (#538) 5e342333 Swift C2DClient defaults to the services' socket_path (#494) (#525) a2460a8b Java AuthorizerBehaviorTest: time the JWK watch's backoff from its first attempt (#540) (#553) 3...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/309; git show --stat e00c0a8c | head -40; gh issue view 264 --repo tacplus-dev/tacplus --comments | tail -60
+< commit e00c0a8ccc0cce93dbc45179601368223473822f Author: jodydadescott <jody@thescottsweb.com> Date:   Wed Nov 11 02:13:24 2026 +0000      Python: require 3.10 and raise cryptography/requests/urllib3 floors past every advisory (#264)          The floors cryptography>=42.0.0, requests>=2.31.0, urllib3...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/309; sed -n 100,200p pkg/internal/python/types/pyproject.go; sed -n 1060,1110p pkg/internal/python/types/generator.go; grep -rln 'setuptools>=61\|pytest>=7' --exclude-dir=.git . | head -50
+< 		} 		if relPath == "proto" || strings.HasPrefix(relPath, "proto/") { 			return nil 		} 		// Create __init__.py if it doesn't exist and the dir has package content 		if hasPackageContent(path) { 			initPath := filepath.Join(path, "__init__.py") 			if _, err := os.Stat(initPath); os.IsNotExist(err) {...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/309; sed -n 200,260p pkg/internal/python/types/pyproject.go; grep -rn 'pythonRequiresPython\s*=' pkg; for q in setuptools:84.1.0 pytest:9.0.3 mypy:1.0.0 wheel:0.30.0 setuptools:75.3.4 pytest:8.3.5; do n=${q%%:*}; v=${q#*:}; echo "== $q"; curl -s https://api.osv.dev/v...
+< 	updateDep("protobuf", protobufVersion) 	updateDep("PyYAML", pyYAMLVersion) 	updateDep("tomli", tomliVersion) 	updateDep("tomli-w", tomliWVersion) 	updateDep("grpcio", grpcioVersion) 	for _, dep := range extraProjectDeps { 		updateDep(dep.Name, dep.Version) 	} 	ensureProjectDep := func(depName, newV...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Fixing the hardcoded floors on main first; checking existing tests.
+> Bash cd /builds/looper/tacplus/issues/309; grep -rln 'requires-python\|build-system\|pytest>=' pkg --include=*_test.go; grep -rn 'func Test.*Pyproject\|func Test.*RequiresPython' pkg/internal/python | head -20
+< pkg/internal/python/types/pyproject_python_floor_test.go pkg/projectfile/projectfile_test.go pkg/internal/python/types/pyproject_python_floor_test.go:67:func TestRootPyprojectDeclaresPython310AndAdvisoryFloors(t *testing.T) { pkg/internal/python/types/pyproject_python_floor_test.go:84:func TestUpdat...
+> Read /builds/looper/tacplus/issues/309/pkg/internal/python/types/pyproject_python_floor_test.go
+< 1	// Copyright (c) 2026 Jody Scott 2	// SPDX-License-Identifier: Apache-2.0 3	 4	package types 5	 6	import ( 7		"io/fs" 8		"os" 9		"path/filepath" 10		"strconv" 11		"strings" 12		"testing" 13	 14		"gopkg.in/yaml.v3" 15	 16		"github.com/tacplus-dev/tacplus/pkg/internal/common/packages" 17		"github.co...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/309; python3 - <<'EOF' p='pkg/internal/python/types/pyproject_python_floor_test.go' s=open(p).read() s=s.replace('''func TestRootPyprojectDeclaresPython310AndAdvisoryFloors(t *testing.T) {''','''// The build-system and dev floors are tacplus's own, not dependencies.y...
+< FAIL	github.com/tacplus-dev/tacplus/pkg/internal/python/types [setup failed] FAIL
+> Bash cd /builds/looper/tacplus/issues/309; go test ./pkg/internal/python/types/ -run 'Pyproject' 2>&1 | head -20
+< # github.com/tacplus-dev/tacplus/pkg/internal/python/types pkg/internal/common/parser/descriptor.go:20:2: no required module provides package github.com/tacplus-dev/tacplus/target/proto/spec/sys; to add it: 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sys FAIL	github.com/tacplus-dev/tacp...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/309; grep -n 'target/proto' justfile | head; which protoc protoc-gen-go buf 2>&1 | head
+< /usr/local/bin/protoc /usr/local/bin/protoc-gen-go
+> Bash cd /builds/looper/tacplus/issues/309; grep -rn 'target/proto\|protoc ' justfile Makefile scripts/*.sh 2>/dev/null | head; ls
+< justfile:16:# gencode protoc emits declares a MINIMUM protobuf runtime version; the runtime justfile:27:# On 2026-08-22 a `brew upgrade` silently moved protoc to 36.0 while the pins justfile:72:# into site/build. Needs protoc and python3; the pinned toolchain from justfile:127:# Assert the host prot...
+> Bash cd /builds/looper/tacplus/issues/309; grep -n -B2 -A12 '^build\|^gen\|^proto' justfile | head -60
+< 29-# ExceptionInInitializerError instead of a version error. `just protoc-check` 30-# exists so that never happens silently again. 31:protoc_version := "36.0" 32- 33-default: install 34- 35:generate: 36-  {{lock}} go generate ./pkg/internal/proto/spec/... 37- 38:build: generate 39-  mkdir -p bin 40-...
+> Bash cd /builds/looper/tacplus/issues/309; go generate ./pkg/internal/proto/spec/... 2>&1 | tail -3; go test ./pkg/internal/python/types/ -run 'Pyproject' 2>&1 | grep -E 'must|still|^(ok|FAIL|---)' | head
+= task_started
+= task_notification
+< --- FAIL: TestRootPyprojectDeclaresPython310AndAdvisoryFloors (0.00s)     pyproject_python_floor_test.go:88: pyproject.toml must build with "setuptools>=84.1.0": --- FAIL: TestUpdatePyprojectRaisesPythonAndRootFloors (0.00s)     pyproject_python_floor_test.go:131: updated pyproject.toml must build w...
+Tests fail as expected. Now the fix.
+> Bash cd /builds/looper/tacplus/issues/309; sed -n 15,30p pkg/internal/python/types/pyproject.go; git status --short
+< 	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot" 	"github.com/tacplus-dev/tacplus/pkg/internal/common/packages" 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype" )  // pythonRequiresPython is the interpreter every generated pyproject.toml // declares. The root floors that clear ever...
+> Bash cd /builds/looper/tacplus/issues/309; python3 - <<'EOF' p='pkg/internal/python/types/pyproject.go' s=open(p).read() s=s.replace('''const pythonRequiresPython = ">=3.10" ''','''const pythonRequiresPython = ">=3.10"  // The build-system and dev-extra floors are tacplus's own, not // dependencies.yaml'...
+= task_started
+= task_notification
+< pkg/internal/python/types/naming_test.go ?   	github.com/tacplus-dev/tacplus/pkg/internal/python/pyrender	[no test files] ok  	github.com/tacplus-dev/tacplus/pkg/internal/python/types	2.476s  pkg/internal/python/types/generator.go             |  6 ++---  pkg/internal/python/types/pyproject.go       ...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/309; grep -rn 'setuptools\|pytest>=\|3\.10' docs/*.md README.src.md | grep -iv 'tomli' | head -20; cat gates.yaml | head -40
+< docs/INSTALL.md:201:  (23.10 and later, GitHub's runners among them) AppArmor also withholds user docs/USER.md:2130:**The generated Python package needs Python 3.10 or later.** Its runtime docs/USER.md:2133:`dependencies.yaml` sets, and `requires-python = ">=3.10"`. Set # The gate map of tacplus (ta...
+> Bash cd /builds/looper/tacplus/issues/309; grep -n 'cryptography' docs/*.md README.src.md STATE.md | head; gh pr view 405 --repo tacplus-dev/tacplus --json state,files,body | head -c 3000
+< docs/USER.md:2131:libraries import `cryptography`, `httpx`, `requests` and `urllib3`, so the docs/USER.md:2134:`cryptography: '>=50.0.0'`, `requests: '>=2.33.0'` and `urllib3: '>=2.8.0'` {"body":"Backport of #264 to release/2.6. Per the hub decision on #264, 2.6 onward requires Python 3.10 and takes...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/309; for n in 399 400 401 402 403 404 405; do gh pr view $n --repo tacplus-dev/tacplus --json number,state,baseRefName,headRefName,mergedAt -q '[.number,.state,.baseRefName,.headRefName,.mergedAt]|@tsv'; done; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "$b $(git l...
+< 399	OPEN	release/2.0	backport/264-release-2.0	 400	OPEN	release/2.1	backport/264-release-2.1	 401	OPEN	release/2.2	backport/264-release-2.2	 402	OPEN	release/2.3	backport/264-release-2.3	 403	OPEN	release/2.4	backport/264-release-2.4	 404	OPEN	release/2.5	backport/264-release-2.5	 405	OPEN	release/2...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/309; sed -n 2125,2145p docs/USER.md; grep -n 'TestTypesPyproject\|pytest' pkg/internal/python/types/*_test.go | head -3
+< Client-only targets do not have a supported service runtime library surface. Accepted builds should use only the generated C2D/C2S/W2S client helpers, the `client_im` identity manager, and any client-side primitives they import.  **The generated Python package needs Python 3.10 or later.** Its runti...
+> Edit /builds/looper/tacplus/issues/309/docs/USER.md
+< The file /builds/looper/tacplus/issues/309/docs/USER.md has been updated successfully.
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/309; python3 - <<'EOF' p='docs/USER.md' s=open(p).read() s=s.replace('''A regeneration over an existing `pyproject.toml` raises `requires-python`, these floors and the root `setuptools` floor in place.''','''A regeneration over an existing root `pyproject.toml` raise...
+< 262:  (#264, #309, #312, #338). No scanner sees them: a lockfile resolve, including `just generated` 305:  scan found advisories in exactly those: #312 (TypeScript, Rust, Go), #309 (Python build/dev floors), #308 744:  C# or Swift client resolves to: the nightly scan queries OSV by hand (2026-11-18:...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/309; grep -n -A15 '^consumer-build-python\|^consumer-build ' justfile | head -40; sed -n 255,270p PROPOSALS.md; /usr/local/bin/repo-looper --help 2>&1 | head -30
+< 557:consumer-build-python: 558-  {{lock}} bash cross-test/consumer-contract/run.sh --language python 559- 560-consumer-build-typescript: 561-  {{lock}} bash cross-test/consumer-contract/run.sh --language typescript 562- 563-consumer-build-rust: 564-  {{lock}} bash cross-test/consumer-contract/run.sh...
+> Bash /usr/local/bin/repo-looper --help 2>&1 | sed -n 30,80p | grep -n -i 'build\|gates'
+< 13:land's id, its gates and when it was queued; the issue is labelled 15:for, or run, a build (looper#86); the manager's verdict is a comment on the 22:that order onto a candidate from main (refs/looper/staging), builds the 50:(looper#41): the model's docker is looper-docker. The gates a land runs a...
+= thinking_tokens
+= thinking_tokens
+> Edit /builds/looper/tacplus/issues/309/PROPOSALS.md
+< The file /builds/looper/tacplus/issues/309/PROPOSALS.md has been updated successfully.
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/309; go test ./pkg/internal/python/... ./docs/... ./scripts/... 2>&1 | tail -5; git status --short
+= task_started
+= task_notification
+< go: downloading golang.org/x/mod v0.40.0 ?   	github.com/tacplus-dev/tacplus/pkg/internal/python/pyrender	[no test files] ok  	github.com/tacplus-dev/tacplus/pkg/internal/python/types	2.461s ?   	github.com/tacplus-dev/tacplus/docs	[no test files] ok  	github.com/tacplus-dev/tacplus/scripts	32.015s ...
+Main fix done and unit-tested; committing and starting the build job.
+> Bash cd /builds/looper/tacplus/issues/309; git add -A && git commit -q -F - <<'EOF' Python: raise the generated setuptools and pytest floors past every advisory (#309)  The generated pyproject.toml's build-system required setuptools>=61.0 and the types packages' dev extra pytest>=7.0.0, floors tacplus ha...
+< 2b2c630d Python: raise the generated setuptools and pytest floors past every advisory (#309) 13009
+= thinking_tokens
+= thinking_tokens
+Build running (PID 13009). Meanwhile preparing backports, stacked on #264's open backport branches.
+> Bash cd /builds/looper/tacplus/issues/309; git diff origin/release/2.0 origin/backport/264-release-2.0 --stat | tail -3; git diff origin/release/2.0 origin/backport/264-release-2.0 -- docs/ pkg/internal/python/types/pyproject.go | head -120
+<  pkg/internal/python/types/pyproject.go             |  16 +-  .../python/types/pyproject_python_floor_test.go    | 214 +++++++++++++++++++++  18 files changed, 306 insertions(+), 46 deletions(-) diff --git a/docs/USER.md b/docs/USER.md index 8f0765a5..a483d7bb 100644 --- a/docs/USER.md +++ b/docs/US...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash for p in setuptools/75.3.4 setuptools/75.4.0 pytest/8.3.5 pytest/8.4.0 setuptools/84.1.0 pytest/9.0.3; do echo "$p $(curl -s https://pypi.org/pypi/$p/json | python3 -c 'import json,sys;print(json.load(sys.stdin)["info"]["requires_python"])')"; done; curl -s https://pypi.org/pypi/setuptools/json | py...
+< setuptools/75.3.4 >=3.8 setuptools/75.4.0 >=3.9 pytest/8.3.5 >=3.8 pytest/8.4.0 >=3.9 setuptools/84.1.0 >=3.10 pytest/9.0.3 >=3.10 ['75.3.0', '75.3.1', '75.3.2', '75.3.3', '75.3.4']
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/309; W=$HOME/bp; mkdir -p $W; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do git worktree add -q -b backport/309-release-$b $W/$b origin/backport/264-release-$b 2>&1 | tail -1; git -C $W/$b merge -q --no-edit origin/release/$b 2>&1 | tail -1; echo "$b: $(grep -c 'setuptool...
+< <persisted-output> Output too large (38.3KB). Full output saved to: /builds/looper/tacplus/homes/looper-309/.claude/projects/-builds-looper-tacplus-issues-309/22898ac9-7595-482b-b949-a4cd4c4e0f47/tool-results/bpk2abo1p.txt  Preview (first 2KB): 2.0: /builds/looper/tacplus/homes/looper-309/bp/2.0/pkg...
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/bp; for b in *; do echo "$b: $(git -C $b log --oneline -1 | cut -c1-70) | ahead of 264: $(git -C $b rev-list --count origin/backport/264-release-$b..HEAD) | conflicts: $(git -C $b diff --name-only --diff-filter=U | wc -l)"; grep -c 'setuptools>=61.0' $b/pkg/internal/python/types/pyproject.g...
+< 2.0: 7b01c32c Merge branch 'release/2.0' into backport/264-release-2.0 | ahead of 264: 0 | conflicts: 0 2.0/pkg/internal/python/types/pyproject.go:1 2.0/pkg/internal/python/types/generator.go:1 1 2.1: fcc34b6c Merge branch 'release/2.1' into backport/264-release-2.1 | ahead of 264: 0 | conflicts: 0 ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/bp/2.6 && git cherry-pick -n 2b2c630d 2>&1 | tail -2; git checkout HEAD -- PROPOSALS.md 2>/dev/null; git status --short; cd ../2.0; grep -n 'requires-python\|packageName, version, typeDir\|const pythonRequiresPython' pkg/internal/python/types/generator.go pkg/internal/python/types/pyproject...
+< hint: with 'git add <paths>' or 'git rm <paths>' hint: Disable this message with "git config advice.mergeConflict false" M  docs/USER.md M  pkg/internal/python/types/generator.go M  pkg/internal/python/types/pyproject.go M  pkg/internal/python/types/pyproject_python_floor_test.go pkg/internal/python...
+> Bash cd $HOME/bp/2.6 && git diff --cached --stat; git diff --name-only --diff-filter=U; cd ../2.0; sed -n 60,140p pkg/internal/python/types/pyproject_python_floor_test.go
+<  docs/USER.md                                       |  7 ++++--  pkg/internal/python/types/generator.go             |  6 ++---  pkg/internal/python/types/pyproject.go             | 13 +++++++++--  .../python/types/pyproject_python_floor_test.go    | 27 ++++++++++++++++++++--  4 files changed, 44 ins...
+= thinking_tokens
+= thinking_tokens
+2.6 cherry-pick applied cleanly. Now scripting the 3.8-line edits for 2.0–2.5.
+> Bash cd $HOME/bp; for b in 2.1 2.2 2.3 2.4 2.5; do for f in pkg/internal/python/types/pyproject_python_floor_test.go pkg/internal/python/types/pyproject.go; do cmp -s 2.0/$f $b/$f || echo "$b $f differs"; done; grep -n 'urllib3 | 2.2.3 | PYSEC-2026-4177' $b/docs/USER.md | head -1; done; grep -n 'const py...
+< 2.1 pkg/internal/python/types/pyproject.go differs 1553:| urllib3 | 2.2.3 | PYSEC-2026-4177 (CVE-2026-97689) | 2.8.0 | 1601:| urllib3 | 2.2.3 | PYSEC-2026-4177 (CVE-2026-97689) | 2.8.0 | 1601:| urllib3 | 2.2.3 | PYSEC-2026-4177 (CVE-2026-97689) | 2.8.0 | 1672:| urllib3 | 2.2.3 | PYSEC-2026-4177 (CVE...
+> Bash mkdir -p $HOME/scripts; cat > $HOME/scripts/bp38.py <<'PYEOF' import sys root = sys.argv[1] def edit(rel, pairs):     p = root + '/' + rel     s = open(p).read()     for old, new in pairs:         if old not in s:             sys.exit(f'{rel}: missing {old[:60]!r}')         s = s.replace(old, new, 1...
+< == 2.0 == 2.1 == 2.2 == 2.3 == 2.4 == 2.5 Shell cwd was reset to /builds/looper/tacplus/issues/309
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/bp/2.0; sed -n '/supports Python 3.8 or later/,/^---/p' docs/USER.md; tail -3 /tmp/build309.log
+< **The generated Python package supports Python 3.8 or later on this line.** Its runtime libraries import `cryptography`, `httpx`, `requests` and `urllib3`, so the generated `pyproject.toml` declares them as root dependencies at the floors `dependencies.yaml` sets, and `requires-python = ">=3.8"`. Se...
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/bp; for b in 2.0 2.1 2.2 2.3 2.4 2.5; do python3 -I -c ' import sys;p=sys.argv[1];s=open(p).read();o="existing root `pyproject.toml` raises these floors and `setuptools` in place; a";assert o in s;open(p,"w").write(s.replace(o,"existing root `pyproject.toml` raises the root floors and `setu...
+= task_started
+= task_notification
+< 2.0 ok  	github.com/tacplus-dev/tacplus/pkg/internal/python/types	1.931s 2.1 ok  	github.com/tacplus-dev/tacplus/pkg/internal/python/types	2.044s 2.2 ok  	github.com/tacplus-dev/tacplus/pkg/internal/python/types	2.021s 2.3 ok  	github.com/tacplus-dev/tacplus/pkg/internal/python/types	2.084s 2.4 ok  ...
+= thinking_tokens
+= thinking_tokens
+All seven backport branches pass. Committing, pushing and opening PRs.
+> Bash cd $HOME/bp; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do (cd $b; git status --short | grep -v '^??' | head -5; git add docs/USER.md pkg/internal/python/types; if [ $b = 2.6 ]; then msg="Python: raise the generated setuptools and pytest floors past every advisory (#309)  Backport of #309 to release/2.6,...
+<  M docs/USER.md  M pkg/internal/python/types/generator.go  M pkg/internal/python/types/pyproject.go  M pkg/internal/python/types/pyproject_python_floor_test.go 2.0 bdbe5fe3 Python: raise the generated setuptools and pytest floors to the newest on 3.8 (#309) next tag: v2.0.32  M docs/USER.md  M pkg/i...
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/bp; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do git -C $b push -q origin backport/309-release-$b 2>&1 | grep -v '^remote:' | tail -2; done; echo pushed
+= task_started
+= task_notification
+= vcs_state_changed
+< pushed Shell cwd was reset to /builds/looper/tacplus/issues/309
+> Bash cd $HOME/bp; declare -A P=([2.0]=399 [2.1]=400 [2.2]=401 [2.3]=402 [2.4]=403 [2.5]=404 [2.6]=405); for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do last=$(git tag --merged origin/release/$b --sort=-v:refname "v$b.*" | head -1); next="v$b.$(( ${last##*.} + 1 ))"; if [ $b = 2.6 ]; then fl='`setuptools>=84.1.0...
+= task_started
+= task_notification
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+= code_change_published
+< fatal: not a git repository (or any parent up to mount point /) Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set). https://github.com/tacplus-dev/tacplus/pull/902 fatal: not a git repository (or any parent up to mount point /) Stopping at filesystem boundary (GIT_DISCOVERY_AC...
+= thinking_tokens
+= thinking_tokens
+The tag lookup ran outside a repo; fixing the tag names in the PR bodies.
+> Bash cd /builds/looper/tacplus/issues/309; n=902; for b in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do last=$(git tag --merged origin/release/$b --sort=-v:refname "v$b.*" | head -1); next="v$b.$(( ${last##*.} + 1 ))"; body=$(gh pr view $n --repo tacplus-dev/tacplus --json body -q .body); body=$(printf '%s' "$body" |...
+= task_started
+= task_notification
+< That is `v2.0.33` today (`v2.0.32` is the newest That is `v2.1.26` today (`v2.1.25` is the newest That is `v2.2.23` today (`v2.2.22` is the newest That is `v2.3.25` today (`v2.3.24` is the newest That is `v2.4.25` today (`v2.4.24` is the newest That is `v2.5.26` today (`v2.5.25` is the newest That i...
+> Bash cd /builds/looper/tacplus/issues/309; /usr/local/bin/repo-looper --repo tacplus --issue 309 --checkpoint "main fix 2b2c630d committed (setuptools>=84.1.0, pytest>=9.0.3, in-place setuptools raise, tests, USER.md, PROPOSALS wheel entry); build job running. Backport PRs #902-#908 (release/2.0-2.6) ope...
+< [2026-11-19T22:16:14Z] checkpoint of #309 (a step) pushed to looper/tacplus-309:  7 files changed, 387 insertions(+), 9 deletions(-) [2026-11-19T22:13:08Z] build requested: tacplus 2b2c630, the gates full (pkg/internal/python/types/generator.go is mapped to full (pkg/**)) the build job https://gitla...
+= thinking_tokens
+= thinking_tokens
+While the full-gate build runs (~80–100 min), I'll wait on it.
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Bash until ! kill -0 13009 2>/dev/null; do sleep 20; done; tail -5 /tmp/build309.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bkluzlxb0. Output is being written to: /builds/looper/tacplus/homes/looper-309/tmp/claude-61000/-builds-looper-tacplus-issues-309/22898ac9-7595-482b-b949-a4cd4c4e0f47/tasks/bkluzlxb0.output. You will be notified when it completes. To check interim output, use R...
+Meanwhile, the trace check (no handlers touched, but rule 13 asks for it):
+> Bash cd /builds/looper/tacplus/issues/309; /usr/local/bin/looper-trace check 2>&1 | tail -5
+= task_started
+= task_notification
+< FINDING dropped-trace cross-test/server-runtime/client/go/main.go:114: checkPage's call ListEventsPaged is caused by the request but does not carry its trace_id (api); propagate it, or, if the request does not cause the call, say so where it is made: `// trace: unrelated: <why>` FINDING untested cro...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/309; /usr/local/bin/looper-trace check 2>&1 | grep FINDING | cut -d: -f1 | sort | uniq -c; gh issue list --repo tacplus-dev/tacplus --state all --search "server-runtime trace_id in:title,body" --limit 5
+= task_started
+= task_notification
+<       4 FINDING dropped-trace cross-test/server-runtime/client/go/main.go       4 FINDING untested cross-test/server-runtime/client/go/main.go 311	OPEN	server-runtime Go driver: four calls with no inbound request lack their `// trace: unrelated:` marker, so looper-trace check fails on main	bug, appr...
+Already filed as #311; nothing to add. Waiting on the build.
+> Bash until ! kill -0 13009 2>/dev/null; do sleep 20; done; tail -5 /tmp/build309.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: b0st99t1p). Output is being written to: /builds/looper/tacplus/homes/looper-309/tmp/claude-61000/-builds-looper-tacplus-issues-309/22898ac9-7595-482b-b949-a4cd4c4e0f47/tasks/b0st99t1p.output. You will be notified w...
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 1 28); do kill -0 13009 2>/dev/null || break; sleep 20; done; tail -3 /tmp/build309.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< [2026-11-19T22:23:20Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3091549357 on 2b2c630: queued for 11m, not started no runner: the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3091549357 has not started within 15m (no tacplus-dev/build st...
+= thinking_tokens
+= thinking_tokens
+No runner took the build within 15 min (exit 4, not a verdict). The change is small and unit-tested; the manager's merge build runs the full gates anyway, so I'll queue the land.
+> Bash cd /builds/looper/tacplus/issues/309; git status --short; /usr/local/bin/repo-looper --repo tacplus --issue 309 --land 2>&1 | tail -4
+= task_started
+= task_notification
+< [2026-11-19T22:28:52Z] checkpoint of #309 (land queued) pushed to looper/tacplus-309:  8 files changed, 434 insertions(+), 9 deletions(-) [2026-11-19T22:28:54Z] queued: the manager of tacplus lands looper/tacplus-309 in its next batch, with the lands queued before it (the merge train, looper#86), an...
+> Bash cd /builds/looper/tacplus/issues/309; /usr/local/bin/repo-looper --repo tacplus --issue 309 --checkpoint "Land queued: 2b2c630d (generated setuptools>=84.1.0, pytest>=9.0.3, in-place setuptools raise, tests, USER.md, PROPOSALS wheel entry). My --build got no runner (exit 4, pipeline 3091549357); the...
+< [2026-11-19T22:29:03Z] checkpoint of #309 (a step) pushed to looper/tacplus-309:  8 files changed, 438 insertions(+), 9 deletions(-)
+The fix for #309 is queued to land on main, but it has not been through a full build yet. My build job sat in the queue for 15 minutes and no runner took it, so it gave no verdict. The full gates will first run in the manager's build of the batch. So far only the Python generator's own Go tests have passed, on main and on all seven release branches.
+
+**On main (2b2c630d, queued):**
+- Both generated `pyproject.toml` files now require `setuptools>=84.1.0`, and the types packages' `dev` extra requires `pytest>=9.0.3`. An OSV query on 2026-11-19 returned no advisories for either version.
+- Regenerating over an existing root `pyproject.toml` now also raises its old `setuptools` floor in place.
+- I extended `pyproject_python_floor_test.go` first and watched it fail before making the change.
+- `docs/USER.md` describes the new floors.
+- `PROPOSALS.md` has a new entry: the bare `"wheel"` requirement still admits a HIGH advisory (CVE-2022-40898). I didn't change it because the issue doesn't ask for it.
+
+**Backports:** pull requests #902–#908 target release/2.0–2.6, and none is merged yet.
+- **2.0–2.5:** these lines stay on Python 3.8, so the floors are the newest versions that install there: `setuptools>=75.3.4` and `pytest>=8.3.5`. That clears two of the three HIGH setuptools advisories. The rest are listed as accepted in USER.md, next to #264's table:
+  - setuptools: GHSA-5rjg-fvgr-3xxf (HIGH), GHSA-h35f-9h28-mq5c and GHSA-xmj3-9gf7-h52w
+  - pytest: GHSA-6w46-j5rx-g56g
+- **2.6:** the same change as main.
+- **Merge order:** each PR is built on top of #264's still-open backport for its line (#399–#405) and has to merge after it. Until then its diff includes #264's commits.
+- **Tags:** each PR says which patch tag to cut once it merges (v2.0.33 … v2.6.14 as of today). #264's PRs name the same tags, so if both merge together, one tag covers both fixes.
+
+**Not done:**
+- No `v2.6.2` tag. Main has taken features since v2.6.1, so 2.6 patches come from release/2.6, through #908.
+- `just consumer-build-python` hasn't run. The issue asks for it, but it needs a container and isn't part of the gates.
+- `looper-trace check` reports only the findings already filed as #311. This change touches no service handlers.
+
+The next run of this issue posts the outcome comment and closes it once the manager's verdict is on the issue.
+= success: The fix for #309 is queued to land on main, but it has not been through a full build yet. My build job sat in the queue for 15 minutes and no runner took it, so it gave no verdict. The full gates will first run in the manager's build of the batch. So far only the Python generator's own Go tests have passed, on main and on all seven release branches.
+
+**On main (2b2c630d, queued):**
+- Both generated `pyproject.toml` files now require `setuptools>=84.1.0`, and the types packages' `dev` extra requires `pytest>=9.0.3`. An OSV query on 2026-11-19 returned no advisories for either version.
+- Regenerating over an existing root `pyproject.toml` now also raises its old `setuptools` floor in place.
+- I extended `pyproject_python_floor_test.go` first and watched it fail before making the change.
+- `docs/USER.md` describes the new floors.
+- `PROPOSALS.md` has a new entry: the bare `"wheel"` requirement still admits a HIGH advisory (CVE-2022-40898). I didn't change it because the issue doesn't ask for it.
+
+**Backports:** pull requests #902–#908 target release/2.0–2.6, and none is merged yet.
+- **2.0–2.5:** these lines stay on Python 3.8, so the floors are the newest versions that install there: `setuptools>=75.3.4` and `pytest>=8.3.5`. That clears two of the three HIGH setuptools advisories. The rest are listed as accepted in USER.md, next to #264's table:
+  - setuptools: GHSA-5rjg-fvgr-3xxf (HIGH), GHSA-h35f-9h28-mq5c and GHSA-xmj3-9gf7-h52w
+  - pytest: GHSA-6w46-j5rx-g56g
+- **2.6:** the same change as main.
+- **Merge order:** each PR is built on top of #264's still-open backport for its line (#399–#405) and has to merge after it. Until then its diff includes #264's commits.
+- **Tags:** each PR says which patch tag to cut once it merges (v2.0.33 … v2.6.14 as of today). #264's PRs name the same tags, so if both merge together, one tag covers both fixes.
+
+**Not done:**
+- No `v2.6.2` tag. Main has taken features since v2.6.1, so 2.6 patches come from release/2.6, through #908.
+- `just consumer-build-python` hasn't run. The issue asks for it, but it needs a container and isn't part of the gates.
+- `looper-trace check` reports only the findings already filed as #311. This change touches no service handlers.
+
+The next run of this issue posts the outcome comment and closes it once the manager's verdict is on the issue.
+= usage: {"claude-opus-5-5":{"inputTokens":98,"outputTokens":20144,"cacheReadInputTokens":3153005,"cacheCreationInputTokens":80208,"webSearchRequests":0,"costUSD":1.6755370000000005,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":4123,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}

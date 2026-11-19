@@ -503,8 +503,12 @@ public class DiskStoreTest {
                 log.roll(RedoLog.dedupFile(log.activePath()));
                 check(awaitFailures(shipper, 1), "the seeded segment's upload should be failing");
 
+                // An append that waits on the failing upload never finishes, so
+                // any finite bound tells the bug from a slow disk; this one is far
+                // above the cost of five fsyncs on a saturated one (main measured
+                // over 60 s for ten on a runner stalled on I/O, #300).
                 writer.start();
-                writer.join(60_000L);
+                writer.join(600_000L);
                 check(!writer.isAlive(), "appends must not wait on a failing upload");
                 check(thrown.get() == null, "appends while an upload fails must not throw: " + thrown.get());
                 check(shipper.pending() > 0, "the upload must still be failing when the appends finish");

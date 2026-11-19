@@ -1,0 +1,37 @@
+# The Debian packages of the base image (images/base.Dockerfile installs
+# them): Swift's documented runtime dependencies (Debian 12 list, trixie
+# names), .NET's (libicu), and the common build basics. The image carries
+# nothing else but Debian's base system and what these depend on:
+# tacplus-packages-check (images/packages-check.sh) fails its build otherwise
+# (#554). Add a package here, never through an image it starts from.
+bash
+binutils
+build-essential
+ca-certificates
+cmake
+curl
+file
+git
+gnupg
+jq
+libc6-dev
+libcurl4-openssl-dev
+libedit2
+libgcc-14-dev
+libicu76
+libncurses-dev
+libpython3-dev
+libsqlite3-0
+libssl-dev
+libstdc++-14-dev
+libxml2-dev
+libz3-dev
+pkg-config
+procps
+python3
+python3-pip
+python3-venv
+tzdata
+unzip
+xz-utils
+zlib1g-dev

@@ -15,9 +15,11 @@ import "testing"
 
 // Cross-language golden vectors — identical strings are pinned in
 // rust/chassis/collection lib.rs page_tests and java CollectionRuntimeTest.
+// Named as vectors, not tokens: a secret scan reads a token-named literal as a
+// key in every project that generates this test (tacplus#628).
 const (
-	pageTokenVectorSimple  = "eyJ2IjoxLCJrIjpbImFiYyIsIjEyMyJdfQ"
-	pageTokenVectorUnicode = "eyJ2IjoxLCJrIjpbImFcImJcXGMiLCI8eD4mw6kiLCJsaW5l4oCoc2VwIl19"
+	pageVectorSimple  = "eyJ2IjoxLCJrIjpbImFiYyIsIjEyMyJdfQ"
+	pageVectorUnicode = "eyJ2IjoxLCJrIjpbImFcImJcXGMiLCI8eD4mw6kiLCJsaW5l4oCoc2VwIl19"
 )
 
 func TestPageTokenByteIdentitySimple(t *testing.T) {
@@ -25,7 +27,7 @@ func TestPageTokenByteIdentitySimple(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	if tok != pageTokenVectorSimple {
+	if tok != pageVectorSimple {
 		t.Fatalf("simple token drifted from the cross-language vector: %q", tok)
 	}
 	c, err := DecodePageToken(tok)
@@ -44,7 +46,7 @@ func TestPageTokenByteIdentityUnicode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	if tok != pageTokenVectorUnicode {
+	if tok != pageVectorUnicode {
 		t.Fatalf("unicode token drifted from the cross-language vector: %q", tok)
 	}
 	c, err := DecodePageToken(tok)

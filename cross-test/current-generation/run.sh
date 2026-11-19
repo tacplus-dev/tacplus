@@ -15,6 +15,8 @@ source "$ROOT_DIR/cross-test/lib/go-compile.sh"
 source "$ROOT_DIR/cross-test/lib/retired-claims.sh"
 # shellcheck source=../lib/parallel-jobs.sh
 source "$ROOT_DIR/cross-test/lib/parallel-jobs.sh"
+# shellcheck source=../lib/rust-selftest-once.sh
+source "$ROOT_DIR/cross-test/lib/rust-selftest-once.sh"
 PROTO_SRC="$ROOT_DIR/cross-test/proto"
 HEALTHONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-healthonly"
 ZERORPC_PROTO_SRC="$ROOT_DIR/cross-test/proto-zerorpc"
@@ -170,6 +172,10 @@ fi
 
 mkdir -p "$WORK_ROOT"
 WORK_ROOT="$(cd "$WORK_ROOT" && pwd)"
+# The Rust chassis crates whose self-tests passed in this run, by content hash:
+# a later fixture rendering the same source reuses them (rust_selftest_reused,
+# #843). A job of the worker pool below shares the pool's.
+rust_selftest_start "$WORK_ROOT/rust-selftests-passed" "$([[ -n "$FIXTURE_FILTER" ]] && echo true || echo false)"
 
 if [[ -z "$TACPLUS_BIN" ]]; then
   TACPLUS_BIN="$ROOT_DIR/target/tacplus-current-generation"
@@ -954,39 +960,83 @@ rust_self_test_packages() {
   [[ ! -f "$output/chassis/am/tests/accounting_sink_spool.rs" ]] || echo "-p am"
 }
 
+# rust_self_test_calls PACKAGES sets the caller's test_call and doc_call to
+# the cargo calls that test PACKAGES (-p NAME lines): an empty array where they
+# select nothing.
+rust_self_test_calls() {
+  local doc_packages
+  test_call=()
+  doc_call=()
+  # shellcheck disable=SC2206 # $1 is -p NAME pairs
+  [[ -z "$1" ]] || test_call=(env SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" \
+    cargo test --no-fail-fast $1 --lib --bins --tests)
+  # The doc tests. Not the logger crate's: six of its doc examples do not
+  # compile, because they import a bare `types` crate that has never existed
+  # (the real dependency is <crate-base>_types). They have been broken since
+  # they were written and were invisible while no gate ran this crate. Fixing
+  # them is separate work; this gate deliberately does not pretend to cover them.
+  doc_packages="$(grep -vx -- '-p logger' <<<"$1" || true)"
+  # shellcheck disable=SC2206 # $doc_packages is -p NAME pairs
+  [[ -z "$doc_packages" ]] || doc_call=(cargo test $doc_packages --doc)
+}
+
 run_rust_spiffe_self_tests() {
   local output="$1"
   local log_dir="$2"
-  local packages doc_packages
+  local packages run_packages="" reused package
+  local -a test_call doc_call
   packages="$(rust_self_test_packages "$output")"
   [[ -n "$packages" ]] || return 1
+
+  # A chassis crate whose rendered source, dependency tree and calls are the
+  # same as in a fixture where its tests passed in this gate is not tested
+  # again: identical source, toolchain and flags give the identical test
+  # (#843). It gets a cargo check instead, and the gate log names the hash it
+  # reused. The root package, the fixture's own, always runs.
+  rust_self_test_calls "$packages"
+  rust_selftest_reused "$output" "$log_dir/rust-selftest-hash.log" "${test_call[@]}" ::: "${doc_call[@]}"
+  reused=""
+  while read -r package; do
+    if [[ -f "$output/chassis/${package#-p }/Cargo.toml" ]] && grep -qxF -- "$package" <<<"$RUST_SELFTEST_REUSED"; then
+      reused+="$package"$'\n'
+    else
+      run_packages+="$package"$'\n'
+    fi
+  done <<<"$packages"
+  rust_self_test_calls "$run_packages"
 
   # One cargo call for every crate's unit and integration tests. A cargo test
   # of each crate on its own resolved the dependencies' features for that crate
   # alone, so each compiled the generated types crate again: a minute each,
   # thirteen times a fixture, most of current-generation's time (tacplus#812).
   # --no-fail-fast so one crate's failures do not hide the next one's.
-  # shellcheck disable=SC2086 # $packages is -p NAME pairs
-  (cd "$output" && SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" \
-    cargo test --no-fail-fast $packages --lib --bins --tests) >"$log_dir/rust-test.log" 2>&1 || {
-      dump_step_log "$log_dir/rust-test.log"
-      return 1
-    }
-  assert_clean_log "$log_dir/rust-test.log"
+  if [[ ${#test_call[@]} -gt 0 ]]; then
+    (cd "$output" && "${test_call[@]}") >"$log_dir/rust-test.log" 2>&1 || {
+        dump_step_log "$log_dir/rust-test.log"
+        return 1
+      }
+    assert_clean_log "$log_dir/rust-test.log"
+  fi
 
-  # The doc tests, built against what the call above built. Not the logger
-  # crate's: six of its doc examples do not compile, because they import a bare
-  # `types` crate that has never existed (the real dependency is
-  # <crate-base>_types). They have been broken since they were written and were
-  # invisible while no gate ran this crate. Fixing them is separate work; this
-  # gate deliberately does not pretend to cover them.
-  doc_packages="$(grep -vx -- '-p logger' <<<"$packages")"
-  # shellcheck disable=SC2086 # $doc_packages is -p NAME pairs
-  (cd "$output" && cargo test $doc_packages --doc) >"$log_dir/rust-doc-test.log" 2>&1 || {
-      dump_step_log "$log_dir/rust-doc-test.log"
-      return 1
-    }
-  assert_clean_log "$log_dir/rust-doc-test.log"
+  # The doc tests, built against what the call above built.
+  if [[ ${#doc_call[@]} -gt 0 ]]; then
+    (cd "$output" && "${doc_call[@]}") >"$log_dir/rust-doc-test.log" 2>&1 || {
+        dump_step_log "$log_dir/rust-doc-test.log"
+        return 1
+      }
+    assert_clean_log "$log_dir/rust-doc-test.log"
+  fi
+
+  if [[ -n "$reused" ]]; then
+    # shellcheck disable=SC2086 # $reused is -p NAME pairs
+    (cd "$output" && cargo check $reused --lib --bins --tests) >"$log_dir/rust-check-reused.log" 2>&1 || {
+        dump_step_log "$log_dir/rust-check-reused.log"
+        return 1
+      }
+    assert_clean_log "$log_dir/rust-check-reused.log"
+  fi
+  [[ ${#test_call[@]} -eq 0 ]] \
+    || rust_selftest_record "$output" "$log_dir/rust-selftest-hash.log" "${test_call[@]}" ::: "${doc_call[@]}"
 
   # NEW-21: the model crate's own unit tests include the generated
   # ServiceManager's startup error classifier (identity_error_tests). Nothing ran

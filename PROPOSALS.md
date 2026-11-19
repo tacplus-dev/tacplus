@@ -4,6 +4,25 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Rust self-tests once per content hash in the other gates that run them** (2026-11-17, #843):
+  `current-generation` runs each Rust chassis crate's self-tests once per gate for each source they test
+  (`cross-test/lib/rust-selftest-once.sh`). `cross-test/consumer-contract/run.sh` runs some of the same crates'
+  tests (`cargo test -p spiffe`, `-p grpcserver`, `-p collection`) per leg; `rust_selftest_reused` and
+  `rust_selftest_record` with that gate's own `RUST_SELFTEST_PASSED_DIR` would skip its repeats. Go and Java were
+  left as they are because the rule doesn't pay there. A Go fixture's tests take seconds once #841's keepalive test runs in one fixture only, and Go's own test
+  cache can't help because the module path differs per fixture. The Java self-tests each run one class's `main`
+  after the Maven compile every fixture needs anyway.
+- **One dependency resolution for the generated Rust crates in every project** (2026-11-18, #843): a chassis
+  self-test is reused only where `cargo tree` resolves the same versions and features, and several fixtures don't
+  resolve them the same way. In requires-device the model types crate has `sha2` as a normal dependency, where
+  main has it as a dev-dependency (#829's `moveUnusedCrateDependencies` places it by what each project's
+  generated code uses). That turns on `memchr`'s `default` feature, so every chassis crate over `regex` or `memchr`
+  (key/jwk/token, httpclient, logger, grpcconfig, servicemanager) is a different build there and runs again. If
+  the generator pinned the features of such shared dependencies in `[workspace.dependencies]`, every project
+  would get one resolution. More fixtures would then reuse their self-tests, and so would a consumer's
+  `cargo test` cache. Since #812 runs a fixture's crates in one `cargo test`, features unify over everything it
+  selects, the fixture's root package too, so a root package's dependencies can also make a chassis crate's
+  build differ. The gate log lists each crate that ran with its hash, so a mismatch can be traced to its cause.
 - **OpenJML in the arm64 build image** (2026-11-07, #257): `images/build.Dockerfile` installs the
   `openjml-ubuntu-latest` release on both platforms, and that release's JDK and solvers are x86-64: on
   `build:2.6` for arm64 (the looper's runners) `openjml` fails with `Exec format error`, so Java verification runs

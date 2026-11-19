@@ -311,6 +311,7 @@ message ContractEvent {
 service ContractApi {
   option (spec.service_c2s) = {auth_entitled_users: true};
 
+  // Return the contract for one tenant namespace.
   rpc GetContract(ContractRequest) returns (ContractResponse) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ENTITLED_USERS], target_namespace_field: "tenant_namespace"};
     option (spec.rest_method) = {methods: [REST_METHOD_GET]};

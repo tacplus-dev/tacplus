@@ -185,6 +185,15 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-18 by lo
   G115, G404, G703 or G704: each was fixed (enum parse bounded to int32, gRPC codes, IP packing via encoding/binary,
   JWK exponent, the AWS STS region validated) or annotated with its reason (wire two's complement, retry jitter,
   operator-named paths). Backported to release/2.0 through release/2.6 by pull request, each line's next patch.
+  Sign-in config in proto (#224, main, for 2.7): `sys/signin.proto` (package `signin`) declares the deployment's
+  account-model switch (`Deployment`), a tenant's providers offered, authorized OIDC IdP (issuer, client, the exact
+  tenant id for a multi-tenant IdP, a declared non-reassignable subject claim), registered domains (subdomains by
+  suffix, DNS verification state), join mode and durations (`Tenant`), and `Subject`. Three new field annotations,
+  generated in Go, Java, Rust, Python and TypeScript: `assert_registrable_domain` (a public suffix refused, by the
+  Public Suffix List snapshot embedded in `pkg/internal/common/publicsuffix`, one table in every language),
+  `assert_not_address` and `assert_enum_not_in`; so generated validation refuses a registered public suffix, a SAML
+  IdP and an address-shaped subject (`cross-test/current-generation` self-tests). Kernel holding it in its tenant
+  config slice and enforcing the flow is kernel's; the single-account mode's shape is still to be designed.
 - **Released / deployed:** v2.6.0 is the newest release: the binaries and `checksums.txt`, and
   `ghcr.io/tacplus-dev/tacplus/build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c`
   (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.

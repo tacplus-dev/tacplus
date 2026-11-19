@@ -22,7 +22,7 @@ var KnownPackages = []PackageDefinition{
 			"go":         {"google.golang.org/protobuf"},
 			"java":       {"com.google.protobuf:protobuf-java", "com.google.protobuf:protobuf-java-util"},
 			"python":     {"protobuf"},
-			"rust":       {"prost", "prost-types", "prost-wkt-types"},
+			"rust":       {"prost", "prost-types"},
 			"typescript": {"@bufbuild/protobuf", "@bufbuild/protoc-gen-es"},
 		},
 	},

@@ -3556,10 +3556,10 @@ contractclient-model = { path = "$output" }
 diskstore = { path = "$output/chassis/diskstore" }
 futures = "0.3.31"
 prost = "0.14.1"
-prost-wkt-types = "0.7.1"
 serde_json = "1.0.149"
 servicemanager = { path = "$output/chassis/servicemanager" }
 tokio = { version = "1.51.6", features = ["rt-multi-thread", "net", "sync", "time"] }
+wkt = { path = "$output/chassis/wkt" }
 tokio-stream = { version = "0.1.17", features = ["net"] }
 tokio-tungstenite = "0.30.0"
 tonic = "0.14.0"
@@ -4453,7 +4453,7 @@ async fn run_eventbus_subscriber_metadata_smoke() {
         topic: "contractfixtures.FixtureState.events".to_string(),
         partition: 7,
         offset: 42,
-        timestamp: Some(prost_wkt_types::Timestamp {
+        timestamp: Some(wkt::Timestamp {
             seconds: 1_700_000_000,
             nanos: 123_000_000,
         }),

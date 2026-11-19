@@ -2098,8 +2098,35 @@ language-appropriate implementations of:
 | `tags` | Kubernetes-style tag sets and selectors |
 | `am` | Typed accounting event helpers and claim projection support |
 | `jwkview` | Watch client for signing key views (go only) |
+| `wkt` | The `google.protobuf` well-known types the generated messages carry, with serde in their proto3 JSON form (rust only) |
 
 These are not generic utility libraries. Each is generated with the service's module path baked in and the correct proto imports resolved.
+
+**Rust well-known types (2.7).** A generated Rust message's
+`google.protobuf.Any`, `Timestamp`, `Duration`, `Struct`, `Value` and
+`ListValue` fields are the `wkt` chassis crate's types (`wkt::Timestamp`, ...),
+not prost-wkt-types', which depends on chrono 0.4, unmaintained
+(RUSTSEC-2026-0543); no generated crate depends on chrono (#862). A service with
+MCP tools (any user-facing c2s rpc, [above](#every-user-rpc-is-also-an-mcp-tool))
+still locks it through rmcp, the MCP SDK, which requires it. They are the
+same prost messages, field for field, with the same JSON: a `Timestamp` is RFC
+3339 in UTC, a `Duration` seconds with an `s` suffix (now with 0, 3, 6 or 9
+fractional digits, not always 9), a `Struct` the object it holds (keys sorted),
+and an `Any` `{"@type": ..., "value": [bytes]}` (the generated code has no type
+registry to embed the packed message's own JSON), read back from that form or
+with `value` in base64. `token::Token::expires_in()` returns
+`Option<std::time::Duration>`, zero once the token has expired, where it
+returned a signed `chrono::Duration`.
+
+Moving a Rust service to 2.7: replace `prost_wkt_types::` with `wkt::` and
+depend on the generated crate (`wkt = { path = "<output-dir>/chassis/wkt" }`)
+instead of prost-wkt-types; `Timestamp`/`Duration` convert to and from
+`std::time::SystemTime`/`std::time::Duration`, `Value` from and to its kinds as
+before, and `Any` packs and unpacks with `from_msg`/`to_msg`
+(`try_pack`/`try_unpack`, which needed prost-wkt's registry, are gone). Code
+that read `expires_in()` as a `chrono::Duration` reads a `std::time::Duration`.
+A consumer's `dependencies.yaml` may drop its `chrono`, `prost-wkt-types` and
+`prost-wkt-build` pins: nothing generated references them.
 
 **Which algorithm a token is verified with.** The JWK decides, never the
 token. A JWK accepts the algorithms of its key's family: RSA `RS256`, `RS384`

@@ -22,9 +22,17 @@ use key::error::{AuthError, Result};
 use key::keys;
 use jwk::jwk;
 use {{.CrateBasePathUnderscore}}_types::sys::token::JwtPayloadType;
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// The current time, in seconds since the Unix epoch.
+fn unix_now() -> i64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(since) => since.as_secs() as i64,
+        Err(before) => -(before.duration().as_secs() as i64),
+    }
+}
 
 
 /// JWT header structure
@@ -97,7 +105,7 @@ pub struct Payload {
 /// let key = keys::generate_ed25519_key()?;
 /// let mut token = Token::new();
 /// token.set_issuer("my-service")?;
-/// token.set_expiration(chrono::Utc::now().timestamp() + 3600)?;
+/// token.set_expiration(exp)?; // seconds since the Unix epoch
 /// token.sign(&key)?;
 /// ```
 pub struct Token {
@@ -624,11 +632,14 @@ impl Token {
         self.immutable
     }
 
-    /// Returns the duration until the token expires
-    pub fn expires_in(&self) -> Option<chrono::Duration> {
+    /// Returns the time left until the token expires: zero once it has
+    /// expired, None when it has no expiration (exp) claim.
+    pub fn expires_in(&self) -> Option<Duration> {
         self.payload.exp.map(|exp| {
-            let exp_time = DateTime::from_timestamp(exp, 0).unwrap_or_else(|| Utc::now());
-            exp_time.signed_duration_since(Utc::now())
+            UNIX_EPOCH
+                .checked_add(Duration::from_secs(exp.max(0) as u64))
+                .and_then(|expiry| expiry.duration_since(SystemTime::now()).ok())
+                .unwrap_or_default()
         })
     }
 
@@ -735,7 +746,7 @@ impl Token {
         // Check expiration and not-before with the same 60s clock-skew
         // tolerance used by the other generated token libraries.
         const CLOCK_SKEW_SECONDS: i64 = 60;
-        let now = Utc::now().timestamp();
+        let now = unix_now();
         if let Some(exp) = self.payload.exp {
             if now >= exp + CLOCK_SKEW_SECONDS {
                 return Err(AuthError::expired());
@@ -824,6 +835,19 @@ mod tests {
     use key::keys;
 
     #[test]
+    fn expires_in_is_the_std_duration_left_until_exp() {
+        let mut token = Token::new();
+        assert_eq!(token.expires_in(), None);
+
+        token.set_expiration(unix_now() + 3600).unwrap();
+        let left = token.expires_in().unwrap();
+        assert!(left > Duration::from_secs(3590) && left <= Duration::from_secs(3600), "{left:?}");
+
+        token.set_expiration(unix_now() - 60).unwrap();
+        assert_eq!(token.expires_in(), Some(Duration::ZERO));
+    }
+
+    #[test]
     fn test_token_sign_and_verify() {
         let key = keys::generate_ed25519_key().unwrap();
 
@@ -831,7 +855,7 @@ mod tests {
         token.set_issuer("test-issuer").unwrap();
         token.set_subject("test-subject").unwrap();
         token.set_namespace("/tenants/acme").unwrap();
-        token.set_expiration(Utc::now().timestamp() + 3600).unwrap();
+        token.set_expiration(unix_now() + 3600).unwrap();
 
         token.sign(&key).unwrap();
 
@@ -886,7 +910,7 @@ mod tests {
         let mut token = Token::new();
         token.set_issuer("test-issuer").unwrap();
         token.set_namespace("/tenants/acme").unwrap();
-        token.set_expiration(Utc::now().timestamp() + 3600).unwrap();
+        token.set_expiration(unix_now() + 3600).unwrap();
         token.sign(&key).unwrap();
         let signed = token.base64().unwrap().to_string();
         let jwk = no_alg_jwk(&key);
@@ -917,7 +941,7 @@ mod tests {
         let mut token = Token::new();
         token.set_issuer("test").unwrap();
         token.set_namespace("/tenants/acme").unwrap();
-        token.set_expiration(Utc::now().timestamp() + 3600).unwrap();
+        token.set_expiration(unix_now() + 3600).unwrap();
 
         token.sign(&key).unwrap();
 
@@ -938,7 +962,7 @@ mod tests {
         let mut token = Token::new();
         token.set_issuer("test-issuer").unwrap();
         token.set_subject("test-subject").unwrap();
-        token.set_expiration(Utc::now().timestamp() + 3600).unwrap();
+        token.set_expiration(unix_now() + 3600).unwrap();
         let err = token.sign(&key).expect_err("minting without a namespace must fail");
         assert!(
             err.to_string().contains("token is missing namespace"),
@@ -951,7 +975,7 @@ mod tests {
         let mut token = Token::new();
         token.set_issuer("test-issuer").unwrap();
         token.set_subject("test-subject").unwrap();
-        token.set_expiration(Utc::now().timestamp() + 3600).unwrap();
+        token.set_expiration(unix_now() + 3600).unwrap();
         token.set_namespace("/tenants/acme").unwrap();
         token.sign(&key).expect("minting with a namespace must succeed");
         assert!(token.is_immutable());

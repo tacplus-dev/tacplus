@@ -765,6 +765,10 @@ the looper then marks it `promoted` or `declined` here with the date.
   both and the leg passes (some ten minutes, mostly npm and tsc). Its python leg waits on #665, its rust leg on
   #829 and its swift legs on the linker-warning entry above. Once each leg passes, adding it to `gates.yaml` is a
   cost decision.
+- **The generated build-system's `wheel` has no floor** (2026-11-19, #309): both generated `pyproject.toml`s
+  require `"wheel"` bare, which admits wheel 0.30 (GHSA-qwmp-2cf2-g9g6, HIGH, fixed 0.38.1). setuptools 70.1 and
+  later build wheels without it, so on main (`setuptools>=84.1.0`) the entry can go; on the 3.8 release lines,
+  `wheel>=0.38.1`.
 
 ## Promoted / declined
 - **`just generated <dir>`: tacplus's security checks scan its generated output** (2026-11-09, #376): promoted

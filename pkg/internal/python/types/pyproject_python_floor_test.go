@@ -64,6 +64,14 @@ func assertPythonFloors(t *testing.T, content string) {
 	}
 }
 
+// The build-system and dev floors are tacplus's own, not dependencies.yaml's
+// (#309): setuptools 84.1.0 and pytest 9.0.3 clear every known advisory and,
+// like the runtime floors, need Python 3.10.
+const (
+	setuptoolsAdvisoryFloor = `"setuptools>=84.1.0"`
+	pytestAdvisoryFloor     = `"pytest>=9.0.3"`
+)
+
 func TestRootPyprojectDeclaresPython310AndAdvisoryFloors(t *testing.T) {
 	usePythonFloorTestDeps(t)
 	out := t.TempDir()
@@ -76,6 +84,9 @@ func TestRootPyprojectDeclaresPython310AndAdvisoryFloors(t *testing.T) {
 		t.Fatalf("read pyproject.toml: %v", err)
 	}
 	assertPythonFloors(t, string(data))
+	if !strings.Contains(string(data), setuptoolsAdvisoryFloor) {
+		t.Errorf("pyproject.toml must build with %s:\n%s", setuptoolsAdvisoryFloor, data)
+	}
 }
 
 // A regeneration into an existing output updates the pyproject.toml in place:
@@ -84,7 +95,11 @@ func TestRootPyprojectDeclaresPython310AndAdvisoryFloors(t *testing.T) {
 func TestUpdatePyprojectRaisesPythonAndRootFloors(t *testing.T) {
 	usePythonFloorTestDeps(t)
 	out := t.TempDir()
-	existing := `[project]
+	existing := `[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
 name = "acme-client"
 version = "1.0.0"
 requires-python = ">=3.8"
@@ -112,7 +127,10 @@ dependencies = [
 	}
 	content := string(data)
 	assertPythonFloors(t, content)
-	for _, stale := range []string{`">=3.8"`, "cryptography>=42.0.0", "requests>=2.31.0", "urllib3>=2.0.0"} {
+	if !strings.Contains(content, setuptoolsAdvisoryFloor) {
+		t.Errorf("updated pyproject.toml must build with %s:\n%s", setuptoolsAdvisoryFloor, content)
+	}
+	for _, stale := range []string{`">=3.8"`, "setuptools>=61.0", "cryptography>=42.0.0", "requests>=2.31.0", "urllib3>=2.0.0"} {
 		if strings.Contains(content, stale) {
 			t.Errorf("updated pyproject.toml still holds %s:\n%s", stale, content)
 		}
@@ -135,6 +153,11 @@ func TestTypesPyprojectDeclaresPython310(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `requires-python = ">=3.10"`) {
 		t.Errorf("types pyproject.toml must declare requires-python >=3.10:\n%s", data)
+	}
+	for _, floor := range []string{setuptoolsAdvisoryFloor, pytestAdvisoryFloor} {
+		if !strings.Contains(string(data), floor) {
+			t.Errorf("types pyproject.toml must declare %s:\n%s", floor, data)
+		}
 	}
 }
 

@@ -22,6 +22,14 @@ import (
 // do not install on 3.8 or 3.9.
 const pythonRequiresPython = ">=3.10"
 
+// The build-system and dev-extra floors are tacplus's own, not
+// dependencies.yaml's (#309): setuptools 84.1.0 and pytest 9.0.3 clear every
+// known advisory, and like the root floors need Python 3.10.
+const (
+	pythonSetuptoolsFloor = ">=84.1.0"
+	pythonPytestFloor     = ">=9.0.3"
+)
+
 // createRootPyprojectToml creates a root pyproject.toml file for all generated Python packages
 func createRootPyprojectToml(config *tactype.Config, outputDir string) error {
 	pyprojectPath := filepath.Join(outputDir, "pyproject.toml")
@@ -133,7 +141,7 @@ extra-index-url = ["%s"]
 	}
 
 	pyprojectContent := fmt.Sprintf(`[build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools%s", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -152,7 +160,7 @@ all = ["PyYAML%s", "tomli%s; python_version<'3.11'", "tomli-w%s"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-%s`, packageName, version, pythonRequiresPython, strings.Join(deps, ",\n"), pyYAMLVersion, tomliVersion, tomliWVersion, pyYAMLVersion, tomliVersion, tomliWVersion, pipConfig)
+%s`, pythonSetuptoolsFloor, packageName, version, pythonRequiresPython, strings.Join(deps, ",\n"), pyYAMLVersion, tomliVersion, tomliWVersion, pyYAMLVersion, tomliVersion, tomliWVersion, pipConfig)
 
 	if err := os.WriteFile(pyprojectPath, []byte(pyprojectContent), 0644); err != nil {
 		return fmt.Errorf("failed to create pyproject.toml: %w", err)
@@ -197,6 +205,7 @@ func updatePyprojectToml(pyprojectPath, version, protobufVersion, pyYAMLVersion,
 		})
 	}
 
+	updateDep("setuptools", pythonSetuptoolsFloor)
 	updateDep("protobuf", protobufVersion)
 	updateDep("PyYAML", pyYAMLVersion)
 	updateDep("tomli", tomliVersion)

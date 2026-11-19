@@ -2071,8 +2071,11 @@ generated `pyproject.toml` declares them as root dependencies at the floors
 or higher, as `example/proto/dependencies.yaml` does: older floors admit
 releases with known advisories, which a lockfile or another constraint holding
 the package back would install. Those releases do not install on 3.8 or 3.9
-(#264). A regeneration over an existing `pyproject.toml` raises
-`requires-python` and these floors in place.
+(#264). Its build backend and the types packages' `dev` extra are tacplus's
+own floors, not `dependencies.yaml`'s: `setuptools>=84.1.0` and
+`pytest>=9.0.3`, the first releases with no known advisory (#309). A
+regeneration over an existing root `pyproject.toml` raises `requires-python`,
+the root floors and `setuptools` in place; a types package's is rewritten.
 
 ---
 

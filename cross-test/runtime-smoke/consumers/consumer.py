@@ -25,6 +25,7 @@ import httpx
 from contractclient_model.c2sm.service_manager import ServiceManager as C2SServiceManager
 from contractclient_model.types.contract.contractclient import contract_pb2, helpers
 from contractclient_model.types.services.contractclient import contractaudit_pb2, contractaudit_pb2_grpc
+from contractclient_model.types.sys.errors.exceptions import CODE_UNAUTHENTICATED, ProtoError
 from contractclient_model.w2sm.service_manager import ServiceManager as W2SServiceManager
 
 GRPC_ADDR = os.environ["TACPLUS_FIXTURE_GRPC"]
@@ -380,8 +381,9 @@ async def run_w2s_http_sse_smoke() -> None:
             try:
                 await no_token.w2s_clients.contractclient.contract_api_client.get_contract(valid_request())
                 raise AssertionError("auth-required python W2S Read without token provider succeeded")
-            except PermissionError:
-                pass
+            except ProtoError as exc:
+                # PAR-9: an unauthenticable W2S call is UNAUTHENTICATED, as in every language.
+                assert exc.error.code == CODE_UNAUTHENTICATED, f"expected UNAUTHENTICATED, got {exc!r}"
             await expect_counter("w2sReadRequests", 1)
         finally:
             await no_token.close()

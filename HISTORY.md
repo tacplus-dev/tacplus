@@ -149,3 +149,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue Java AccountingSinkSpoolTest: an RPC completion's 1 s emit bound fails on a loaded runner (#851)
 - 2026-11-19 looper issue gosec G702 (HIGH, CWE-78) at cmd/sitegen/annotations.go:99: exec.Command runs the protoc that PROTOC_BINARY names (#572)
 - 2026-11-19 looper issue gosec G404 (HIGH, CWE-338) at cross-test/chaos/orchestrator/orchestrator.go:77: math/rand seeded from the chaos profile (#571)
+- 2026-11-19 looper issue gosec G404 (HIGH, CWE-338) at cross-test/chaos/fault/fault.go:125: math/rand for the seeded chaos fault schedule (#570)

@@ -1072,27 +1072,27 @@ func generateTypesPyProject(config *tactype.Config, typesDir, typeDir, protoPack
 	}
 
 	content := fmt.Sprintf(`[build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools%s", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "%s"
 version = "%s"
 description = "Protocol Buffer types for %s.%s"
-requires-python = ">=3.8"
+requires-python = "%s"
 dependencies = [
 %s
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0.0",
+    "pytest%s",
     "mypy>=1.0.0"
 ]
 
 [tool.setuptools.packages.find]
 where = ["."]
-`, packageName, version, typeDir, protoPackage, deps)
+`, pythonSetuptoolsFloor, packageName, version, typeDir, protoPackage, pythonRequiresPython, deps, pythonPytestFloor)
 
 	if err := os.WriteFile(pyprojectPath, []byte(content), 0644); err != nil {
 		return fmt.Errorf("failed to write pyproject.toml: %w", err)

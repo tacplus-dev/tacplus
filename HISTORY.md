@@ -160,3 +160,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue Go: a service_state topic boundary ((spec.topic)) generates a state client that does not compile (#454)
 - 2026-11-19 looper issue gosec G703 (HIGH, CWE-22) at pkg/protosrc/merge.go:122: merged proto files written through an unconfined destination path (#579)
 - 2026-11-19 looper issue semgrep grpc-server-insecure-connection (HIGH) at example/server/main.go:161: the example server serves plaintext gRPC on any NOTES_ADDR (#583)
+- 2026-11-19 looper issue Generated Go chassis tests carry token-shaped literals that gitleaks flags in every project that generates them (looper#145) (#628)

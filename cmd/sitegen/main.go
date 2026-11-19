@@ -21,7 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
+	"path"
 )
 
 func main() {
@@ -35,15 +35,31 @@ func main() {
 }
 
 func run(root, out string) error {
+	// Every file sitegen reads or writes is opened through an os.Root, so a
+	// path from repository content (a link, a snippet marker) that leaves the
+	// repository, or the docs directory, is an error rather than resolved.
+	repo, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer repo.Close()
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		return err
+	}
+	docs, err := os.OpenRoot(out)
+	if err != nil {
+		return err
+	}
+	defer docs.Close()
 	// sitegen owns these directories under the docs directory outright: they
 	// are removed and rewritten on every run so a document dropped from the
 	// published set disappears from the site too.
 	for _, dir := range generatedDirs {
-		if err := os.RemoveAll(filepath.Join(out, dir)); err != nil {
+		if err := docs.RemoveAll(dir); err != nil {
 			return err
 		}
 	}
-	if err := stageDocs(root, out); err != nil {
+	if err := stageDocs(repo, docs); err != nil {
 		return err
 	}
 	pages, err := annotationPages(root)
@@ -51,16 +67,18 @@ func run(root, out string) error {
 		return err
 	}
 	for page, md := range pages {
-		if err := writeFile(filepath.Join(out, filepath.FromSlash(page)), md); err != nil {
+		if err := writeFile(docs, page, md); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func writeFile(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+// writeFile writes data to the slash-separated path rel under r, creating its
+// directory.
+func writeFile(r *os.Root, rel string, data []byte) error {
+	if err := r.MkdirAll(path.Dir(rel), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return r.WriteFile(rel, data, 0o644)
 }

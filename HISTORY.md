@@ -165,3 +165,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue semgrep grpc-server-insecure-connection (HIGH) at cross-test/runtime-smoke/fixture/main.go:771: plaintext gRPC server in the runtime-smoke test fixture (#581)
 - 2026-11-19 looper issue Generated-output, staged-proto, fleet and fetch-layer writes go through unconfined joined paths (gosec G703, HIGH, 43 sites): write through os.Root (#754)
 - 2026-11-19 looper issue Java generator: utf16Units' bounded rune -> uint16 conversions trip gosec G115 (HIGH, 2 sites) (#756)
+- 2026-11-19 looper issue MCP-6 refuses Python client builds of any C2S service: python is gated as an MCP host, but it is a full-client target (#665)

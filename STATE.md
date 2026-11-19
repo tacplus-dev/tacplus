@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-18 by looper (#340).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-19 by looper (#455).
 
 - **Version / line:** v2.6.13 (latest release, 2026-11-15, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -73,6 +73,10 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-18 by lo
   (`cross-test/trace-carry`, in `just gates`; on main for 2.7, and backported to release/2.0 through release/2.6 by pull requests #330-#336, each line's next patch).
   Gap: sys contract messages mostly lack field 200, and helpers that build their own request take no `trace_id`
   (#327, 2.7); a message without field 200 is not yet refused (#328, 3.0).
+  Cross-language runtime evidence for java and rust (`cross-test/server-runtime`: the generated java and rust servers
+  driven by the go client, java client -> rust host, rust client -> java host) is in `just gates` since #455; it had
+  stopped building on main unnoticed (its config lacked `grpc-servers: all`, and the java fixture predated the claims-
+  returning `Authenticator` and the MCP SDK dependency).
   Gates scaled to the diff (#266, tacplus-dev/looper#48): `gates.yaml` maps a land's changed paths to gate sets. A
   change to `*.md` or `docs/**` only runs `just docs` (the planning files check, relative links through
   `go run ./cmd/sitegen -check-links`, gitleaks, `just test`: about a minute); `images/` runs `just test`, `just images`

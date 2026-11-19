@@ -71,6 +71,7 @@ func main() {
 // request, dispatches to the handler, validates the response, and marshals it
 // back. Exact field values prove real generated code round-tripped.
 func checkUnary(ctx context.Context, api *client.ContractApiClient, lang string) {
+	// trace: unrelated: the driver is the root of this call; no inbound request causes it.
 	resp, err := api.GetPublicContract(ctx, validRequest())
 	if err != nil {
 		fail("%s GetPublicContract: %v", lang, err)
@@ -86,6 +87,7 @@ func checkUnary(ctx context.Context, api *client.ContractApiClient, lang string)
 
 // checkServerStream: auth_any_user server-streaming (SNAPSHOT collection mode).
 func checkServerStream(ctx context.Context, api *client.ContractApiClient, lang string) {
+	// trace: unrelated: the driver is the root of this call; no inbound request causes it.
 	seq, err := api.ListEvents(ctx, validRequest())
 	if err != nil {
 		fail("%s ListEvents: %v", lang, err)
@@ -111,6 +113,7 @@ func checkServerStream(ctx context.Context, api *client.ContractApiClient, lang 
 // encoded a resume cursor and decoded it back on the follow-up call.
 func checkPage(ctx context.Context, api *client.ContractApiClient, lang string) {
 	var ids []string
+	// trace: unrelated: the driver is the root of this call; no inbound request causes it.
 	for event, err := range api.ListEventsPaged(ctx, &types.ContractPageRequest{
 		TenantNamespace: "tenant.alpha",
 		PageSize:        10,
@@ -135,6 +138,7 @@ func checkPage(ctx context.Context, api *client.ContractApiClient, lang string) 
 // empty verifying-key set, so the opaque fixture bearer is rejected at token
 // verification in both languages: UNAUTHENTICATED, exactly, either side.
 func checkFailClosed(ctx context.Context, api *client.ContractApiClient, lang string) {
+	// trace: unrelated: the driver is the root of this call; no inbound request causes it.
 	resp, err := api.GetContract(ctx, validRequest())
 	if err == nil {
 		fail("%s GetContract was accepted (result_id=%q) — auth is not fail-closed", lang, resp.GetResultId())

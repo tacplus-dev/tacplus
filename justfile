@@ -183,7 +183,7 @@ protoc-check:
 # per gate would let another job interleave a regeneration between two of them.
 # The nested `just` calls re-enter this same lock.
 gates:
-  {{lock}} bash scripts/gates.sh soundness test current-generation determinism cert-stream stream-expiry rotation memberport claims-provenance accounting-identity w2s-validate c2d-server zero-rpc-s2s jwk-alg redact trace-carry tacplus-script
+  {{lock}} bash scripts/gates.sh soundness test current-generation determinism cert-stream stream-expiry rotation memberport claims-provenance accounting-identity w2s-validate c2d-server zero-rpc-s2s jwk-alg redact trace-carry server-runtime tacplus-script
 
 # Run `just gates` inside the tacplus build image instead of against the
 # host toolchain: every SDK and tool at the pinned versions, with no host
@@ -407,6 +407,14 @@ redact-java:
 
 redact-rust:
   {{lock}} bash cross-test/redact/run.sh --language rust
+
+# Cross-language runtime evidence for java and rust (LED-2): the generated java
+# and rust ContractApi servers driven over the wire by the generated go C2S
+# client, then the generated java client against the rust host and the generated
+# rust client against the java host. In `gates` since #455, where it was found
+# not building on main: no gate ran it. One leg at a time: cross-test/justfile.
+server-runtime:
+  {{lock}} bash cross-test/server-runtime/run.sh
 
 # trace_id across projections and stores (#313): a projection carries its
 # source's trace_id; the record dispatch and the service_store disk helpers

@@ -196,6 +196,10 @@ assert_clean_log() {
   fi
 }
 
+# grpc-servers: all, as consumer-contract's config: the fixture tree holds
+# several services, and unset, generation is scoped to contractclient's own
+# contract file, dropping contract/contract.proto (ContractApi), the C2S client
+# manager (c2sm) and the contract.contractclient types the drivers import.
 write_config() {
   local dir="$1"
   local language="$2"
@@ -205,6 +209,7 @@ language: "$language"
 pkg: "com.gitlab.example.tacplus.consumer.contractclient"
 src: "$PROTO_SRC"
 output-dir: "model"
+grpc-servers: all
 EOF
 }
 
@@ -218,7 +223,13 @@ generate_model() {
     cat "$log" >&2
     die "$language generation failed"
   }
-  assert_clean_log "$log"
+  # The one accepted warning, as in consumer-contract: the shared contract proto
+  # still exercises the legacy (spec.redact) on purpose until 3.0 removes it
+  # (#274), and generation names it deprecated.
+  if rg -n '(WARN|WARNING|warning:|ERROR|panic:|fatal:)' "$log" \
+    | rg -v 'warning: deprecated: .*\(spec\.(redact|data_entitlement)\)'; then
+    die "warning/error output found in $log"
+  fi
 }
 
 # Matches the consumer-contract go compile module: the generation dir is the
@@ -458,9 +469,10 @@ start_server_for() {
     java)
       build_java_server
       # --sun-misc-unsafe-memory-access=allow: protobuf-java/netty still use
-      # sun.misc.Unsafe; JDK 24+ warns on first use and this gate asserts the
-      # fixture server's stderr stays empty.
-      start_fixture "$JAVA_LOG_DIR" "$JAVA_BIN" --sun-misc-unsafe-memory-access=allow \
+      # sun.misc.Unsafe; --enable-native-access=ALL-UNNAMED: netty loads its
+      # native transport. JDK 24+ warns on first use of either, and this gate
+      # asserts the fixture server's stderr stays empty.
+      start_fixture "$JAVA_LOG_DIR" "$JAVA_BIN" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED \
         -Dlogback.configurationFile="$GATE_DIR/fixture/java/logback.xml" \
         -cp "$JAVA_FIXTURE_CLASSPATH" fixture.Fixture
       SERVER_LOG_DIR="$JAVA_LOG_DIR"
@@ -524,7 +536,7 @@ for client in "${clients[@]:-}"; do
       build_java_client
       start_server_for "$peer"
       run_client_against java "$peer" "$SERVER_LOG_DIR" \
-        "$JAVA_BIN" --sun-misc-unsafe-memory-access=allow \
+        "$JAVA_BIN" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED \
         -Dlogback.configurationFile="$GATE_DIR/fixture/java/logback.xml" \
         -cp "$JAVA_CLIENT_CLASSPATH" client.Client
       ;;

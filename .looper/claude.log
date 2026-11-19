@@ -1,0 +1,43 @@
+= init
+= thinking_tokens
+= thinking_tokens
+> Bash git status --short && git log --oneline -3 && git diff --stat && gh issue view 569 --repo tacplus-dev/tacplus --comments | tail -30
+<  M docs/USER.md  M pkg/protosrc/merge.go  M pkg/protosrc/merge_test.go 48e3460b HISTORY.md: #567 (looper) 376e9a45 HISTORY.md: #264 (looper) 474ee270 HISTORY.md: #566 (looper)  docs/USER.md               |  2 +-  pkg/protosrc/merge.go      | 37 +++++++++++++++++++++---------  pkg/protosrc/merge_test...
+Let me look at the diff and quickly check for a possible hang (e.g. a symlink loop) before re-queuing.
+> Bash git diff
+< diff --git a/docs/USER.md b/docs/USER.md index aca8bb20..ef36c85f 100644 --- a/docs/USER.md +++ b/docs/USER.md @@ -147,7 +147,7 @@ Proto package names must be globally unique; choose last segments that are  unique across the system to avoid collisions in these languages.  | `src` | string | No | Pri...
+= thinking_tokens
+= thinking_tokens
+The walk can't loop: `fs.WalkDir` doesn't follow symlinked directories. Running the package tests before committing:
+> Bash timeout 600 go test ./pkg/protosrc/ ./pkg/fleet/ ./pkg/runner/ 2>&1 | tail -5; go vet ./pkg/protosrc/
+= task_started
+= task_notification
+< pkg/internal/common/parser/descriptor.go:20:2: no required module provides package github.com/tacplus-dev/tacplus/target/proto/spec/sys; to add it: 	go get github.com/tacplus-dev/tacplus/target/proto/spec/sys FAIL	github.com/tacplus-dev/tacplus/pkg/runner [setup failed] ok  	github.com/tacplus-dev/t...
+`pkg/protosrc` passes. `pkg/runner` (and likely fleet) need generated code, which exists only in the build job. Committing and re-queuing unchanged, as the hub asked:
+> Bash git add docs/USER.md pkg/protosrc/merge.go pkg/protosrc/merge_test.go && git commit -q -F - <<'EOF' merging sources never reads through a symlink out of a source  protosrc merges every proto source, fetched dependencies included, into one tree. filepath.Walk + os.ReadFile followed a symlink named li...
+= task_started
+= task_notification
+< afac1c54 merging sources never reads through a symlink out of a source [2026-11-19T22:06:20Z] checkpoint of #569 (land queued) pushed to looper/tacplus-569:  6 files changed, 381 insertions(+), 12 deletions(-) [2026-11-19T22:06:23Z] queued: the manager of tacplus lands looper/tacplus-569 in its next...
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 569 --checkpoint "Land re-queued unchanged (afac1c54, same fix as 2d5d413) per the hub's 10:33Z note. No hang reproduced: fs.WalkDir over os.Root does not follow symlinked dirs, so the walk cannot loop; go test ./pkg/protosrc passes (fleet/runner nee...
+< [2026-11-19T22:06:31Z] checkpoint of #569 (a step) pushed to looper/tacplus-569:  6 files changed, 385 insertions(+), 12 deletions(-)
+I've put the #569 fix back in the merge queue unchanged, as the hub asked. It's commit `afac1c54`, the same fix as `2d5d413`.
+
+**The hang:** I didn't reproduce it, and I don't think this change causes it. The new code walks each source with `fs.WalkDir` through an `os.Root`, and that walk doesn't follow symlinked directories, so it can't loop. If the next batch hangs again with this land in it, I'll look further.
+
+**Tests:** `go test ./pkg/protosrc/` passes here. `pkg/fleet` and `pkg/runner` didn't run here because they need generated code that only the build job produces. `pkg/runner` failed at setup on that missing code, and I didn't get the `pkg/fleet` result. Both broke in the first send-back, so that build is what will show whether they pass now.
+
+**Still open:**
+- **Backports:** pull requests #885–#891 against release/2.0 through release/2.6 are open.
+- **No tag on main:** main has taken features since v2.6.1, so the patch tags go out on the release branches instead.
+- **After the manager's verdict:** the next run comments on the issue with the commits, gates and batch. That comment includes the result of the earlier full-gates build (pipeline 3086897896), which I haven't checked. Then that run closes the issue.
+= success: I've put the #569 fix back in the merge queue unchanged, as the hub asked. It's commit `afac1c54`, the same fix as `2d5d413`.
+
+**The hang:** I didn't reproduce it, and I don't think this change causes it. The new code walks each source with `fs.WalkDir` through an `os.Root`, and that walk doesn't follow symlinked directories, so it can't loop. If the next batch hangs again with this land in it, I'll look further.
+
+**Tests:** `go test ./pkg/protosrc/` passes here. `pkg/fleet` and `pkg/runner` didn't run here because they need generated code that only the build job produces. `pkg/runner` failed at setup on that missing code, and I didn't get the `pkg/fleet` result. Both broke in the first send-back, so that build is what will show whether they pass now.
+
+**Still open:**
+- **Backports:** pull requests #885–#891 against release/2.0 through release/2.6 are open.
+- **No tag on main:** main has taken features since v2.6.1, so the patch tags go out on the release branches instead.
+- **After the manager's verdict:** the next run comments on the issue with the commits, gates and batch. That comment includes the result of the earlier full-gates build (pipeline 3086897896), which I haven't checked. Then that run closes the issue.
+= usage: {"claude-opus-5-5":{"inputTokens":12,"outputTokens":1840,"cacheReadInputTokens":174927,"cacheCreationInputTokens":22847,"webSearchRequests":0,"costUSD":0.2546094,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":152,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}

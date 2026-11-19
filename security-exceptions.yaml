@@ -320,10 +320,6 @@ exceptions:
     reason: "#340 bridge, rule-wide (1 site): cmd/sitegen runs the protoc that PROTOC_BINARY names, a documentation tool CI runs; #572"
     decided_by: jodydadescott
     expires: 2026-12-31
-  - id: dockerfile.security.missing-user.missing-user
-    reason: "#340 bridge, rule-wide (1 site): the root Dockerfile is the deprecated tacplus image's, never pushed again (#193); #580 retires or fixes it"
-    decided_by: jodydadescott
-    expires: 2026-12-31
   - id: yaml.github-actions.security.run-shell-injection.run-shell-injection
     reason: "#340 bridge, rule-wide (1 site): images.yml:74 interpolates github.event.inputs.rebuild into a run: step; #584 moves it to an env variable"
     decided_by: jodydadescott

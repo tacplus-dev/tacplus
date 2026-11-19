@@ -16,6 +16,11 @@ import (
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
+// pythonRequiresPython is the interpreter every generated pyproject.toml
+// declares. This line keeps 3.8, so its root floors are the newest releases
+// that install on 3.8 (#264); clearing the advisories they leave needs 2.6+.
+const pythonRequiresPython = ">=3.8"
+
 // createRootPyprojectToml creates a root pyproject.toml file for all generated Python packages
 func createRootPyprojectToml(config *tactype.Config, outputDir string) error {
 	pyprojectPath := filepath.Join(outputDir, "pyproject.toml")
@@ -134,7 +139,7 @@ build-backend = "setuptools.build_meta"
 name = "%s"
 version = "%s"
 description = "Generated Protocol Buffer types"
-requires-python = ">=3.8"
+requires-python = "%s"
 dependencies = [
 %s
 ]
@@ -146,7 +151,7 @@ all = ["PyYAML%s", "tomli%s; python_version<'3.11'", "tomli-w%s"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-%s`, packageName, version, strings.Join(deps, ",\n"), pyYAMLVersion, tomliVersion, tomliWVersion, pyYAMLVersion, tomliVersion, tomliWVersion, pipConfig)
+%s`, packageName, version, pythonRequiresPython, strings.Join(deps, ",\n"), pyYAMLVersion, tomliVersion, tomliWVersion, pyYAMLVersion, tomliVersion, tomliWVersion, pipConfig)
 
 	if err := os.WriteFile(pyprojectPath, []byte(pyprojectContent), 0644); err != nil {
 		return fmt.Errorf("failed to create pyproject.toml: %w", err)
@@ -168,6 +173,10 @@ func updatePyprojectToml(pyprojectPath, version, protobufVersion, pyYAMLVersion,
 	// Update project version
 	versionRe := regexp.MustCompile(`(?m)^version\s*=\s*"[^"]*"`)
 	content = versionRe.ReplaceAllString(content, fmt.Sprintf(`version = "%s"`, version))
+
+	// Update the declared interpreter: the managed floors below need it.
+	requiresPythonRe := regexp.MustCompile(`(?m)^requires-python\s*=\s*"[^"]*"`)
+	content = requiresPythonRe.ReplaceAllString(content, fmt.Sprintf(`requires-python = "%s"`, pythonRequiresPython))
 
 	// Update managed dependency versions.
 	// Pattern matches "depname>=X.Y.Z" (or ~= or ==) with optional trailing markers.
@@ -192,6 +201,9 @@ func updatePyprojectToml(pyprojectPath, version, protobufVersion, pyYAMLVersion,
 	updateDep("tomli", tomliVersion)
 	updateDep("tomli-w", tomliWVersion)
 	updateDep("grpcio", grpcioVersion)
+	for _, dep := range extraProjectDeps {
+		updateDep(dep.Name, dep.Version)
+	}
 	ensureProjectDep := func(depName, newVersion string) {
 		escaped := regexp.QuoteMeta(depName)
 		re := regexp.MustCompile(`"` + escaped + `(>=|~=|==)[^"]*"`)

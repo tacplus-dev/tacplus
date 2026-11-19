@@ -82,7 +82,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-18 by lo
   the CPUs by default), and caps current-generation's own fixture pool (#812) at the same number; each job slot builds
   Rust in its own cargo directory with its share of the CPUs (`CARGO_BUILD_JOBS`, `GOFLAGS -p`, a 40-minute `go test`
   deadline). The log and the verdict are the same whatever the cap, and a table of each gate's wall time comes before
-  the verdict: 3396 s on 8 CPUs at `GATES_JOBS=4`, current-generation the longest (#300).
+  the verdict: 3396 s on 8 CPUs at `GATES_JOBS=4`, current-generation the longest (#300). Each gate's rc and wall time
+  also print as it ends, and a leg past `GATES_TIMEOUT` (5400 s) is stopped and fails naming itself; every Java
+  fixture logs io.grpc and io.netty at INFO, which kept the trace under GitLab's 4 MiB (#893).
   The generated code is scanned at the source (#376, tacplus-dev/looper#108): `just generated DIR` writes every proto
   set the current-generation gate builds, in Go, Rust and Java (services) and Python and TypeScript (clients), as
   trees the build's security checks load; the gates job keeps it as `generated/` and the security job scans it with

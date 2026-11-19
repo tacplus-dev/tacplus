@@ -141,3 +141,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-13 looper issue release/2.0: cross-test/TESTS.md carries an unresolved merge conflict (markers committed) (#329)
 - 2026-11-19 looper issue current-generation: Go DiskStore self-test TestAppendLogConcurrentAppendsStayWholeLines times out on a loaded runner: 400 fsync'd appends under one mutex within go test's 10m (#721)
 - 2026-11-19 looper issue Go approval chassis template: appendSingular's wire-encoding reinterpretations trip gosec G115 (HIGH) in every generated Go project (5 sites) (#755)
+- 2026-11-19 looper issue rotation Java self-test bidiBothWaysAcrossLifetimes: stream ends UNAUTHENTICATED (stream credential expired) mid-way on a loaded runner (#840)

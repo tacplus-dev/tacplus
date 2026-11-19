@@ -22,7 +22,12 @@
 # and fails. While the set runs, JOBS_EMIT (default jobs_emit_log) is called
 # with each job's index as soon as it AND every job added before it finished,
 # so what it prints comes out in the order the jobs were added, whatever the
-# order they ran in: the log and the verdict never depend on the cap.
+# order they ran in: the log and the verdict never depend on the cap. JOBS_DONE,
+# when set, is called with each job's index as soon as that job finished,
+# whatever is still running before it (scripts/gates.sh: a gate's rc as it
+# ends, tacplus#893); what it prints is the one part of the output in the
+# order the jobs ended. While the set runs, JOBS_STATUS[i] is running or done
+# once job i started or finished.
 # Afterwards JOBS_RC[i] holds each job's exit status, JOBS_SECS[i] its wall
 # time in seconds, and JOBS_START[i] and JOBS_END[i] when it started and ended
 # (seconds since the epoch).
@@ -140,24 +145,26 @@ jobs_start() {
 
 jobs_run() {
   local n=${#JOBS_NAMES[@]} i k state running=0 finished=0 emitted=0 failed=0 free
-  local -a slot_of=() slot_busy=() status=()
+  local -a slot_of=() slot_busy=()
   JOBS_PID=()
+  JOBS_STATUS=()
   for ((k = 0; k < JOBS_CAP; k++)); do slot_busy[$k]=0; done
   while [[ $emitted -lt $n ]]; do
     # Reap the jobs that finished.
     for ((i = 0; i < n; i++)); do
-      [[ "${status[$i]:-}" == running && -f "$JOBS_DIR/$i.status" ]] || continue
+      [[ "${JOBS_STATUS[$i]:-}" == running && -f "$JOBS_DIR/$i.status" ]] || continue
       wait "${JOBS_PID[$i]}" 2>/dev/null
       read -r JOBS_RC[$i] JOBS_SECS[$i] JOBS_START[$i] JOBS_END[$i] <"$JOBS_DIR/$i.status"
-      status[$i]=done
+      JOBS_STATUS[$i]=done
       slot_busy[${slot_of[$i]}]=0
       running=$((running - 1))
       finished=$((finished + 1))
+      [[ -z "${JOBS_DONE:-}" ]] || "$JOBS_DONE" "$i"
     done
     # Start what is ready, in the order added, while a slot is free. A job
     # whose dependency failed finishes at once, failed, without running.
     for ((i = 0; i < n; i++)); do
-      [[ -z "${status[$i]:-}" ]] || continue
+      [[ -z "${JOBS_STATUS[$i]:-}" ]] || continue
       state="$(jobs_deps_state "$i")"
       if [[ "$state" == failed* ]]; then
         echo "not run: dependency ${state#failed } failed" >"$JOBS_DIR/$i.log"
@@ -165,8 +172,9 @@ jobs_run() {
         JOBS_SECS[$i]=0
         JOBS_START[$i]=$(date +%s)
         JOBS_END[$i]=${JOBS_START[$i]}
-        status[$i]=done
+        JOBS_STATUS[$i]=done
         finished=$((finished + 1))
+        [[ -z "${JOBS_DONE:-}" ]] || "$JOBS_DONE" "$i"
         continue
       fi
       [[ "$state" == ok && $running -lt $JOBS_CAP ]] || continue
@@ -175,12 +183,12 @@ jobs_run() {
       done
       slot_busy[$free]=1
       slot_of[$i]=$free
-      status[$i]=running
+      JOBS_STATUS[$i]=running
       running=$((running + 1))
       jobs_start "$i" "$free"
     done
     # Emit, in the order added, every finished job whose predecessors were.
-    while [[ $emitted -lt $n && "${status[$emitted]:-}" == done ]]; do
+    while [[ $emitted -lt $n && "${JOBS_STATUS[$emitted]:-}" == done ]]; do
       [[ "${JOBS_RC[$emitted]}" -eq 0 ]] || failed=$((failed + 1))
       "${JOBS_EMIT:-jobs_emit_log}" "$emitted"
       emitted=$((emitted + 1))

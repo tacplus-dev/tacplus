@@ -59,7 +59,7 @@ mkdir -p "$WORK/testclasses"
   || die "clean-close test did not compile"
 
 echo "==> Running generated Java clean-close subscriber test"
-"${JDK_BIN}java" -cp "$WORK/testclasses:$CP" SubscriberCleanCloseTest \
+"${JDK_BIN}java" -Dlogback.configurationFile="$ROOT_DIR/cross-test/lib/logback-test.xml" -cp "$WORK/testclasses:$CP" SubscriberCleanCloseTest \
   || die "generated Java subscriber re-resolves in a tight loop on clean stream closes"
 
 echo "==> subscriber-clean-close check PASSED"

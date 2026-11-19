@@ -1,0 +1,23 @@
+<!-- Copyright (c) 2026 Jody Scott
+     SPDX-License-Identifier: Apache-2.0
+
+     The logging of every JVM a cross-test script starts, and of every
+     surefire run (as src/test/resources/logback-test.xml): the generated
+     code's own lines (rotation, refusals, faults) at DEBUG, gRPC's and
+     Netty's at INFO. Without it logback logs everything at DEBUG, and
+     io.grpc's netty frame and TLS lines alone (some 10,500 a run) cut the
+     gates job's trace at GitLab's 4 MiB, hiding which gate failed or hung
+     (tacplus#877, tacplus#893). scripts/java_test_logging_test.go holds every
+     script to it. -->
+<configuration>
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+  <logger name="io.grpc" level="INFO"/>
+  <logger name="io.netty" level="INFO"/>
+  <root level="DEBUG">
+    <appender-ref ref="STDOUT"/>
+  </root>
+</configuration>

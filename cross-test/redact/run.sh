@@ -313,7 +313,8 @@ run_java() {
   echo "==> Checking the vectors with the generated java redact<T> and validators"
   # --sun-misc-unsafe-memory-access=allow: protobuf-java still uses
   # sun.misc.Unsafe and JDK 24+ warns on first use.
-  "$java_bin" --sun-misc-unsafe-memory-access=allow -cp "$leg_dir/classes:$classpath" \
+  "$java_bin" --sun-misc-unsafe-memory-access=allow -Dlogback.configurationFile="$ROOT_DIR/cross-test/lib/logback-test.xml" \
+    -cp "$leg_dir/classes:$classpath" \
     redactvectors.RedactVectors "$FIXTURE" >"$dir/test.log" 2>&1 || {
     cat "$dir/test.log" >&2
     die "java leg failed"

@@ -744,11 +744,11 @@ the looper then marks it `promoted` or `declined` here with the date.
   `rotation refused` fault, `MemberPort.java`, Rust `session.rs`) has the same shape: a session whose both `fin`s
   have just closed it on the server, with a rotation on the way, ends in a reset instead of a clean close. Same
   fix: a refused rotation stops rotating and lets the current stream end (clean, or at its `exp`).
-- **Java fixtures' gRPC and Netty logs at INFO** (2026-11-18, #877): logback with no configuration logs at DEBUG,
-  and io.grpc's netty frame lines (some 10,500 in one rotation run) cut a gate job's log at GitLab's 4 MiB. #877
-  gave the rotation fixture a `logback-test.xml` (io.grpc, io.netty at INFO); the other Java fixtures that run under
-  mvn with logback-classic (stream-expiry, memberport, cert-stream, external-token, redact, trace-carry, jwk-alg)
-  would take the same file.
+- **A timeout per gate from its measured wall time** (2026-11-19, #893): `scripts/gates.sh` stops any leg past
+  `GATES_TIMEOUT` (one value for every leg, 5400 s by default), so a hung leg of a gate that takes two minutes
+  still holds its slot for an hour and a half. The wall-time table each run prints gives each gate's usual time; a budget per
+  gate (say three times its usual, beside its name in the justfile or gates.yaml) would stop a hung short gate in
+  minutes.
 - **Run `just consumer-build-typescript` in the gates** (2026-11-17, #839): `just consumer-build` is in no gate, so
   its TypeScript leg rotted on main unseen twice over: the client-only proto lost its MCP-6 description once
   descriptions were enforced, and the c2d case's generation log carried the generator's own w2sm WARN. #839 fixes

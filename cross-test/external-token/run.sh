@@ -107,6 +107,8 @@ EOF
     mkdir -p "$OUT/src/test/java/com/example/externaltoken/model/chassis/service_im"
     cp "$TESTDATA/ExternalTokenBehaviorTest.java" \
       "$OUT/src/test/java/com/example/externaltoken/model/chassis/service_im/ExternalTokenBehaviorTest.java"
+    mkdir -p "$OUT/src/test/resources"
+    cp "$ROOT_DIR/cross-test/lib/logback-test.xml" "$OUT/src/test/resources/logback-test.xml"
     cp "$TESTDATA/pom.xml" "$OUT/pom.xml"
 
     echo "==> Running generated Java external-token behavior tests"

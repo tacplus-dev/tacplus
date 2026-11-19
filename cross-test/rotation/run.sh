@@ -147,7 +147,7 @@ EOF
     cp "$TESTDATA/RotationBehaviorTest.java" \
       "$OUT/src/test/java/com/example/rotationfixture/model/chassis/grpcserver/RotationBehaviorTest.java"
     mkdir -p "$OUT/src/test/resources"
-    cp "$TESTDATA/logback-test.xml" "$OUT/src/test/resources/logback-test.xml"
+    cp "$ROOT_DIR/cross-test/lib/logback-test.xml" "$OUT/src/test/resources/logback-test.xml"
     sed -e 's/com\.example\.streamexpiry/com.example.rotationfixture/' \
       -e 's/stream-expiry-java-fixture/rotation-java-fixture/' \
       "$ROOT_DIR/cross-test/stream-expiry/testdata/pom.xml" > "$OUT/pom.xml"

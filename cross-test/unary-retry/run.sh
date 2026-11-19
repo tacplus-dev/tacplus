@@ -96,7 +96,7 @@ EOF
     "${JDK_BIN}javac" -d "$WORK/testclasses" -cp "$CP" "$TESTDATA/UnaryRetryBehaviorTest.java" \
       || die "unary-retry test did not compile"
     echo "==> Running generated Java unary-retry behavior test"
-    "${JDK_BIN}java" -cp "$WORK/testclasses:$CP" UnaryRetryBehaviorTest \
+    "${JDK_BIN}java" -Dlogback.configurationFile="$ROOT_DIR/cross-test/lib/logback-test.xml" -cp "$WORK/testclasses:$CP" UnaryRetryBehaviorTest \
       || die "generated Java unary client retry: budget or jitter behavior failed"
     ;;
   rust)

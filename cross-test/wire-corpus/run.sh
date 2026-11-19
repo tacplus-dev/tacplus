@@ -354,7 +354,8 @@ run_java() {
   echo "==> Decoding the golden corpus with the generated java types"
   # --sun-misc-unsafe-memory-access=allow: protobuf-java still uses
   # sun.misc.Unsafe and JDK 24+ warns on first use.
-  "$java_bin" --sun-misc-unsafe-memory-access=allow -cp "$decoder_dir/classes:$classpath" \
+  "$java_bin" --sun-misc-unsafe-memory-access=allow -Dlogback.configurationFile="$ROOT_DIR/cross-test/lib/logback-test.xml" \
+    -cp "$decoder_dir/classes:$classpath" \
     decoder.Decoder "$FIXTURE" || die "java decoder failed"
 }
 

@@ -160,7 +160,7 @@ run_java() {
   class_name="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$TESTDATA/RestDispatchSelfTest.java").RestDispatchSelfTest"
 
   echo "==> Running generated Java W2S request-validation and REST browser-form self-test"
-  "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$compile_dir/target/classes:$(cat "$compile_dir/classpath")" "$class_name" \
+  "$java_cmd" --sun-misc-unsafe-memory-access=allow -Dlogback.configurationFile="$ROOT_DIR/cross-test/lib/logback-test.xml" -cp "$compile_dir/target/classes:$(cat "$compile_dir/classpath")" "$class_name" \
     || die "generated Java W2S request-validation / REST browser-form self-test failed"
 
   echo "==> w2s-validate check PASSED (java)"

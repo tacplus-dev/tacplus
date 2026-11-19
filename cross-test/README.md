@@ -49,6 +49,22 @@ every job and the heavy `go test` packages ran past their deadline; `just
 gates` also gives `go test` a 40-minute deadline (`GATES_GO_TEST_TIMEOUT`)
 for a package that runs beside the other gates.
 
+A gate's output waits for every gate named before it, so `scripts/gates.sh`
+also prints one line as each gate ends, in the order they end: `gates: GATE
+rc=N pass|FAIL in Ss, D of T done; running: LEG...` (#893). It stops a leg
+that runs past `GATES_TIMEOUT` seconds (default 5400; 0 for none) with
+every process it started, through timeout(1), and fails it with rc=124 and a
+line naming it: a hung gate held a build slot for hours, the trace silent on
+which.
+
+Every JVM a script starts names a logback configuration
+(`-Dlogback.configurationFile`), `cross-test/lib/logback-test.xml` unless
+the fixture has its own, and every surefire run gets that file as its
+`src/test/resources/logback-test.xml`: unconfigured, logback logs grpc-java's
+Netty lines at DEBUG, some 10,500 a run, and cut the gates job's trace at
+GitLab's 4 MiB (#877, #893). `scripts/java_test_logging_test.go` holds every
+script and configuration to it.
+
 Cargo locks a target directory for a whole build, so two jobs running at once
 never share one: each job slot of `just gates` gets its own directory under
 `target/gates/cargo-slotN` (through `TACPLUS_CROSS_TEST_CARGO_TARGET`), and

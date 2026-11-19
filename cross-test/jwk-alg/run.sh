@@ -353,7 +353,8 @@ run_java() {
   echo "==> Verifying the vectors with the generated java chassis"
   # --sun-misc-unsafe-memory-access=allow: protobuf-java still uses
   # sun.misc.Unsafe and JDK 24+ warns on first use.
-  "$java_bin" --sun-misc-unsafe-memory-access=allow -cp "$leg_dir/classes:$classpath" \
+  "$java_bin" --sun-misc-unsafe-memory-access=allow -Dlogback.configurationFile="$ROOT_DIR/cross-test/lib/logback-test.xml" \
+    -cp "$leg_dir/classes:$classpath" \
     jwkalg.JwkAlgTest "$FIXTURE" >"$dir/test.log" 2>&1 || {
     cat "$dir/test.log" >&2
     die "java leg failed"

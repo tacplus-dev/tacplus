@@ -140,7 +140,7 @@ run_java() {
   echo "==> Running generated Java standalone C2D host self-test"
   # grpc-netty logs every frame at DEBUG; keep it in a log and show the
   # self-test's own verdict.
-  if ! "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$compile_dir/target/classes:$(cat "$compile_dir/classpath")" \
+  if ! "$java_cmd" --sun-misc-unsafe-memory-access=allow -Dlogback.configurationFile="$ROOT_DIR/cross-test/lib/logback-test.xml" -cp "$compile_dir/target/classes:$(cat "$compile_dir/classpath")" \
       com.example.c2dserver.daemon.C2DStandaloneSelfTest >"$WORK/java/selftest.log" 2>&1; then
     grep -E "FAIL|Exception|check\(s\) failed" "$WORK/java/selftest.log" | head -40
     die "generated Java standalone C2D host self-test failed"

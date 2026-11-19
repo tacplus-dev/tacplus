@@ -299,6 +299,8 @@ EOF
     mkdir -p "$OUT/src/test/java/com/example/certstream/model/s2sm"
     cp "$ROOT_DIR/cross-test/cert-stream/testdata/CertStreamBehaviorTest.java" \
       "$OUT/src/test/java/com/example/certstream/model/s2sm/CertStreamBehaviorTest.java"
+    mkdir -p "$OUT/src/test/resources"
+    cp "$ROOT_DIR/cross-test/lib/logback-test.xml" "$OUT/src/test/resources/logback-test.xml"
     write_java_cert_stream_pom "$OUT/pom.xml" "$OUT"
 
     echo "==> Running generated Java cert-stream behavior tests"

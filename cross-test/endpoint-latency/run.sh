@@ -59,7 +59,7 @@ mkdir -p "$WORK/testclasses"
   || die "endpoint-latency test did not compile"
 
 echo "==> Running generated Java endpoint-latency test"
-"${JDK_BIN}java" -cp "$WORK/testclasses:$CP" EndpointLatencyTest \
+"${JDK_BIN}java" -Dlogback.configurationFile="$ROOT_DIR/cross-test/lib/logback-test.xml" -cp "$WORK/testclasses:$CP" EndpointLatencyTest \
   || die "generated Java static pool keeps a slow READY endpoint active: latency is not a Ping round trip"
 
 echo "==> endpoint-latency check PASSED"

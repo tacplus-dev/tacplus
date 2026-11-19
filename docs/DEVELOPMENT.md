@@ -519,7 +519,11 @@ of the CPUs (`CARGO_BUILD_JOBS`, `GOFLAGS -p`), and `go test` runs with a
 40-minute deadline, since a package runs beside the other gates. A gate you
 add runs beside every other: it takes its own work directory, builds Rust in
 `$CARGO_TARGET_DIR` (`cross-test/lib/cargo-target.sh`) and uses the prebuilt
-`$TACPLUS_BIN`.
+`$TACPLUS_BIN`. Each gate's rc and wall time also print as it ends
+(`gates: GATE rc=N ...`), and a leg past `GATES_TIMEOUT` seconds (default
+5400) is stopped and fails with rc=124, naming itself (#893). A JVM a gate
+starts logs io.grpc and io.netty at INFO (`cross-test/lib/logback-test.xml`):
+at DEBUG they cut the gates job's trace at GitLab's 4 MiB.
 `cross-test/README.md` has the details. `GATES_JOBS=1 just gates` runs them
 one at a time.
 

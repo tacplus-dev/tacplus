@@ -24,6 +24,17 @@
 # with two caps and compares). Before that last line a table gives each gate's
 # wall time and the total.
 #
+# A gate whose output waits on a slower one named before it still shows in the
+# trace as it ends (tacplus#893): `gates: GATE rc=N pass|FAIL in Ss, D of T
+# done; running: ...`, the one line in the order the gates ended. Each leg is
+# stopped, with every process it started, after GATES_TIMEOUT seconds (default
+# 5400; 0 for none), and fails with rc=124 and a line that names it: a gate
+# that hung held a build slot for hours, the trace silent on which. The
+# default is the longest a gate may take inside full's budget (gates.yaml),
+# not its usual time: current-generation, the longest, took most of a
+# 3396 s run (#300), and a slow runner's must not fail for it. The timeout
+# needs timeout(1) (coreutils; gtimeout on macOS).
+#
 # Before the gates: protoc-check (a protoc/runtime mismatch breaks three gates
 # with an error that names neither protoc nor a version), then the generated
 # spec descriptors and one tacplus binary, built once for every gate
@@ -107,12 +118,31 @@ gate_legs() {
   fi
 }
 
+TIMEOUT="${GATES_TIMEOUT:-5400}"
+timeout_cmd=""
+if [[ "$TIMEOUT" != 0 ]]; then
+  timeout_cmd="$(command -v timeout || command -v gtimeout || true)"
+  [[ -n "$timeout_cmd" ]] || echo "gates: no timeout(1) on PATH: GATES_TIMEOUT=$TIMEOUT is not enforced"
+fi
+
 # One leg, in its job slot's own cargo directory. The gate's dependencies
 # (generate, ...) ran before the gates, so --no-deps: run again by every gate
-# at once they would write the same files concurrently.
+# at once they would write the same files concurrently. timeout(1) runs it in
+# a process group of its own and stops the whole group: TERM, then KILL a
+# minute later.
 run_leg() {
   export TACPLUS_CROSS_TEST_CARGO_TARGET="$WORKDIR/cargo-slot$JOBS_SLOT"
-  "$JUST" --no-deps "$1"
+  if [[ -z "$timeout_cmd" ]]; then
+    "$JUST" --no-deps "$1"
+    return
+  fi
+  local rc=0 start=$SECONDS
+  "$timeout_cmd" -k 60 "$TIMEOUT" "$JUST" --no-deps "$1" || rc=$?
+  if [[ $rc -eq 124 || ( $rc -eq 137 && $((SECONDS - start)) -ge $TIMEOUT ) ]]; then
+    echo "gates: $1 timed out after ${TIMEOUT}s (GATES_TIMEOUT): stopped"
+    rc=124
+  fi
+  return $rc
 }
 
 gate_names=()
@@ -136,10 +166,29 @@ gate_of() {
   done
 }
 
+# Gate $1's rc and wall time into gate_rc and gate_secs, once its every leg
+# finished: it fails with the status of its first failing leg, and took from
+# the start of its first leg to the end of its last. Returns 1 while a leg
+# runs or waits.
 gate_rc=()
 gate_secs=()
+gate_result() {
+  local g="$1" first=${gate_first[$1]} last=${gate_last[$1]} j rc=0
+  for ((j = first; j <= last; j++)); do
+    [[ "${JOBS_STATUS[$j]:-}" == done ]] || return 1
+  done
+  local start=${JOBS_START[$first]} end=${JOBS_END[$first]}
+  for ((j = first; j <= last; j++)); do
+    [[ $rc -eq 0 ]] && rc=${JOBS_RC[$j]}
+    [[ ${JOBS_START[$j]} -lt $start ]] && start=${JOBS_START[$j]}
+    [[ ${JOBS_END[$j]} -gt $end ]] && end=${JOBS_END[$j]}
+  done
+  gate_rc[$g]=$rc
+  gate_secs[$g]=$((end - start))
+}
+
 gates_emit() {
-  local i="$1" g first last j rc=0 multi=false
+  local i="$1" g first last multi=false
   g="$(gate_of "$i")"
   first=${gate_first[$g]}
   last=${gate_last[$g]}
@@ -149,19 +198,27 @@ gates_emit() {
   cat "$JOBS_DIR/$i.log"
   $multi && echo "--- ${JOBS_NAMES[$i]} rc=${JOBS_RC[$i]} ---"
   [[ $i -eq $last ]] || return 0
-  # The gate fails with the status of its first failing leg; it took from
-  # the start of its first leg to the end of its last.
-  local start=${JOBS_START[$first]} end=${JOBS_END[$first]}
-  for ((j = first; j <= last; j++)); do
-    [[ $rc -eq 0 ]] && rc=${JOBS_RC[$j]}
-    [[ ${JOBS_START[$j]} -lt $start ]] && start=${JOBS_START[$j]}
-    [[ ${JOBS_END[$j]} -gt $end ]] && end=${JOBS_END[$j]}
+  gate_result "$g"
+  echo "=== ${gate_names[$g]} rc=${gate_rc[$g]} ==="
+}
+
+# As leg $1 ends: when it was its gate's last to, the gate's rc and wall time,
+# how many gates are done, and the legs still running.
+gates_done() {
+  local g done=0 running="" verdict=pass j
+  g="$(gate_of "$1")"
+  gate_result "$g" || return 0
+  [[ ${gate_rc[$g]} -eq 0 ]] || verdict=FAIL
+  for ((j = 0; j < ${#gate_names[@]}; j++)); do
+    [[ -n "${gate_rc[$j]:-}" ]] && done=$((done + 1))
   done
-  gate_rc[$g]=$rc
-  gate_secs[$g]=$((end - start))
-  echo "=== ${gate_names[$g]} rc=$rc ==="
+  for ((j = 0; j < ${#JOBS_NAMES[@]}; j++)); do
+    [[ "${JOBS_STATUS[$j]:-}" == running ]] && running+=" ${JOBS_NAMES[$j]}"
+  done
+  echo "gates: ${gate_names[$g]} rc=${gate_rc[$g]} $verdict in ${gate_secs[$g]}s, $done of ${#gate_names[@]} done${running:+; running:$running}"
 }
 JOBS_EMIT=gates_emit
+JOBS_DONE=gates_done
 jobs_run
 
 fail=0

@@ -42,7 +42,13 @@ dir="$TACPLUS_CROSS_TEST_CARGO_TARGET"
 mkdir -p "$(dirname "$dir")"
 mkdir "$dir.in-use" 2>/dev/null || { echo "leg $leg: $dir is in use by another leg"; exit 9; }
 echo "leg $leg starts"
-case "$leg" in slow) sleep 2 ;; *) sleep 1 ;; esac
+case "$leg" in
+  slow) sleep 2 ;;
+  # hang never ends by itself, and leaves a child that marks the work
+  # directory if it outlives the leg.
+  hang) ( sleep 4; touch "$GATES_WORKDIR/orphan" ) & sleep 30 ;;
+  *) sleep 1 ;;
+esac
 echo "leg $leg ends"
 rmdir "$dir.in-use"
 case "$leg" in broken|multi-b) exit 3 ;; esac
@@ -53,18 +59,24 @@ exit 0
 // output, exit status and wall time.
 func runGates(t *testing.T, cap string) (string, int, time.Duration) {
 	t.Helper()
-	dir := t.TempDir()
+	return runGatesOf(t, t.TempDir(), cap, nil, "alpha", "multi", "slow", "broken", "omega")
+}
+
+// runGatesOf runs scripts/gates.sh on the fake gates named, in dir, with a
+// cap and the environment added.
+func runGatesOf(t *testing.T, dir, cap string, env []string, gates ...string) (string, int, time.Duration) {
+	t.Helper()
 	just := filepath.Join(dir, "just")
 	if err := os.WriteFile(just, []byte(fakeJust), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("bash", "gates.sh", "alpha", "multi", "slow", "broken", "omega")
-	cmd.Env = append(os.Environ(),
+	cmd := exec.Command("bash", append([]string{"gates.sh"}, gates...)...)
+	cmd.Env = append(append(os.Environ(),
 		"GATES_JUST="+just,
 		"GATES_JOBS="+cap,
 		"GATES_WORKDIR="+filepath.Join(dir, "work"),
 		"TACPLUS_BIN=/bin/true",
-	)
+	), env...)
 	start := time.Now()
 	out, err := cmd.CombinedOutput()
 	took := time.Since(start)
@@ -80,8 +92,13 @@ func runGates(t *testing.T, cap string) (string, int, time.Duration) {
 
 var gateTimes = regexp.MustCompile(` *\b\d+s\b|GATES_JOBS=\d+`)
 
+// progressLines are the lines gates.sh prints as each gate ends, in the order
+// they end (tacplus#893): the only ones that depend on the cap.
+var progressLines = regexp.MustCompile(`(?m)^gates: .*\n`)
+
 // The gates run concurrently (tacplus#300), but their verdict and log must
-// not depend on how many ran at once or in what order they finished.
+// not depend on how many ran at once or in what order they finished. Only
+// the progress lines, printed as each gate ends, do.
 func TestGatesVerdictDoesNotDependOnTheCap(t *testing.T) {
 	serial, serialRC, serialTook := runGates(t, "1")
 	parallel, parallelRC, parallelTook := runGates(t, "4")
@@ -94,7 +111,7 @@ func TestGatesVerdictDoesNotDependOnTheCap(t *testing.T) {
 		"=== broken rc=3 ===",
 		"=== omega rc=0 ===",
 	} {
-		if !strings.Contains(serial, want) {
+		if !strings.Contains(progressLines.ReplaceAllString(serial, ""), want) {
 			t.Errorf("GATES_JOBS=1 output lacks %q:\n%s", want, serial)
 		}
 	}
@@ -118,11 +135,51 @@ func TestGatesVerdictDoesNotDependOnTheCap(t *testing.T) {
 	if serialRC != parallelRC {
 		t.Errorf("exit %d with GATES_JOBS=1, %d with GATES_JOBS=4", serialRC, parallelRC)
 	}
-	if a, b := gateTimes.ReplaceAllString(serial, "N"), gateTimes.ReplaceAllString(parallel, "N"); a != b {
+	for _, want := range []string{"alpha", "multi", "slow", "broken", "omega"} {
+		if !regexp.MustCompile(`(?m)^gates: ` + want + ` (rc=0 pass|rc=3 FAIL) in \d+s, \d of 5 done`).MatchString(parallel) {
+			t.Errorf("no progress line for %s as it ended:\n%s", want, parallel)
+		}
+	}
+	normal := func(out string) string {
+		return gateTimes.ReplaceAllString(progressLines.ReplaceAllString(out, ""), "N")
+	}
+	if a, b := normal(serial), normal(parallel); a != b {
 		t.Errorf("the output depends on the cap\n--- GATES_JOBS=1:\n%s\n--- GATES_JOBS=4:\n%s", a, b)
 	}
 	if parallelTook >= serialTook {
 		t.Errorf("GATES_JOBS=4 took %s, GATES_JOBS=1 %s: the gates did not run concurrently", parallelTook, serialTook)
+	}
+}
+
+// A gate's rc and wall time reach the trace as it ends, not once every gate
+// named before it ended too, and a gate that hangs is stopped at
+// GATES_TIMEOUT, with its children, and fails naming itself (tacplus#893): a
+// hung gate held a build slot for hours with nothing in the trace.
+func TestGatesReportEachGateAsItEndsAndStopAHungOne(t *testing.T) {
+	dir := t.TempDir()
+	out, rc, took := runGatesOf(t, dir, "2", []string{"GATES_TIMEOUT=3"}, "hang", "alpha")
+	if rc != 1 || !strings.HasSuffix(out, "=== OVERALL fail=1 ===\n") {
+		t.Errorf("a hung gate must fail the gates; exit %d:\n%s", rc, out)
+	}
+	if took > 20*time.Second {
+		t.Errorf("the gates took %s: the hung gate was not stopped at GATES_TIMEOUT=3", took)
+	}
+	alphaDone := strings.Index(out, "gates: alpha rc=0 pass in ")
+	hangDone := strings.Index(out, "gates: hang rc=124 FAIL in ")
+	hangBlock := strings.Index(out, "=== hang ===")
+	if alphaDone < 0 || hangDone < 0 || alphaDone > hangBlock || alphaDone > hangDone {
+		t.Errorf("alpha's rc did not reach the trace as it ended, before the hung gate's:\n%s", out)
+	}
+	if !strings.Contains(out, "gates: hang timed out after 3s (GATES_TIMEOUT): stopped\n") ||
+		!strings.Contains(out, "=== hang rc=124 ===") {
+		t.Errorf("the hung gate does not fail naming its timeout:\n%s", out)
+	}
+	if !regexp.MustCompile(`gates: alpha rc=0 pass in \d+s, 1 of 2 done; running: hang\n`).MatchString(out) {
+		t.Errorf("the progress line does not name the gates still running:\n%s", out)
+	}
+	time.Sleep(5*time.Second - took)
+	if _, err := os.Stat(filepath.Join(dir, "work", "orphan")); err == nil {
+		t.Errorf("the hung gate's child outlived its timeout")
 	}
 }
 

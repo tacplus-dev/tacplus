@@ -6424,7 +6424,7 @@ run_java_generated_self_tests() {
     package_name="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$source_file")"
     [[ -n "$package_name" ]] || die "could not determine Java package for $source_file"
     class_name="$package_name.$(basename "$source_file" .java)"
-    SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$class_name" >>"$test_log" 2>&1 || {
+    SPIFFE_VECTOR_FIXTURE="$ROOT_DIR/cross-test/fixtures/spiffe_vectors.json" "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -Dlogback.configurationFile="$ROOT_DIR/cross-test/lib/logback-test.xml" -cp "$cp" "$class_name" >>"$test_log" 2>&1 || {
       cat "$test_log" >&2
       return 1
     }
@@ -6437,7 +6437,7 @@ run_java_generated_self_tests() {
   sc_test="$(find "$output/src/main/java" -type f -path '*/chassis/serviceconnection/ServiceConnectionTest.java' -print -quit)"
   if [[ -n "$sc_test" ]]; then
     sc_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$sc_test").$(basename "$sc_test" .java)"
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$sc_class" >>"$test_log" 2>&1 || {
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -Dlogback.configurationFile="$ROOT_DIR/cross-test/lib/logback-test.xml" -cp "$cp" "$sc_class" >>"$test_log" 2>&1 || {
       cat "$test_log" >&2
       return 1
     }

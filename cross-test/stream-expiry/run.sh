@@ -132,6 +132,8 @@ EOF
     mkdir -p "$OUT/src/test/java/com/example/streamexpiry/model/chassis/grpcserver"
     cp "$TESTDATA/StreamExpiryBehaviorTest.java" \
       "$OUT/src/test/java/com/example/streamexpiry/model/chassis/grpcserver/StreamExpiryBehaviorTest.java"
+    mkdir -p "$OUT/src/test/resources"
+    cp "$ROOT_DIR/cross-test/lib/logback-test.xml" "$OUT/src/test/resources/logback-test.xml"
     cp "$TESTDATA/pom.xml" "$OUT/pom.xml"
 
     echo "==> Running generated Java stream-expiry behavior test"

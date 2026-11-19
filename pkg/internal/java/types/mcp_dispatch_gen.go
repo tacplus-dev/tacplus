@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
@@ -1430,7 +1431,7 @@ func javaQuote(s string) string {
 			if r < 0x20 || r > 0x7e {
 				// Java string literals take UTF-16 code units, so anything
 				// outside the BMP is written as its surrogate pair.
-				for _, u := range utf16Units(r) {
+				for _, u := range utf16.Encode([]rune{r}) {
 					fmt.Fprintf(&b, `\u%04x`, u)
 				}
 				continue
@@ -1440,15 +1441,6 @@ func javaQuote(s string) string {
 	}
 	b.WriteByte('"')
 	return b.String()
-}
-
-// utf16Units returns r as one or two UTF-16 code units.
-func utf16Units(r rune) []uint16 {
-	if r < 0x10000 {
-		return []uint16{uint16(r)}
-	}
-	r -= 0x10000
-	return []uint16{uint16(0xd800 + (r >> 10)), uint16(0xdc00 + (r & 0x3ff))}
 }
 
 // javaIsMcpCarrier reports whether method is svc's generated MCP session

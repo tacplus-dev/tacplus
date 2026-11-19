@@ -795,7 +795,7 @@ func main() {
 	// Unwired C2S gRPC server: mandatory-auth wrapper with NO auth funcs.
 	// Clients assert the fail-closed rejection ("authorizer not configured")
 	// over the wire and that the handler is never reached.
-	unwiredSrv := grpc.NewServer()
+	unwiredSrv := grpc.NewServer() // nosemgrep: go.grpc.security.grpc-server-insecure-connection.grpc-server-insecure-connection -- loopback-only runtime-smoke fixture, never shipped; TLS is the chassis', tested by cert-stream (#582)
 	unwiredWrapper := server.NewContractApi(unwiredHandler{apiHandler: apiHandler{s: s}, s: s})
 	if unwiredWrapper.HasAuthorizer() {
 		fatal("unwired wrapper unexpectedly reports an authorizer")

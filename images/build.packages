@@ -1,0 +1,9 @@
+# The Debian packages the build image adds to the base image's
+# (images/base.packages; images/build.Dockerfile installs them). The image
+# carries nothing else but Debian's base system and what these depend on
+# (tacplus-packages-check, #554).
+dnsutils
+iproute2
+jbmc
+patch
+ripgrep

@@ -19,6 +19,7 @@ import (
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/collection"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
 // requiredZeroCheck returns the Go expression to check if a field is at its zero
@@ -851,6 +852,67 @@ func Validate%[1]s%[3]sWithDepth(m *%[1]s, depth int) error {
 	}
 
 `, goFieldName, goFieldName, errFunc, goFieldName)
+				}
+
+			case "assert_registrable_domain", "assert_not_address":
+				if err := parser.CheckSignInAssert(msg.Name, field, annotationName, annotationValue); err != nil {
+					return err
+				}
+				fn, what := "ValidateAssertRegistrableDomain", "must be a registrable domain name"
+				if annotationName == "assert_not_address" {
+					fn, what = "ValidateAssertNotAddress", "must not be address-shaped"
+				}
+				if field.IsRepeated {
+					fmt.Fprintf(b, `	// Validate %s (%s)
+	for i, v := range m.%s {
+		if v != "" {
+			if err := utils.%s(v); err != nil {
+				return protoerrors.NewErrMissingInvalidData(err, "field %s[%%d] %s", i)
+			}
+		}
+	}
+
+`, goFieldName, annotationName, goFieldName, fn, goFieldName, what)
+				} else {
+					fmt.Fprintf(b, `	// Validate %s (%s)
+	if m.%s != "" {
+		if err := utils.%s(m.%s); err != nil {
+			return protoerrors.NewErrMissingInvalidData(err, "field %s %s")
+		}
+	}
+
+`, goFieldName, annotationName, goFieldName, fn, goFieldName, goFieldName, what)
+				}
+
+			case "assert_enum_not_in":
+				if err := parser.CheckSignInAssert(msg.Name, field, annotationName, annotationValue); err != nil {
+					return err
+				}
+				for _, refused := range annotationValue.IntSliceValue {
+					if field.IsRepeated {
+						fmt.Fprintf(b, `	// Validate %s (assert_enum_not_in %d)
+	for i, val := range m.%s {
+		if int32(val) == %d {
+			return protoerrors.NewErrMissingInvalidData(nil, "field %s[%%d] must not be %%s", i, val.String())
+		}
+	}
+
+`, goFieldName, refused, goFieldName, refused, goFieldName)
+					} else if field.IsOptional {
+						fmt.Fprintf(b, `	// Validate %s (assert_enum_not_in %d)
+	if m.%s != nil && int32(*m.%s) == %d {
+		return protoerrors.NewErrMissingInvalidData(nil, "field %s must not be %%s", m.%s.String())
+	}
+
+`, goFieldName, refused, goFieldName, goFieldName, refused, goFieldName, goFieldName)
+					} else {
+						fmt.Fprintf(b, `	// Validate %s (assert_enum_not_in %d)
+	if int32(m.%s) == %d {
+		return protoerrors.NewErrMissingInvalidData(nil, "field %s must not be %%s", m.%s.String())
+	}
+
+`, goFieldName, refused, goFieldName, refused, goFieldName, goFieldName)
+					}
 				}
 
 			case "assert_gt":

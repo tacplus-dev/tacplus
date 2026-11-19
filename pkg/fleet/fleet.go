@@ -525,6 +525,8 @@ func isSysPackage(pkg string) bool {
 	switch pkg {
 	case "spec", "tokenrequest", "x509", "healthreport", "minter", "redolog", "servicehealth", "services", "entitlements", "accounting_method", "services_config", "tenant_config", "project_config", "mcp", "query", "logger", "host", "key", "jwk", "jwkview", "publicjwksview", "smbcert", "tlscert", "grpcconfig", "opalib", "accounting", "trace", "tags", "token", "tokencache", "ip", "http", "httpclient", "filesystem", "diskstore", "cloudidentity", "cloudvendor", "credpair", "alpn", "entitlement", "entitlementview", "errors", "outputformat", "tacplus", "eventbus_support", "memberport", "rotation":
 		return true
+	case "signin": // tacplus#224
+		return true
 	}
 	return false
 }

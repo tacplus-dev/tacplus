@@ -40,6 +40,35 @@ func writeJavaEnumDefinedValidation(b *strings.Builder, msg model.Message, field
 	return nil
 }
 
+// writeJavaEnumNotIn writes the (spec.assert_enum_not_in) checks (tacplus#224):
+// a value whose enum number is listed is refused, named by its constant (or
+// its number when the runtime does not know it). The shape is checked by
+// parser.CheckSignInAssert before this runs.
+func writeJavaEnumNotIn(b *strings.Builder, field model.Field, javaFieldName, getterName string, refused []int32) {
+	valueGetter := getterName + "Value"
+	for _, n := range refused {
+		fmt.Fprintf(b, "// Validate %s (assert_enum_not_in %d)\n", javaFieldName, n)
+		switch {
+		case field.IsRepeated:
+			fmt.Fprintf(b, "for (int i = 0; i < msg.%sList().size(); i++) {\n", valueGetter)
+			fmt.Fprintf(b, "if (msg.%sList().get(i) == %d) {\n", valueGetter, n)
+			fmt.Fprintf(b, "String name = msg.%sList().get(i).name();\n", getterName)
+			writeJavaValidationThrow(b, fmt.Sprintf("field %s[%%d] must not be %%s", javaFieldName), "i", fmt.Sprintf("\"UNRECOGNIZED\".equals(name) ? \"%d\" : name", n))
+			b.WriteString("}\n")
+			b.WriteString("}\n")
+		default:
+			cond := fmt.Sprintf("msg.%s() == %d", valueGetter, n)
+			if field.IsOptional {
+				cond = fmt.Sprintf("msg.has%s() && %s", javaFieldNameUpper(field.Name), cond)
+			}
+			fmt.Fprintf(b, "if (%s) {\n", cond)
+			fmt.Fprintf(b, "String name = msg.%s().name();\n", getterName)
+			writeJavaValidationThrow(b, fmt.Sprintf("field %s must not be %%s", javaFieldName), fmt.Sprintf("\"UNRECOGNIZED\".equals(name) ? \"%d\" : name", n))
+			b.WriteString("}\n")
+		}
+	}
+}
+
 func writeJavaNumericConstraintValidation(b *strings.Builder, msg model.Message, field model.Field, javaFieldName, getterName string, constraint *model.NumericConstraint) error {
 	if constraint == nil {
 		return nil

@@ -1485,6 +1485,27 @@ install_json_key_selftest() {
   cp "$SELFTESTS_SRC/rust/json_key_test.rs" "$output/tests/"
 }
 
+# install_signin_selftest drops the sign-in config self-test (tacplus#224) into
+# the main fixture's generated sys/signin package: `go test ./...` (go) and the
+# root crate's `cargo test --tests` in run_rust_spiffe_self_tests (rust) run it.
+install_signin_selftest() {
+  local output="$1"
+  local language="$2"
+  local pkg=""
+  case "$language" in
+    go)
+      pkg="$(find "$output" -type f -path '*/types/sys/signin/signin.pb.go' -print -quit)"
+      [[ -n "$pkg" ]] || die "main fixture (go): generated sys/signin package not found under $output"
+      cp "$SELFTESTS_SRC/go/signin_validate_test.go" "$(dirname "$pkg")/"
+      ;;
+    rust)
+      [[ -f "$output/Cargo.toml" ]] || die "main fixture (rust): generated crate not found under $output"
+      mkdir -p "$output/tests"
+      cp "$SELFTESTS_SRC/rust/signin_validate_test.rs" "$output/tests/"
+      ;;
+  esac
+}
+
 # install_backpressure_selftests copies the fixture's self-tests into the
 # generated packages they drive. Java: the subscribe test beside the AgentState
 # StateClient (its topic iterator), the W2S test beside the AgentUploadApi W2S
@@ -2482,6 +2503,7 @@ for language in $(fixture_languages base); do
   assert_extraction_output "$output_root" "$language"
   install_extraction_selftest "$output_root" "$language"
   install_json_key_selftest "$output_root" "$language"
+  install_signin_selftest "$output_root" "$language"
   echo "==> Compiling $language cross-test fixture"
   compile_current_output "$output_root" "$language" "$dir/tacplus"
   if [[ "$language" == go ]]; then

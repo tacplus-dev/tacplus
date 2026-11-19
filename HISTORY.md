@@ -143,3 +143,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue Go approval chassis template: appendSingular's wire-encoding reinterpretations trip gosec G115 (HIGH) in every generated Go project (5 sites) (#755)
 - 2026-11-19 looper issue rotation Java self-test bidiBothWaysAcrossLifetimes: stream ends UNAUTHENTICATED (stream credential expired) mid-way on a loaded runner (#840)
 - 2026-11-19 looper issue Generated Go chassis test TestKeepaliveOverrideDoesNotGOAWAYGeneratedClient waits 140 s of real time: every generated model's go test ./... pays it (#842)
+- 2026-11-19 looper issue rotation Rust self-test rust_rotation_server_streaming_across_lifetimes: Recv after 160 ticks gets PermissionDenied on a loaded runner (#877)

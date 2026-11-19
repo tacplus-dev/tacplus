@@ -6,6 +6,7 @@ package formatter
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,9 +43,17 @@ func Format(lang, dir string) error {
 
 // indentFiles walks dir, reads each file with the given extension, applies
 // codefile.IndentCode to auto-indent based on brace nesting, and writes the
-// result back.
+// result back. Every read and write goes through an os.Root, so no path
+// resolves outside dir, and a symlink is never written through (gosec G703;
+// tacplus#578).
 func indentFiles(dir, ext string, lang codefile.Language) error {
-	files, err := collectFiles(dir, ext)
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", dir, err)
+	}
+	defer r.Close()
+
+	files, err := collectFiles(r, ext)
 	if err != nil {
 		return fmt.Errorf("collecting %s files: %w", ext, err)
 	}
@@ -56,15 +65,16 @@ func indentFiles(dir, ext string, lang codefile.Language) error {
 		zap.String("ext", ext),
 		zap.Int("count", len(files)))
 
-	for _, path := range files {
-		content, err := os.ReadFile(path)
+	for _, rel := range files {
+		path := filepath.Join(dir, rel)
+		content, err := r.ReadFile(rel)
 		if err != nil {
 			return fmt.Errorf("reading %s: %w", path, err)
 		}
 
 		indented := codefile.IndentCode(lang, string(content))
 
-		if err := os.WriteFile(path, []byte(indented), 0644); err != nil {
+		if err := r.WriteFile(rel, []byte(indented), 0644); err != nil {
 			return fmt.Errorf("writing %s: %w", path, err)
 		}
 	}
@@ -81,15 +91,16 @@ func formatPython(dir string) error {
 	return run(tool, []string{"."}, dir)
 }
 
-// collectFiles walks dir and returns absolute paths of files with the given extension.
-func collectFiles(dir, ext string) ([]string, error) {
+// collectFiles walks r and returns the paths, relative to it, of the regular
+// files with the given extension. A symlink is not followed or collected.
+func collectFiles(r *os.Root, ext string) ([]string, error) {
 	var files []string
-	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+	err := fs.WalkDir(r.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() && filepath.Ext(path) == ext {
-			files = append(files, path)
+		if d.Type().IsRegular() && filepath.Ext(rel) == ext {
+			files = append(files, filepath.FromSlash(rel))
 		}
 		return nil
 	})

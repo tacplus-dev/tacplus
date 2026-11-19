@@ -25,6 +25,15 @@ the looper then marks it `promoted` or `declined` here with the date.
   a string and `jmlSpecs` writes none: they are fuzzed only. A validator that measures `getXBytes().size()` (the same
   bytes; protobuf-java caches them) would let ESC prove them. The same holds for `assert_float` (`in`/`not_in` still
   stream over a lambda) and the element bounds of repeated fields (checked in a loop ESC needs an invariant for).
+- **TypeScript: `required_if_eq` on an enum sibling declared in another file** (2026-11-09, #464): the fix resolves
+  the protobuf-es member against the enums of the message's own file, and for an enum declared elsewhere drops the
+  `UPPER_SNAKE(EnumName)_` prefix when the value carries it, which is wrong for an enum whose values do not all share
+  it. `helpers.ts` also imports only its own file's enums (`getEnumNames(pf.Enums)`), so such a check may not compile
+  at all. Not verified: no fixture has the case. When the kitchensink (#196) lands, give it one, compiled with `tsc`.
+- **The generated TypeScript model's `npm install` warns** (2026-11-09, #464): npm 11 reports `protobufjs`'s
+  postinstall as an install script not yet covered by `allowScripts`, so every consumer's install of a generated
+  model prints `npm warn install-scripts`. `current-generation` now holds only the `tsc` build to a clean log. Either
+  the generated `package.json` names the script it allows, or the dependency on `protobufjs` goes, if nothing needs it.
 - **CI's own jobs read `build.lock` instead of floating `build:latest`** (2026-11-12, #340): the build pipeline
   (tacplus-dev/build) runs this repository's gates in the image `build.lock` pins by digest, but
   `.github/workflows/nightly-gates.yml`, `nightly-security.yml`, `nightly-fixes.yml`, `site.yml` and

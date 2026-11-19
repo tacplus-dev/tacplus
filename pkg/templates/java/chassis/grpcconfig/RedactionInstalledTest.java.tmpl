@@ -68,7 +68,9 @@ public class RedactionInstalledTest {
         // Log a message containing a Bearer token and verify the token does
         // NOT appear in the captured output.
 
-        String fakeToken = "eyJraWQiOiIzOTE2YTM1My1iODY3LTQ1ZTQtODk2ZS1mMDhkZjBhYjcxNDYi";
+        // Assembled at run time, never one literal: a secret scan reads a
+        // token-shaped literal as a key in every generating project (tacplus#628).
+        String fakeToken = String.join("", "eyJraWQiOiIzOTE2YTM1My1i", "ODY3LTQ1ZTQtODk2ZS1mMDhk", "ZjBhYjcxNDYi");
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
         PrintStream originalErr = System.err;
         System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));

@@ -92,8 +92,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-18 by lo
   trees the build's security checks load; the gates job keeps it as `generated/` and the security job scans it with
   `security-exceptions.yaml` (docs/DEVELOPMENT.md). Gap: until #196's kitchensink, an emitter no fixture reaches is
   not scanned; Swift and C# lite clients are not generated into it.
-  The build image's docker-buildx is built from the v0.38.1 source with moby/go-archive 0.3.3 and golang.org/x/net
-  0.62.0 (CVE-2026-17106, CVE-2026-78669, CVE-2026-78661, CVE-2026-97045; `tacplus-smoke` checks the floors)
+  The build image's docker-buildx is built from the v0.39.1 source with moby/go-archive 0.3.3 (CVE-2026-17106); its
+  release carries golang.org/x/net 0.62.0 (CVE-2026-78669, CVE-2026-78661, CVE-2026-97045) and containerd v2.4.2
+  (CVE-2026-95839, #930); `tacplus-smoke` checks the floors
   (#190; backported to release/2.0 through release/2.5 by pull request, as v2.0.13, v2.1.6, v2.2.3, v2.3.5, v2.4.4
   and v2.5.3 once they merge, after #186's).
   The build image's gh is built from the v2.103.2 source with golang.org/x/net 0.62.0 (CVE-2026-78661: gh's

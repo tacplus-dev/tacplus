@@ -331,8 +331,9 @@ open, so this is what bounds a stream whose caller never renews its token, or
 cannot because its access was revoked, to one token lifetime. A handler sees
 its stream end the usual way: the stream context is cancelled and further
 sends and receives fail. Unary calls are checked once per call and are not
-cut. (Rust: streams on handler-provided `additional_services` routes are not
-yet covered.)
+cut. A Rust handler's own `additional_services` routes are covered too: the
+server cannot tell their unary calls from their streams, so every call on those
+routes, unary included, ends at its token's `exp` (tacplus#931).
 
 Auth-disabled calls bypass token lookup.
 

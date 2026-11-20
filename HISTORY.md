@@ -169,3 +169,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue Release workflow marks every patch release Latest: a 2.4 backport took Latest from 2.6 (#337)
 - 2026-11-19 looper issue gosec G703 (HIGH, CWE-22) at pkg/formatter/formatter.go:67: the indenter writes generated files back through unconfined paths (#578)
 - 2026-11-19 looper issue TypeScript: required_if_eq on an enum sibling emits the proto value name (EvictionPolicy.EVICTION_POLICY_LRU), so the generated model of cross-test/proto does not compile (#464)
+- 2026-11-19 looper issue semgrep run-shell-injection (HIGH) at .github/workflows/images.yml:74: github.event.inputs.rebuild interpolated into a run: script (#584)

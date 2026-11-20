@@ -26,10 +26,11 @@ for t in protoc-gen-go protoc-gen-go-grpc protoc-gen-grpc-java protoc-gen-es pro
 done
 # docker-buildx is built from source with dependencies bumped past advisories
 # its release has not taken yet (build.Dockerfile, buildx stage): it must
-# start, and carry each module at least at its floor.
+# start, and carry each module at least at its floor, and the modules its
+# release moved past an advisory (containerd, #930).
 docker buildx version
 buildx=/usr/local/libexec/docker/cli-plugins/docker-buildx
-for floor in github.com/moby/go-archive@v0.3.0 golang.org/x/net@v0.62.0; do
+for floor in github.com/containerd/containerd/v2@v2.4.2 github.com/moby/go-archive@v0.3.0 golang.org/x/net@v0.62.0; do
   mod=${floor%@*} min=${floor#*@}
   have=$(go version -m "$buildx" | awk -v m="$mod" '$1 == "dep" && $2 == m { print $3 }')
   [[ -n "$have" && "$(printf '%s\n%s\n' "$min" "$have" | sort -V | head -n 1)" == "$min" ]] \

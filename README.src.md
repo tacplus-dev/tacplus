@@ -34,10 +34,10 @@ authorization, builds the caller identity, and only then calls your code.
 Release binaries for Linux, macOS and Windows (amd64 and arm64) are on
 [GitHub Releases](https://github.com/tacplus-dev/tacplus/releases), each with
 `checksums.txt`; `tacplus upgrade` keeps an installed binary on the newest
-patch of its MAJOR.MINOR line. The container image carries tacplus and every
-protoc plugin it drives, so a build can run it as its own generate step:
-
---8<-- "docs/snippets/install-container.md"
+patch of its MAJOR.MINOR line. The `ghcr.io/tacplus-dev/tacplus/tacplus`
+image is deprecated: its tags stay as they are and it is never pushed again,
+so `tacplus:2.3` stays at `2.3.24` and takes none of this line's later
+patches.
 
 From source, with Go, `just` and `protoc`:
 

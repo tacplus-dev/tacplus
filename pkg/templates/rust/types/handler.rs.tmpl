@@ -171,6 +171,16 @@ pub trait Handler: Send + Sync + 'static {
         None
     }
 
+    /// The full gRPC paths ("/pkg.Service/Method") of the streaming rpcs
+    /// (client-, server- or bidi-streaming) among additional_services()'
+    /// routes. The server ends each at the exp of the token it opened with,
+    /// UNAUTHENTICATED (API.md); the other routes' calls are not cut. A server
+    /// layer cannot tell unary from streaming, so None (the default) ends every
+    /// call on those routes at its token's exp, unary ones included.
+    fn additional_streaming_paths(&self) -> Option<Vec<String>> {
+        None
+    }
+
     /// Called during graceful shutdown. Drain in-flight work and release resources.
     async fn shutdown(&self);
 }

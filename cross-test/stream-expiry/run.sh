@@ -8,6 +8,8 @@
 # seconds out and is never rotated, while the handler keeps the stream open.
 # The server must end each one at the token's exp with UNAUTHENTICATED; a server
 # that checks the token only at open leaves all three open and the leg fails.
+# Rust runs the three shapes again on a handler's own additional_services route
+# (tacplus#931), which Go's and Java's server-wide interceptors cover by design.
 # Java, Go and Rust also run the member port's leg (tacplus#321, #322): a member
 # tunnel stream that is not rotated ends at exp with UNAUTHENTICATED and a reset
 # of its local connection.
@@ -112,6 +114,8 @@ EOF
     grep -q "StreamCredentialExpiryLayer" "$OUT/chassis/grpcserver/src/authorizer.rs" \
       || die "rust grpcserver StreamCredentialExpiryLayer missing"
     grep -q "STREAMING_RPC_PATHS" "$OUT/s2sm/mod.rs" || die "rust ServiceManager STREAMING_RPC_PATHS missing"
+    grep -q "fn stream_credential_expiry_layer(" "$OUT/s2sm/mod.rs" \
+      || die "rust ServiceManager stream_credential_expiry_layer missing"
     cp "$TESTDATA/stream_expiry_behavior_test.rs" "$OUT/s2sm/stream_expiry_behavior_test.rs"
     printf '\n#[cfg(test)]\nmod stream_expiry_behavior_test;\n' >> "$OUT/s2sm/mod.rs"
 

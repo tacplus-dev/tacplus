@@ -329,12 +329,52 @@ func TestRustServiceManagerEndsStreamsAtCredentialExpiry(t *testing.T) {
 	for _, want := range []string{
 		"pub const STREAMING_RPC_PATHS: &[&str]",
 		"range .StreamingPaths",
-		"server.layer(StreamCredentialExpiryLayer::new(",
+		"StreamCredentialExpiryLayer::new(",
 		"STREAMING_RPC_PATHS.iter()",
+		"server.layer(stream_credential_expiry_layer(",
 	} {
 		if !strings.Contains(tmpl, want) {
 			t.Errorf("service_manager.rs.tmpl missing %q: streams would outlive their opening token", want)
 		}
+	}
+}
+
+// tacplus#931: a stream on a handler's own additional_services route ends at
+// its token's exp too. The layer learns the handler's streaming paths from the
+// handler, or, when it names none, polices every route outside the generated
+// services, which the ServiceManager lists by gRPC service name.
+func TestRustServiceManagerEndsHandlerRouteStreamsAtCredentialExpiry(t *testing.T) {
+	rendered := renderRustServiceManagerForTest(t, smTemplateData{
+		ServiceLabel:          "tasks",
+		HasGrpc:               true,
+		HasTlsGrpc:            true,
+		HasServiceHealthState: true,
+		GrpcServices: []grpcServiceEntry{
+			{TraitName: "Tasks", WrapperVar: "wrapper_tasks", GrpcServiceName: "tasks.TasksService"},
+			{TraitName: "Daemon", WrapperVar: "wrapper_daemon", GrpcServiceName: "tasks.DaemonService", IsC2D: true},
+		},
+	})
+	for _, want := range []string{
+		"const GENERATED_GRPC_SERVICES: &[&str] = &[\n    \"tasks.TasksService\",\n];",
+		"layer.with_handler_routes(GENERATED_GRPC_SERVICES.iter().map(|s| s.to_string()), handler_streaming_paths)",
+		"let additional_routes = handler.additional_services();",
+		"handler.additional_streaming_paths(),",
+		"let router = if let Some(additional_routes) = additional_routes {",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("rendered Rust ServiceManager missing %q: a handler route's stream would outlive its token", want)
+		}
+	}
+	if strings.Contains(rendered, "\"tasks.DaemonService\"") {
+		t.Errorf("GENERATED_GRPC_SERVICES lists a c2d service, which the TLS server does not serve")
+	}
+
+	handler, err := loadTemplate("handler.rs.tmpl")
+	if err != nil {
+		t.Fatalf("loadTemplate handler.rs.tmpl: %v", err)
+	}
+	if !strings.Contains(handler, "fn additional_streaming_paths(&self) -> Option<Vec<String>> {\n        None\n    }") {
+		t.Errorf("handler.rs.tmpl must declare additional_streaming_paths, defaulting to None (police every handler route)")
 	}
 }
 

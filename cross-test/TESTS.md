@@ -34,7 +34,10 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   stream opened with a token about 3 s from `exp` that is never rotated, while
   the handler holds every stream open; each must be ended by the server at the
   token's `exp` with `UNAUTHENTICATED`. A control stream with an hour-long token
-  stays open past that window. Each language also runs the member port's leg
+  stays open past that window. Rust runs the same streams again on a handler's
+  own `additional_services` route, served beside the generated service behind
+  the ServiceManager's `stream_credential_expiry_layer` (tacplus#931). Each
+  language also runs the member port's leg
   (`cross-test/memberport`'s `MemberPortStreamExpiryTest`, tacplus#321, and its
   Go and Rust ports, #322): a member
   tunnel stream that is not rotated ends at `exp` with `UNAUTHENTICATED`, no

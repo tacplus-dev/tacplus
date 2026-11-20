@@ -936,7 +936,10 @@ where
 // authorization header, an unparsable token, or no exp claim passes through
 // untouched and the wrapper's own verification decides. Unary rpcs are never
 // touched; a tower layer cannot tell unary from streaming, so the
-// ServiceManager hands it the full gRPC paths of its streaming rpcs.
+// ServiceManager hands it the full gRPC paths of its streaming rpcs. A
+// handler's own additional_services routes are not in the model: given their
+// streaming paths it polices those, and given none every call on those routes
+// is ended at exp like a stream, so no handler stream outlives its token.
 
 /// Status message a stream ended by its credential's expiry carries.
 pub const STREAM_CREDENTIAL_EXPIRED: &str = "stream credential expired";
@@ -944,13 +947,63 @@ pub const STREAM_CREDENTIAL_EXPIRED: &str = "stream credential expired";
 /// Tower layer that ends streaming rpcs at their opening token's `exp`.
 #[derive(Clone)]
 pub struct StreamCredentialExpiryLayer {
+    paths: Arc<PolicedPaths>,
+}
+
+/// Which calls a [`StreamCredentialExpiryLayer`] ends at exp.
+struct PolicedPaths {
     /// Full gRPC paths ("/pkg.Service/Method") of the streaming rpcs to police.
-    streaming_paths: Arc<HashSet<String>>,
+    streaming: HashSet<String>,
+    /// When set, the gRPC services ("pkg.Service") generated from the model:
+    /// a path under none of them, nor under health, is a handler's own
+    /// additional_services route whose streams the handler did not name, and
+    /// is policed whatever its call type.
+    generated_services: Option<HashSet<String>>,
+}
+
+impl PolicedPaths {
+    fn polices(&self, path: &str) -> bool {
+        if self.streaming.contains(path) {
+            return true;
+        }
+        let Some(generated) = &self.generated_services else {
+            return false;
+        };
+        match path.strip_prefix('/').and_then(|p| p.split_once('/')) {
+            Some((service, _)) => service != "grpc.health.v1.Health" && !generated.contains(service),
+            None => true,
+        }
+    }
 }
 
 impl StreamCredentialExpiryLayer {
     pub fn new(streaming_paths: impl IntoIterator<Item = String>) -> Self {
-        Self { streaming_paths: Arc::new(streaming_paths.into_iter().collect()) }
+        Self {
+            paths: Arc::new(PolicedPaths {
+                streaming: streaming_paths.into_iter().collect(),
+                generated_services: None,
+            }),
+        }
+    }
+
+    /// Also police the routes a handler serves beside the generated services
+    /// (`generated_services`, "pkg.Service"): the streaming paths it names
+    /// (`handler_streaming_paths`), or, when it names none (None), every call
+    /// on a route outside the generated services and health, unary included.
+    pub fn with_handler_routes(
+        self,
+        generated_services: impl IntoIterator<Item = String>,
+        handler_streaming_paths: Option<Vec<String>>,
+    ) -> Self {
+        let mut streaming = self.paths.streaming.clone();
+        let generated_services = match handler_streaming_paths {
+            Some(paths) => {
+                streaming.extend(paths);
+                None
+            }
+            None => Some(generated_services.into_iter().collect()),
+        };
+        Self { paths: Arc::new(PolicedPaths { streaming, generated_services }) }
     }
 }
 
@@ -958,7 +1011,7 @@ impl<S> tower::Layer<S> for StreamCredentialExpiryLayer {
     type Service = StreamCredentialExpiryService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        StreamCredentialExpiryService { inner, streaming_paths: self.streaming_paths.clone() }
+        StreamCredentialExpiryService { inner, paths: self.paths.clone() }
     }
 }
 
@@ -966,7 +1019,7 @@ impl<S> tower::Layer<S> for StreamCredentialExpiryLayer {
 #[derive(Clone)]
 pub struct StreamCredentialExpiryService<S> {
     inner: S,
-    streaming_paths: Arc<HashSet<String>>,
+    paths: Arc<PolicedPaths>,
 }
 
 /// The `exp` claim of the bearer token in an authorization header value,
@@ -1024,7 +1077,7 @@ where
     }
 
     fn call(&mut self, req: hyper::http::Request<ReqBody>) -> Self::Future {
-        let deadline = if self.streaming_paths.contains(req.uri().path()) {
+        let deadline = if self.paths.polices(req.uri().path()) {
             bearer_expiration(req.headers().get("authorization").and_then(|v| v.to_str().ok()))
                 .and_then(expiry_deadline)
         } else {
@@ -2003,5 +2056,55 @@ mod authorizer_behavior_tests {
         let res = svc.ready().await.unwrap().call(req("/demo.DemoService/DoThing")).await.unwrap();
         assert!(res.headers().get("grpc-status").is_none(), "unary path must pass through");
         assert_eq!(reached.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    // A handler's additional_services routes (tacplus#931): when the handler
+    // names no streaming paths, every route outside the generated services and
+    // health is ended at exp; a generated unary rpc still is not. When it names
+    // them, exactly those are.
+    #[tokio::test]
+    async fn stream_credential_expiry_polices_handler_routes() {
+        use tower::{Layer, Service, ServiceExt};
+        let key = new_test_key();
+        let bearer = signed_token(&key, now_plus(-5), SERVICE_NAME, |_| {});
+        let inner = tower::service_fn(|_req: hyper::http::Request<tonic::body::Body>| async move {
+            Ok::<_, std::convert::Infallible>(hyper::http::Response::new(tonic::body::Body::empty()))
+        });
+        let req = |path: &str| {
+            hyper::http::Request::builder()
+                .uri(path)
+                .header("authorization", bearer.as_str())
+                .body(tonic::body::Body::empty())
+                .unwrap()
+        };
+        let generated = || vec!["demo.DemoService".to_string()];
+        let base = || StreamCredentialExpiryLayer::new(vec!["/demo.DemoService/Watch".to_string()]);
+
+        let mut undeclared = base().with_handler_routes(generated(), None).layer(inner.clone());
+        for (path, ended) in [
+            ("/demo.DemoService/Watch", true),
+            ("/demo.DemoService/DoThing", false),
+            ("/grpc.health.v1.Health/Watch", false),
+            ("/hand.Written/Follow", true),
+            ("/hand.Written/Get", true),
+        ] {
+            let res = undeclared.ready().await.unwrap().call(req(path)).await.unwrap();
+            let status = res.headers().get("grpc-status").and_then(|v| v.to_str().ok());
+            assert_eq!(status == Some("16"), ended, "undeclared handler routes: {path}");
+        }
+
+        let mut declared = base()
+            .with_handler_routes(generated(), Some(vec!["/hand.Written/Follow".to_string()]))
+            .layer(inner);
+        for (path, ended) in [
+            ("/demo.DemoService/Watch", true),
+            ("/demo.DemoService/DoThing", false),
+            ("/hand.Written/Follow", true),
+            ("/hand.Written/Get", false),
+        ] {
+            let res = declared.ready().await.unwrap().call(req(path)).await.unwrap();
+            let status = res.headers().get("grpc-status").and_then(|v| v.to_str().ok());
+            assert_eq!(status == Some("16"), ended, "declared handler streaming paths: {path}");
+        }
     }
 }

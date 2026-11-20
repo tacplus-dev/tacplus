@@ -61,11 +61,6 @@ the looper then marks it `promoted` or `declined` here with the date.
   https://sum.golang.org/tile/8/0/x192/982: stream error: stream ID 139; INTERNAL_ERROR`), not on code. A
   `go mod download` with a short retry before each Go fixture build (or a warmed module cache in the build image)
   would keep one network hiccup from failing a gate.
-- **End Rust `additional_services` streams at their token's exp** (2026-11-01, #260): the Go and Java servers end
-  every streaming rpc at its opening token's `exp`, handler-provided services included, because gRPC tells their
-  interceptors the call type. The Rust `StreamCredentialExpiryLayer` is a tower layer that cannot, so it polices only
-  the generated `STREAMING_RPC_PATHS`, and a stream on a handler's own `additional_services` route still outlives its
-  token. Reading the streaming paths off the handler's routes (or a handler-declared list) would close it.
 - **Long MCP sessions end at their token's exp** (2026-11-01, #260): the MCP session carrier is a bidi stream, so
   like every stream it now ends at the opening token's `exp` (Go, Java, Rust). An MCP client holding one session
   for longer than a token lifetime must reconnect with a fresh token; #259's make-before-break rotation is the

@@ -36,6 +36,24 @@ source "$ROOT_DIR/cross-test/lib/java-compile.sh"
 
 die() { echo "c2d-server check FAILED: $*" >&2; exit 1; }
 
+# Each Java self-test JVM runs under a deadline, so a hung run fails this leg
+# within minutes instead of holding the gate until its own timeout (#778).
+# On the deadline the JVM gets SIGQUIT first, which writes its thread dump to
+# the log, then SIGKILL. Usage: run_java_selftest <log> <java command...>;
+# returns the JVM's status, 124 or 137 on the deadline.
+JAVA_SELFTEST_TIMEOUT="${C2D_JAVA_SELFTEST_TIMEOUT:-600}"
+run_java_selftest() {
+  local log="$1" rc=0
+  shift
+  timeout --signal=QUIT --kill-after=20 "$JAVA_SELFTEST_TIMEOUT" "$@" >"$log" 2>&1 || rc=$?
+  if [[ $rc -eq 124 || $rc -eq 137 ]]; then
+    echo "the self-test JVM did not exit within ${JAVA_SELFTEST_TIMEOUT}s; its last lines and thread dump:" >&2
+    grep -v -E "^\s*$" "$log" | grep -B20 -m1 "^Full thread dump" >&2 || tail -40 "$log" >&2
+    sed -n '/^Full thread dump/,/^JNI global refs/p' "$log" | head -300 >&2
+  fi
+  return "$rc"
+}
+
 LANGUAGES="go java rust swift"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -51,7 +69,15 @@ if [[ ! -x "$TACPLUS_BIN" || -z "${TACPLUS_BIN_PREBUILT:-}" ]]; then
 fi
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# The go, java and rust self-tests serve on a socket of this run's own, not on
+# the declared socket_path: the gates run this script's legs at once, and on
+# the one shared path a leg's daemon took another's socket (#778). They still
+# check the generated constant is the declared path. Under /tmp, as a Unix
+# socket path is short. The swift leg dials the declared path, which only it
+# serves.
+SOCK_DIR="$(mktemp -d /tmp/tacplus-c2d.XXXXXX)"
+export C2D_SELFTEST_SOCKET="$SOCK_DIR/daemon.sock"
+trap 'rm -rf "$WORK" "$SOCK_DIR"' EXIT
 
 generate() {
   local language="$1"
@@ -140,12 +166,50 @@ run_java() {
   echo "==> Running generated Java standalone C2D host self-test"
   # grpc-netty logs every frame at DEBUG; keep it in a log and show the
   # self-test's own verdict.
-  if ! "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$compile_dir/target/classes:$(cat "$compile_dir/classpath")" \
-      com.example.c2dserver.daemon.C2DStandaloneSelfTest >"$WORK/java/selftest.log" 2>&1; then
+  if ! run_java_selftest "$WORK/java/selftest.log" "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$compile_dir/target/classes:$(cat "$compile_dir/classpath")" \
+      com.example.c2dserver.daemon.C2DStandaloneSelfTest; then
     grep -E "FAIL|Exception|check\(s\) failed" "$WORK/java/selftest.log" | head -40
     die "generated Java standalone C2D host self-test failed"
   fi
   grep "C2D standalone host self-test passed" "$WORK/java/selftest.log" || die "self-test exited 0 without its pass line"
+
+  # The self-test against two mutants of the generated chassis C2DServer,
+  # compiled ahead of it on the classpath (#778). A host slow to bind, as on a
+  # loaded runner, must still pass; a host that binds and never restricts its
+  # socket must fail, naming the socket's mode.
+  local javac_cmd="javac"
+  if [[ -n "$java_env" && -x "${java_env#JAVA_HOME=}/bin/javac" ]]; then
+    javac_cmd="${java_env#JAVA_HOME=}/bin/javac"
+  fi
+  local chmod_line='Files.setPosixFilePermissions(socketPath, PosixFilePermissions.fromString("rw-------"));'
+  local bind_line='server = builder.build().start();'
+  grep -qF "$chmod_line" "$C2D" || die "C2DServer.java no longer restricts the socket with: $chmod_line"
+  grep -qF "$bind_line" "$C2D" || die "C2DServer.java no longer binds with: $bind_line"
+  local mutant
+  for mutant in slow-bind no-chmod; do
+    local mdir="$WORK/java/mutant-$mutant"
+    mkdir -p "$mdir/src" "$mdir/classes"
+    case "$mutant" in
+      slow-bind) sed "s|$bind_line|Thread.sleep(15_000); $bind_line|" "$C2D" >"$mdir/src/C2DServer.java" ;;
+      no-chmod) sed "s|$chmod_line|// chmod stubbed away|" "$C2D" >"$mdir/src/C2DServer.java" ;;
+    esac
+    "$javac_cmd" -nowarn -d "$mdir/classes" -cp "$compile_dir/target/classes:$(cat "$compile_dir/classpath")" \
+      "$mdir/src/C2DServer.java" >"$mdir/javac.log" 2>&1 \
+      || { cat "$mdir/javac.log"; die "the $mutant C2DServer mutant did not compile"; }
+    echo "==> Running the Java self-test against a $mutant C2DServer"
+    local rc=0
+    run_java_selftest "$mdir/selftest.log" "$java_cmd" --sun-misc-unsafe-memory-access=allow \
+      -cp "$mdir/classes:$compile_dir/target/classes:$(cat "$compile_dir/classpath")" \
+      com.example.c2dserver.daemon.C2DStandaloneSelfTest || rc=$?
+    case "$mutant" in
+      slow-bind)
+        [[ $rc -eq 0 ]] && grep -q "C2D standalone host self-test passed" "$mdir/selftest.log" \
+          || { grep -E "FAIL|Exception|check\(s\) failed" "$mdir/selftest.log" | head -40; die "the self-test failed a host that binds after 15s"; } ;;
+      no-chmod)
+        [[ $rc -ne 0 ]] && grep -q "FAIL: no owner-only (rw-------) c2d socket at .* (mode [-rwx]\{9\})" "$mdir/selftest.log" \
+          || { grep -E "FAIL|Exception|passed" "$mdir/selftest.log" | head -40; die "the self-test did not fail, with the socket's mode, a host that never restricts its socket"; } ;;
+    esac
+  done
 
   echo "==> c2d-server check PASSED (java)"
 }
@@ -208,10 +272,12 @@ run_swift() {
   rm -f "$socket"
   "$DAEMON/daemon" >"$DAEMON/daemon.log" 2>&1 &
   local daemon_pid=$!
+  # The bound only guards a hung daemon: on a loaded runner its start can take
+  # well past 10s (#778).
   local tries=0
   until [[ -S "$socket" ]]; do
     kill -0 "$daemon_pid" 2>/dev/null || { cat "$DAEMON/daemon.log"; die "Go daemon exited before listening"; }
-    (( ++tries < 250 )) || { kill "$daemon_pid"; die "no c2d socket at $socket"; }
+    (( ++tries < 3000 )) || { kill "$daemon_pid"; die "no c2d socket at $socket"; }
     sleep 0.04
   done
 

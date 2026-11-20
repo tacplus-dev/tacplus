@@ -8,9 +8,11 @@
 # pkg/** runs full until per-language sets (pkg/internal/<lang>/** to that
 # language's generation, compile and cross-tests) are confirmed to cover
 # everything such a path can break (PROPOSALS.md).
-# full's minutes: 79 on an 8-CPU runner from a cold target/cross-test,
-# current-generation about 33 of them on its worker pool with one cargo test per
-# Rust fixture (tacplus#812; was 2h55m, 2h26m), and a margin for a slower runner.
+# full's minutes: the nightly of 2026-11-20 (main 28d76028, GitHub's 4-CPU
+# runner, GATES_JOBS=2) ran every gate in 2753 s (46 minutes), current-generation
+# 2202 s of them on its worker pool (tacplus#812; was 2h55m, 2h26m serially), the
+# next longest memberport 565 s. The build pool's 8-CPU runner took 5502 s for
+# the same set (pipeline 3095538807, red), so the margin stays.
 full:
   run: just gates
   minutes: 100

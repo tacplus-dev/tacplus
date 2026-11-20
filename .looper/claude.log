@@ -1,0 +1,269 @@
+= init
+> Bash cd /builds/looper/tacplus/issues/812; git diff; gh run list --repo tacplus-dev/tacplus --workflow 'Nightly gates' --limit 4; gh issue view 812 --repo tacplus-dev/tacplus --comments | tail -30
+< diff --git a/gates.yaml b/gates.yaml index 20e669d7..f6ab906f 100644 --- a/gates.yaml +++ b/gates.yaml @@ -11,6 +11,8 @@  # full's minutes: 79 on an 8-CPU runner from a cold target/cross-test,  # current-generation about 33 of them on its worker pool with one cargo test per  # Rust fixture (tacplus#...
+The 2026-11-20 nightly succeeded in 53m43s. Let me read its per-gate table.
+> Bash cd /tmp; gh run view 44764867452 --repo tacplus-dev/tacplus --json jobs,headSha -q '.headSha, (.jobs[]|.name+" "+.startedAt+" "+.completedAt+" "+.conclusion)'; gh run view 44764867452 --repo tacplus-dev/tacplus --log > /tmp/n812.log 2>&1; wc -l /tmp/n812.log; grep -n -i -E 'wall|OVERALL' /tmp/n812.l...
+< 28d76028e2a611fce6251d667c41e23fdc8de76b just gates (build image) 2026-11-20T15:35:53Z 2026-11-20T16:29:34Z success 11411 /tmp/n812.log 11366:just gates (build image)	UNKNOWN STEP	2026-11-20T16:29:16.7874963Z === gate wall times (GATES_JOBS=2) === 11385:just gates (build image)	UNKNOWN STEP	2026-11-...
+> Bash sed -n '11360,11390p' /tmp/n812.log | cut -f3- ; grep -m3 -n -E 'nproc|CPUs|cpus' /tmp/n812.log | cut -c1-200; grep -n -E '^.*(==> |=== .* rc=)' /tmp/n812.log | head -3 | cut -f3-
+< 2026-11-20T16:29:16.7871845Z ok   determinism: the same commit, before and after 2.6.1, generates byte-identical output 2026-11-20T16:29:16.7872595Z ok   determinism: both builds ran the pinned 2.6.0 (the output's version stamp) 2026-11-20T16:29:16.7873110Z ok   determinism: the build never fetched ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/812; grep -n -i -E 'workers|jobs=|cpu' /tmp/n812.log | head -10 | cut -f3- | cut -c1-200; grep -n 'GATES_JOBS' -r justfile scripts cross-test/lib 2>/dev/null | head; cat .github/workflows/nightly*.yml 2>/dev/null | grep -n -E 'runs-on|GATES_JOBS'
+< 2026-11-20T16:20:53.3812892Z    Compiling cpufeatures v0.3.1 2026-11-20T16:29:16.7874963Z === gate wall times (GATES_JOBS=2) === justfile:173:# names its legs (cert-stream: cert-stream-go ...), concurrently: GATES_JOBS scripts/gates_test.go:76:		"GATES_JOBS="+cap, scripts/gates_test.go:93:var gateTi...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/812; grep -E '=== [a-z0-9-]+ rc=' /tmp/n812.log | cut -f3- ; sed -n 1,80p scripts/gates.sh
+< 2026-11-20T15:43:23.0283607Z === protoc-check rc=0 === 2026-11-20T15:44:10.5654652Z === soundness rc=0 === 2026-11-20T15:46:33.3540936Z === test rc=0 === 2026-11-20T16:20:53.2660733Z === current-generation rc=0 === 2026-11-20T16:20:53.2672487Z === determinism rc=0 === 2026-11-20T16:20:53.3845369Z ==...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash nproc; uptime; which just go cargo java swift mvn 2>&1 | head; cat /sys/fs/cgroup/cpu.max 2>/dev/null
+< 2  19:03:50 up 15 days, 13:31,  0 users,  load average: 0.34, 0.42, 1.05 /usr/local/bin/just /usr/local/go/bin/go /usr/local/cargo/bin/cargo /opt/java/openjdk/bin/java /usr/bin/swift /usr/local/bin/mvn 150000 100000
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/812; sed -n 1,40p gates.yaml; grep -rn -i "minutes" docs/DEVELOPMENT.md README.md CONTRIBUTING.md 2>/dev/null | head; grep -n -A12 '#812' PROPOSALS.md | head -40
+< # The gate map of tacplus (tacplus#266; tacplus-dev/looper README, Gates scaled # to the diff): the gates a land runs, chosen by the paths its diff changes. A # path no set names, a path under full's paths, a change to this file, the # nightly gates and every release run full. Each set's run is a sh...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/812; grep -rn -E 'minutes|5400|GATES_TIMEOUT' --include=*.go --include=*.sh --include=justfile --include=*.yml . 2>/dev/null | grep -v -E '^./(target|node_modules)' | grep -v '_test.go:.*minutes of' | head -20
+< ./scripts/with-tree-lock.sh:24:# the child's log. TACPLUS_TREE_LOCK_TIMEOUT (seconds, default 5400) caps the ./scripts/with-tree-lock.sh:46:timeout="${TACPLUS_TREE_LOCK_TIMEOUT:-5400}" ./scripts/gates_test.go:156:// GATES_TIMEOUT, with its children, and fails naming itself (tacplus#893): a ./scripts...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/812; python3 - <<'EOF' p='gates.yaml' s=open(p).read() old=s[s.index("# full's minutes:"):s.index("full:\n")] new="""# full's minutes: the nightly of 2026-11-20 (main 28d76028, GitHub's 4-CPU # runner, GATES_JOBS=2) ran every gate in 2753 s (46 minutes), current-gene...
+< diff --git a/gates.yaml b/gates.yaml index 20e669d7..bc9b0bf7 100644 --- a/gates.yaml +++ b/gates.yaml @@ -8,12 +8,13 @@  # pkg/** runs full until per-language sets (pkg/internal/<lang>/** to that  # language's generation, compile and cross-tests) are confirmed to cover  # everything such a path can...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/812; git commit -qam "gates.yaml: full's minutes 100 -> 45, from the 2026-11-20 nightly (#812)  The first nightly with every #812 cut and #843 in it (main 28d76028) ran the full gate set in 2753 s on GitHub's 4-CPU runner (GATES_JOBS=2), current-generation 2202 s of ...
+< pid 1197
+> Bash cd /builds/looper/tacplus/issues/812; git log --oneline -2; sleep 60; cat /tmp/b812.log
+= task_started
+= task_notification
+< 31978acb gates.yaml: full's minutes 100 -> 45, from the 2026-11-20 nightly (#812) 28d76028 HISTORY.md: #843 (looper) [2026-11-20T19:04:24Z] checkpoint of #812 (a build) pushed to looper/tacplus-812:  3 files changed, 421 insertions(+), 4 deletions(-) [2026-11-20T19:04:24Z] build requested: tacplus 3...
+= thinking_tokens
+= thinking_tokens
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Bash while kill -0 1197 2>/dev/null; do sleep 20; done; cat /tmp/b812.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bvo0oe0zy. Output is being written to: /builds/looper/tacplus/homes/looper-812/tmp/claude-61000/-builds-looper-tacplus-issues-812/ab023b79-abb3-45fd-a517-38ffab8ad3fa/tasks/bvo0oe0zy.output. You will be notified when it completes. To check interim output, use R...
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 812 --checkpoint "DONE: commit 31978acb sets gates.yaml full minutes 100->45 from the 2026-11-20 nightly (run 44764867452, main 28d76028, 4-CPU GitHub runner, GATES_JOBS=2): every gate in 2753 s, current-generation 2202 s, memberport 565 s, OVERALL f...
+< [2026-11-20T19:05:40Z] checkpoint of #812 (a step) pushed to looper/tacplus-812:  3 files changed, 434 insertions(+), 4 deletions(-)
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/812; git status --short; git diff --stat origin/main origin/looper/tacplus-812 2>/dev/null || (git fetch -q origin looper/tacplus-812 && git diff --stat origin/main FETCH_HEAD)
+<  .looper/claude.log |  87 ++++++++++++++  .looper/prompt.md  | 342 +++++++++++++++++++++++++++++++++++++++++++++++++++++  gates.yaml         |   9 +-  3 files changed, 434 insertions(+), 4 deletions(-)
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash until ! kill -0 1197 2>/dev/null; do sleep 30; done; cat /tmp/b812.log
+= task_started
+= background_tasks_changed
+= task_updated
+< Command did not complete within its 600s timeout and was moved to the background (ID: bewox8tub). Output is being written to: /builds/looper/tacplus/homes/looper-812/tmp/claude-61000/-builds-looper-tacplus-issues-812/ab023b79-abb3-45fd-a517-38ffab8ad3fa/tasks/bewox8tub.output. You will be notified w...
+> Monitor while kill -0 1197 2>/dev/null; do sleep 30; done; echo "build done"; tail -5 /tmp/b812.log
+= permission_denied
+< This Bash command contains multiple operations. The following parts require approval: kill -0 1197, tail -5 /tmp/b812.log
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 19); do kill -0 1197 2>/dev/null || break; sleep 30; done; cat /tmp/b812.log
+= task_started
+= task_notification
+< [2026-11-20T19:04:24Z] checkpoint of #812 (a build) pushed to looper/tacplus-812:  3 files changed, 421 insertions(+), 4 deletions(-) [2026-11-20T19:04:24Z] build requested: tacplus 31978ac, the gates full (gates.yaml changed) the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807...
+> Bash for i in $(seq 19); do kill -0 1197 2>/dev/null || break; sleep 30; done; tail -3 /tmp/b812.log
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< [2026-11-20T19:14:35Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807 on 31978ac: running since 11m [2026-11-20T19:24:42Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807 on 31978ac: running si...
+> Bash for i in $(seq 19); do kill -0 1197 2>/dev/null || break; sleep 30; done; tail -3 /tmp/b812.log
+= task_started
+= task_notification
+< [2026-11-20T19:14:35Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807 on 31978ac: running since 11m [2026-11-20T19:24:42Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807 on 31978ac: running si...
+> Bash for i in $(seq 19); do kill -0 1197 2>/dev/null || break; sleep 30; done; tail -3 /tmp/b812.log; date -u
+= task_started
+= task_notification
+< [2026-11-20T19:24:42Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807 on 31978ac: running since 21m [2026-11-20T19:34:50Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807 on 31978ac: running si...
+= thinking_tokens
+= thinking_tokens
+The pool build has run about 50 minutes, longer than 45. I'm checking whether GitLab's API shows its job durations while I keep waiting for the verdict.
+> Bash curl -s "https://gitlab.com/api/v4/projects/tacplus-dev%2Fbuild/pipelines/3095538807/jobs" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d if isinstance(d,dict) else [(j["name"],j["status"],j["started_at"],j["duration"],(j.get("runner") or {}).get("description")) for j in d])'
+< {'message': '404 Project Not Found'}
+> Bash for i in $(seq 19); do kill -0 1197 2>/dev/null || break; sleep 30; done; tail -3 /tmp/b812.log; date -u
+= task_started
+= task_notification
+< [2026-11-20T19:34:50Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807 on 31978ac: running since 31m [2026-11-20T19:44:57Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807 on 31978ac: running si...
+> Bash for i in $(seq 19); do kill -0 1197 2>/dev/null || break; sleep 30; done; tail -3 /tmp/b812.log; date -u
+= task_started
+= task_notification
+< [2026-11-20T19:44:57Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807 on 31978ac: running since 41m [2026-11-20T19:55:04Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807 on 31978ac: running si...
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 19); do kill -0 1197 2>/dev/null || break; sleep 30; done; tail -3 /tmp/b812.log; date -u
+= task_started
+= task_notification
+< [2026-11-20T19:55:04Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807 on 31978ac: running since 51m [2026-11-20T20:05:12Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807 on 31978ac: running si...
+> Bash for i in $(seq 19); do kill -0 1197 2>/dev/null || break; sleep 30; done; tail -4 /tmp/b812.log; date -u
+= task_started
+= task_notification
+< [2026-11-20T19:55:04Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807 on 31978ac: running since 51m [2026-11-20T20:05:12Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807 on 31978ac: running si...
+> Bash for i in $(seq 19); do kill -0 1197 2>/dev/null || break; sleep 30; done; tail -3 /tmp/b812.log; date -u
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< [2026-11-20T20:35:38Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807 on 31978ac: running since 1h32m verdict: failure: the gates full (gates.yaml) exited 1: === OVERALL fail=1 ===; error: recipe `gates` failed on line 189 with exit code 1 build ...
+= thinking_tokens
+= thinking_tokens
+The pool build failed after 5502 s, which is just past the 5400 s gate timeout (GATES_TIMEOUT), so a gate probably hung or ran out of time. I'm checking whether the output says which gate.
+> Bash cat /tmp/b812.log | grep -v 'waiting for the verdict'; ls /builds/tacplus-dev/looper/looper-runs/20261120T190259Z-issue-812/ 2>&1
+< [2026-11-20T19:04:24Z] checkpoint of #812 (a build) pushed to looper/tacplus-812:  3 files changed, 421 insertions(+), 4 deletions(-) [2026-11-20T19:04:24Z] build requested: tacplus 31978ac, the gates full (gates.yaml changed) the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3095538807...
+> Bash cd /builds/tacplus-dev/looper/looper-runs/20261120T190259Z-issue-812/; ls -la builds; tail -20 builds.log; find builds -type f | head
+< total 24 drwxr-xr-x 2 looper-812 looper-812 4096 Nov 20 20:36 . drwx------ 4 looper-812 looper-812 4096 Nov 20 19:05 .. -rw-r--r-- 1 root       root        129 Nov 20 20:36 20261120T190424Z-1737114048.ended -rw-r--r-- 1 root       root         71 Nov 20 19:04 20261120T190424Z-1737114048.started -rw-...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/812; for n in 843 893 757 657; do echo "== #$n"; gh issue view $n --repo tacplus-dev/tacplus --comments 2>/dev/null | grep -E 'The manager (merged|did not)|ran [0-9]+ s|set=|build job' | cut -c1-300 | tail -4; done
+= task_started
+= task_notification
+< == #843 The manager did not merge [`looper/tacplus-843`](https://github.com/tacplus-dev/tacplus/tree/looper/tacplus-843): red, nothing merges without green gates. Nothing of it is merged; the branch stays, and it is sent back with the failure: this issue stays approved, and its next report fixes it ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/812; git reset -q --soft HEAD~1 && git restore --staged gates.yaml && sed -i 's/^  minutes: 45$/  minutes: 100/' gates.yaml && python3 - <<'EOF' p='gates.yaml'; s=open(p).read() s=s.replace("# next longest memberport 565 s; the build pool's 8-CPU runner has twice the...
+< diff --git a/gates.yaml b/gates.yaml index 20e669d7..8201e5b4 100644 --- a/gates.yaml +++ b/gates.yaml @@ -8,9 +8,11 @@  # pkg/** runs full until per-language sets (pkg/internal/<lang>/** to that  # language's generation, compile and cross-tests) are confirmed to cover  # everything such a path can ...
+Now I'm posting the measurements and the decision the hub needs to make to the issue, and labelling it needs-decision.
+> Bash cd /builds/looper/tacplus/issues/812; cat > /tmp/c812.md <<'EOF' **#812: the gates are 46 minutes on GitHub's 4-CPU runner but 92 (red) on the build pool, which I can't see into. This needs a decision.**  **Measured** - **Nightly gates, 2026-11-20** (GitHub run 44764867452, main 28d76028, the first ...
+= task_started
+= task_notification
+< https://github.com/tacplus-dev/tacplus/issues/812#issuecomment-7050055581 https://github.com/tacplus-dev/tacplus/issues/812
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 812 --checkpoint "needs-decision (comment 7050055581): the 2026-11-20 nightly (run 44764867452, 4-CPU GitHub runner, GATES_JOBS=2) ran the full gates green in 2753 s (current-generation 2202 s), but the pool --build of main plus a gates.yaml note (pi...
+< [2026-11-20T20:38:02Z] checkpoint of #812 (a step) pushed to looper/tacplus-812:  3 files changed, 582 insertions(+), 3 deletions(-)
+I couldn't close #812 on this run. The full gates now take about 46 minutes on GitHub's 4-CPU runner, but on the build pool they took 92 minutes and failed. So I've asked the hub how the 45-minute target should be measured, labelled the issue `needs-decision`, and landed nothing.
+
+**What I measured**
+- **Last night's run on main** (GitHub run 44764867452, the first with #843): every gate passed, in 2753 s (45.9 min) on a 4-CPU runner. current-generation took 2202 s of that, down from 2h26m when it ran serially. The next longest gate, memberport, took 565 s.
+- **This run's `--build` on the build pool** (pipeline 3095538807): failed after 5502 s with `OVERALL fail=1`. The only change from main was a gates.yaml comment plus `minutes: 100 -> 45`, and no gate reads `minutes`.
+  - I can't see which gate failed, because the pool's log isn't readable from here. 5502 s is just past the 5400 s gate timeout, so my guess is that current-generation was stopped for running past 90 minutes. That is not confirmed.
+  - If it is right, every land that runs the full gates on the pool will fail the same way, not just this one.
+- **Earlier full-gate builds on the pool** ranged from 2990 s to 8786 s. With twice GitHub's CPUs it is about twice as slow and varies widely, which points to load on the pool rather than the gates themselves.
+
+**Where I left it**
+- I put `full: minutes` back at 100, since writing 45 would contradict the only pool measurement. A note with these numbers is in gates.yaml, uncommitted on `looper/tacplus-812`.
+- Comment 7050055581 asks the hub two things:
+  1. Does "under 45 minutes on the 8-CPU runner" mean an 8-CPU runner doing one build at a time, or the shared pool as it is loaded today? I recommended the former: measure there, and if it's under 45, set 45 and close the issue.
+  2. Can the looper read the pool's gate logs? This repeats an unanswered earlier comment (7026403554); without the logs I can't find the failing or slowest gate.
+
+There is no patch release, since only gate config changed, and no service handlers were touched.
+= success: I couldn't close #812 on this run. The full gates now take about 46 minutes on GitHub's 4-CPU runner, but on the build pool they took 92 minutes and failed. So I've asked the hub how the 45-minute target should be measured, labelled the issue `needs-decision`, and landed nothing.
+
+**What I measured**
+- **Last night's run on main** (GitHub run 44764867452, the first with #843): every gate passed, in 2753 s (45.9 min) on a 4-CPU runner. current-generation took 2202 s of that, down from 2h26m when it ran serially. The next longest gate, memberport, took 565 s.
+- **This run's `--build` on the build pool** (pipeline 3095538807): failed after 5502 s with `OVERALL fail=1`. The only change from main was a gates.yaml comment plus `minutes: 100 -> 45`, and no gate reads `minutes`.
+  - I can't see which gate failed, because the pool's log isn't readable from here. 5502 s is just past the 5400 s gate timeout, so my guess is that current-generation was stopped for running past 90 minutes. That is not confirmed.
+  - If it is right, every land that runs the full gates on the pool will fail the same way, not just this one.
+- **Earlier full-gate builds on the pool** ranged from 2990 s to 8786 s. With twice GitHub's CPUs it is about twice as slow and varies widely, which points to load on the pool rather than the gates themselves.
+
+**Where I left it**
+- I put `full: minutes` back at 100, since writing 45 would contradict the only pool measurement. A note with these numbers is in gates.yaml, uncommitted on `looper/tacplus-812`.
+- Comment 7050055581 asks the hub two things:
+  1. Does "under 45 minutes on the 8-CPU runner" mean an 8-CPU runner doing one build at a time, or the shared pool as it is loaded today? I recommended the former: measure there, and if it's under 45, set 45 and close the issue.
+  2. Can the looper read the pool's gate logs? This repeats an unanswered earlier comment (7026403554); without the logs I can't find the failing or slowest gate.
+
+There is no patch release, since only gate config changed, and no service handlers were touched.
+= usage: {"claude-opus-5-5":{"inputTokens":68,"outputTokens":13576,"cacheReadInputTokens":1865088,"cacheCreationInputTokens":59005,"webSearchRequests":0,"costUSD":1.1168495999999999,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":4506,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}

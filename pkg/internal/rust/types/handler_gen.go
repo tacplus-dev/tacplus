@@ -36,6 +36,10 @@ type grpcServiceEntry struct {
 	HandleConfigName string // "identity_config"
 	// Proto package name (snake_case)
 	PackageName string // "identity"
+	// GrpcServiceName is the full gRPC service name ("pkg.Service") its
+	// paths start with. The StreamCredentialExpiryLayer tells a generated
+	// route from a handler-provided additional_services route by it.
+	GrpcServiceName string // "identity.IdentityService"
 	// gRPC server type
 	ServerType string // "IdentityServiceServer"
 	// tonic server module name (snake_case service name + "_server")
@@ -333,6 +337,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 			GetterName:               disambiguated + "_grpc_impl",
 			HandleConfigName:         disambiguated + "_config",
 			PackageName:              svc.PackageName,
+			GrpcServiceName:          svc.PackageName + "." + svc.ServiceName,
 			ServerType:               tonicName + "Server",
 			ServerModName:            tonicServerModName,
 			ModPath:                  fmt.Sprintf("%s::%s", typesBase, svc.PackageName),

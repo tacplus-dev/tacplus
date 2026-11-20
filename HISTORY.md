@@ -167,3 +167,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue Java generator: utf16Units' bounded rune -> uint16 conversions trip gosec G115 (HIGH, 2 sites) (#756)
 - 2026-11-19 looper issue MCP-6 refuses Python client builds of any C2S service: python is gated as an MCP host, but it is a full-client target (#665)
 - 2026-11-19 looper issue Release workflow marks every patch release Latest: a 2.4 backport took Latest from 2.6 (#337)
+- 2026-11-19 looper issue gosec G703 (HIGH, CWE-22) at pkg/formatter/formatter.go:67: the indenter writes generated files back through unconfined paths (#578)

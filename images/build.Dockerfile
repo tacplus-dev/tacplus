@@ -13,6 +13,10 @@ ARG GO_VERSION=1.26
 ARG RUST_VERSION=1
 ARG NODE_VERSION=24
 ARG SWIFT_VERSION=6.1.3
+# The docker CLI is copied from docker:DOCKER_VERSION-cli, built with whatever
+# Go upstream used: 29.9.3's go1.26.10 carried CVE-2026-97054 (HIGH), fixed in
+# 29.10.0's go1.27.4 (#901). A rebuild takes the newest 29.x; images/smoke.sh
+# checks its Go against each line's fixed release (go_stdlib_check).
 ARG DOCKER_VERSION=29
 # docker-buildx is built from its release's source rather than copied from
 # the docker CLI image: its releases (through 0.38.1) vendor moby/go-archive

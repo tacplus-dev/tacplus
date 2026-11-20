@@ -4,6 +4,14 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **The c2d-server swift leg's socket is one path per machine, not per run** (2026-11-15, #778): the go, java and
+  rust self-tests now serve on a socket under a per-run `mktemp -d` (`C2D_SELFTEST_SOCKET`, set by
+  `cross-test/c2d-server/run.sh`): `just gates` runs the four legs at once, and on the one declared path
+  (`/tmp/tacplus-c2d-server-check/daemon.sock`) a leg's daemon took another's socket, which hung the Java slow-bind
+  run on main. The swift leg still serves its Go daemon on the declared path, because it tests the Swift
+  `C2DClient()` default dial. Two gate runs in different checkouts on one runner can still collide there:
+  `scripts/with-tree-lock.sh` serializes one checkout only. A machine-wide lock around that leg, or a Swift
+  default taken from an env override in the test only, would isolate it.
 - **Rust self-tests once per content hash in the other gates that run them** (2026-11-17, #843):
   `current-generation` runs each Rust chassis crate's self-tests once per gate for each source they test
   (`cross-test/lib/rust-selftest-once.sh`). `cross-test/consumer-contract/run.sh` runs some of the same crates'

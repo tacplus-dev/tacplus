@@ -34,7 +34,9 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   stream opened with a token about 3 s from `exp` that is never rotated, while
   the handler holds every stream open; each must be ended by the server at the
   token's `exp` with `UNAUTHENTICATED`. A control stream with an hour-long token
-  stays open past that window.
+  stays open past that window. Rust runs the same streams again on a handler's
+  own `additional_services` route, served beside the generated service behind
+  the ServiceManager's `stream_credential_expiry_layer` (tacplus#931).
 - `external-token` (`cross-test/external-token/run.sh`): behavioral gate for the
   generated external-audience token accessor (`token_for_external` /
   `TokenForExternal` / `tokenForExternal`) in Go, Java, and Rust. A mock token

@@ -30,6 +30,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,7 +46,11 @@ import (
 	types "example.com/c2dserver/model/types/svc/c2dserver"
 )
 
-const socketPath = "/tmp/tacplus-c2d-server-check/daemon.sock"
+// declaredSocketPath is the fixture's socket_path. The test serves on the
+// path run.sh gives it in C2D_SELFTEST_SOCKET, one per run: the gates run the
+// go, java, rust and swift legs at once, and on one shared path one leg's
+// daemon took another's socket (#778).
+const declaredSocketPath = "/tmp/tacplus-c2d-server-check/daemon.sock"
 
 type recordingDaemon struct {
 	unaryHits     atomic.Int32
@@ -82,8 +87,12 @@ func (d *recordingDaemon) GenerateLocalEvents(_ *servicemanager.Caller, req *typ
 }
 
 func TestGeneratedC2DStandaloneHostOverSocket(t *testing.T) {
+	socketPath := os.Getenv("C2D_SELFTEST_SOCKET")
+	if socketPath == "" {
+		socketPath = declaredSocketPath
+	}
 	// A stale file at the socket path, as a crashed daemon leaves behind.
-	if err := os.MkdirAll("/tmp/tacplus-c2d-server-check", 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	// Clear whatever an aborted earlier run left (possibly a live-looking socket
@@ -96,14 +105,14 @@ func TestGeneratedC2DStandaloneHostOverSocket(t *testing.T) {
 	}
 
 	// A daemon passes the generated constant for the declared socket_path.
-	if sm.C2DSocketPath != socketPath {
-		t.Fatalf("sm.C2DSocketPath = %q, want the declared socket_path %q", sm.C2DSocketPath, socketPath)
+	if sm.C2DSocketPath != declaredSocketPath {
+		t.Fatalf("sm.C2DSocketPath = %q, want the declared socket_path %q", sm.C2DSocketPath, declaredSocketPath)
 	}
 	daemon := &recordingDaemon{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- sm.ServeC2DStandalone(ctx, sm.C2DSocketPath, daemon) }()
+	go func() { serveErr <- sm.ServeC2DStandalone(ctx, socketPath, daemon) }()
 
 	// Ready once the stale file has been replaced by a socket AND the socket is
 	// locked down. Two waits, two bounds: the bind can take long on a loaded

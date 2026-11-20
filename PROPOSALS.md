@@ -784,6 +784,16 @@ the looper then marks it `promoted` or `declined` here with the date.
   both and the leg passes (some ten minutes, mostly npm and tsc). Its python leg waits on #665, its rust leg on
   #829 and its swift legs on the linker-warning entry above. Once each leg passes, adding it to `gates.yaml` is a
   cost decision.
+- **`export_to`: an exported state root lists the packages allowed to import it** (2026-11-20, #928):
+  `(spec.service_state).export` is a bool, so once it is true any package that declares a `state_import` (or a
+  file-level `state_imports`) of the root gets an RO client, tenant-owned ones included. kernel#71 needs the
+  deployment config's redacted copy read by the Admiral only. Proposed: add `repeated string export_to = 8` to
+  `StateAnnotation`, holding importer proto packages. Generation fails for an import from an unlisted package, both in
+  `ValidateStateConsistency` and in `ResolveStatesFromProto`. The generated state service's `auth_services` is
+  intersected with the list, so the owner's server never authorizes an unlisted caller. With no list, `export: true`
+  means what it does today. The questions for Jody are on the issue: does `export_to` require or imply `export`; are
+  importers named by package; does the list also govern tenant-pinned TenantConfig reads and the event-C2S topics of
+  an exported root; does `registry.json` carry it.
 
 ## Promoted / declined
 - **`just generated <dir>`: tacplus's security checks scan its generated output** (2026-11-09, #376): promoted

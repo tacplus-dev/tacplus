@@ -172,3 +172,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue semgrep run-shell-injection (HIGH) at .github/workflows/images.yml:74: github.event.inputs.rebuild interpolated into a run: script (#584)
 - 2026-11-19 looper issue Rust DiskStore chassis appendlog.rs opens its log with create(true) and no truncate choice: clippy::suspicious_open_options (HIGH, failing the policy) in every generated Rust model with a DiskStore (6 sites) (#853)
 - 2026-11-19 looper issue consumer-build-typescript fails on main: c2d case's expected 'no grpc_w2s_client edges' WARN fails the clean-log check (#839)
+- 2026-11-19 looper issue gosec G122 (HIGH, CWE-367) at cmd/sysrename/main.go:111: os.WriteFile on a filepath.Walk path (symlink TOCTOU) (#568)

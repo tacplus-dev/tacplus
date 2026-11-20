@@ -176,3 +176,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue gosec G703 (HIGH, CWE-22) at cmd/sysrename/main.go:111: os.WriteFile to a walked path, not confined to -root (#577)
 - 2026-11-19 looper issue runtime-smoke: run.sh fails at setup, copies consumer-contract/proto/platform/health.proto that #161 removed (#657)
 - 2026-11-19 looper issue Published base images were not rebuilt with #711: base:latest and base:2.6 still carry linux-libc-dev 6.12.116-1 (six HIGH), failing the nightly security sweep on main (#757)
+- 2026-11-20 looper issue current-generation: run a chassis self-test once per gate when its rendered source is identical across fixtures (content hash) (#843)

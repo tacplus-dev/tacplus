@@ -54,6 +54,28 @@ impl Stream {
     }
 }
 
+/// Bounds a peer's stream by its progress, never by its total time (#919): a
+/// read or write that moves no byte for this many milliseconds fails, and its
+/// error names the bound. A slowed stream runs for as long as it moves.
+pub static STALL_MS: AtomicU64 = AtomicU64::new(60_000);
+
+/// Puts each read and write on `s` under the stall bound.
+fn bound(s: &TcpStream, stall: Duration) {
+    let _ = s.set_read_timeout(Some(stall));
+    let _ = s.set_write_timeout(Some(stall));
+}
+
+/// An error of a read or write under the stall bound `timeout`, the bound named
+/// when it is why.
+fn stalled(timeout: std::io::Result<Option<Duration>>, e: std::io::Error) -> std::io::Error {
+    match (e.kind(), timeout) {
+        (ErrorKind::WouldBlock | ErrorKind::TimedOut, Ok(Some(stall))) => {
+            std::io::Error::new(e.kind(), format!("no byte moved in {:?}, the peer's stall bound: {}", stall, e))
+        }
+        _ => e,
+    }
+}
+
 /// What one side of a connection saw.
 #[derive(Debug, Clone, Default)]
 pub struct PeerResult {
@@ -90,7 +112,7 @@ pub fn send(s: &TcpStream, seed: u64, n: u64, max_chunk: usize, pause: Duration)
         let pick = (chunks.next() as usize) << 8 | chunks.next() as usize;
         let len = ((n - sent) as usize).min(1 + pick % max_chunk);
         stream.fill(&mut buf[..len]);
-        out.write_all(&buf[..len])?;
+        out.write_all(&buf[..len]).map_err(|e| stalled(s.write_timeout(), e))?;
         sent += len as u64;
         if !pause.is_zero() {
             thread::sleep(pause);
@@ -110,7 +132,7 @@ pub fn receive(s: &TcpStream, seed: u64, pause: &dyn Fn() -> u64) -> PeerResult 
         let n = match input.read(&mut buf) {
             Ok(0) => return PeerResult { received, ..Default::default() },
             Ok(n) => n,
-            Err(e) => return PeerResult::failed(received, &e),
+            Err(e) => return PeerResult::failed(received, &stalled(s.read_timeout(), e)),
         };
         if let Some(bad) = stream.check(&buf[..n]) {
             return PeerResult {
@@ -146,7 +168,7 @@ pub fn exchange_with(
         Ok(s) => s,
         Err(e) => return PeerResult::failed(0, &e),
     };
-    let _ = s.set_read_timeout(Some(Duration::from_secs(60)));
+    bound(&s, Duration::from_millis(STALL_MS.load(Ordering::SeqCst)));
     let writer_socket = s.try_clone().expect("clone socket");
     let writer = thread::spawn(move || send(&writer_socket, send_seed, send_bytes, max_chunk, send_pause));
     let r = receive(&s, expect_seed, &|| read_pause_ms);
@@ -176,6 +198,8 @@ pub struct Server {
     pub bytes_received: AtomicU64,
     pub results: Mutex<HashMap<usize, PeerResult>>,
     pub read_pause_ms: AtomicU64,
+    /// [`STALL_MS`] when the server started, for its pushes.
+    stall: Duration,
 }
 
 impl Server {
@@ -203,6 +227,7 @@ impl Server {
             bytes_received: AtomicU64::new(0),
             results: Mutex::new(HashMap::new()),
             read_pause_ms: AtomicU64::new(0),
+            stall: Duration::from_millis(STALL_MS.load(Ordering::SeqCst)),
         });
         let me = server.clone();
         thread::spawn(move || {
@@ -252,14 +277,20 @@ impl Server {
             return PeerResult::default();
         }
         let writer_socket = s.try_clone().expect("clone socket");
-        let writer = thread::spawn(move || {
-            // The reader's result records the connection's fate.
-            let _ = send(&writer_socket, push_seed, push_bytes, push_chunk, push_pause);
-        });
+        // The push is under the stall bound.
+        let _ = writer_socket.set_write_timeout(Some(self.stall));
+        let writer = thread::spawn(move || send(&writer_socket, push_seed, push_bytes, push_chunk, push_pause));
         let r = receive(s, expect_seed, &|| self.read_pause_ms.load(Ordering::SeqCst));
         self.bytes_received.fetch_add(r.received, Ordering::SeqCst);
-        let _ = writer.join();
-        r
+        // The push runs past the read side for as long as it moves. Otherwise
+        // the reader's result records the connection's fate; a stalled push is
+        // the server's own.
+        match writer.join() {
+            Ok(Err(e)) if r.error.is_none() && matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                PeerResult { error: Some(format!("push failed: {}", e)), error_kind: Some(e.kind()), ..r }
+            }
+            _ => r,
+        }
     }
 
     pub fn result(&self, id: usize) -> Option<PeerResult> {

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -90,8 +91,49 @@ func describe(err error) string {
 	return err.Error()
 }
 
+// peerStall bounds a peer's stream by its progress, never by its total time
+// (#919): a read or write that moves no byte for this long fails, and its
+// error names the bound. A slowed stream runs for as long as it moves. Zero
+// is the default, 60 seconds; a test may store a shorter one.
+var peerStall atomic.Int64
+
+func peerStallBound() time.Duration {
+	if d := time.Duration(peerStall.Load()); d > 0 {
+		return d
+	}
+	return 60 * time.Second
+}
+
+// stallConn puts each read and write under the stall bound.
+type stallConn struct {
+	*net.TCPConn
+	bound time.Duration
+}
+
+func (c stallConn) Read(b []byte) (int, error) {
+	_ = c.SetReadDeadline(time.Now().Add(c.bound))
+	n, err := c.TCPConn.Read(b)
+	return n, c.stalled(err)
+}
+
+func (c stallConn) Write(b []byte) (int, error) {
+	_ = c.SetWriteDeadline(time.Now().Add(c.bound))
+	n, err := c.TCPConn.Write(b)
+	return n, c.stalled(err)
+}
+
+func (c stallConn) stalled(err error) error {
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return fmt.Errorf("no byte moved in %v, the peer's stall bound: %w", c.bound, err)
+	}
+	return err
+}
+
 // peerSend sends n bytes of seed's stream in seeded chunk sizes, then half-closes.
-func peerSend(c *net.TCPConn, seed, n int64, maxChunk int, pause time.Duration) error {
+func peerSend(c interface {
+	io.Writer
+	CloseWrite() error
+}, seed, n int64, maxChunk int, pause time.Duration) error {
 	stream := newPeerStream(seed)
 	chunks := newPeerStream(seed ^ 0x5DEECE66D)
 	buf := make([]byte, maxChunk)
@@ -150,18 +192,14 @@ func exchangeWith(address net.Addr, sendSeed, sendBytes, expectSeed int64, maxCh
 	if err != nil {
 		return peerResult{firstMismatch: -1, err: describe(err)}
 	}
-	c := raw.(*net.TCPConn)
+	c := stallConn{raw.(*net.TCPConn), peerStallBound()}
 	defer c.Close()
-	_ = c.SetDeadline(time.Now().Add(60 * time.Second))
 	sendErr := make(chan error, 1)
 	go func() { sendErr <- peerSend(c, sendSeed, sendBytes, maxChunk, sendPause) }()
 	r := peerReceive(c, expectSeed, func() time.Duration { return readPause })
-	select {
-	case err := <-sendErr:
-		if r.err == "" && err != nil {
-			r.err = "send failed: " + describe(err)
-		}
-	case <-time.After(60 * time.Second):
+	// The send ends by itself: each of its writes is under the stall bound.
+	if err := <-sendErr; r.err == "" && err != nil {
+		r.err = "send failed: " + describe(err)
 	}
 	return r
 }
@@ -182,7 +220,9 @@ type peerServer struct {
 	expectSeed int64
 	pushChunk  int
 	pushPause  time.Duration
-	readPause  atomic.Int64 // nanoseconds
+	// stall is peerStallBound() when the server started, for its pushes.
+	stall     time.Duration
+	readPause atomic.Int64 // nanoseconds
 	// accepted counts connections: zero means nothing ever reached the protocol.
 	accepted      atomic.Int32
 	bytesReceived atomic.Int64
@@ -197,7 +237,7 @@ func newPeerServer(t *testing.T, mode peerMode, pushSeed, pushBytes, expectSeed 
 		t.Fatalf("peer server: %v", err)
 	}
 	s := &peerServer{lis: lis, mode: mode, pushSeed: pushSeed, pushBytes: pushBytes, expectSeed: expectSeed,
-		pushChunk: pushChunk, pushPause: pushPause, results: make(map[int32]peerResult)}
+		pushChunk: pushChunk, pushPause: pushPause, stall: peerStallBound(), results: make(map[int32]peerResult)}
 	t.Cleanup(func() { _ = lis.Close() })
 	go s.acceptLoop()
 	return s
@@ -270,17 +310,72 @@ func (s *peerServer) serve(id int32, c *net.TCPConn) {
 			}
 		}
 	}
-	done := make(chan struct{})
+	pushErr := make(chan error, 1)
 	go func() {
-		defer close(done)
-		// The reader's result records the connection's fate.
-		_ = peerSend(c, s.pushSeed, s.pushBytes, s.pushChunk, s.pushPause)
+		pushErr <- peerSend(stallConn{c, s.stall}, s.pushSeed, s.pushBytes, s.pushChunk, s.pushPause)
 	}()
 	r := peerReceive(c, s.expectSeed, s.pause)
 	s.bytesReceived.Add(r.received)
-	select {
-	case <-done:
-	case <-time.After(60 * time.Second):
+	// The push ends by itself, under the stall bound, however long it runs
+	// past the read side. Otherwise the reader's result records the
+	// connection's fate; a stalled push is the server's own.
+	if err := <-pushErr; r.err == "" && errors.Is(err, os.ErrDeadlineExceeded) {
+		r.err = "push failed: " + describe(err)
 	}
 	s.put(id, r)
+}
+
+// A slowed peer whose stream outlasts the stall bound many times over still
+// delivers every byte: the bound is on progress, never on the stream's total
+// time (#919). The client sends its few bytes at once and reads slowly while
+// the server pushes slowly, so the server's push outlives its read side too.
+func TestMemberPortPeerBoundsAStreamByProgressNotWallTime(t *testing.T) {
+	defer peerStall.Store(0)
+	peerStall.Store(int64(300 * time.Millisecond))
+	server := newPeerServer(t, pushMode, 61, 40*1024, 62, 1024, 50*time.Millisecond)
+	addr, err := net.ResolveTCPAddr("tcp", server.address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	r := exchangeWith(addr, 62, 4096, 61, 4096, 0, 20*time.Millisecond)
+	elapsed := time.Since(start)
+	if !r.ok(40 * 1024) {
+		t.Fatalf("a slowed stream, %v long against a %v stall bound: %v", elapsed, peerStallBound(), r)
+	}
+	if elapsed < 3*peerStallBound() {
+		t.Fatalf("the stream must outlast the stall bound several times over, took %v", elapsed)
+	}
+	waitFor(t, "the server's result", 10*time.Second, func() bool { return server.resultCount() == 1 })
+	if sr, _ := server.result(1); !sr.ok(4096) {
+		t.Fatalf("server: %v", sr)
+	}
+}
+
+// A peer that stops making progress is cut at the stall bound, and the error
+// says so.
+func TestMemberPortPeerNamesTheStallBound(t *testing.T) {
+	defer peerStall.Store(0)
+	peerStall.Store(int64(300 * time.Millisecond))
+	lis, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lis.Close()
+	go func() {
+		// Accepts, then neither reads nor writes.
+		c, err := lis.Accept()
+		if err == nil {
+			defer c.Close()
+			time.Sleep(10 * time.Second)
+		}
+	}()
+	start := time.Now()
+	r := exchangeWith(lis.Addr(), 1, 1024, 2, 1024, 0, 0)
+	if !strings.Contains(r.err, "stall bound") {
+		t.Fatalf("a stalled peer: %v", r)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("a stalled peer is cut at the stall bound, took %v", elapsed)
+	}
 }

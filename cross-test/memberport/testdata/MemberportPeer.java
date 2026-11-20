@@ -10,6 +10,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.util.SplittableRandom;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -57,6 +58,13 @@ final class MemberportPeer {
 
     enum Mode { ECHO, PUSH }
 
+    /**
+     * Bounds a peer's stream by its progress, never by its total time (#919):
+     * a read or a send that moves no byte for this long fails, and its error
+     * names the bound. A slowed stream runs for as long as it moves.
+     */
+    static volatile long stallMillis = 60_000;
+
     /** What one side of a connection saw. */
     static final class Result {
         final long received;
@@ -81,17 +89,22 @@ final class MemberportPeer {
 
     /** Sends {@code n} bytes of seed's stream in seeded chunk sizes, then half-closes. */
     static void send(Socket s, long seed, long n, int maxChunk, long pauseMillisPerChunk) throws IOException, InterruptedException {
+        send(s, seed, n, maxChunk, pauseMillisPerChunk, new AtomicLong());
+    }
+
+    /** {@link #send(Socket, long, long, int, long)}, counting the bytes written in {@code sent}. */
+    static void send(Socket s, long seed, long n, int maxChunk, long pauseMillisPerChunk, AtomicLong sent)
+            throws IOException, InterruptedException {
         Stream stream = new Stream(seed);
         SplittableRandom chunks = new SplittableRandom(seed ^ 0x5DEECE66DL);
         byte[] buf = new byte[maxChunk];
         OutputStream out = s.getOutputStream();
-        long sent = 0;
-        while (sent < n) {
-            int len = (int) Math.min(n - sent, 1 + chunks.nextInt(maxChunk));
+        while (sent.get() < n) {
+            int len = (int) Math.min(n - sent.get(), 1 + chunks.nextInt(maxChunk));
             stream.fill(buf, 0, len);
             out.write(buf, 0, len);
             out.flush();
-            sent += len;
+            sent.addAndGet(len);
             if (pauseMillisPerChunk > 0) {
                 Thread.sleep(pauseMillisPerChunk);
             }
@@ -129,9 +142,37 @@ final class MemberportPeer {
                     Thread.sleep(10);
                 }
             }
+        } catch (SocketTimeoutException e) {
+            return new Result(received, -1, "no byte moved in " + timeoutOf(s) + "ms, the peer's stall bound: " + e);
         } catch (Exception e) {
             return new Result(received, -1, e.toString());
         }
+    }
+
+    private static int timeoutOf(Socket s) {
+        try {
+            return s.getSoTimeout();
+        } catch (IOException e) {
+            return -1;
+        }
+    }
+
+    /**
+     * Waits for a sender for as long as it moves: false once it has written no
+     * byte for {@code stallMillis} (a blocked write cannot time out by itself;
+     * closing the socket ends it).
+     */
+    static boolean joinWhileMoving(Thread sender, AtomicLong sent, long stallMillis) throws InterruptedException {
+        long last = -1;
+        while (sender.isAlive()) {
+            long now = sent.get();
+            if (now == last) {
+                return false;
+            }
+            last = now;
+            sender.join(stallMillis);
+        }
+        return true;
     }
 
     /**
@@ -144,20 +185,24 @@ final class MemberportPeer {
 
     static Result exchange(InetSocketAddress address, long sendSeed, long sendBytes, long expectSeed,
             int maxChunk, long sendPauseMillis, long readPauseMillis) throws Exception {
+        long stall = stallMillis;
         try (Socket s = new Socket()) {
             s.connect(address, 10_000);
-            s.setSoTimeout(60_000);
+            s.setSoTimeout((int) stall);
             java.util.concurrent.atomic.AtomicReference<String> sendError = new java.util.concurrent.atomic.AtomicReference<>();
+            AtomicLong sent = new AtomicLong();
             Thread writer = new Thread(() -> {
                 try {
-                    send(s, sendSeed, sendBytes, maxChunk, sendPauseMillis);
+                    send(s, sendSeed, sendBytes, maxChunk, sendPauseMillis, sent);
                 } catch (Exception e) {
                     sendError.set(e.toString());
                 }
             }, "peer-client-send");
             writer.start();
             Result r = receive(s, expectSeed, readPauseMillis);
-            writer.join(60_000);
+            if (!joinWhileMoving(writer, sent, stall)) {
+                sendError.compareAndSet(null, "no byte moved in " + stall + "ms, the peer's stall bound");
+            }
             if (r.error == null && sendError.get() != null) {
                 return new Result(r.received, r.firstMismatch, "send failed: " + sendError.get());
             }
@@ -174,6 +219,8 @@ final class MemberportPeer {
         final long expectSeed;
         final int pushChunk;
         final long pushPauseMillis;
+        /** {@link MemberportPeer#stallMillis} when the server started, for its pushes. */
+        final long stallMillis = MemberportPeer.stallMillis;
         volatile long readPauseMillis;
         /** Connections accepted: zero means nothing ever reached the protocol. */
         final AtomicInteger accepted = new AtomicInteger();
@@ -240,9 +287,10 @@ final class MemberportPeer {
                     results.put(id, new Result(-1, -1, null));
                     return;
                 }
+                AtomicLong pushed = new AtomicLong();
                 Thread writer = new Thread(() -> {
                     try {
-                        send(s, pushSeed, pushBytes, pushChunk, pushPauseMillis);
+                        send(s, pushSeed, pushBytes, pushChunk, pushPauseMillis, pushed);
                     } catch (Exception ignored) {
                         // The reader's result records the connection's fate.
                     }
@@ -250,7 +298,12 @@ final class MemberportPeer {
                 writer.start();
                 Result r = receive(s, expectSeed, () -> readPauseMillis);
                 bytesReceived.addAndGet(r.received);
-                writer.join(60_000);
+                // The push runs past the read side for as long as it moves; a
+                // stalled push is the server's own failure.
+                if (!joinWhileMoving(writer, pushed, stallMillis) && r.error == null) {
+                    r = new Result(r.received, r.firstMismatch,
+                            "push failed: no byte moved in " + stallMillis + "ms, the peer's stall bound");
+                }
                 results.put(id, r);
             } catch (Exception e) {
                 results.put(id, new Result(0, -1, e.toString()));

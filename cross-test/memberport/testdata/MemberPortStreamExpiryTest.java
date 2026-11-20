@@ -6,6 +6,7 @@ package com.example.grid.model.chassis.memberport;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.example.grid.model.types.sys.memberport.Memberport.MemberChunk;
 import io.grpc.Status;
 import java.net.InetSocketAddress;
 import java.util.concurrent.atomic.AtomicReference;
@@ -34,15 +35,49 @@ class MemberPortStreamExpiryTest {
 
     @Test
     void anExpiredUnrotatedStreamEndsUnauthenticatedAtExpWithALocalReset() throws Exception {
+        // The token's life is the property under test, not a bound on the
+        // runner (#919): a loaded runner can spend a 3-second token before the
+        // session opens. Then the stream is refused at exp before it worked
+        // at all, which says nothing about expiry, so it is tried again on a
+        // token twice as long, up to MAX_TTL_SECONDS, named if it is reached.
+        for (long ttlSeconds = 3; ; ttlSeconds *= 2) {
+            if (expiresAtExp(ttlSeconds)) {
+                return;
+            }
+            if (ttlSeconds * 2 > MAX_TTL_SECONDS) {
+                throw new AssertionError("no session opened before its token's exp, on tokens of up to "
+                        + ttlSeconds + "s");
+            }
+        }
+    }
+
+    /** The longest token {@link #anExpiredUnrotatedStreamEndsUnauthenticatedAtExpWithALocalReset} tries. */
+    static final long MAX_TTL_SECONDS = 24;
+
+    /**
+     * One stream on a {@code ttlSeconds} token: false when it ended before its
+     * session opened (the token spent on a slow runner), else its checks.
+     */
+    boolean expiresAtExp(long ttlSeconds) throws Exception {
         MemberportPeer.Server behind = fixture.echo();
         InetSocketAddress port = fixture.member(MemberPortBehaviorTest.X).listen(MemberPortBehaviorTest.loopback0(), behind.address());
-        long ttlSeconds = 3;
         long exp = (System.currentTimeMillis() / 1000 + ttlSeconds) * 1000;
         MemberPortBehaviorTest.Raw r = new MemberPortBehaviorTest.Raw(fixture.rawChannel(port),
                 fixture.fleet.mint(MemberPortBehaviorTest.SVC, MemberPortBehaviorTest.X, MemberPortBehaviorTest.AUD, ttlSeconds));
-        MemberPortBehaviorTest.openSession(r);
+        MemberChunk first = r.send(MemberPortBehaviorTest.open()).poll(MemberPortBehaviorTest.Raw.NEXT_DEADLINE_MS);
+        if (first == null && r.closed.isDone() && r.closed.get().getCode() == Status.Code.UNAUTHENTICATED
+                && System.currentTimeMillis() >= exp - 250) {
+            return false;
+        }
+        assertTrue(first != null && !first.getSessionId().isEmpty(),
+                "the server's first chunk names the session: " + first + "; stream status " + r.closed.getNow(null));
         r.send(MemberPortBehaviorTest.data(new byte[] {1, 2, 3}));
-        assertArrayEquals(new byte[] {1, 2, 3}, r.next().getPayload().toByteArray(), "the stream works until exp");
+        MemberChunk echoed = r.poll(MemberPortBehaviorTest.Raw.NEXT_DEADLINE_MS);
+        if (echoed == null && System.currentTimeMillis() >= exp - 250) {
+            return false;
+        }
+        assertTrue(echoed != null, "the stream works until exp; stream status " + r.closed.getNow(null));
+        assertArrayEquals(new byte[] {1, 2, 3}, echoed.getPayload().toByteArray(), "the stream works until exp");
         Status s = r.status(ttlSeconds * 1000 + 5_000);
         long late = System.currentTimeMillis() - exp;
         MemberPortBehaviorTest.assertRefused(Status.Code.UNAUTHENTICATED, s, "an expired, unrotated stream");
@@ -50,6 +85,7 @@ class MemberPortStreamExpiryTest {
         MemberPortBehaviorTest.waitFor("the connection behind the port to end", 5_000, () -> behind.results.size() == 1);
         String error = String.valueOf(behind.results.get(1).error);
         assertTrue(error.contains("reset"), "the connection behind the port is reset: " + error);
+        return true;
     }
 
     @Test

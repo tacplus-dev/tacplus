@@ -349,6 +349,9 @@ class MemberPortBehaviorTest {
 
     /** One member tunnel stream, driven by hand: what a peer that is not a generated member port can send. */
     static final class Raw {
+        /** How long {@link #next} waits for a chunk on an open stream. */
+        static final long NEXT_DEADLINE_MS = 60_000;
+
         final ClientCall<MemberChunk, MemberChunk> call;
         final LinkedBlockingQueue<MemberChunk> received = new LinkedBlockingQueue<>();
         final CompletableFuture<Status> closed = new CompletableFuture<>();
@@ -388,12 +391,38 @@ class MemberPortBehaviorTest {
             call.cancel("test: cut off without last", null);
         }
 
+        /**
+         * The next chunk. It waits as long as the stream is open, up to
+         * {@link #NEXT_DEADLINE_MS}, a generous bound named when it passes
+         * (#919): a loaded runner is slow, not wrong. A stream that ends with
+         * no chunk fails at once, with its status.
+         */
         MemberChunk next() throws InterruptedException {
-            MemberChunk m = received.poll(10, TimeUnit.SECONDS);
+            MemberChunk m = poll(NEXT_DEADLINE_MS);
             if (m == null) {
-                throw new AssertionError("no chunk within 10s; stream status " + closed.getNow(null));
+                Status s = closed.getNow(null);
+                throw new AssertionError(s != null
+                        ? "the stream ended before its next chunk; stream status " + s
+                        : "no chunk within the " + NEXT_DEADLINE_MS / 1000 + "s deadline; the stream is still open");
             }
             return m;
+        }
+
+        /** The next chunk, or null once the stream has ended with none queued or {@code timeoutMillis} has passed. */
+        MemberChunk poll(long timeoutMillis) throws InterruptedException {
+            long deadline = System.currentTimeMillis() + timeoutMillis;
+            while (true) {
+                MemberChunk m = received.poll(50, TimeUnit.MILLISECONDS);
+                if (m != null) {
+                    return m;
+                }
+                if (closed.isDone()) {
+                    return received.poll();
+                }
+                if (System.currentTimeMillis() > deadline) {
+                    return null;
+                }
+            }
         }
 
         Status status(long timeoutMillis) throws Exception {

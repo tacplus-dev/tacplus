@@ -417,6 +417,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   tokens. A floor on the time the rotation leaves (say, rotate at least a few seconds before `exp` when the
   lifetime allows), or an early warning when a stream is attached with little of its lifetime left, would make the
   margin hold for short-lived tokens too.
+- **The Go and Rust member port rotation tests still run on 3-second tokens** (2026-11-20, #919): #737 gave the
+  Java `byteSessionRunsAcrossSeveralTokenLifetimesBothWaysAtOnce` and `aRotationCarriesTheReceiversRenewedToken`
+  6-second tokens (a cutover a second or more before `exp`), and #919 the interop leg; their Go twins
+  (`memberport_behavior_test.go`, `newMinter(..., 3, 2)`) and Rust twins (`memberport_behavior.rs`,
+  `Minter::new(..., 3, 2)`) keep the half-second margin a loaded runner outlasted. The same change there (6, 4,
+  1.6 MB, two lifetimes of 12.5 s) would keep them from the same flake.
 - **Cargo's retried network errors fail the clean-log check** (2026-11-01, #255): `assert_clean_log` in
   `cross-test/current-generation/run.sh` (and its copies in the other cross-tests) fails on any `warning:` line, so
   cargo's `warning: spurious network error (3 tries remaining): [16] Error in the HTTP2 framing layer`, which cargo

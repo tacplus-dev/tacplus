@@ -9,13 +9,22 @@ package memberport
 // writes the one fake fleet there (the kernel signing key, the CA, the Java
 // member's serving certificate); then a Go member port and a Java member port
 // tunnel to each other both ways at once (Java forward -> Go listen, Go forward
-// -> Java listen) on 3-second tokens, so each session rotates several times,
+// -> Java listen) on 6-second tokens, so each session rotates several times,
 // and every byte must arrive intact both ways. The files coordinate the two
 // processes: fleet.ready, go.port, java.port, go.done, java.done.
+//
+// The leg is bounded by its bytes, not by seconds (#919): each stream is a
+// fixed count, cut only when it stops moving (the peer's stall bound). Neither
+// side takes its member port down before the other is done: a side whose own
+// direction fails says so in its done file ("ok", or its failures) and keeps
+// serving the other's session, so each side reports its own result, not a
+// reset. Every wait after the streams start has an explicit deadline, named
+// when it passes.
 
 import (
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,13 +45,38 @@ func writeInterop(t *testing.T, dir, name string, data []byte) {
 
 func waitInterop(t *testing.T, dir, name string, timeout time.Duration) string {
 	t.Helper()
-	var got []byte
-	waitFor(t, name+" from the Java side", timeout, func() bool {
-		b, err := os.ReadFile(filepath.Join(dir, name))
-		got = b
-		return err == nil
-	})
-	return strings.TrimSpace(string(got))
+	got, ok := readInterop(dir, name, timeout)
+	if !ok {
+		t.Fatalf("timed out waiting for %s from the Java side", name)
+	}
+	return got
+}
+
+// interopDeadline is each wait's after the streams start: for the other
+// side's session, and for its done file. Generous: the streams take seconds.
+const interopDeadline = 5 * time.Minute
+
+// readInterop polls for the Java side's file name until the deadline; its
+// trimmed content, or false once the deadline has passed.
+func readInterop(dir, name string, deadline time.Duration) (string, bool) {
+	until := time.Now().Add(deadline)
+	for {
+		if b, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
+			return strings.TrimSpace(string(b)), true
+		}
+		if time.Now().After(until) {
+			return "", false
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// interopReport is a done file's content: "ok", or one failure a line.
+func interopReport(failures []string) []byte {
+	if len(failures) == 0 {
+		return []byte("ok\n")
+	}
+	return []byte(strings.Join(failures, "\n") + "\n")
 }
 
 func TestMemberPortInteropWithJava(t *testing.T) {
@@ -70,40 +104,54 @@ func TestMemberPortInteropWithJava(t *testing.T) {
 	writeInterop(t, dir, "java-leaf.key", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8}))
 	writeInterop(t, dir, "fleet.ready", []byte("1\n"))
 
-	// 3-second tokens renewed with 2 seconds left: about one rotation every
-	// 2.25 seconds, each way.
-	gm := newMinter(f, tenantX, 3, 2)
+	// 6-second tokens renewed with 4 seconds left: a stream lives 4 to 6
+	// seconds and the client rotates at 75% of it, so a cutover has a second
+	// or more before the old stream's exp, as in the behaviour tests (#737).
+	gm := newMinter(f, tenantX, 6, 4)
 	g := fx.memberWith(gm.token, certRef(f.leaf(t, tenantX, testSvc, "Ed25519")), f.lookup)
 	// Behind the Go port: pushes seed 41, expects the Java client's seed 42.
-	server := newPeerServer(t, pushMode, 41, 800_000, 42, 4096, 20*time.Millisecond)
+	server := newPeerServer(t, pushMode, 41, 1_600_000, 42, 4096, 20*time.Millisecond)
 	gAddr := fx.listen(g, server.address())
 	writeInterop(t, dir, "go.port", []byte(gAddr.String()+"\n"))
 
 	javaAddr := waitInterop(t, dir, "java.port", 10*time.Minute)
-	fwd, err := g.Forward(javaAddr)
-	if err != nil {
-		t.Fatal(err)
-	}
+	var failures []string
 	// Go client -> Go port -> Java port -> Java peer server (pushes 31, expects 32).
-	start := time.Now()
-	r := exchangeWith(fwd, 32, 800_000, 31, 4096, 20*time.Millisecond, 0)
-	elapsed := time.Since(start)
-	if !r.ok(800_000) {
-		t.Fatalf("Go forward -> Java listen: no loss, duplication or reordering: %v", r)
-	}
-	if elapsed < 6500*time.Millisecond {
-		t.Fatalf("the session must outlive two token lifetimes, took %v", elapsed)
-	}
-	if got := gm.mints.Load(); got < 3 {
-		t.Fatalf("the Go client rotated onto new tokens: %d mints", got)
+	if fwd, err := g.Forward(javaAddr); err != nil {
+		failures = append(failures, fmt.Sprintf("Go forward -> Java listen: forward: %v", err))
+	} else {
+		start := time.Now()
+		r := exchangeWith(fwd, 32, 1_600_000, 31, 4096, 20*time.Millisecond, 0)
+		elapsed := time.Since(start)
+		switch {
+		case !r.ok(1_600_000):
+			failures = append(failures, fmt.Sprintf("Go forward -> Java listen: no loss, duplication or reordering: %v after %v", r, elapsed))
+		case elapsed < 12500*time.Millisecond:
+			failures = append(failures, fmt.Sprintf("the session must outlive two token lifetimes, took %v", elapsed))
+		}
+		if got := gm.mints.Load(); got < 3 {
+			failures = append(failures, fmt.Sprintf("the Go client rotated onto new tokens: %d mints", got))
+		}
 	}
 	// Java client -> Java port -> Go port -> this peer server.
-	if sr := fx.serverResult(server, 1, 2*time.Minute); !sr.ok(800_000) {
-		t.Fatalf("Java forward -> Go listen: %v", sr)
+	until := time.Now().Add(interopDeadline)
+	for server.resultCount() == 0 && time.Now().Before(until) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if sr, ok := server.result(1); !ok {
+		failures = append(failures, fmt.Sprintf("Java forward -> Go listen: no session ended within the Go side's deadline of %v", interopDeadline))
+	} else if !sr.ok(1_600_000) {
+		failures = append(failures, fmt.Sprintf("Java forward -> Go listen: %v", sr))
 	}
 	if got := server.accepted.Load(); got != 1 {
-		t.Fatalf("one byte session from Java: the target was dialled %d times", got)
+		failures = append(failures, fmt.Sprintf("one byte session from Java: the target was dialled %d times", got))
 	}
-	writeInterop(t, dir, "go.done", []byte("1\n"))
-	waitInterop(t, dir, "java.done", 2*time.Minute)
+	writeInterop(t, dir, "go.done", interopReport(failures))
+	java, ok := readInterop(dir, "java.done", interopDeadline)
+	if !ok {
+		java = fmt.Sprintf("nothing: it was not done within the Go side's deadline of %v", interopDeadline)
+	}
+	if len(failures) > 0 {
+		t.Fatalf("%s\nthe Java side reported: %s", strings.Join(failures, "\n"), java)
+	}
 }

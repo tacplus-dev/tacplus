@@ -330,13 +330,23 @@ pub fn write_interop(dir: &std::path::Path, name: &str, data: &str) {
 
 /// Waits for the Java side of a two-process leg to publish `name`; its trimmed content.
 pub async fn wait_interop(dir: &std::path::Path, name: &str, timeout: Duration) -> String {
+    match read_interop(dir, name, timeout).await {
+        Some(s) => s,
+        None => panic!("timed out waiting for {} from the Java side", name),
+    }
+}
+
+/// [`wait_interop`] that returns None once the deadline has passed.
+pub async fn read_interop(dir: &std::path::Path, name: &str, timeout: Duration) -> Option<String> {
     let path = dir.join(name);
     let deadline = Instant::now() + timeout;
     loop {
         if let Ok(s) = std::fs::read_to_string(&path) {
-            return s.trim().to_string();
+            return Some(s.trim().to_string());
         }
-        assert!(Instant::now() < deadline, "timed out waiting for {} from the Java side", name);
+        if Instant::now() >= deadline {
+            return None;
+        }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }

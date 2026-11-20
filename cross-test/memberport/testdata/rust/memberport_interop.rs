@@ -9,8 +9,16 @@
 //! java-leaf.key, fleet.ready) and plays the "go" side of its marker files
 //! (go.port, go.done); then a Rust member port and a Java member port tunnel to
 //! each other both ways at once (Java forward -> Rust listen, Rust forward ->
-//! Java listen) on 3-second tokens, so each session rotates several times, and
+//! Java listen) on 6-second tokens, so each session rotates several times, and
 //! every byte must arrive intact both ways.
+//!
+//! The leg is bounded by its bytes, not by seconds (#919): each stream is a
+//! fixed count, cut only when it stops moving (the peer's stall bound).
+//! Neither side takes its member port down before the other is done: a side
+//! whose own direction fails says so in its done file ("ok", or its failures)
+//! and keeps serving the other's session, so each side reports its own result,
+//! not a reset. Every wait after the streams start has an explicit deadline,
+//! named when it passes.
 
 mod support;
 
@@ -22,6 +30,10 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use support::peer::{self, Mode, Server};
 use support::*;
+
+/// Each wait's after the streams start: for the other side's session, and for
+/// its done file. Generous: the streams take seconds.
+const DEADLINE: Duration = Duration::from_secs(300);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn rust_and_java_member_ports_tunnel_to_each_other() {
@@ -48,30 +60,61 @@ async fn rust_and_java_member_ports_tunnel_to_each_other() {
     write_interop(&dir, "java-leaf.key", &java_key);
     write_interop(&dir, "fleet.ready", "1\n");
 
-    // 3-second tokens renewed with 2 seconds left: about one rotation every
-    // 2.25 seconds, each way.
-    let rm = Minter::new(&fleet, X, 3, 2);
+    // 6-second tokens renewed with 4 seconds left: a stream lives 4 to 6
+    // seconds and the client rotates at 75% of it, so a cutover has a second
+    // or more before the old stream's exp, as in the behaviour tests (#737).
+    let rm = Minter::new(&fleet, X, 6, 4);
     let r = member_with(&fleet, rm.source(), &Arc::new(RwLock::new(fleet.leaf(X, SVC, false))), fleet.jwk_lookup());
     // Behind the Rust port: pushes seed 41, expects the Java client's seed 42.
-    let server = Server::start(Mode::Push, 41, 800_000, 42, 4096, Duration::from_millis(20));
+    let server = Server::start(Mode::Push, 41, 1_600_000, 42, 4096, Duration::from_millis(20));
     let r_addr = r.listen(loopback0(), server.addr).await.expect("listen");
     write_interop(&dir, "go.port", &format!("{}\n", r_addr));
 
     let java_addr: std::net::SocketAddr =
         wait_interop(&dir, "java.port", Duration::from_secs(600)).await.parse().expect("java.port");
-    let fwd = r.forward(java_addr).await.expect("forward");
+    let mut failures = Vec::new();
     // Rust client -> Rust port -> Java port -> Java peer server (pushes 31, expects 32).
-    let start = Instant::now();
-    let result = blocking(move || peer::exchange_with(fwd, 32, 800_000, 31, 4096, Duration::from_millis(20), 0)).await;
-    let elapsed = start.elapsed();
-    assert!(result.ok(800_000), "Rust forward -> Java listen: no loss, duplication or reordering: {:?}", result);
-    assert!(elapsed > Duration::from_millis(6_500), "the session must outlive two token lifetimes, took {:?}", elapsed);
-    assert!(rm.mints.load(Ordering::SeqCst) >= 3, "the Rust client rotated onto new tokens: {} mints", rm.mints.load(Ordering::SeqCst));
+    match r.forward(java_addr).await {
+        Err(e) => failures.push(format!("Rust forward -> Java listen: forward: {:?}", e)),
+        Ok(fwd) => {
+            let start = Instant::now();
+            let result = blocking(move || peer::exchange_with(fwd, 32, 1_600_000, 31, 4096, Duration::from_millis(20), 0)).await;
+            let elapsed = start.elapsed();
+            if !result.ok(1_600_000) {
+                failures.push(format!(
+                    "Rust forward -> Java listen: no loss, duplication or reordering: {:?} after {:?}",
+                    result, elapsed
+                ));
+            } else if elapsed <= Duration::from_millis(12_500) {
+                failures.push(format!("the session must outlive two token lifetimes, took {:?}", elapsed));
+            }
+            let mints = rm.mints.load(Ordering::SeqCst);
+            if mints < 3 {
+                failures.push(format!("the Rust client rotated onto new tokens: {} mints", mints));
+            }
+        }
+    }
     // Java client -> Java port -> Rust port -> this peer server.
-    wait_for("the Java client's session", Duration::from_secs(120), || server.result_count() == 1).await;
-    let sr = server.result(1).unwrap();
-    assert!(sr.ok(800_000), "Java forward -> Rust listen: {:?}", sr);
-    assert_eq!(server.accepted.load(Ordering::SeqCst), 1, "one byte session from Java: the target was dialled once");
-    write_interop(&dir, "go.done", "1\n");
-    wait_interop(&dir, "java.done", Duration::from_secs(120)).await;
+    let until = Instant::now() + DEADLINE;
+    while server.result_count() == 0 && Instant::now() < until {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    match server.result(1) {
+        None => failures.push(format!(
+            "Java forward -> Rust listen: no session ended within the Rust side's deadline of {:?}",
+            DEADLINE
+        )),
+        Some(sr) if !sr.ok(1_600_000) => failures.push(format!("Java forward -> Rust listen: {:?}", sr)),
+        Some(_) => {}
+    }
+    let accepted = server.accepted.load(Ordering::SeqCst);
+    if accepted != 1 {
+        failures.push(format!("one byte session from Java: the target was dialled {} times", accepted));
+    }
+    let report = if failures.is_empty() { "ok\n".to_string() } else { failures.join("\n") + "\n" };
+    write_interop(&dir, "go.done", &report);
+    let java = read_interop(&dir, "java.done", DEADLINE).await.unwrap_or_else(|| {
+        format!("nothing: it was not done within the Rust side's deadline of {:?}", DEADLINE)
+    });
+    assert!(failures.is_empty(), "{}\nthe Java side reported: {}", failures.join("\n"), java);
 }

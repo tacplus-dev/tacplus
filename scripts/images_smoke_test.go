@@ -46,7 +46,8 @@ func dep(module, version string) string {
 
 func TestSmokeGoFloors(t *testing.T) {
 	buildxOK := "/usr/local/libexec/docker/cli-plugins/docker-buildx: go1.27.3\n" +
-		dep("github.com/moby/go-archive", "v0.3.3") + dep("golang.org/x/net", "v0.62.0")
+		dep("github.com/containerd/containerd/v2", "v2.4.2") + dep("github.com/moby/go-archive", "v0.3.3") +
+		dep("golang.org/x/net", "v0.62.0")
 	gh := func(deps string) string {
 		return "/usr/local/bin/gh: go1.27.3\n\tpath\tgithub.com/cli/cli/v2/cmd/gh\n" + deps
 	}
@@ -60,6 +61,8 @@ func TestSmokeGoFloors(t *testing.T) {
 		{"gh below the x/net floor", buildxOK, gh(dep("golang.org/x/net", "v0.60.0")), "carries golang.org/x/net v0.60.0, below v0.62.0"},
 		{"gh without x/net", buildxOK, gh(dep("golang.org/x/text", "v0.30.0")), "carries golang.org/x/net none, below v0.62.0"},
 		{"buildx below the go-archive floor", strings.Replace(buildxOK, "v0.3.3", "v0.2.0", 1), gh(dep("golang.org/x/net", "v0.62.0")), "carries github.com/moby/go-archive v0.2.0, below v0.3.0"},
+		// CVE-2026-95839 (#930): buildx through 0.38.x vendors containerd v2.4.1.
+		{"buildx below the containerd floor", strings.Replace(buildxOK, "v2.4.2", "v2.4.1", 1), gh(dep("golang.org/x/net", "v0.62.0")), "carries github.com/containerd/containerd/v2 v2.4.1, below v2.4.2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, err := goFloors(t, tc.buildx, tc.gh)

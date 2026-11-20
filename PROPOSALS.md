@@ -784,6 +784,19 @@ the looper then marks it `promoted` or `declined` here with the date.
   both and the leg passes (some ten minutes, mostly npm and tsc). Its python leg waits on #665, its rust leg on
   #829 and its swift legs on the linker-warning entry above. Once each leg passes, adding it to `gates.yaml` is a
   cost decision.
+- **Generated tenant-to-owner config push** (2026-11-20, #927; kernel#70): a tenant-scope `config_slice` declares
+  `delivery: PUSH`, and tacplus generates three things. First, a sys contract `configpush.ConfigPush`: one bidi
+  stream per (tenant, owner) that carries a snapshot, then versions. Each slice goes as its registered field number
+  plus bytes, because the owner's proto is never in the tenant store's run. Second, a publisher in the tenant's
+  Stratum that watches the slice's record and uses the record revision as the version. Third, the owner's receiver:
+  it holds slices in memory only, fails closed until the first snapshot, accepts only a higher version, and accepts
+  only the tenant's own `stratum` subject, which it checks through a tenant-registry hook the owner implements
+  (kernel#69). The publisher reconnects and sends the snapshot again after a break or an owner restart. Why: the
+  2026-11-19 addendum of roadmap `decisions/skipper-and-admiral-2026-11-01.md` decided that tenant config reaches
+  the kernel by push, from tenant to system. Generating the contract keeps the kernel from setting a hand-written
+  one that tacplus would then have to follow. Depends on #352 (registered slice field numbers). Open questions are
+  on the issue: which Stratum record holds a slice, the version's source, whether the owner keeps a slice after its
+  stream breaks, the slice's identity, and Java-first parity.
 
 ## Promoted / declined
 - **`just generated <dir>`: tacplus's security checks scan its generated output** (2026-11-09, #376): promoted

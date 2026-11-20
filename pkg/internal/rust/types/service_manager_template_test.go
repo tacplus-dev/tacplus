@@ -329,12 +329,44 @@ func TestRustServiceManagerEndsStreamsAtCredentialExpiry(t *testing.T) {
 	for _, want := range []string{
 		"pub const STREAMING_RPC_PATHS: &[&str]",
 		"range .StreamingPaths",
-		"server.layer(StreamCredentialExpiryLayer::new(",
+		"StreamCredentialExpiryLayer::new(",
 		"STREAMING_RPC_PATHS.iter()",
+		"server.layer(stream_credential_expiry_layer(",
 	} {
 		if !strings.Contains(tmpl, want) {
 			t.Errorf("service_manager.rs.tmpl missing %q: streams would outlive their opening token", want)
 		}
+	}
+}
+
+// tacplus#931: a stream on a handler's own additional_services route ends at
+// its token's exp too. A server layer cannot tell unary from streaming, so the
+// layer polices every call on a route outside the generated services, which
+// the ServiceManager lists by gRPC service name.
+func TestRustServiceManagerEndsHandlerRouteStreamsAtCredentialExpiry(t *testing.T) {
+	rendered := renderRustServiceManagerForTest(t, smTemplateData{
+		ServiceLabel:          "tasks",
+		HasGrpc:               true,
+		HasTlsGrpc:            true,
+		HasServiceHealthState: true,
+		GrpcServices: []grpcServiceEntry{
+			{TraitName: "Tasks", WrapperVar: "wrapper_tasks", GrpcServiceName: "tasks.TasksService"},
+			{TraitName: "Daemon", WrapperVar: "wrapper_daemon", GrpcServiceName: "tasks.DaemonService", IsC2D: true},
+		},
+	})
+	for _, want := range []string{
+		"const GENERATED_GRPC_SERVICES: &[&str] = &[\n    \"tasks.TasksService\",\n];",
+		"layer.with_handler_routes(GENERATED_GRPC_SERVICES.iter().map(|s| s.to_string()), None)",
+		"let additional_routes = handler.additional_services();",
+		"server.layer(stream_credential_expiry_layer(additional_routes.is_some()));",
+		"let router = if let Some(additional_routes) = additional_routes {",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("rendered Rust ServiceManager missing %q: a handler route's stream would outlive its token", want)
+		}
+	}
+	if strings.Contains(rendered, "\"tasks.DaemonService\"") {
+		t.Errorf("GENERATED_GRPC_SERVICES lists a c2d service, which the TLS server does not serve")
 	}
 }
 

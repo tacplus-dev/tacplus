@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-18 by looper (#340).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by looper (#931).
 
 - **Version / line:** v2.6.13 (latest release, 2026-11-15, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -34,9 +34,11 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-18 by lo
   patch once it merges).
   The generated Go, Java and Rust servers end every streaming rpc at the `exp` of the token it opened with,
   `UNAUTHENTICATED` (API.md, Client Send Contract); they checked it only at open, so an expired or revoked caller
-  kept its stream (#260, `cross-test/stream-expiry`, in `just gates`; Rust does not yet cover handler
-  `additional_services` streams; backported to release/2.0 through release/2.5 by pull request, each line's next
-  patch once it merges).
+  kept its stream (#260, `cross-test/stream-expiry`, in `just gates`; backported to release/2.0 through release/2.5
+  by pull request, each line's next patch once it merges). Rust covers a handler's own `additional_services`
+  streams too (#931): the handler names its streaming paths (`Handler::additional_streaming_paths`), and when it
+  names none every call on those routes ends at exp; backported to release/2.0 through release/2.6 without the
+  trait method (every handler-route call ends at exp), by pull request.
   No install text names a `tacplus:X.Y` image (`TestDocsPinNoTacplusImage`); the release branches' install docs,
   which still pinned `tacplus:2.0`, pin their own line (#201; release/2.1 through release/2.5 by pull request,
   #238–#242, as v2.1.7, v2.2.4, v2.3.6, v2.4.5 and v2.5.5 once they merge).

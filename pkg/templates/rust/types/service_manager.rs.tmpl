@@ -81,7 +81,8 @@ use grpcserver::authorizer::StreamCredentialExpiryLayer;
 /// server- or bidi-streaming) this ServiceManager serves on its TLS server.
 /// Each is ended by the server at its opening token's exp, UNAUTHENTICATED: a
 /// stream carries only the token it opened with (API.md, Client Send Contract).
-/// Handler-provided additional_services routes are not listed.
+/// Handler-provided additional_services routes are not listed: see
+/// `stream_credential_expiry_layer`.
 pub const STREAMING_RPC_PATHS: &[&str] = &[
 {{- range .GrpcServices}}
 {{- if not .IsC2D}}
@@ -91,6 +92,30 @@ pub const STREAMING_RPC_PATHS: &[&str] = &[
 {{- end}}
 {{- end}}
 ];
+
+/// The gRPC services ("pkg.Service") generated from the model that this
+/// ServiceManager serves on its TLS server. A path under none of them (nor
+/// health) is a handler-provided additional_services route.
+const GENERATED_GRPC_SERVICES: &[&str] = &[
+{{- range .GrpcServices}}
+{{- if not .IsC2D}}
+    "{{.GrpcServiceName}}",
+{{- end}}
+{{- end}}
+];
+
+/// The layer that ends every streaming rpc on the TLS server at its opening
+/// token's exp: the generated streaming paths, and, when the handler serves
+/// additional_services routes (`serves_handler_routes`), every call on those
+/// routes, unary included, since a server layer cannot tell their unary calls
+/// from their streams (tacplus#931).
+fn stream_credential_expiry_layer(serves_handler_routes: bool) -> StreamCredentialExpiryLayer {
+    let layer = StreamCredentialExpiryLayer::new(STREAMING_RPC_PATHS.iter().map(|p| p.to_string()));
+    if !serves_handler_routes {
+        return layer;
+    }
+    layer.with_handler_routes(GENERATED_GRPC_SERVICES.iter().map(|s| s.to_string()), None)
+}
 {{- end}}
 {{- range .ConfigFetches}}
 use {{.ConfigModPath}}::Config as {{.ConfigAliasType}};
@@ -1797,16 +1822,16 @@ impl ServiceManager {
         ));
         // A stream is authorized once, at open, by the layer above and its
         // wrapper; this layer ends every streaming rpc at its opening token's
-        // exp with UNAUTHENTICATED so no stream outlives its credential.
-        let mut server = server.layer(StreamCredentialExpiryLayer::new(
-            STREAMING_RPC_PATHS.iter().map(|p| p.to_string()),
-        ));
+        // exp with UNAUTHENTICATED so no stream outlives its credential, the
+        // handler's own additional_services streams included.
+        let additional_routes = handler.additional_services();
+        let mut server = server.layer(stream_credential_expiry_layer(additional_routes.is_some()));
 
         // Build router: if handler provides additional services, start from those routes
         // (Server::add_routes), then chain our services (Router::add_service).
         // Router doesn't have add_routes, so additional routes must go first.
         // c2d services are excluded — they run on a separate unix socket server.
-        let router = if let Some(additional_routes) = handler.additional_services() {
+        let router = if let Some(additional_routes) = additional_routes {
             server.add_routes(additional_routes)
                 .add_service(grpc_health_svc)
 {{- range .GrpcServices}}

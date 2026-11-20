@@ -15,14 +15,21 @@
 // and is never rotated, and keeps it busy. The server must end each one at the
 // token's exp with UNAUTHENTICATED. A control stream opened with a long-lived
 // token must stay open past that window.
+//
+// The same three shapes run again on a handler-provided additional_services
+// route (tacplus#931): a service the model does not know, served beside the
+// generated one as a hand-written tonic service would be. The ServiceManager's
+// own generated stream_credential_expiry_layer must end those at exp too.
 
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use key::keys;
 use tokio_stream::Stream;
+use tonic::codegen::{http, Service};
 
 use crate::s2sm::internal::grpc::servers::svc::streamexpiry::streamer_service::{
     StreamerServiceHandler, ValidationWrapper,
@@ -32,6 +39,12 @@ use crate::types::svc::streamexpiry::streamer_service_server::StreamerServiceSer
 use crate::types::svc::streamexpiry::Tick;
 
 type TickStream = Pin<Box<dyn Stream<Item = Result<Tick, tonic::Status>> + Send>>;
+type Client = StreamerServiceClient<Renamed<tonic::transport::Channel>>;
+
+/// The gRPC service the model generates.
+const GENERATED_SERVICE: &str = "streamexpiry.StreamerService";
+/// The handler's own additional_services route: a service the model does not know.
+const HANDLER_SERVICE: &str = "streamexpiry.HandWrittenStreamer";
 
 /// The audience the generated Authorizer accepts (its service label), which
 /// run.sh reads from the generated code.
@@ -148,8 +161,43 @@ impl StreamerServiceHandler for KeepOpenHandler {
     }
 }
 
-/// Serves the generated wrapper the way the generated ServiceManager does and
-/// returns the bound address.
+/// A service whose requests' gRPC service name `from` is renamed `to`. On the
+/// server it serves the generated StreamerService as HANDLER_SERVICE, a route
+/// outside the model; on the client it points the generated client at it.
+#[derive(Clone)]
+struct Renamed<S> {
+    inner: S,
+    from: &'static str,
+    to: &'static str,
+}
+
+impl<S> tonic::server::NamedService for Renamed<S> {
+    const NAME: &'static str = HANDLER_SERVICE;
+}
+
+impl<S, B> Service<http::Request<B>> for Renamed<S>
+where
+    S: Service<http::Request<B>>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut req: http::Request<B>) -> Self::Future {
+        let path = req.uri().path().replacen(&format!("/{}/", self.from), &format!("/{}/", self.to), 1);
+        let mut parts = req.uri().clone().into_parts();
+        parts.path_and_query = Some(path.parse().expect("renamed path"));
+        *req.uri_mut() = http::Uri::from_parts(parts).expect("renamed uri");
+        self.inner.call(req)
+    }
+}
+
+/// Serves the generated wrapper the way the generated ServiceManager does,
+/// and beside it a handler route, and returns the bound address.
 async fn serve(key: &keys::ImmutableKey) -> std::net::SocketAddr {
     let authorizer = Arc::new(grpcserver::authorizer::Authorizer::with_seeded_jwks(vec![jwk_for_key(key)]));
     crate::s2sm::internal::grpc::servers::svc::streamexpiry::streamer_service::register_method_auth(&authorizer);
@@ -158,13 +206,25 @@ async fn serve(key: &keys::ImmutableKey) -> std::net::SocketAddr {
     let adapter = Arc::new(super::AuthorizerAdapter { authorizer: authorizer.clone() });
     wrapper.set_authorize_func(Some(adapter)).await;
     assert!(wrapper.has_authorizer().await, "wrapper must be wired to the authorizer");
+    // The handler route's own service, the same handler behind its own
+    // wrapper, renamed onto a route the model does not know.
+    let handler_wrapper = ValidationWrapper::new(Arc::new(KeepOpenHandler));
+    handler_wrapper
+        .set_authorize_func(Some(Arc::new(super::AuthorizerAdapter { authorizer: authorizer.clone() })))
+        .await;
+    let handler_route = Renamed {
+        inner: servicemanager::deadline::InboundDeadline::new(StreamerServiceServer::new(handler_wrapper)),
+        from: HANDLER_SERVICE,
+        to: GENERATED_SERVICE,
+    };
 
     let incoming = tonic::transport::server::TcpIncoming::bind("127.0.0.1:0".parse().unwrap())
         .expect("bind 127.0.0.1:0");
     let addr = incoming.local_addr().expect("local addr");
 
     // The layers the generated ServiceManager installs on its TLS server, in
-    // its order, the expiry layer fed the ServiceManager's own generated list.
+    // its order, the expiry layer the ServiceManager's own, for a handler that
+    // serves additional_services routes.
     assert_eq!(
         super::STREAMING_RPC_PATHS,
         &[
@@ -174,25 +234,34 @@ async fn serve(key: &keys::ImmutableKey) -> std::net::SocketAddr {
         ],
         "generated STREAMING_RPC_PATHS must list exactly the three streaming rpcs"
     );
+    // This line's fixture also carries the authority's TokenMintService, so
+    // the list is checked for the two services the test serves.
+    assert!(
+        super::GENERATED_GRPC_SERVICES.contains(&GENERATED_SERVICE)
+            && !super::GENERATED_GRPC_SERVICES.contains(&HANDLER_SERVICE),
+        "generated GENERATED_GRPC_SERVICES must list the generated service and not the handler route: {:?}",
+        super::GENERATED_GRPC_SERVICES
+    );
     let server = tonic::transport::Server::builder().layer(grpcserver::authorizer::AuthEnforcingLayer::with_exempt_paths(
         authorizer.clone(),
         Vec::<String>::new(),
     ));
-    let mut server = server.layer(grpcserver::authorizer::StreamCredentialExpiryLayer::new(
-        super::STREAMING_RPC_PATHS.iter().map(|p| p.to_string()),
-    ));
-    let router = server.add_service(servicemanager::deadline::InboundDeadline::new(StreamerServiceServer::new(wrapper)));
+    let mut server = server.layer(super::stream_credential_expiry_layer(true));
+    let router = server
+        .add_routes(tonic::service::Routes::new(handler_route))
+        .add_service(servicemanager::deadline::InboundDeadline::new(StreamerServiceServer::new(wrapper)));
     tokio::spawn(async move {
         router.serve_with_incoming(incoming).await.expect("serve");
     });
     addr
 }
 
-async fn client(addr: std::net::SocketAddr) -> StreamerServiceClient<tonic::transport::Channel> {
+/// A client of `service` (GENERATED_SERVICE or HANDLER_SERVICE) on `addr`.
+async fn client(addr: std::net::SocketAddr, service: &'static str) -> Client {
     let endpoint = tonic::transport::Endpoint::from_shared(format!("http://{addr}")).expect("endpoint");
     for _ in 0..50 {
         if let Ok(ch) = endpoint.connect().await {
-            return StreamerServiceClient::new(ch);
+            return StreamerServiceClient::new(Renamed { inner: ch, from: GENERATED_SERVICE, to: service });
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -211,7 +280,7 @@ fn with_auth<T>(msg: T, bearer: &str) -> tonic::Request<T> {
 /// How a stream ended: the status and when.
 type Ended = Result<(tonic::Status, SystemTime), String>;
 
-async fn run_send_ticks(mut c: StreamerServiceClient<tonic::transport::Channel>, bearer: String) -> Ended {
+async fn run_send_ticks(mut c: Client, bearer: String) -> Ended {
     match c.send_ticks(with_auth(endless_ticks(), &bearer)).await {
         Ok(resp) => Err(format!("SendTicks completed OK instead of being ended: {:?}", resp.into_inner())),
         Err(st) => Ok((st, SystemTime::now())),
@@ -228,14 +297,14 @@ async fn drain(name: &str, mut s: tonic::Streaming<Tick>) -> Ended {
     }
 }
 
-async fn run_generate_ticks(mut c: StreamerServiceClient<tonic::transport::Channel>, bearer: String) -> Ended {
+async fn run_generate_ticks(mut c: Client, bearer: String) -> Ended {
     match c.generate_ticks(with_auth(tick("go"), &bearer)).await {
         Ok(resp) => drain("GenerateTicks", resp.into_inner()).await,
         Err(st) => Ok((st, SystemTime::now())),
     }
 }
 
-async fn run_assist_ticks(mut c: StreamerServiceClient<tonic::transport::Channel>, bearer: String) -> Ended {
+async fn run_assist_ticks(mut c: Client, bearer: String) -> Ended {
     match c.assist_ticks(with_auth(endless_ticks(), &bearer)).await {
         Ok(resp) => drain("AssistTicks", resp.into_inner()).await,
         Err(st) => Ok((st, SystemTime::now())),
@@ -279,11 +348,21 @@ fn check_ended(name: &str, exp: i64, ended: Result<Ended, tokio::time::error::El
 async fn rust_stream_expiry_ends_every_stream_shape_at_exp() {
     let key = keys::generate_ed25519_key().expect("generate ed25519 key");
     let addr = serve(&key).await;
-    let c = client(addr).await;
+    ends_every_stream_shape_at_exp(&key, client(addr, GENERATED_SERVICE).await, "").await;
+}
 
+// tacplus#931: the same on a handler's own additional_services route.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rust_stream_expiry_ends_every_handler_route_stream_shape_at_exp() {
+    let key = keys::generate_ed25519_key().expect("generate ed25519 key");
+    let addr = serve(&key).await;
+    ends_every_stream_shape_at_exp(&key, client(addr, HANDLER_SERVICE).await, "handler route ").await;
+}
+
+async fn ends_every_stream_shape_at_exp(key: &keys::ImmutableKey, c: Client, route: &str) {
     let exp = now_secs() + SHORT_TTL_SECS;
-    let short = service_bearer(&key, exp);
-    let long = service_bearer(&key, now_secs() + 3600);
+    let short = service_bearer(key, exp);
+    let long = service_bearer(key, now_secs() + 3600);
 
     let send = tokio::spawn(tokio::time::timeout(HARD_BOUND, run_send_ticks(c.clone(), short.clone())));
     let gen = tokio::spawn(tokio::time::timeout(HARD_BOUND, run_generate_ticks(c.clone(), short.clone())));
@@ -314,13 +393,13 @@ async fn rust_stream_expiry_ends_every_stream_shape_at_exp() {
 
     let mut failures = Vec::new();
     for (name, h) in [("SendTicks (client-stream)", send), ("GenerateTicks (server-stream)", gen), ("AssistTicks (bidi)", assist)] {
-        if let Err(e) = check_ended(name, exp, h.await.expect("stream task panicked")) {
+        if let Err(e) = check_ended(&format!("{route}{name}"), exp, h.await.expect("stream task panicked")) {
             failures.push(e);
         }
     }
     match control.await.expect("control task panicked") {
-        Ok(got) => eprintln!("control: long-lived stream still open past exp+{LATE_SLACK:?} ({got} ticks)"),
-        Err(e) => failures.push(e),
+        Ok(got) => eprintln!("{route}control: long-lived stream still open past exp+{LATE_SLACK:?} ({got} ticks)"),
+        Err(e) => failures.push(format!("{route}{e}")),
     }
     assert!(failures.is_empty(), "stream credential expiry failures:\n  {}", failures.join("\n  "));
 }

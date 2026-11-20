@@ -375,12 +375,6 @@ the looper then marks it `promoted` or `declined` here with the date.
   within epsilon of NaN). A field whose only constraint is `not_in` still accepts NaN, which is arguably right (NaN
   is not one of the forbidden values) but surprising next to the rest. Refusing NaN on any `assert_float` (or adding
   an explicit `allow_nan`) would make it one rule; that changes accepted input, so it belongs in a minor.
-- **Release lines still push the deprecated `tacplus/tacplus` image** (2026-11-02, nightly scan): docs/VERSIONING.md
-  on main says `tacplus/tacplus` "is never pushed again" and its tags "up to the 2.5 line stay as they are", but each
-  patch tag runs its release branch's pre-#193 `images.yml`, which builds and pushes it (`tacplus:2.4.7` and
-  `tacplus:2.5.7`, 2026-11-02, Images runs 41460207658 and 41460215925) `FROM` a `build:X.Y` that is never rebuilt
-  (#283). Either say in VERSIONING.md that the 2.0–2.5 lines keep pushing it until they leave support, or stop
-  pushing it from the lines. Consumers of the 2.x `tacplus` image would then stop getting patches through it.
 - **Retry Go module downloads in CI** (2026-11-02, nightly scan): CI on main at ce69bf89 (run 41456279271) failed
   `current-generation-go` on one transient checksum-database error (`verifying go.mod: ... reading
   https://sum.golang.org/tile/8/0/x192/982: stream error: stream ID 139; INTERNAL_ERROR`), not on code. A

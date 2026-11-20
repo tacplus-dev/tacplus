@@ -1,0 +1,7 @@
+Work in progress of #932 (not to land): one patch per release line, each a
+commit on origin/release/X.Y. Apply with
+  git worktree add -b backport/932-release-X.Y <dir> origin/release/X.Y
+  git -C <dir> am backports-932/release-X.Y.patch
+then push the branch and open the PR (needs looper:workflows on #932: the
+patches change .github/workflows/images.yml). Delete this directory before
+committing anything on looper/tacplus-932.

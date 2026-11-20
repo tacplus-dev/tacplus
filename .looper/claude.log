@@ -1,0 +1,384 @@
+= init
+> Bash cd /builds/looper/tacplus/issues/932; gh issue view 932 --repo tacplus-dev/tacplus --comments | tail -20; gh api "repos/tacplus-dev/roadmap/contents/suggestions/2026-11-20-the-deprecated-tacplus-tacplus-image-is-still-pushed-by-every-2-1-to-2-5-patch-as-root-against-versioning-md-stop-the-lines-push...
+< author:	tacplus-looper association:	none edited:	false status:	none -- The looper of tacplus starts this issue on `claude-opus-5-5`, the default model. Its limit 4h is capped at 4h by this job (https://gitlab.com/tacplus-dev/looper/-/jobs/18229603022), which ends sooner: the run stops by itself befo...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; git fetch -q origin; git branch -r | grep release; for v in 2.0 2.1 2.2 2.3 2.4 2.5 2.6; do echo "v$v.0 $(git log -1 --format=%cs v$v.0 2>/dev/null)"; done; grep -n -i "tacplus/tacplus\|deprecated" docs/VERSIONING.md PROPOSALS.md .github/workflows/images.yml | h...
+<   origin/backport/190-release-2.0   origin/backport/190-release-2.1   origin/backport/190-release-2.2   origin/backport/190-release-2.3   origin/backport/190-release-2.4   origin/backport/190-release-2.5   origin/backport/199-release-2.0   origin/backport/199-release-2.1   origin/backport/199-releas...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; sed -n 60,130p docs/VERSIONING.md; sed -n 375,390p PROPOSALS.md; for b in 2.0 2.1 2.2 2.3 2.4 2.5; do echo "== $b"; git show origin/release/$b:.github/workflows/images.yml | grep -n "tacplus\b\|NS }}/tacplus\|^  [a-z-]*:$" | head -30; git ls-tree --name-only ori...
+< minor. A minor older than a year is out of support: it gets no patches, and a consumer still on it upgrades.  Each supported minor has a branch `release/MAJOR.MINOR`, cut at its `.0` tag (or at its first good patch). A patch release is a tag on that branch. The branch is protected: changes land only...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; git log --oneline --grep='#193' origin/main | head; gh issue view 193 --repo tacplus-dev/tacplus | head -60
+< 1e3669b9 Deck: the versioning slide pins tacplus.lock, not the retired tacplus:2.0 image (#201) 6039b6ca No tacplus image: repos pin tacplus + build image; build:X.Y runs the pin (#193) 3be0e404 ROADMAP.md: no tacplus image, build:X.Y + script (#193); later, per-language build images (agent, at Jody...
+> Bash cd /builds/looper/tacplus/issues/932; git show 6039b6ca --stat | head -60; git show 6039b6ca -- .github/workflows/images.yml | head -300
+< commit 6039b6cae8228d9e3ba9924ffe2e46962e0de864 Author: jodydadescott <jody@thescottsweb.com> Date:   Thu Oct 29 04:49:37 2026 +0000      No tacplus image: repos pin tacplus + build image; build:X.Y runs the pin (#193)          Builds must be determined by their commit alone (tacplus-dev/roadmap    ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+I'm reading how each release line's `images.yml` builds and pushes the deprecated `tacplus` image, so I can remove it from each line without breaking anything else.
+> Bash cd /builds/looper/tacplus/issues/932; git show origin/release/2.5:.github/workflows/images.yml > /tmp/i25.yml; sed -n 1,60p /tmp/i25.yml; sed -n 200,380p /tmp/i25.yml; echo ===; git show origin/release/2.5:Dockerfile; echo ===; git grep -n "tacplus/tacplus\|NS/tacplus\|/tacplus:\|images/tacplus.Dock...
+< name: Images  # The image set from docs/VERSIONING.md: base (every SDK), build (base + # every tool; the image the gates run in), tacplus (the binary + every protoc # plugin; what a consumer's generate step pulls). Each layer is # rebuilt only when its definition changed, on demand, or (base) weekly...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; for b in 2.0 2.1 2.2 2.3 2.4 2.5; do echo "$b $(git tag -l "v$b.*" --sort=-v:refname | head -1) $(git log -1 --format=%cs origin/release/$b)"; done; git show origin/release/2.0:.github/workflows/images.yml | sed -n 1,25p; git ls-tree -r --name-only origin/releas...
+< 2.0 v2.0.32 2026-11-15 2.1 v2.1.25 2026-11-15 2.2 v2.2.22 2026-11-15 2.3 v2.3.24 2026-11-15 2.4 v2.4.24 2026-11-15 2.5 v2.5.25 2026-11-15 name: Images  # The three-layer image set from docs/VERSIONING.md: base (runtimes), build # (base + every build tool), tacplus (build + the binary). Each layer is...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; for b in 2.0 2.3 2.5; do echo "== $b"; git grep -n "tacplus/tacplus" origin/release/$b -- ':!.github' | grep -v "_test.go\|testdata" | head -15; done; git grep -n "images.yml" origin/release/2.5 -- '*_test.go' '*.sh' | head
+< == 2.0 origin/release/2.0:docs/VERSIONING.md:48:| `ghcr.io/tacplus-dev/tacplus/tacplus` | `build` plus the tacplus binary | every push to `main` and every release | == 2.3 origin/release/2.3:README.md:92:  ghcr.io/tacplus-dev/tacplus/tacplus:2.3 \ origin/release/2.3:docs/VERSIONING.md:56:| `ghcr.io/...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; gh issue view 580 --repo tacplus-dev/tacplus --json state,title,body -q '.state+" "+.title+"\n"+.body' | head -30; gh pr list --repo tacplus-dev/tacplus --state all --head backport/580-release-2.5 --json number,state,title,files -q '.[]|"\(.number) \(.state) \(....
+< OPEN semgrep dockerfile.security.missing-user (HIGH) at Dockerfile:26: the root Dockerfile, of the deprecated tacplus image, runs as root Found by the nightly scan of `main` (2026-11-13), item 1: a new, unaccepted finding of the build's deterministic security checks that fails the policy (looper REA...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; grep -rln "images.yml" scripts/*_test.go images/ 2>/dev/null; grep -rn "tacplus-manifest\|NS }}/tacplus\|no tacplus image" scripts/*_test.go | head; git show origin/release/2.5:scripts/images_index_test.go | sed -n 75,130p; git show origin/release/2.5:scripts/im...
+< scripts/images_index_test.go scripts/images_workflow_test.go images/base.Dockerfile images/build.Dockerfile 			} 		}) 	} }  // The OS upgrade in each image is a layer the registry cache would otherwise // hand back unchanged as long as the image it starts from has not moved (#369): // it must depend...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; for b in 2.0 2.1 2.2 2.3 2.4 2.5; do git cat-file -e origin/release/$b:scripts/images_workflow_test.go 2>/dev/null && echo "$b has workflow test"; done; sed -n 1,60p scripts/images_workflow_test.go; sed -n 60,200p /tmp/i25.yml
+< // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0  package scripts  import ( 	"os" 	"os/exec" 	"path/filepath" 	"regexp" 	"strings" 	"testing"  	"gopkg.in/yaml.v3" )  type workflowStep struct { 	ID  string            `yaml:"id"` 	Run string            `yaml:"run"` 	Env map[stri...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+I'm checking how main's weekly run dispatches each line's `images.yml`, so that dropping the `tacplus` choice from the dispatch input can't break that dispatch.
+> Bash cd /builds/looper/tacplus/issues/932; grep -n "dispatch\|rebuild" .github/workflows/images.yml | head -20; git show origin/release/2.5:scripts/images-plan.sh | sed -n 1,60p
+< 19:# A run on a release/X.Y branch is a line rebuild (#283): base and build from 21:# latest, main, X or an X.Y.Z. The weekly schedule on main dispatches one for 44:  workflow_dispatch: 46:      rebuild: 47:        description: "Lowest layer to rebuild (everything above it rebuilds too); a run on re...
+> Bash cd /builds/looper/tacplus/issues/932; sed -n 370,420p .github/workflows/images.yml
+<           echo "Build image: \`$ref\`" >> "$GITHUB_STEP_SUMMARY"    # The weekly line rebuild (#283): dispatch this workflow on every supported   # release/X.Y (a minor released within the last twelve months,   # docs/VERSIONING.md), each building from its own branch. A branch whose own   # scripts/...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; B=origin/release/2.5; git show $B:justfile | sed -n 345,362p; git grep -n "manifest, tags\|tacplus-smoke" $B -- .github images scripts | grep -v "images.yml"; git show $B:docs/VERSIONING.md | sed -n 40,110p; git show $B:docs/snippets/install-container.md; git gr...
+<   {{lock}} bash cross-test/claims-provenance/run.sh  # Behavioral coverage of W2S request (ingress) validation in the generated # Rust REST dispatch module. # The image set (docs/VERSIONING.md, Images), built natively for this # machine's architecture and tagged tacplus-local/*: base (every SDK), bu...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; B=origin/release/2.5; git show $B:README.src.md | sed -n 20,60p; echo ======; git show $B:site/docs/install.md | sed -n 95,150p; git show $B:justfile | grep -n -i "readme" | head
+< plus a `tacplus.yaml` saying which language, package and output directory.  ## What you get  For Go, `tacplus build` writes a module under `model/`:  --8<-- "docs/snippets/generated-tree.md"  You implement the handler interface. The wrapper validates every request and response against the `assert_*`...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+I'll do release/2.5 first, then carry the change to the other lines. First, checking how much the touched files differ between lines.
+> Bash cd /builds/looper/tacplus/issues/932; for f in .github/workflows/images.yml justfile docs/VERSIONING.md docs/snippets/install-container.md site/docs/install.md README.src.md README.md; do for b in 2.0 2.1 2.2 2.3 2.4; do n=$(git diff origin/release/$b origin/release/2.5 -- $f | grep -c '^[-+][^-+]')...
+< /bin/bash: line 1: column: command not found 65:# in example/. See example/README.md.
+> Bash cd /builds/looper/tacplus/issues/932; for f in .github/workflows/images.yml justfile docs/VERSIONING.md docs/snippets/install-container.md site/docs/install.md README.src.md README.md; do for b in 2.0 2.1 2.2 2.3 2.4; do n=$(git diff origin/release/$b origin/release/2.5 -- $f | grep -c '^[-+][^-+]')...
+< .github/workflows/images.yml 2.0: 10 .github/workflows/images.yml 2.1: 0 .github/workflows/images.yml 2.2: 0 .github/workflows/images.yml 2.3: 0 .github/workflows/images.yml 2.4: 0 justfile 2.0: 88 justfile 2.1: 23 justfile 2.2: 23 justfile 2.3: 23 justfile 2.4: 17 docs/VERSIONING.md 2.0: 32 docs/VE...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; which go; go version; gh api "orgs/tacplus-dev/packages/container/tacplus%2Ftacplus/versions?per_page=30" -q '.[]|"\(.created_at) \(.metadata.container.tags)"' 2>&1 | head -30
+< /usr/local/go/bin/go go version go1.27.4 linux/arm64 2026-11-15T13:24:39Z ["2.1.25","2.1"] 2026-11-15T13:23:54Z ["2.5.25","2.5"] 2026-11-15T13:23:38Z ["2.2.22","2.2"] 2026-11-15T13:20:44Z ["2.3.24","2.3"] 2026-11-15T13:19:45Z [] 2026-11-15T13:19:45Z [] 2026-11-15T13:19:44Z [] 2026-11-15T13:19:10Z []...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; W=$HOME/wt; mkdir -p $W; git worktree add -q -b backport/932-release-2.5 $W/2.5 origin/release/2.5 && cd $W/2.5 && grep -n "yaml" go.mod; ls scripts/*_test.go; git log -3 --format='%h %s' -- .github/workflows/images.yml
+< 12:	gopkg.in/yaml.v3 v3.0.1 scripts/conflict_markers_test.go scripts/cross_test_cargo_target_test.go scripts/cross_test_listener_test.go scripts/go_dependency_floor_test.go scripts/images_index_test.go scripts/images_packages_test.go scripts/images_plan_test.go scripts/images_smoke_test.go scripts/i...
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.5; grep -rn "tacplus\.Dockerfile\|tacplus image\|TACPLUS_IMAGE" --include=*.go --include=*.sh --include=*.yml . | grep -v "^./testdata" | head -20
+< ./scripts/images-tags.sh:2:# Decide which tags a .github/workflows/images.yml run puts on the tacplus image ./images/smoke.sh:3:# promises answers. TACPLUS_IMAGE says which promise: slim (the tacplus ./images/smoke.sh:30:[[ "${TACPLUS_IMAGE:-build}" == build ]] && want+=("${sdk[@]}") ./images/smoke....
+Writing the failing test on release/2.5 first.
+> Bash cd $HOME/wt/2.5; sed -n 1,30p scripts/images_index_test.go; sed -n 1,40p scripts/images_tags_test.go
+< // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0  package scripts  import ( 	"os" 	"os/exec" 	"path/filepath" 	"regexp" 	"strings" 	"testing" )  // checkIndex runs images-check-index.sh against a fake docker whose // `buildx imagetools inspect <ref> --format '{{json .Image}}'`...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Write /builds/looper/tacplus/homes/looper-932/wt/2.5/scripts/images_no_tacplus_test.go
+> Bash cd $HOME/wt/2.5/scripts && go test -run TestImagesPushNoTacplusImage . 2>&1 | tail -15
+< File created successfully at: /builds/looper/tacplus/homes/looper-932/wt/2.5/scripts/images_no_tacplus_test.go (file state is current in your context — no need to Read it back)
+= task_started
+= task_notification
+<     images_no_tacplus_test.go:47: job tacplus: file: "images/tacplus.Dockerfile" builds or pushes the tacplus image     images_no_tacplus_test.go:47: job tacplus: outputs: "type=image,name=${{ env.NS }}/tacplus,push-by-digest=true,name-canonical=true,push=true" builds or pushes the tacplus image    ...
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.5; wc -l .github/workflows/images.yml; grep -n "^  [a-z-]*:$" .github/workflows/images.yml
+< 359 .github/workflows/images.yml 28:  push: 31:  schedule: 53:  plan: 107:  base: 157:  build: 208:  build-manifest: 251:  tacplus: 308:  tacplus-manifest: Shell cwd was reset to /builds/looper/tacplus/issues/932
+> Bash cd $HOME/wt/2.5; head -250 .github/workflows/images.yml > /tmp/new.yml; cat >> /tmp/new.yml <<'EOF'   # There is no tacplus image any more (#932): ghcr.io/.../tacplus is   # deprecated, its tags stay as they are and it is never pushed again   # (docs/VERSIONING.md). A release still tags the build im...
+<  M .github/workflows/images.yml D  Dockerfile D  images/tacplus.Dockerfile ?? scripts/images_no_tacplus_test.go Shell cwd was reset to /builds/looper/tacplus/issues/932
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.5; python3 - <<'EOF' p='.github/workflows/images.yml' s=open(p).read() old_head=s[:s.index('# A release tag builds its build image fresh')] new_head='''name: Images  # The image set from docs/VERSIONING.md: base (every SDK) and build (base + # every tool; the image the gates run in). E...
+< diff --git a/.github/workflows/images.yml b/.github/workflows/images.yml index e99e076b..8457032e 100644 --- a/.github/workflows/images.yml +++ b/.github/workflows/images.yml @@ -1,22 +1,21 @@  name: Images   -# The image set from docs/VERSIONING.md: base (every SDK), build (base + -# every tool; th...
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.5; python3 - <<'EOF' p='.github/workflows/images.yml' s=open(p).read() old='''          # The build image this run compiles tacplus with: the one it builds, else           # its release line's (build:X.Y), else (main, or a line's first release)           # build:latest.''' assert old i...
+< Exit code 1 ok  	github.com/tacplus-dev/tacplus/scripts	0.578s Traceback (most recent call last):   File "<string>", line 1, in <module>     import yaml,sys;yaml.safe_load(open('../.github/workflows/images.yml'))     ^^^^^^^^^^^^^^^ ModuleNotFoundError: No module named 'yaml'
+The test now passes on release/2.5. Next I'm updating that line's justfile and docs.
+> Bash cd $HOME/wt/2.5; which actionlint shellcheck; python3 - <<'EOF' p='justfile' s=open(p).read() old='''# machine's architecture and tagged tacplus-local/*: base (every SDK), build # (base + every tool; what the gates run in) and tacplus (the binary + every # protoc plugin). CI builds and pushes the mu...
+<  .github/workflows/images.yml | 133 +++++++++----------------------------------  justfile                     |   9 +--  2 files changed, 31 insertions(+), 111 deletions(-) Shell cwd was reset to /builds/looper/tacplus/issues/932
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.5; grep -n "" docs/VERSIONING.md | sed -n 25,50p; grep -n "tacplus image\|tacplus:\|tacplus\.Dockerfile\|tacplus/tacplus" docs/VERSIONING.md
+< 25:problem, never for staying on a known defect. 26: 27:## Backports 28: 29:Every fix is made on `main` first. It is then backported to **every minor 30:released within the last twelve months**, as its own patch release of that 31:minor. A minor older than a year is out of support: it gets no patche...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.5; sed -n 50,80p docs/VERSIONING.md; sed -n 86,104p docs/VERSIONING.md
+< | image | contents | rebuilt when | |---|---|---| | `ghcr.io/tacplus-dev/tacplus/base` | OS and every SDK tacplus is built and tested with: Go, Java (JDK, Maven), Rust, Python, Node (TypeScript), Swift, .NET | weekly (`latest` from main, each supported line's `X.Y` from its release branch), or when ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.5; sed -n 1,70p cmd/sitegen/main.go; grep -rn "sitegen" justfile | head
+< // Copyright (c) 2026 Jody Scott // SPDX-License-Identifier: Apache-2.0  // Command sitegen writes the generated part of the tacplus.dev site into the // MkDocs docs directory (site/docs). It is deterministic and runs before every // `mkdocs build`: // //   - The user-facing repository documents (do...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; for b in 2.0 2.1 2.2 2.3 2.4 2.5; do echo "== $b"; git grep -n "install-container\|tacplus/tacplus" origin/release/$b -- ':!.github' ':!testdata' | grep -v "_test.go" ; done 2>&1 | sed 's/^origin\/release\///'
+< == 2.0 2.0:docs/VERSIONING.md:48:| `ghcr.io/tacplus-dev/tacplus/tacplus` | `build` plus the tacplus binary | every push to `main` and every release | == 2.1 2.1:README.md:83:docker run --rm -v "$PWD:/w" -w /w ghcr.io/tacplus-dev/tacplus/tacplus:2.1 tacplus build 2.1:docs/VERSIONING.md:56:| `ghcr.io/...
+= thinking_tokens
+= thinking_tokens
+> Bash mkdir -p $HOME/bin; cat > $HOME/bin/docs932.py <<'EOF' # Usage: python3 docs932.py <line> <last-tacplus-tag>; run in a release worktree. import os, re, sys line, last = sys.argv[1], sys.argv[2]  def edit(path, fn):     s = open(path).read()     t = fn(s)     assert t != s, path     open(path, 'w').w...
+< diff --git a/README.src.md b/README.src.md index df2a328b..abe6c5c5 100644 --- a/README.src.md +++ b/README.src.md @@ -34,10 +34,9 @@ authorization, builds the caller identity, and only then calls your code.  Release binaries for Linux, macOS and Windows (amd64 and arm64) are on  [GitHub Releases](h...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Fixing the line wrapping in README.src.md, then regenerating README.md with the line's own generator.
+> Bash cd $HOME/bin; python3 - <<'EOF' p='docs932.py' s=open(p).read() old='''deprecated.replace("The `ghcr", "The\\n`ghcr", 1).replace("deprecated: its tags\\n", "deprecated: its tags ", 1) + "\\n\\n"''' assert old in s s=s.replace(old,'''"The `ghcr.io/tacplus-dev/tacplus/tacplus`\\n"                     ...
+< --- a/README.src.md +++ b/README.src.md -patch of its MAJOR.MINOR line. The container image carries tacplus and every -protoc plugin it drives, so a build can run it as its own generate step: - ---8<-- "docs/snippets/install-container.md" +patch of its MAJOR.MINOR line. The `ghcr.io/tacplus-dev/tacp...
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.5; rm -f cmd/sitegen/zz_regen_test.go; head -40 cmd/sitegen/readme.go | grep -n "import\|\"" ; T=$(mktemp -d); cp cmd/sitegen/readme.go $T/; cat > $T/m.go <<'EOF' package main  import ( 	"os" )  func main() { 	md, err := readme(os.Args[1]) 	if err != nil { 		panic(err) 	} 	if err := os...
+< 6:import ( 7:	"fmt" 8:	"os" 9:	"path/filepath" 10:	"regexp" 11:	"strings" 17://	--8<-- "docs/snippets/proto.md" 24:	readmeSrc = "README.src.md" 25:	readmeOut = "README.md" 27:	readmeNotice = "<!-- Generated from README.src.md by cmd/sitegen: do not edit. -->\n" 30:var snippetLine = regexp.MustCompil...
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.5; grep -n -i "container\|image" site/docs/install.md | head; sed -n 104,116p site/docs/install.md; grep -rn -i "container image\|#container" site/docs/*.md site/mkdocs.yml 2>/dev/null | head
+< 2:description: Install tacplus from a GitHub release, keep it current with tacplus upgrade, run it as a container image, or build it from source. 9:the [container image](#container-image) carries all of them. 71:a release binary you install them yourself; the [image](#container-image) has 107:## Con...
+> Bash cd $HOME/wt/2.5; sed -n 1,12p site/docs/install.md; sed -n 66,75p site/docs/install.md
+< --- description: Install tacplus from a GitHub release, keep it current with tacplus upgrade, run it as a container image, or build it from source. ---  # Install  tacplus is a single binary. It drives `protoc` and the protoc plugins for the languages you generate, so a working setup is the binary p...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cat >> $HOME/bin/docs932.py <<'EOF'  def install_refs(s):     s = s.replace("keep it current with tacplus upgrade, run it as a container image, or build it from source.",                   "keep it current with tacplus upgrade, or build it from source.")     s = s.replace("languages you generate, so...
+< --- a/site/docs/index.md +++ b/site/docs/index.md --   [:octicons-download-24: **Install**](install.md): release binaries, `tacplus upgrade`, the container image, or from source. +-   [:octicons-download-24: **Install**](install.md): release binaries, `tacplus upgrade`, or from source. --- a/site/do...
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.5; go test ./scripts/ ./pkg/images/ 2>&1 | tail -5; gofmt -l scripts/; bash -n justfile 2>/dev/null; which just && just --list >/dev/null && echo just ok
+<     cross_test_cargo_target_test.go:148: the build left no rlib to prune in /builds/looper/tacplus/homes/looper-932/tmp/TestPruneCargoWorkspaceKeepsSharedDependencies2042425539/001/shared-target FAIL FAIL	github.com/tacplus-dev/tacplus/scripts	0.919s ok  	github.com/tacplus-dev/tacplus/pkg/images	0....
+> Bash cd $HOME/wt/2.5; git stash -q -u && go test ./scripts/ 2>&1 | grep -E "^(--- FAIL|ok|FAIL)" ; git stash pop -q && git status --short | wc -l; go test ./scripts/ 2>&1 | grep -E "^(--- FAIL|ok|FAIL)"
+< --- FAIL: TestPruneCargoWorkspaceKeepsSharedDependencies (0.09s) FAIL FAIL	github.com/tacplus-dev/tacplus/scripts	0.832s FAIL 11 --- FAIL: TestPruneCargoWorkspaceKeepsSharedDependencies (0.09s) FAIL FAIL	github.com/tacplus-dev/tacplus/scripts	0.850s FAIL Shell cwd was reset to /builds/looper/tacplus...
+I'm checking release/2.5's backport commit convention, then committing.
+> Bash cd /builds/looper/tacplus/issues/932; git log -1 --format=%B origin/backport/918-release-2.5 | head -30; gh pr view 925 --repo tacplus-dev/tacplus --json body -q .body | head -30
+< formatter: scale black's deadline to the files it formats (#918)  Backport of main's fix. Python generation ran black under a fixed 2-minute deadline sized for an idle machine; on a loaded build pod black outlived it and was killed ("black failed: signal: killed"). The deadline is now 5m plus 5s per...
+> Bash cd $HOME/wt/2.5; git add -A && git commit -q -F - <<'EOF' Images: stop pushing the deprecated tacplus image from this line (#932)  docs/VERSIONING.md on main says ghcr.io/tacplus-dev/tacplus/tacplus is deprecated, its tags stay as they are and it is never pushed again (#193), yet every patch on this...
+< 44c4bc9e Images: stop pushing the deprecated tacplus image from this line (#932)     Co-Authored-By: Claude <noreply@anthropic.com>   .github/workflows/images.yml       | 133 ++++++++-----------------------------  Dockerfile                         |  26 --------  README.md                          ...
+= thinking_tokens
+= thinking_tokens
+release/2.5 is committed. Now carrying the same change to 2.1–2.4 (identical `images.yml`; per-line docs).
+> Bash cat > $HOME/bin/just932.py <<'EOF' import re p='justfile' s=open(p).read() t=re.sub(r"\n  docker build -f images/tacplus\.Dockerfile [^\n]*", "", s) t=t.replace("\n  docker run --rm tacplus-local/tacplus:latest tacplus-smoke", "") t=t.replace("""# machine's architecture and tagged tacplus-local/*: b...
+< 330-# (base + every tool; what the gates run in) and tacplus (the binary + every 331-# protoc plugin). CI builds and pushes the multi-arch set to ghcr.io 332-# (.github/workflows/images.yml). 333-images: 334-  docker build -f images/base.Dockerfile -t tacplus-local/base:latest . 335-  docker build -...
+> Bash cd /builds/looper/tacplus/issues/932; declare -A LAST=([2.1]=2.1.25 [2.2]=2.2.22 [2.3]=2.3.24 [2.4]=2.4.24); MSG=$(git -C $HOME/wt/2.5 log -1 --format=%B); for b in 2.2 2.3 2.4 2.1; do echo "=== $b"; git worktree add -q -b backport/932-release-$b $HOME/wt/$b origin/release/$b || continue; ( cd $HOME...
+< === 2.2 M  .github/workflows/images.yml D  Dockerfile  M README.md  M README.src.md  M docs/VERSIONING.md  D docs/snippets/install-container.md D  images/tacplus.Dockerfile  M justfile A  scripts/images_no_tacplus_test.go  M site/docs/index.md  M site/docs/install.md === 2.3 M  .github/workflows/ima...
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.1; head -3 README.md; sed -n 70,95p README.md; git diff site docs | grep '^[+-]'; grep -n "tacplus/tacplus\|container" site/docs/install.md
+< # tacplus  **t**ypes, **a**ttributes, **c**onstraints, **plus** more: a compiler that turns the compiler.  ## Install  Release binaries for Linux, macOS and Windows (amd64 and arm64) are on [GitHub Releases](https://github.com/tacplus-dev/tacplus/releases), each with `checksums.txt`. Once installed,...
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.1; grep -n "tacplus:X.Y\|tacplus image\|Consumers pin" docs/VERSIONING.md; for b in 2.2 2.3 2.4; do grep -c "tacplus:X.Y" $HOME/wt/$b/docs/VERSIONING.md; done; python3 - <<'EOF' p='README.md' s=open(p).read() old='''The container image carries tacplus and every protoc plugin it drives,...
+< 40:2.0.1 is the first usable 2.0 release). Consumers pin their `MAJOR.MINOR`, 0 0 0  README.md            |  9 +++------  docs/VERSIONING.md   | 36 +++++++++++----------------------  justfile             |  9 +++------  site/docs/index.md   |  2 +-  site/docs/install.md | 56 +++++++++---------------...
+> Bash cd $HOME/wt; for b in 2.1 2.2 2.3 2.4; do echo "== $b"; sed -n 38,44p $b/docs/VERSIONING.md; done
+< == 2.1 Supported today: `release/2.0` through `release/2.1`, one per minor (2.0 was cut at `v2.0.1`; 2.0.0 published images but its release build failed, so 2.0.1 is the first usable 2.0 release). Consumers pin their `MAJOR.MINOR`, `2.1` for this release: the `tacplus:2.1` image and `tacplus upgrade...
+> Bash cd $HOME/wt; for b in 2.1 2.2 2.3 2.4; do python3 - $b <<'EOF' import sys b=sys.argv[1]; p=f'{b}/docs/VERSIONING.md' s=open(p).read() old=f"`{b}` for this release: the `tacplus:{b}` image and `tacplus upgrade` both\nfollow its newest patch." assert old in s s=s.replace(old,f"`{b}` for this release: ...
+< diff --git a/docs/VERSIONING.md b/docs/VERSIONING.md index bad00c24..d69327a0 100644 --- a/docs/VERSIONING.md +++ b/docs/VERSIONING.md @@ -38,38 +38,25 @@ branch is protected: changes land only by pull request.  Supported today: `release/2.0` through `release/2.4`, one per minor (2.0 was  cut at `v2...
+= thinking_tokens
+= thinking_tokens
+Lines 2.1–2.4 are edited. Running the new test on each and committing.
+> Bash cd /builds/looper/tacplus/issues/932; declare -A LAST=([2.1]=2.1.25 [2.2]=2.2.22 [2.3]=2.3.24 [2.4]=2.4.24); MSG=$(git -C $HOME/wt/2.5 log -1 --format=%B); for b in 2.1 2.2 2.3 2.4; do ( cd $HOME/wt/$b && go test -run 'TestImages' ./scripts/ 2>&1 | tail -1 && git add -A && printf '%s\n' "$MSG" | sed...
+= task_started
+= task_notification
+< ok  	github.com/tacplus-dev/tacplus/scripts	0.552s 2.1 4959defe 5:yet every patch on this line still built and pushed it (tacplus:2.1.25 on 15:  deprecated and that tacplus:2.1 stays at 2.1.25: a consumer installs the ok  	github.com/tacplus-dev/tacplus/scripts	0.528s 2.2 11f5c658 5:yet every patch ...
+= thinking_tokens
+= thinking_tokens
+Now release/2.0, which differs more.
+> Bash cd /builds/looper/tacplus/issues/932; git diff origin/release/2.0 origin/release/2.5 -- .github/workflows/images.yml; git show origin/release/2.0:docs/VERSIONING.md | sed -n 36,100p; git show origin/release/2.0:justfile | sed -n 315,330p; git show origin/release/2.0:README.md | grep -n -i "docker\|c...
+< diff --git a/.github/workflows/images.yml b/.github/workflows/images.yml index 9ba1e23d..e99e076b 100644 --- a/.github/workflows/images.yml +++ b/.github/workflows/images.yml @@ -1,7 +1,8 @@  name: Images   -# The three-layer image set from docs/VERSIONING.md: base (runtimes), build -# (base + every...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; git worktree add -q -b backport/932-release-2.0 $HOME/wt/2.0 origin/release/2.0; cd $HOME/wt/2.0; grep -n "smoke" images/*.Dockerfile; grep -n "^  [a-z-]*:$" .github/workflows/images.yml; sed -n 1,20p .github/workflows/images.yml
+< images/base.Dockerfile:67:       '<groupId>smoke</groupId><artifactId>smoke</artifactId><version>1</version>' \ images/base.Dockerfile:71:    && test -f "$d/target/smoke-1.jar" \ images/build.Dockerfile:20:# release carries it; images/smoke.sh checks the floors. images/tacplus.Dockerfile:41:# The sm...
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.0; git show 44c4bc9e:.github/workflows/images.yml | sed -n '/^  # There is no tacplus image any more (#932)/,$p' > /tmp/tail932.yml; head -246 .github/workflows/images.yml > /tmp/n.yml; cat /tmp/tail932.yml >> /tmp/n.yml; mv /tmp/n.yml .github/workflows/images.yml; python3 - <<'EOF' p=...
+< --- a/.github/workflows/images.yml +++ b/.github/workflows/images.yml -# The three-layer image set from docs/VERSIONING.md: base (runtimes), build -# (base + every build tool), tacplus (build + the binary). Each layer is -# rebuilt only when its definition changed, on demand, or (base) weekly, and -...
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.0; sed -n 28,36p docs/VERSIONING.md; grep -rn "tacplus/tacplus\|tacplus:2\|tacplus image\|tacplus\.Dockerfile" --include=*.md --include=justfile --include=*.sh --include=*.go . | grep -v "testdata\|ROADMAP\|HISTORY" | head
+< Every fix is made on `main` first. It is then backported to **every minor released within the last twelve months**, as its own patch release of that minor. A minor older than a year is out of support: it gets no patches, and a consumer still on it upgrades.  Each supported minor has a branch `releas...
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.0; grep -rln "smoke.sh" --include=*.go --include=*.yml --include=justfile --include=*.sh . | grep -v testdata
+< (Bash completed with no output)
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.0; git rm -q images/tacplus.Dockerfile Dockerfile images/smoke.sh; python3 - <<'EOF' def edit(p, pairs):     s=open(p).read()     for a,b in pairs:         assert a in s, (p,a)         s=s.replace(a,b)     open(p,'w').write(s) edit('justfile',[('''# The three-layer image set (docs/VERS...
+< docs/VERSIONING.md:32:a consumer still on it upgrades. docs/VERSIONING.md:66:take every Debian security fix (`apt-get upgrade`) without waiting for a docs/VERSIONING.md:73:`build` fresh (`apt-get upgrade`), from its line's `base:X.Y`, never docs/VERSIONING.md:74:re-tagging the line's older image. Ev...
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.0; git checkout -q 44c4bc9e -- scripts/images_no_tacplus_test.go; go test -run TestImagesPushNoTacplusImage -v ./scripts/ 2>&1 | tail -3; go test ./pkg/images/ 2>&1 | tail -1; ls cmd | head -30 | tr '\n' ' '
+< --- PASS: TestImagesPushNoTacplusImage (0.00s) PASS ok  	github.com/tacplus-dev/tacplus/scripts	0.002s ok  	github.com/tacplus-dev/tacplus/pkg/images	0.002s build cmd.go registry soundness sysrename upgrade validate verify version Shell cwd was reset to /builds/looper/tacplus/issues/932
+= thinking_tokens
+= thinking_tokens
+> Bash cd $HOME/wt/2.0; python3 - <<'EOF' p='docs/VERSIONING.md' s=open(p).read() a="`checksums.txt`): a consumer's generate step runs the release binary.\n" assert a in s s=s.replace(a,"`checksums.txt`): a consumer's generate step runs the release binary, and\n`tacplus upgrade` keeps it on the newest patc...
+< 4ee7e307 Images: stop pushing the deprecated tacplus image from this line (#932) Shell cwd was reset to /builds/looper/tacplus/issues/932
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+All six backport branches are committed. Next, the change on main: VERSIONING.md and the resolved PROPOSALS.md entry.
+> Bash cd /builds/looper/tacplus/issues/932; sed -n 84,88p docs/VERSIONING.md; sed -n 376,386p PROPOSALS.md; grep -n "tacplus/tacplus\|tacplus image" STATE.md | head
+< | `ghcr.io/tacplus-dev/tacplus/build` | `base` plus every tool: protoc and every plugin, grpcio-tools, Kani, JBMC and OpenJML, cargo-fuzz and its nightly Rust, just, the docker CLI, gcloud. Its `tacplus` is `images/tacplus.sh`, which runs the release the repository pins. What a repository's build ru...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; python3 - <<'EOF' def edit(p,a,b):     s=open(p).read(); assert a in s,(p,a); open(p,'w').write(s.replace(a,b)) edit('docs/VERSIONING.md','''`ghcr.io/tacplus-dev/tacplus/tacplus` is deprecated: its tags up to the 2.5 line stay as they are, and it is never pushed...
+<  PROPOSALS.md       | 6 ------  docs/VERSIONING.md | 6 +++++-  2 files changed, 5 insertions(+), 7 deletions(-)
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Pushing the six backport branches and opening their pull requests.
+> Bash cd /builds/looper/tacplus/issues/932; for b in 2.0 2.1 2.2 2.3 2.4 2.5; do git push -q origin backport/932-release-$b 2>&1 | grep -v "^remote:" ; done; git ls-remote origin 'refs/heads/backport/932-*'
+= task_started
+= task_notification
+= vcs_state_changed
+< To https://github.com/tacplus-dev/tacplus.git  ! [remote rejected]   backport/932-release-2.0 -> backport/932-release-2.0 (refusing to allow a GitHub App to create or update workflow `.github/workflows/images.yml` without `workflows` permission) error: failed to push some refs to 'https://github.com...
+= thinking_tokens
+= thinking_tokens
+The GitHub App can't push workflow file changes. I'm checking how earlier backports that touched `images.yml` got pushed.
+> Bash cd /builds/looper/tacplus/issues/932; for n in 801 751; do gh pr view $n --repo tacplus-dev/tacplus --json headRefName,author,files,body -q '"\(.headRefName) \(.author.login) \([.files[].path])\n\(.body[0:600])"'; echo; done; /usr/local/bin/repo-looper --help 2>&1 | head -40
+< looper/tacplus-757-backport-2.5 app/tacplus-looper ["docs/VERSIONING.md","images/base.Dockerfile"] Backport of #757 to release/2.5.  #711 fixed linux-libc-dev (DSA-6628-1) by rebuilding `build` only, so `base:2.5` (and `base:latest`) kept 6.12.116-1 with six fixed HIGH findings. This adds the OS-pac...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; git log -1 --format='%cI %an' origin/backport/584-release-2.5; gh search issues --owner tacplus-dev "workflows permission" --json repository,number,title,state -q '.[]|"\(.repository.nameWithOwner)#\(.number) \(.state) \(.title)"' | head; gh search issues --owne...
+< 2026-11-15T07:45:13Z jodydadescott tacplus-dev/looper#99 closed --checkpoint says 'pushed' when GitHub rejected the push (a .github/workflows change without the App's workflows permission) tacplus-dev/llmproxy#56 open Security checks: 15 new non-blocking findings (semgrep mutable action tags in ci.y...
+> Bash cd /builds/looper/tacplus/issues/932; gh issue view 106 --repo tacplus-dev/looper --comments | tail -30; gh issue view 194 --repo tacplus-dev/looper | sed -n 1,40p
+< author:	tacplus-looper association:	none edited:	false status:	none -- The looper of looper starts this issue with its limit 4h capped at 4h by this job (https://gitlab.com/tacplus-dev/looper/-/jobs/17842068337), which ends sooner: the run stops by itself before then, its work checkpointed, and the ...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; gh issue view 194 --repo tacplus-dev/looper --comments | grep -v "^$" | tail -25; gh api repos/tacplus-dev/looper/contents/README.md -H 'Accept: application/vnd.github.raw' | grep -n -i -B2 -A6 "looper:workflows" | head -50
+< edited:	false status:	none -- The looper of looper starts this issue on `claude-opus-5-5`, the default model. Its limit 4h is capped at 4h by this job (https://gitlab.com/tacplus-dev/looper/-/jobs/18174890373), which ends sooner: the run stops by itself before then, its work checkpointed, and the ne...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; mkdir -p backports-932; for b in 2.0 2.1 2.2 2.3 2.4 2.5; do git format-patch -q -1 backport/932-release-$b --stdout > backports-932/release-$b.patch; done; cat > backports-932/README <<'EOF' Work in progress of #932 (not to land): one patch per release line, ea...
+< total 200 drwxr-xr-x  2 looper-932 looper-932  4096 Nov 20 18:25 . drwxr-x--- 14 looper-932 looper-932  4096 Nov 20 18:25 .. -rw-r--r--  1 looper-932 looper-932   430 Nov 20 18:25 README -rw-r--r--  1 looper-932 looper-932 26002 Nov 20 18:25 release-2.0.patch -rw-r--r--  1 looper-932 looper-932 3102...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/932; cat > /tmp/c932.md <<'EOF' **Waiting on a label: this issue needs `looper:workflows` before its backports can be pushed.**  The change is the backport the suggestion asks for. It removes the tacplus job from each line's `images.yml`, so every pull request change...
+= task_started
+= task_notification
+< [{"name":"needs-decision"}] https://github.com/tacplus-dev/tacplus/issues/932#issuecomment-7047381568 https://github.com/tacplus-dev/tacplus/issues/932
+> Bash cd /builds/looper/tacplus/issues/932; /usr/local/bin/repo-looper --repo tacplus --issue 932 --checkpoint "Backports of #932 ready for release/2.0-2.5 (one commit each, saved as backports-932/release-X.Y.patch; apply with git am on origin/release/X.Y) and main's VERSIONING.md/PROPOSALS.md edits (unco...
+< [2026-11-20T18:25:33Z] checkpoint of #932 (a step) pushed to looper/tacplus-932:  11 files changed, 4255 insertions(+), 7 deletions(-)
+> Bash cd /builds/looper/tacplus/issues/932; git fetch -q origin looper/tacplus-932 && git ls-tree --name-only -r FETCH_HEAD backports-932 | head; git diff --stat origin/main FETCH_HEAD | tail -2
+< backports-932/README backports-932/release-2.0.patch backports-932/release-2.1.patch backports-932/release-2.2.patch backports-932/release-2.3.patch backports-932/release-2.4.patch backports-932/release-2.5.patch  docs/VERSIONING.md              |   6 +-  11 files changed, 4255 insertions(+), 7 dele...
+The fix is ready for all six release lines, but nothing is pushed or landed yet: the issue needs the `looper:workflows` label from a member first.
+
+**Why it's stuck:** every backport removes the `tacplus` image job from that line's `.github/workflows/images.yml`. GitHub refused to push all six branches because my token has no permission to change workflow files. The looper only grants that permission when a member has put `looper:workflows` on the issue (looper#115). I commented on #932 asking for the label and added `needs-decision`. Once a member adds `looper:workflows` and removes `needs-decision`, the next run picks it up.
+
+**What's ready** (one commit per line, release/2.0 to release/2.5):
+- **`images.yml`:** the jobs that built and pushed the `tacplus` image are gone. One of them also gave each release's `build` image its version tags (`2.5.26`, `2.5`, `2`). I kept that step as a job of its own, so the build image keeps its tags.
+- **Removed files:** `images/tacplus.Dockerfile` and the unused root `Dockerfile` (the root-user problem #580 is about). On 2.0 also `images/smoke.sh`, which only that image shipped. `just images` now builds base and build only.
+- **Docs on each line:** say the image is deprecated and that `tacplus:X.Y` stays at its last tag. Consumers should install the release binary and keep it current with `tacplus upgrade`.
+- **New test** `scripts/images_no_tacplus_test.go`: the workflow builds, pushes and tags no `tacplus` image, its Dockerfiles are gone, and a release still tags its build image. It failed on release/2.5 before the change and passes on all six lines after it. I didn't run the full gates or a build job on any release branch.
+- **Main:** a `docs/VERSIONING.md` line giving each line's last tag, and removal of the PROPOSALS.md entry that asked which way to go. This is uncommitted; it lands with the backports.
+
+**Two things to confirm on the issue:**
+- **I included 2.0.** The title says 2.1 to 2.5, but release/2.0 pushed the image too (`tacplus:2.0.32` on 2026-11-15). If 2.0 should keep pushing it, that pull request gets dropped.
+- **Container users on these lines stop getting patches.** On 2.0 to 2.5, `tacplus:X.Y` is the documented way to run tacplus in a container. Those lines have nothing to replace it (that came in 2.6), so anyone still pulling it stays on 2.0.32, 2.1.25, 2.2.22, 2.3.24, 2.4.24 or 2.5.25. The accepted suggestion took this into account.
+
+**What's left for the next run:** push the six branches and open the pull requests. Their descriptions will name the patch to cut once each merges: `v2.0.33`, `v2.1.26`, `v2.2.23`, `v2.3.25`, `v2.4.25` and `v2.5.26`. Then commit main's doc change, build it and land it. There is no `v2.6.2`, because main and 2.6 have no `tacplus` image. The patches are saved on `looper/tacplus-932` under `backports-932/` (checkpoint pushed). They're not meant to land, and must be deleted before anything is committed on that branch.
+= success: The fix is ready for all six release lines, but nothing is pushed or landed yet: the issue needs the `looper:workflows` label from a member first.
+
+**Why it's stuck:** every backport removes the `tacplus` image job from that line's `.github/workflows/images.yml`. GitHub refused to push all six branches because my token has no permission to change workflow files. The looper only grants that permission when a member has put `looper:workflows` on the issue (looper#115). I commented on #932 asking for the label and added `needs-decision`. Once a member adds `looper:workflows` and removes `needs-decision`, the next run picks it up.
+
+**What's ready** (one commit per line, release/2.0 to release/2.5):
+- **`images.yml`:** the jobs that built and pushed the `tacplus` image are gone. One of them also gave each release's `build` image its version tags (`2.5.26`, `2.5`, `2`). I kept that step as a job of its own, so the build image keeps its tags.
+- **Removed files:** `images/tacplus.Dockerfile` and the unused root `Dockerfile` (the root-user problem #580 is about). On 2.0 also `images/smoke.sh`, which only that image shipped. `just images` now builds base and build only.
+- **Docs on each line:** say the image is deprecated and that `tacplus:X.Y` stays at its last tag. Consumers should install the release binary and keep it current with `tacplus upgrade`.
+- **New test** `scripts/images_no_tacplus_test.go`: the workflow builds, pushes and tags no `tacplus` image, its Dockerfiles are gone, and a release still tags its build image. It failed on release/2.5 before the change and passes on all six lines after it. I didn't run the full gates or a build job on any release branch.
+- **Main:** a `docs/VERSIONING.md` line giving each line's last tag, and removal of the PROPOSALS.md entry that asked which way to go. This is uncommitted; it lands with the backports.
+
+**Two things to confirm on the issue:**
+- **I included 2.0.** The title says 2.1 to 2.5, but release/2.0 pushed the image too (`tacplus:2.0.32` on 2026-11-15). If 2.0 should keep pushing it, that pull request gets dropped.
+- **Container users on these lines stop getting patches.** On 2.0 to 2.5, `tacplus:X.Y` is the documented way to run tacplus in a container. Those lines have nothing to replace it (that came in 2.6), so anyone still pulling it stays on 2.0.32, 2.1.25, 2.2.22, 2.3.24, 2.4.24 or 2.5.25. The accepted suggestion took this into account.
+
+**What's left for the next run:** push the six branches and open the pull requests. Their descriptions will name the patch to cut once each merges: `v2.0.33`, `v2.1.26`, `v2.2.23`, `v2.3.25`, `v2.4.25` and `v2.5.26`. Then commit main's doc change, build it and land it. There is no `v2.6.2`, because main and 2.6 have no `tacplus` image. The patches are saved on `looper/tacplus-932` under `backports-932/` (checkpoint pushed). They're not meant to land, and must be deleted before anything is committed on that branch.
+= usage: {"claude-opus-5-5":{"inputTokens":136,"outputTokens":44385,"cacheReadInputTokens":7296337,"cacheCreationInputTokens":150636,"webSearchRequests":0,"costUSD":3.5525994000000005,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":17577,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}

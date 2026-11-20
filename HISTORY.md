@@ -174,3 +174,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue consumer-build-typescript fails on main: c2d case's expected 'no grpc_w2s_client edges' WARN fails the clean-log check (#839)
 - 2026-11-19 looper issue gosec G122 (HIGH, CWE-367) at cmd/sysrename/main.go:111: os.WriteFile on a filepath.Walk path (symlink TOCTOU) (#568)
 - 2026-11-19 looper issue gosec G703 (HIGH, CWE-22) at cmd/sysrename/main.go:111: os.WriteFile to a walked path, not confined to -root (#577)
+- 2026-11-19 looper issue runtime-smoke: run.sh fails at setup, copies consumer-contract/proto/platform/health.proto that #161 removed (#657)

@@ -1,12 +1,12 @@
 ---
-description: Install tacplus from a GitHub release, keep it current with tacplus upgrade, run it as a container image, or build it from source.
+description: Install tacplus from a GitHub release, keep it current with tacplus upgrade, or build it from source.
 ---
 
 # Install
 
 tacplus is a single binary. It drives `protoc` and the protoc plugins for the
-languages you generate, so a working setup is the binary plus those tools;
-the [container image](#container-image) carries all of them.
+languages you generate, so a working setup is the binary plus those tools
+([What `tacplus build` needs](#what-tacplus-build-needs)).
 
 ## Release binaries
 
@@ -67,9 +67,8 @@ Download one, check it against `checksums.txt`, and put it on your `PATH`:
 
 ### What `tacplus build` needs
 
-The binary generates code by running `protoc` and a plugin per language. With
-a release binary you install them yourself; the [image](#container-image) has
-them all, at the versions tacplus is tested with.
+The binary generates code by running `protoc` and a plugin per language. You install
+them yourself.
 
 | You generate | Needs on `PATH` |
 |---|---|
@@ -106,47 +105,10 @@ requests to GitHub (and drops it on a redirect to another host).
 
 ## Container image
 
-`ghcr.io/tacplus-dev/tacplus/tacplus` is a slim image with the tacplus binary,
-`protoc`, and the plugin for every language that needs one. It is built for
-`linux/amd64` and `linux/arm64`.
-
-| Tag | Meaning |
-|---|---|
-| `2.1` | the newest `2.1.x`: **what you pin** |
-| `2.1.0` | that release, immutable |
-| `2` | the newest `2.x` |
-| `latest` | the newest release |
-| `main-<sha>` | an unreleased build of `main` |
-
-Use it as its **own generate step**: run it over your proto source to write
-the generated model, then compile the result in your usual builder image.
-Don't build `FROM` it. Pulling `tacplus:2.1` again is all it takes to pick
-up a new patch; your builder image is untouched.
-
-```bash
-docker run --rm --pull always -v "$PWD:/workspace" \
-  ghcr.io/tacplus-dev/tacplus/tacplus:2.1 \
-  tacplus build --config tacplus.yaml --src proto
-```
-
-The image's working directory is `/workspace`, so `tacplus.yaml` and the
-proto source are found where you mounted them. The generated files are
-written by the container's user, which is root unless you say otherwise.
-
-In a GitHub Actions workflow the generate step is one `run:` line, ahead of
-the compile:
-
-```yaml
-steps:
-  - uses: actions/checkout@v4
-  - name: Generate
-    run: >-
-      docker run --rm --pull always -v "$PWD:/workspace"
-      ghcr.io/tacplus-dev/tacplus/tacplus:2.1
-      tacplus build --config tacplus.yaml --src proto
-  - name: Build
-    run: go build ./...
-```
+The `ghcr.io/tacplus-dev/tacplus/tacplus` image is deprecated: its tags
+stay as they are and it is never pushed again, so `tacplus:2.1` stays
+at `2.1.25` and takes none of this line's later patches. Install the
+release binary instead and keep it current with `tacplus upgrade`.
 
 ## From source
 

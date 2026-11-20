@@ -1,5 +1,7 @@
 [
   {"tool":"bandit","id":"B101","file":"cross-test/runtime-smoke/consumers/consumer.py","count":47},
+  {"tool":"bandit","id":"B404","file":"cross-test/lib/rust_selftest_hash.py","count":1},
+  {"tool":"bandit","id":"B603","file":"cross-test/lib/rust_selftest_hash.py","count":1},
   {"tool":"gosec","id":"G101","file":"cross-test/chaos/fault/fault.go","count":1},
   {"tool":"gosec","id":"G101","file":"example/server/main.go","count":1},
   {"tool":"gosec","id":"G104","file":"cmd/upgrade/upgrade.go","count":1},

@@ -36,6 +36,24 @@ source "$ROOT_DIR/cross-test/lib/java-compile.sh"
 
 die() { echo "c2d-server check FAILED: $*" >&2; exit 1; }
 
+# Each Java self-test JVM runs under a deadline, so a hung run fails this leg
+# within minutes instead of holding the gate until its own timeout (#778).
+# On the deadline the JVM gets SIGQUIT first, which writes its thread dump to
+# the log, then SIGKILL. Usage: run_java_selftest <log> <java command...>;
+# returns the JVM's status, 124 or 137 on the deadline.
+JAVA_SELFTEST_TIMEOUT="${C2D_JAVA_SELFTEST_TIMEOUT:-600}"
+run_java_selftest() {
+  local log="$1" rc=0
+  shift
+  timeout --signal=QUIT --kill-after=20 "$JAVA_SELFTEST_TIMEOUT" "$@" >"$log" 2>&1 || rc=$?
+  if [[ $rc -eq 124 || $rc -eq 137 ]]; then
+    echo "the self-test JVM did not exit within ${JAVA_SELFTEST_TIMEOUT}s; its last lines and thread dump:" >&2
+    grep -v -E "^\s*$" "$log" | grep -B20 -m1 "^Full thread dump" >&2 || tail -40 "$log" >&2
+    sed -n '/^Full thread dump/,/^JNI global refs/p' "$log" | head -300 >&2
+  fi
+  return "$rc"
+}
+
 LANGUAGES="go java rust swift"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -51,7 +69,15 @@ if [[ ! -x "$TACPLUS_BIN" || -z "${TACPLUS_BIN_PREBUILT:-}" ]]; then
 fi
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# The go, java and rust self-tests serve on a socket of this run's own, not on
+# the declared socket_path: the gates run this script's legs at once, and on
+# the one shared path a leg's daemon took another's socket (#778). They still
+# check the generated constant is the declared path. Under /tmp, as a Unix
+# socket path is short. The swift leg dials the declared path, which only it
+# serves.
+SOCK_DIR="$(mktemp -d /tmp/tacplus-c2d.XXXXXX)"
+export C2D_SELFTEST_SOCKET="$SOCK_DIR/daemon.sock"
+trap 'rm -rf "$WORK" "$SOCK_DIR"' EXIT
 
 generate() {
   local language="$1"
@@ -140,8 +166,8 @@ run_java() {
   echo "==> Running generated Java standalone C2D host self-test"
   # grpc-netty logs every frame at DEBUG; keep it in a log and show the
   # self-test's own verdict.
-  if ! "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$compile_dir/target/classes:$(cat "$compile_dir/classpath")" \
-      com.example.c2dserver.daemon.C2DStandaloneSelfTest >"$WORK/java/selftest.log" 2>&1; then
+  if ! run_java_selftest "$WORK/java/selftest.log" "$java_cmd" --sun-misc-unsafe-memory-access=allow -cp "$compile_dir/target/classes:$(cat "$compile_dir/classpath")" \
+      com.example.c2dserver.daemon.C2DStandaloneSelfTest; then
     grep -E "FAIL|Exception|check\(s\) failed" "$WORK/java/selftest.log" | head -40
     die "generated Java standalone C2D host self-test failed"
   fi
@@ -172,9 +198,9 @@ run_java() {
       || { cat "$mdir/javac.log"; die "the $mutant C2DServer mutant did not compile"; }
     echo "==> Running the Java self-test against a $mutant C2DServer"
     local rc=0
-    "$java_cmd" --sun-misc-unsafe-memory-access=allow \
+    run_java_selftest "$mdir/selftest.log" "$java_cmd" --sun-misc-unsafe-memory-access=allow \
       -cp "$mdir/classes:$compile_dir/target/classes:$(cat "$compile_dir/classpath")" \
-      com.example.c2dserver.daemon.C2DStandaloneSelfTest >"$mdir/selftest.log" 2>&1 || rc=$?
+      com.example.c2dserver.daemon.C2DStandaloneSelfTest || rc=$?
     case "$mutant" in
       slow-bind)
         [[ $rc -eq 0 ]] && grep -q "C2D standalone host self-test passed" "$mdir/selftest.log" \

@@ -11,29 +11,53 @@ Typed accounting event emitter using the delegation pattern.
 """
 
 from .accounting_manager import (
+    ACCOUNTING_INTERNAL_HEADER,
+{{- range .Acct.Stages}}
+    STAGE_{{.}},
+{{- end}}
+    RpcMetrics,
     Sink,
     Emitter,
     LoggerSink,
 {{- if .HasAccountingRecord}}
     EventBusSink,
+    SinkStats,
     method_label,
 {{- end}}
-    capture_error_context,
-    should_capture_stack,
+    add_bytes,
+    begin_metrics,
+    end_metrics,
     grpc_code_from_error,
-    error_context_from_error,
+    is_accounting_internal,
+    level_for,
+    outcome_for_code,
+    reason_for,
+    set_records_returned,
+    set_verified_caller,
 )
 
 __all__ = [
+    "ACCOUNTING_INTERNAL_HEADER",
+{{- range .Acct.Stages}}
+    "STAGE_{{.}}",
+{{- end}}
+    "RpcMetrics",
     "Sink",
     "Emitter",
     "LoggerSink",
 {{- if .HasAccountingRecord}}
     "EventBusSink",
+    "SinkStats",
     "method_label",
 {{- end}}
-    "capture_error_context",
-    "should_capture_stack",
+    "add_bytes",
+    "begin_metrics",
+    "end_metrics",
     "grpc_code_from_error",
-    "error_context_from_error",
+    "is_accounting_internal",
+    "level_for",
+    "outcome_for_code",
+    "reason_for",
+    "set_records_returned",
+    "set_verified_caller",
 ]

@@ -277,3 +277,32 @@ func TestGoValidationSkipsPrincipalNamespaceAnnotationsSilently(t *testing.T) {
 		t.Fatalf("expected no warnings, got %d: %v", got, logs.All())
 	}
 }
+
+// accounting_safe marks a string/bytes field of an accounting event as an
+// identifier or code (parser.ValidateAccountingSafe reads it); it produces no
+// validation code, so it must be skipped without the unknown-annotation warning
+// the warning-free gates (jwk-alg, redact, trace-carry) fail on.
+func TestGoValidationSkipsAccountingSafeSilently(t *testing.T) {
+	core, logs := observer.New(zapcore.WarnLevel)
+	restore := zap.L()
+	zap.ReplaceGlobals(zap.New(core))
+	defer zap.ReplaceGlobals(restore)
+
+	msg := model.Message{
+		Name: "TokenExchanged",
+		Fields: []model.Field{
+			{Name: "subject", Type: "string", Annotations: map[string]model.AnnotationValue{
+				"accounting_safe": {Type: model.AnnotationTypeBool, BoolValue: true},
+			}},
+		},
+	}
+
+	var b strings.Builder
+	if err := generateValidationHelpers(&b, msg); err != nil {
+		t.Fatalf("generateValidationHelpers: %v", err)
+	}
+
+	if got := logs.Len(); got != 0 {
+		t.Fatalf("expected no warnings, got %d: %v", got, logs.All())
+	}
+}

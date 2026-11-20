@@ -17,7 +17,7 @@ from {{.HelpersImportFrom}} import *
 from {{.CollectionImportFrom}} import WatchSource, WatchHub, Page, PageParams, decode_page_token, encode_page_token, effective_page_size
 from {{.TraceImportFrom}} import trace_pb2 as trace_pb
 {{- if .HasAccounting}}
-from {{.AccountingImportFrom}} import grpc_code_from_error, should_capture_stack, error_context_from_error
+from {{.AccountingImportFrom}} import ACCOUNTING_INTERNAL_HEADER, STAGE_AUTH, STAGE_REQUEST, STAGE_HANDLER, STAGE_RESPONSE, begin_metrics, end_metrics, is_accounting_internal, set_verified_caller
 from {{.AccountingMethodImportFrom}} import accounting_method_pb2
 {{- end}}
 
@@ -103,27 +103,40 @@ class {{.WrapperName}}:
         metadata = self._metadata_from_context(context)
         return metadata.get("x-request-id") or metadata.get("request-id") or ""
 
-    def _grpc_code_number(self, code) -> int:
+    def _wire_code(self, context):
+        """The status code the call ended with, as context.abort set it;
+        None when the context has not recorded one."""
+        code_fn = getattr(context, "code", None)
+        if not callable(code_fn):
+            return None
+        try:
+            code = code_fn()
+        except Exception:
+            return None
+        if code is None:
+            return None
         value = getattr(code, "value", code)
         if isinstance(value, tuple) and value:
-            return int(value[0])
+            value = value[0]
         try:
             return int(value)
         except Exception:
-            return 2
+            return None
 
-    def _emit_accounting(self, method, started_at: float, exc, context):
-        if self._emitter is None:
+    def _emit_accounting(self, method, stage, started_at: float, exc, context, metrics, token):
+        """Emits the call's one RpcCompleted (tacplus#273) and ends its call
+        scope. stage is how far the call got; exc is what it ended with (None
+        on success). A call whose verified caller is a service principal and
+        that carries the accounting_internal marker stores accounting, and is
+        not itself accounted."""
+        internal = is_accounting_internal(ACCOUNTING_INTERNAL_HEADER in self._metadata_from_context(context))
+        end_metrics(token)
+        if self._emitter is None or internal:
             return
         duration_ms = max(0, int((time.time() - started_at) * 1000))
         request_id = self._request_id_from_context(context)
-        if exc is None:
-            self._emitter.rpc_completed(method, duration_ms, {}, request_id)
-            return
-        code = grpc_code_from_error(exc)
-        code_number = self._grpc_code_number(code)
-        error_context = error_context_from_error(exc, should_capture_stack(code))
-        self._emitter.rpc_error(method, code_number, str(exc), duration_ms, error_context, {}, request_id)
+        code = self._wire_code(context) if exc is not None else 0
+        self._emitter.rpc(method, stage, exc, duration_ms, metrics, {}, request_id, code=code)
 
 {{- end}}
 
@@ -159,7 +172,10 @@ class {{.WrapperName}}:
         if self._authorize_func is None:
             raise PermissionError(
                 f"authorizer not configured for {full_method} — auth is mandatory and cannot be disabled")
-        self._authorize_func(self._metadata_from_context(context), full_method, req)
+        sub_type = self._authorize_func(self._metadata_from_context(context), full_method, req)
+{{- if .HasAccounting}}
+        set_verified_caller(sub_type)
+{{- end}}
 
     def _authenticate(self, context, target_namespace=None, full_method=None):
         """Check authentication only (auth_any_user). Fail-closed: a missing func rejects.
@@ -169,9 +185,12 @@ class {{.WrapperName}}:
             raise PermissionError(
                 "authenticator not configured — auth is mandatory and cannot be disabled")
         if full_method is None:
-            self._authenticate_func(self._metadata_from_context(context), target_namespace)
+            sub_type = self._authenticate_func(self._metadata_from_context(context), target_namespace)
         else:
-            self._authenticate_func(self._metadata_from_context(context), target_namespace, full_method)
+            sub_type = self._authenticate_func(self._metadata_from_context(context), target_namespace, full_method)
+{{- if .HasAccounting}}
+        set_verified_caller(sub_type)
+{{- end}}
 
     def _abort_handler_error(self, context, exc):
         grpc_code = getattr(exc, "grpc_code", None)

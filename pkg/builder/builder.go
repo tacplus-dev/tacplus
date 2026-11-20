@@ -184,6 +184,11 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := parser.ValidateSensitiveNames(allParsedFiles); err != nil {
 		return err
 	}
+	// Accounting carries no data (tacplus#273): every string or bytes field of an
+	// accounting event is a marked identifier or code.
+	if err := parser.ValidateAccountingSafe(allParsedFiles); err != nil {
+		return err
+	}
 	// The legacy egress redaction still generates, deprecated until 3.0.
 	if w := parser.LegacyRedactWarning(allParsedFiles); w != "" {
 		fmt.Fprintln(os.Stderr, w)

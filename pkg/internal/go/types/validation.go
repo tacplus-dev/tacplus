@@ -1170,7 +1170,9 @@ func Validate%[1]s%[3]sWithDepth(m *%[1]s, depth int) error {
 				"subscribe",
 				"identity_namespace", "identity_subject",
 				"identity_spiffe_subject", "identity_spiffe_resource",
-				"principal", "store_principal", "namespace", "store_namespace":
+				"principal", "store_principal", "namespace", "store_namespace",
+				// accounting_safe is checked by parser.ValidateAccountingSafe.
+				"accounting_safe":
 
 				// Non-validation annotations — used by other code generators (statedb, constants, etc.)
 				// Silently skip: these do not produce validation code.

@@ -2531,11 +2531,14 @@ func TestGoAccountingRuntimeCoversMethodKinds(t *testing.T) {
 	completed := map[services_pb.ContractclientRPCs]int{}
 	errorsByMethod := map[services_pb.ContractclientRPCs]int{}
 	for _, event := range sink.snapshot() {
-		if rpc := event.GetRpcCompleted(); rpc != nil {
-			completed[rpc.GetMethod().GetContractclient()]++
+		// tacplus#273: one RpcCompleted per call; its outcome says whether it failed.
+		rpc := event.GetRpcCompleted()
+		if rpc == nil {
 			continue
 		}
-		if rpc := event.GetRpcError(); rpc != nil {
+		if rpc.GetOutcome() == accounting_pb.RpcOutcome_RPC_OUTCOME_PERMITTED {
+			completed[rpc.GetMethod().GetContractclient()]++
+		} else {
 			errorsByMethod[rpc.GetMethod().GetContractclient()]++
 		}
 	}
@@ -3632,7 +3635,7 @@ use contractclient_model::types::contract::contractclient::{
 };
 use contractclient_model::types::generated::services::services as services_pb;
 use contractclient_model::types::sys::accounting::accounting::{
-    event as accounting_event, Event as AccountingEvent,
+    event as accounting_event, Event as AccountingEvent, RpcOutcome,
 };
 use contractclient_model::types::sys::trace::{TraceEvent, TraceEventKind};
 use contractclient_model::types::services::contractclient::{
@@ -4274,16 +4277,14 @@ fn count_accounting_events(events: &[AccountingEvent]) -> (HashMap<i32, usize>, 
     let mut completed = HashMap::new();
     let mut errors = HashMap::new();
     for event in events {
-        match &event.event {
-            Some(accounting_event::Event::RpcCompleted(rpc)) => {
-                let method = rpc.method.as_ref().map(|m| m.contractclient).unwrap_or_default();
+        // tacplus#273: one RpcCompleted per call; its outcome says whether it failed.
+        if let Some(accounting_event::Event::RpcCompleted(rpc)) = &event.event {
+            let method = rpc.method.as_ref().map(|m| m.contractclient).unwrap_or_default();
+            if rpc.outcome == RpcOutcome::Permitted as i32 {
                 *completed.entry(method).or_insert(0) += 1;
-            }
-            Some(accounting_event::Event::RpcError(rpc)) => {
-                let method = rpc.method.as_ref().map(|m| m.contractclient).unwrap_or_default();
+            } else {
                 *errors.entry(method).or_insert(0) += 1;
             }
-            _ => {}
         }
     }
     (completed, errors)
@@ -7005,13 +7006,14 @@ public final class Consumer {
       Map<Services.ContractclientRPCs, Integer> completed,
       Map<Services.ContractclientRPCs, Integer> errors) {
     for (Accounting.Event event : events) {
+      // tacplus#273: one RpcCompleted per call; its outcome says whether it failed.
       if (event.hasRpcCompleted()) {
         Services.ContractclientRPCs method = event.getRpcCompleted().getMethod().getContractclient();
-        completed.merge(method, 1, Integer::sum);
-      }
-      if (event.hasRpcError()) {
-        Services.ContractclientRPCs method = event.getRpcError().getMethod().getContractclient();
-        errors.merge(method, 1, Integer::sum);
+        if (event.getRpcCompleted().getOutcome() == Accounting.RpcOutcome.RPC_OUTCOME_PERMITTED) {
+          completed.merge(method, 1, Integer::sum);
+        } else {
+          errors.merge(method, 1, Integer::sum);
+        }
       }
     }
   }

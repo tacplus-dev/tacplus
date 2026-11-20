@@ -320,9 +320,11 @@ export class Authorizer {
 
   /**
    * Authorizes a request by verifying the token signature, audience, and
-   * service_entitlements claim.
+   * service_entitlements claim. Resolves to the verified token's sub_type,
+   * which accounting reads to honour the accounting_internal marker
+   * (tacplus#273) only for a service caller.
    */
-  async authorize(metadata: Record<string, string>, fullMethod: string, request?: unknown): Promise<void> {
+  async authorize(metadata: Record<string, string>, fullMethod: string, request?: unknown): Promise<string> {
     const authHeader = metadata['authorization'] || '';
     if (!authHeader) {
       throw AuthError.unauthenticated('missing authorization header');
@@ -412,7 +414,7 @@ export class Authorizer {
       }
       // Level-or-below check (applies to S2S too when target_namespace_field is set).
       this.checkTargetNamespace(methodKey, tw.getNamespace(), request);
-      return;
+      return subType;
     }
 
     // C2S path: user tokens carry service_entitlements.
@@ -424,7 +426,7 @@ export class Authorizer {
 
     if (serviceEntitlementsGrantRPC(te, Authorizer.SERVICE_NAME, fullMethod)) {
       this.checkTargetNamespace(qualifiedMethodKey(fullMethod), tw.getNamespace(), request);
-      return;
+      return subType;
     }
     throw AuthError.permissionDenied(
       `method "${methodName}" not in service_entitlements for service "${Authorizer.SERVICE_NAME}"`
@@ -435,9 +437,10 @@ export class Authorizer {
    * Authenticates a request by verifying token signature and audience only.
    * Does NOT check entitlements. Used for auth_any_user services. fullMethod,
    * when given, lets an RPC_FLAG_ANY_TENANT method's open door hold; without
-   * it the default tenant door applies.
+   * it the default tenant door applies. Resolves to the verified token's
+   * sub_type (see authorize).
    */
-  async authenticate(metadata: Record<string, string>, targetNamespace?: string, fullMethod?: string): Promise<void> {
+  async authenticate(metadata: Record<string, string>, targetNamespace?: string, fullMethod?: string): Promise<string> {
     const authHeader = metadata['authorization'] || '';
     if (!authHeader) {
       throw AuthError.unauthenticated('missing authorization header');
@@ -503,6 +506,7 @@ export class Authorizer {
     }
 
     // auth_any_user: token is valid and correctly scoped — allow.
+    return tw.getSubType();
   }
 
   close(): void {

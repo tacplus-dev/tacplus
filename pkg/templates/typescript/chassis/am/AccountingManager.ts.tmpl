@@ -13,16 +13,142 @@
  * is battle-tested, swap to EventBusSink with no other code changes.
  */
 
-import type {
-  Event,
-  ErrorContext,
-  StateAction,
+import { AsyncLocalStorage } from 'node:async_hooks';
+import {
+  EventLevel,
+  RpcOutcome,
+  RpcReason,
+  type Event,
+  type StateAction,
 } from '../../types/sys/accounting/index.js';
 import type { AccountingMethod } from '../../types/generated/accounting_method/index.js';
 {{- if .HasAccountingRecord}}
 import { create } from '@bufbuild/protobuf';
 import { type AccountingRecord, AccountingRecordSchema } from '{{.AccountingRecordImportPath}}';
 {{- end}}
+
+// ---------------------------------------------------------------------------
+// Classification (tacplus#273) — rendered from accountingpolicy, the one
+// definition Go, Java, Rust, TypeScript and Python share.
+// ---------------------------------------------------------------------------
+
+/** Stage is how far through the generated call path a call got. */
+export type Stage = {{range $i, $s := .Acct.Stages}}{{if $i}} | {{end}}'{{$s}}'{{end}};
+
+/** Outcome is an RpcOutcome name (RPC_OUTCOME_<name>). */
+export type Outcome = keyof typeof RpcOutcome;
+
+/** Reason is an RpcReason name (RPC_REASON_<name>). */
+export type Reason = keyof typeof RpcReason;
+
+/** Level is an EventLevel name (EVENT_LEVEL_<name>). */
+export type Level = keyof typeof EventLevel;
+
+const CODE_OUTCOMES: ReadonlyMap<number, Outcome> = new Map<number, Outcome>([
+{{- range .Acct.CodeOutcomes}}
+  [{{.Code}}, '{{.Outcome}}'], // {{.Name}}
+{{- end}}
+]);
+
+const STAGE_REASONS: ReadonlyMap<string, Reason> = new Map<string, Reason>([
+{{- range .Acct.StageReasons}}
+  ['{{.Stage}}/{{.Outcome}}', '{{.Reason}}'],
+{{- end}}
+]);
+
+const OUTCOME_LEVELS: ReadonlyMap<Outcome, Level> = new Map<Outcome, Level>([
+{{- range .Acct.OutcomeLevels}}
+  ['{{.Outcome}}', '{{.Level}}'],
+{{- end}}
+]);
+
+/** ACCOUNTING_INTERNAL_HEADER marks a call made to store accounting. */
+export const ACCOUNTING_INTERNAL_HEADER = '{{.Acct.InternalHeader}}';
+
+/** Returns the outcome of a call that ended with the gRPC status code. */
+export function outcomeForCode(code: number): Outcome {
+  return CODE_OUTCOMES.get(code) ?? '{{.Acct.DefaultOutcome}}';
+}
+
+/** Returns the reason of a call that stopped at stage with outcome. */
+export function reasonFor(stage: Stage, outcome: Outcome): Reason {
+  if (outcome === 'PERMITTED') return 'UNDEFINED';
+  return STAGE_REASONS.get(`${stage}/${outcome}`) ?? 'INTERNAL';
+}
+
+/** Returns the level of an RpcCompleted with the outcome. */
+export function levelFor(outcome: Outcome): Level {
+  return OUTCOME_LEVELS.get(outcome) ?? 'ERROR';
+}
+
+/** Extracts the numeric gRPC status code a generated wrapper sends for err. */
+export function grpcCodeFromError(err: unknown): number {
+  if (err == null) return 0; // OK
+  if (typeof err === 'object' && 'code' in err && typeof (err as any).code === 'number') {
+    return (err as any).code;
+  }
+  return 13; // INTERNAL, as the wrapper's toGrpcError sends it
+}
+
+// ---------------------------------------------------------------------------
+// Metrics a handler attaches to its call's record
+// ---------------------------------------------------------------------------
+
+/** Metrics are the typed numbers of one call's RpcCompleted.metrics. */
+export interface Metrics {
+  recordsReturned: bigint;
+  bytes: bigint;
+}
+
+/** The accounted call in scope: its metrics and its verified caller. */
+interface CallScope {
+  metrics: Metrics;
+  callerSubType: string;
+}
+
+const callStore = new AsyncLocalStorage<CallScope>();
+
+/**
+ * Runs fn with a fresh accounted-call scope; the generated wrapper runs each
+ * accounted call through it, so setRecordsReturned/addBytes in the handler
+ * land on that call's record.
+ */
+export function runWithMetrics<T>(fn: (metrics: Metrics) => T): T {
+  const scope: CallScope = { metrics: { recordsReturned: 0n, bytes: 0n }, callerSubType: '' };
+  return callStore.run(scope, () => fn(scope.metrics));
+}
+
+/** Sets how many records the current call returned. No-op outside an accounted call. */
+export function setRecordsReturned(n: number | bigint): void {
+  const scope = callStore.getStore();
+  if (scope) scope.metrics.recordsReturned = BigInt(n);
+}
+
+/** Adds n payload bytes to the current call. No-op outside an accounted call. */
+export function addBytes(n: number | bigint): void {
+  const scope = callStore.getStore();
+  if (scope) scope.metrics.bytes += BigInt(n);
+}
+
+/**
+ * Records the sub_type of the current call's verified token; the generated
+ * wrapper calls it once authentication succeeds. No-op outside an accounted
+ * call.
+ */
+export function setVerifiedCaller(subType: string): void {
+  const scope = callStore.getStore();
+  if (scope) scope.callerSubType = subType;
+}
+
+/**
+ * Reports whether the current call stores accounting and so is not itself
+ * accounted: its verified caller is a service principal (sub_type exactly
+ * "service") and it carries the accounting_internal marker. A user or
+ * workload caller with the marker is still recorded.
+ */
+export function isAccountingInternal(hasMarker: boolean): boolean {
+  return hasMarker && callStore.getStore()?.callerSubType === 'service';
+}
 
 // ---------------------------------------------------------------------------
 // Sink interface
@@ -62,57 +188,50 @@ export class Emitter {
     } as unknown as Event;
   }
 
-  /** Emits an INFO RpcCompleted event. */
-  rpcCompleted(
+  /**
+   * Emits the call's one RpcCompleted: its outcome from err's gRPC code, its
+   * reason from the stage it stopped at, and the handler's metrics. The error
+   * text and stack never reach the sink; a FAILED call logs them to the
+   * console at debug.
+   */
+  rpc(
     method: AccountingMethod,
+    stage: Stage,
+    err: unknown,
     durationMs: bigint,
+    metrics: Metrics | undefined,
     identity: Record<string, string>,
     requestId: string,
   ): void {
-    const ev = this.newEvent(2 /* INFO */, identity, requestId);
-    (ev as any).event = {
-      case: 'rpcCompleted',
-      value: { method, durationMs },
+    const code = grpcCodeFromError(err);
+    const outcome = outcomeForCode(code);
+    const reason = reasonFor(stage, outcome);
+    if (outcome === 'FAILED' && err != null) {
+      console.debug('[accounting] rpc failed', {
+        requestId,
+        stage,
+        code,
+        error: err instanceof Error ? (err.stack ?? err.message) : String(err),
+      });
+    }
+    const ev = this.newEvent(EventLevel[levelFor(outcome)], identity, requestId);
+    const value: Record<string, unknown> = {
+      method,
+      durationMs,
+      outcome: RpcOutcome[outcome],
+      code,
+      reason: RpcReason[reason],
     };
-    this.sink.emit(ev);
-  }
-
-  /** Emits an ERROR RpcError event. */
-  rpcError(
-    method: AccountingMethod,
-    code: number,
-    message: string,
-    durationMs: bigint,
-    errorContext: ErrorContext | undefined,
-    identity: Record<string, string>,
-    requestId: string,
-  ): void {
-    const ev = this.newEvent(4 /* ERROR */, identity, requestId);
-    (ev as any).event = {
-      case: 'rpcError',
-      value: { method, code, message, durationMs, errorContext },
-    };
-    this.sink.emit(ev);
-  }
-
-  /** Emits a WARN TokenRejected event. */
-  tokenRejected(
-    reason: string,
-    method: AccountingMethod,
-    identity: Record<string, string>,
-    requestId: string,
-  ): void {
-    const ev = this.newEvent(3 /* WARN */, identity, requestId);
-    (ev as any).event = {
-      case: 'tokenRejected',
-      value: { reason, method },
-    };
+    if (metrics && (metrics.recordsReturned !== 0n || metrics.bytes !== 0n)) {
+      value.metrics = { recordsReturned: metrics.recordsReturned, bytes: metrics.bytes };
+    }
+    (ev as any).event = { case: 'rpcCompleted', value };
     this.sink.emit(ev);
   }
 
   /** Emits a WARN EndpointHealthChanged event. */
   endpointHealthChanged(endpoint: string, healthy: boolean, latencyMs: bigint): void {
-    const ev = this.newEvent(3 /* WARN */, {}, '');
+    const ev = this.newEvent(EventLevel.WARN, {}, '');
     (ev as any).event = {
       case: 'endpointHealthChanged',
       value: { endpoint, healthy, latencyMs },
@@ -128,103 +247,13 @@ export class Emitter {
     identity: Record<string, string>,
     requestId: string,
   ): void {
-    const ev = this.newEvent(2 /* INFO */, identity, requestId);
+    const ev = this.newEvent(EventLevel.INFO, identity, requestId);
     (ev as any).event = {
       case: 'stateUpdated',
       value: { entityType, entityId, action },
     };
     this.sink.emit(ev);
   }
-
-  /** Emits an ERROR Diagnostic event (escape hatch). */
-  diagnostic(
-    message: string,
-    context: string,
-    errorContext: ErrorContext | undefined,
-    identity: Record<string, string>,
-    requestId: string,
-  ): void {
-    const ev = this.newEvent(4 /* ERROR */, identity, requestId);
-    (ev as any).event = {
-      case: 'diagnostic',
-      value: { message, context, errorContext },
-    };
-    this.sink.emit(ev);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// ErrorContext capture
-// ---------------------------------------------------------------------------
-
-/** Builds an ErrorContext from the current call site. */
-export function captureErrorContext(skip: number, shouldStack: boolean): ErrorContext {
-  const ec: ErrorContext = {
-    caller: '',
-    function: '',
-    stackTrace: '',
-  } as unknown as ErrorContext;
-
-  const err = new Error();
-  if (err.stack) {
-    const lines = err.stack.split('\n');
-    const frame = lines[skip + 2]; // skip Error + captureErrorContext
-    if (frame) {
-      const match = frame.match(/at\s+(\S+)\s+\((.+):(\d+):\d+\)/);
-      if (match) {
-        (ec as any).function = match[1];
-        (ec as any).caller = `${match[2]}:${match[3]}`;
-      }
-    }
-    if (shouldStack) {
-      (ec as any).stackTrace = err.stack;
-    }
-  }
-
-  return ec;
-}
-
-/**
- * Returns true for gRPC codes that indicate our bugs
- * (INTERNAL=13, UNKNOWN=2, DATA_LOSS=15).
- */
-export function shouldCaptureStack(code: number): boolean {
-  return code === 13 || code === 2 || code === 15;
-}
-
-/** Extracts a numeric gRPC status code from an error. */
-export function grpcCodeFromError(err: unknown): number {
-  if (err == null) return 0; // OK
-  if (typeof err === 'object' && 'code' in err && typeof (err as any).code === 'number') {
-    return (err as any).code;
-  }
-  return 2; // UNKNOWN
-}
-
-/** Builds ErrorContext from an error, capturing stack if appropriate. */
-export function errorContextFromError(err: unknown, shouldStack: boolean): ErrorContext {
-  const ec: ErrorContext = {
-    caller: '',
-    function: '',
-    stackTrace: '',
-  } as unknown as ErrorContext;
-
-  if (err instanceof Error && err.stack) {
-    const lines = err.stack.split('\n');
-    const frame = lines[1];
-    if (frame) {
-      const match = frame.match(/at\s+(\S+)\s+\((.+):(\d+):\d+\)/);
-      if (match) {
-        (ec as any).function = match[1];
-        (ec as any).caller = `${match[2]}:${match[3]}`;
-      }
-    }
-    if (shouldStack) {
-      (ec as any).stackTrace = err.stack;
-    }
-  }
-
-  return ec;
 }
 
 // ---------------------------------------------------------------------------
@@ -246,20 +275,27 @@ export class LoggerSink implements Sink {
     const base = { sourceId, requestId };
 
     switch (evPayload.case) {
-      case 'rpcCompleted':
-        console.info('[accounting] rpc_completed', { ...base, durationMs: evPayload.value.durationMs });
-        break;
-      case 'rpcError':
-        console.error('[accounting] rpc_error', {
+      case 'rpcCompleted': {
+        const v = evPayload.value;
+        const fields = {
           ...base,
-          code: evPayload.value.code,
-          error: evPayload.value.message,
-          durationMs: evPayload.value.durationMs,
-        });
+          durationMs: v.durationMs,
+          outcome: RpcOutcome[v.outcome],
+          code: v.code,
+          reason: RpcReason[v.reason],
+          recordsReturned: v.metrics?.recordsReturned ?? 0n,
+          bytes: v.metrics?.bytes ?? 0n,
+        };
+        const level = (event as any).level;
+        if (level === EventLevel.ERROR) {
+          console.error('[accounting] rpc_completed', fields);
+        } else if (level === EventLevel.WARN) {
+          console.warn('[accounting] rpc_completed', fields);
+        } else {
+          console.info('[accounting] rpc_completed', fields);
+        }
         break;
-      case 'tokenRejected':
-        console.warn('[accounting] token_rejected', { ...base, reason: evPayload.value.reason });
-        break;
+      }
       case 'endpointHealthChanged':
         console.warn('[accounting] endpoint_health_changed', {
           ...base,
@@ -272,13 +308,6 @@ export class LoggerSink implements Sink {
           ...base,
           entityType: evPayload.value.entityType,
           entityId: evPayload.value.entityId,
-        });
-        break;
-      case 'diagnostic':
-        console.error('[accounting] diagnostic', {
-          ...base,
-          message: evPayload.value.message,
-          context: evPayload.value.context,
         });
         break;
       default:
@@ -317,6 +346,13 @@ export function methodLabel(method: unknown): string {
   return '';
 }
 
+/** SinkStats is EventBusSink's pipeline health. */
+export interface SinkStats {
+  ingested: number;
+  dropped: number;
+  depth: number;
+}
+
 let accountingIdSeq = 0;
 
 function nextAccountingId(sourceId: string, timestampMs: number): string {
@@ -329,6 +365,9 @@ function nextAccountingId(sourceId: string, timestampMs: number): string {
  * typed event into the stored AccountingRecord and hands it to the generated
  * per-topic publisher's queue (built by service_manager.ts.tmpl's
  * createAccountingEmitter, mirroring createTracePublisher).
+ *
+ * The record carries the call's typed outcome, reason, code and metrics, never
+ * an error text (tacplus#273).
  *
  * SEND CONTRACT — NEVER HOLDS THE RPC (issue #34). Sink.emit is a synchronous
  * void call from the generated wrapper's emitAccounting, and Node's event loop
@@ -343,6 +382,7 @@ export class EventBusSink implements Sink {
   private readonly sourceId: string;
   private readonly spoolDepth: number;
   private readonly wake: () => void;
+  private ingested = 0;
   private dropped = 0;
 
   constructor(queue: AccountingRecord[], sourceId: string, wake: () => void, spoolDepth = 4096) {
@@ -356,24 +396,20 @@ export class EventBusSink implements Sink {
     let method: unknown;
     let code = 0;
     let durationMs = 0n;
+    let outcome = 0;
+    let reason = 0;
+    let recordsReturned = 0n;
+    let bytes = 0n;
     const evPayload = (event as any).event;
-    if (evPayload) {
-      switch (evPayload.case) {
-        case 'rpcCompleted':
-          method = evPayload.value.method;
-          durationMs = evPayload.value.durationMs ?? 0n;
-          break;
-        case 'rpcError':
-          method = evPayload.value.method;
-          code = evPayload.value.code ?? 0;
-          durationMs = evPayload.value.durationMs ?? 0n;
-          break;
-        case 'tokenRejected':
-          method = evPayload.value.method;
-          break;
-        default:
-          break;
-      }
+    if (evPayload && evPayload.case === 'rpcCompleted') {
+      const v = evPayload.value;
+      method = v.method;
+      code = v.code ?? 0;
+      durationMs = v.durationMs ?? 0n;
+      outcome = v.outcome ?? 0;
+      reason = v.reason ?? 0;
+      recordsReturned = v.metrics?.recordsReturned ?? 0n;
+      bytes = v.metrics?.bytes ?? 0n;
     }
 
     const timestampMs = (event as any).timestampMs ?? 0n;
@@ -392,6 +428,10 @@ export class EventBusSink implements Sink {
       durationMs,
       principalSub: identity.sub ?? '',
       spiffeId: identity.spiffe_id ?? '',
+      outcome,
+      reason,
+      recordsReturned,
+      bytes,
     });
   }
 
@@ -403,7 +443,16 @@ export class EventBusSink implements Sink {
       return;
     }
     this.queue.push(record);
+    this.ingested += 1;
     this.wake();
+  }
+
+  /**
+   * Returns the pipeline's health as counters, never as records: how many
+   * records the spool accepted and dropped, and how many it holds now.
+   */
+  stats(): SinkStats {
+    return { ingested: this.ingested, dropped: this.dropped, depth: this.queue.length };
   }
 }
 {{- end}}

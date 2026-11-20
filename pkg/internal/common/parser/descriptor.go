@@ -2734,6 +2734,11 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 		annotations["not_sensitive"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 	}
 
+	// accounting_safe - an accounting event's identifier or code, never free text (tacplus#273).
+	if proto.HasExtension(opts, spec.E_AccountingSafe) && proto.GetExtension(opts, spec.E_AccountingSafe).(bool) {
+		annotations["accounting_safe"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	}
+
 	// leader (bool) - per-graph leader election (valid on queue/topic/priority_queue fields)
 	if proto.HasExtension(opts, spec.E_Leader) && proto.GetExtension(opts, spec.E_Leader).(bool) {
 		annotations["leader"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}

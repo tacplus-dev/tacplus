@@ -4,6 +4,27 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Accounting records name their tenant** (2026-11-08, #273 → tacplus-dev/stratum#24): accounting goes to the tenant's
+  own Stratum, but the generated sink leaves `AccountingRecord.namespace` (its `store_namespace`) unset and the
+  emitter's identity map carries only `sub`/`aud`/`iss`/`azp`/`act`. Either the sink fills it from the verified
+  caller's `namespace` claim in Go, Java and Rust, or the event bus stamps it at publish as it stamps the owner;
+  which one is the event bus's and Stratum's contract to settle with stratum#24, so it is not guessed here.
+- **Handler metrics on Go stream RPCs** (2026-11-08, #273): Go's `am.SetRecordsReturned`/`AddBytes` reach the record
+  of a unary call only; a stream handler takes its context from the stream, and the wrapper does not yet hand it a
+  stream whose `Context()` carries the call's `RpcMetrics` (Java's io.grpc.Context and Rust's task-local cover
+  streams). The record of a stream is still written, with its outcome and reason.
+- **Exempt every accounting-topic RPC by type, not only the publish** (2026-11-08, #273): the broker wrapper drops only
+  the accounting topic's publish RPC from its accounting map. A subscribe or watch of the accounting topic (Stratum's
+  ingest) is one record per stream, not per record, so it cannot amplify, and S2S RPCs are not accounted at all; if
+  either changes, widen the exclusion to every RPC whose request or response carries `AccountingRecord`.
+- **Release note for 2.7: the `am` free-text emitters are gone** (2026-11-08, #273): `RpcError`, `TokenRejected`,
+  `Diagnostic`, the agent-telemetry events and the `ErrorContext` helpers are removed from `sys/accounting.proto` and
+  every language's `am`, as #273 asks; a service that called them directly must move to the typed record. The
+  2.7 notes should say so, since docs/VERSIONING.md otherwise keeps a minor additive.
+- **Durable accounting spool self-test is timing-bound under load** (2026-11-08, #273):
+  `TestDurableSpoolReplaysUnacknowledgedAfterRestart` (cross-test/current-generation/testdata/go) failed once with
+  the cursor at 2 of 3 while the whole generated module's tests ran in parallel, and passed five times alone. Its
+  one-second bound may be too tight on a loaded runner.
 - **Rust self-tests once per content hash in the other gates that run them** (2026-11-17, #843):
   `current-generation` runs each Rust chassis crate's self-tests once per gate for each source they test
   (`cross-test/lib/rust-selftest-once.sh`). `cross-test/consumer-contract/run.sh` runs some of the same crates'

@@ -922,6 +922,12 @@ for name, ver in re.findall(r'\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"
         bad.append(f"backoff {ver} (unmaintained, RUSTSEC-2025-0012)")
     elif name == "instant":
         bad.append(f"instant {ver} (unmaintained, RUSTSEC-2024-0384)")
+    # Issue #320: serde_yaml is deprecated and locks unsafe-libyaml, unmaintained
+    # with no fixed release; the chassis and model read YAML with serde-saphyr.
+    elif name == "unsafe-libyaml":
+        bad.append(f"unsafe-libyaml {ver} (RUSTSEC-2024-0449)")
+    elif name == "serde_yaml":
+        bad.append(f"serde_yaml {ver} (deprecated, locks unsafe-libyaml, RUSTSEC-2024-0449)")
 for b in bad:
     print(f"advised crate in the generated lock: {b}", file=sys.stderr)
 sys.exit(1 if bad else 0)
@@ -1474,15 +1480,16 @@ assert_extraction_output() {
   esac
 }
 
-# install_json_key_selftest copies the Rust runtime self-test for
-# common2.JsonKeyProbe into the generated crate's tests/ directory.
+# install_json_key_selftest copies the Rust runtime self-tests for
+# common2.JsonKeyProbe (its JSON keys, and the model and config YAML of #320)
+# into the generated crate's tests/ directory.
 install_json_key_selftest() {
   local output="$1"
   local language="$2"
   [[ "$language" == "rust" ]] || return 0
   [[ -f "$output/Cargo.toml" ]] || die "main fixture (rust): generated crate not found under $output"
   mkdir -p "$output/tests"
-  cp "$SELFTESTS_SRC/rust/json_key_test.rs" "$output/tests/"
+  cp "$SELFTESTS_SRC/rust/json_key_test.rs" "$SELFTESTS_SRC/rust/yaml_test.rs" "$output/tests/"
 }
 
 # install_backpressure_selftests copies the fixture's self-tests into the

@@ -170,3 +170,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue gosec G703 (HIGH, CWE-22) at pkg/formatter/formatter.go:67: the indenter writes generated files back through unconfined paths (#578)
 - 2026-11-19 looper issue TypeScript: required_if_eq on an enum sibling emits the proto value name (EvictionPolicy.EVICTION_POLICY_LRU), so the generated model of cross-test/proto does not compile (#464)
 - 2026-11-19 looper issue semgrep run-shell-injection (HIGH) at .github/workflows/images.yml:74: github.event.inputs.rebuild interpolated into a run: script (#584)
+- 2026-11-19 looper issue Rust DiskStore chassis appendlog.rs opens its log with create(true) and no truncate choice: clippy::suspicious_open_options (HIGH, failing the policy) in every generated Rust model with a DiskStore (6 sites) (#853)

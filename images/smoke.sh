@@ -7,7 +7,8 @@
 set -euo pipefail
 # docker-buildx and gh are built from source with dependencies bumped past
 # advisories their releases have not taken yet (build.Dockerfile, the buildx
-# and gh stages): each must carry every bumped module at least at its floor.
+# and gh stages): each must carry every bumped module at least at its floor,
+# and buildx the modules its release moved past an advisory (containerd, #930).
 # scripts/images_smoke_test.go sources this file for these two functions.
 go_floors() {
   local bin=$1 floor mod min have; shift
@@ -20,7 +21,7 @@ go_floors() {
 }
 go_floors_check() {
   go_floors "${TACPLUS_SMOKE_BUILDX:-/usr/local/libexec/docker/cli-plugins/docker-buildx}" \
-    github.com/moby/go-archive@v0.3.0 golang.org/x/net@v0.62.0 || return 1
+    github.com/containerd/containerd/v2@v2.4.2 github.com/moby/go-archive@v0.3.0 golang.org/x/net@v0.62.0 || return 1
   # CVE-2026-78661 (#350): gh's releases (through 2.103.3) build with x/net 0.60.0.
   go_floors "$(command -v gh)" golang.org/x/net@v0.62.0
 }

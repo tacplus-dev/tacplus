@@ -477,10 +477,19 @@ the looper then marks it `promoted` or `declined` here with the date.
   tenant pin (and now the route pin) of a WATCH seam ahead of request validation and the route check, so an empty
   `target_tenant` there is refused by the pin (`PERMISSION_DENIED`) rather than as `INVALID_ARGUMENT`. Both fail
   closed; the unary seams check in the documented order.
-- **Drop the from-source docker-buildx once a buildx release carries the fixes** (2026-10-29, #190): the build
-  image builds buildx v0.38.1 from source with moby/go-archive 0.3.3 and golang.org/x/net 0.62.0, because no buildx
-  release (master included) has taken them yet. When one does, set `BUILDX_VERSION` to it and drop the bumps (and
-  then the `buildx` stage, copying it from `docker:${DOCKER_VERSION}-cli` again); `tacplus-smoke` keeps the floors.
+- **Drop the from-source docker-buildx once a buildx release carries the fixes** (2026-10-29, #190; 2026-11-20,
+  #930): the build image builds buildx v0.39.1 from source with moby/go-archive 0.3.3, because no buildx release
+  (through 0.39.1) has taken it; 0.39.0 took golang.org/x/net 0.62.0 and containerd v2.4.2 (CVE-2026-95839), so
+  that bump is gone. When one does, set `BUILDX_VERSION` to it and drop the stage, copying it from
+  `docker:${DOCKER_VERSION}-cli` again; `tacplus-smoke` keeps the floors.
+- **The build pipeline scans the pinned build image, and a build-image finding is filed once, on tacplus**
+  (2026-11-20, #930; tacplus-dev/roadmap suggestions/2026-11-20-a-high-in-the-build-image-is-tacplus-s-bug-patched-on-the-line-buildx-past-containerd-v2-4-1-cve-2026-95839-on-main-and-2-6-and-a-build-image-finding-filed-once-upstream-not-as-a-needs-decision-per-pinned-repository.md): the half of #930's
+  suggestion that is not this repository's. The pipeline's security job reports 0 findings for a repository's
+  `build_image` (registry#16, registry's PROPOSALS since 2026-11-12), so consumers find build-image CVEs by hand and
+  file needs-decision (registry#16, fleet-seatrials#60). In tacplus-dev/looper: the security job runs `trivy image`
+  on build.lock's digest (as fleet-seatrials' ci/security.sh does for its CI image), and looper-scan files a
+  build_image finding on tacplus-dev/tacplus (approved, priority:high when a fixed release exists) with a
+  `Blocked-by` in each consumer that finds it (looper#129's rule).
 - **Drop the from-source gh once a gh release carries golang.org/x/net >= 0.62.0** (2026-11-07, #350): the build
   image builds gh v2.103.2 from source with x/net 0.62.0 (CVE-2026-78661), because gh's releases through 2.103.3
   build with 0.60.0. When one does, set `GH_VERSION` to it and download its release tarball in the `fetch` stage

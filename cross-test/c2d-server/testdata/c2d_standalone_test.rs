@@ -36,7 +36,11 @@ use c2dserver_model::types::svc::c2dserver::local_daemon_client::LocalDaemonClie
 use c2dserver_model::types::svc::c2dserver::{LocalEvent, LocalRequest, LocalResponse};
 use futures::StreamExt;
 
-const SOCKET_PATH: &str = "/tmp/tacplus-c2d-server-check/daemon.sock";
+// The fixture's socket_path. The test serves on the path run.sh gives it in
+// C2D_SELFTEST_SOCKET, one per run: the gates run the go, java, rust and swift
+// legs at once, and on one shared path one leg's daemon took another's socket
+// (#778).
+const DECLARED_SOCKET_PATH: &str = "/tmp/tacplus-c2d-server-check/daemon.sock";
 
 #[derive(Default)]
 struct RecordingDaemon {
@@ -95,19 +99,23 @@ impl Handler for Daemon {
 
 #[tokio::test]
 async fn generated_c2d_standalone_host_over_socket() {
+    let socket_path =
+        std::env::var("C2D_SELFTEST_SOCKET").unwrap_or_else(|_| DECLARED_SOCKET_PATH.to_string());
+    let socket = socket_path.as_str();
     // A stale file at the socket path, as a crashed daemon leaves behind.
-    std::fs::create_dir_all("/tmp/tacplus-c2d-server-check").unwrap();
-    let _ = std::fs::remove_file(SOCKET_PATH);
-    std::fs::write(SOCKET_PATH, "stale").unwrap();
+    std::fs::create_dir_all(std::path::Path::new(socket).parent().unwrap()).unwrap();
+    let _ = std::fs::remove_file(socket);
+    std::fs::write(socket, "stale").unwrap();
 
     // A daemon passes the generated constant for the declared socket_path.
-    assert_eq!(c2dserver_model::s2sm::C2D_SOCKET_PATH, SOCKET_PATH);
+    assert_eq!(c2dserver_model::s2sm::C2D_SOCKET_PATH, DECLARED_SOCKET_PATH);
     let state = Arc::new(RecordingDaemon::default());
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let host = tokio::spawn({
         let handler: Arc<dyn Handler> = Arc::new(Daemon(state.clone()));
+        let host_path = socket_path.clone();
         async move {
-            ServiceManager::serve_c2d_standalone(c2dserver_model::s2sm::C2D_SOCKET_PATH, handler, async {
+            ServiceManager::serve_c2d_standalone(&host_path, handler, async {
                 let _ = stop_rx.await;
             })
             .await
@@ -122,30 +130,30 @@ async fn generated_c2d_standalone_host_over_socket() {
     // appearance is the real assertion: a host that binds and never restricts
     // the socket fails there, with its mode.
     let bind_deadline = tokio::time::Instant::now() + Duration::from_secs(120);
-    while !std::fs::metadata(SOCKET_PATH).is_ok_and(|m| m.file_type().is_socket()) {
+    while !std::fs::metadata(socket).is_ok_and(|m| m.file_type().is_socket()) {
         if host.is_finished() {
             panic!("standalone c2d host exited before listening: {:?}", host.await);
         }
         assert!(
             tokio::time::Instant::now() < bind_deadline,
-            "no c2d socket replaced the stale file at {SOCKET_PATH}"
+            "no c2d socket replaced the stale file at {socket}"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     let chmod_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !std::fs::metadata(SOCKET_PATH).is_ok_and(|m| m.permissions().mode() & 0o777 == 0o600) {
+    while !std::fs::metadata(socket).is_ok_and(|m| m.permissions().mode() & 0o777 == 0o600) {
         if host.is_finished() {
             panic!("standalone c2d host exited before listening: {:?}", host.await);
         }
         assert!(
             tokio::time::Instant::now() < chmod_deadline,
-            "no owner-only (0600) c2d socket at {SOCKET_PATH} (metadata: {:?}); the socket ACL is the c2d auth boundary",
-            std::fs::metadata(SOCKET_PATH).map(|m| m.permissions().mode())
+            "no owner-only (0600) c2d socket at {socket} (metadata: {:?}); the socket ACL is the c2d auth boundary",
+            std::fs::metadata(socket).map(|m| m.permissions().mode())
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    let client = c2dserver_model::c2dm::ServiceManager::connect(SOCKET_PATH).await.expect("dial c2d socket");
+    let client = c2dserver_model::c2dm::ServiceManager::connect(socket).await.expect("dial c2d socket");
     let daemon_client = client.grpc().c2dserver().local_daemon_client();
 
     // Valid unary call: no token anywhere, and it must still be served.
@@ -205,6 +213,6 @@ async fn generated_c2d_standalone_host_over_socket() {
         .expect("standalone c2d host did not stop after its shutdown future resolved")
         .expect("host task panicked");
     assert!(result.is_ok(), "standalone c2d host returned {result:?} on shutdown");
-    assert!(std::fs::metadata(SOCKET_PATH).is_err(), "socket file still present after shutdown");
+    assert!(std::fs::metadata(socket).is_err(), "socket file still present after shutdown");
     assert_eq!(state.shutdown_calls.load(Ordering::SeqCst), 1);
 }

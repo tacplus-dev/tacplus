@@ -93,7 +93,7 @@ var KnownPackages = []PackageDefinition{
 		Description: "Serde - Rust serialization framework",
 		Languages:   []string{"rust"},
 		Mappings: map[string][]string{
-			"rust": {"serde", "serde_json", "serde_yaml"},
+			"rust": {"serde", "serde_json", "serde-saphyr"},
 		},
 	},
 	{

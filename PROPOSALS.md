@@ -765,6 +765,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   both and the leg passes (some ten minutes, mostly npm and tsc). Its python leg waits on #665, its rust leg on
   #829 and its swift legs on the linker-warning entry above. Once each leg passes, adding it to `gates.yaml` is a
   cost decision.
+- **Rebuild the build images when an upstream stage image moves** (2026-11-20, #901): `docker:29-cli` moved to
+  29.10.0 (go1.27.4, fixing CVE-2026-97054) on 2026-11-16 22:07Z. Every `build:*` had been built that morning, so the
+  nightly sweep failed for days on a fix that was already published. `build:latest` is rebuilt only when its files
+  change, and each `build:X.Y` only by the weekly line rebuild or a patch tag. The Images workflow could record
+  the digest of each floating `FROM` it copies a binary from (`docker:29-cli`, `golang:1.27-trixie`) and rebuild
+  `build` when one moves. Another option: the nightly sweep dispatches a rebuild when a finding is `fixed` upstream.
 
 ## Promoted / declined
 - **`just generated <dir>`: tacplus's security checks scan its generated output** (2026-11-09, #376): promoted

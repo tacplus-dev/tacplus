@@ -8,13 +8,14 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 )
 
 // mergedMetaFiles are proto-root metadata files merged SEMANTICALLY (deep YAML
@@ -61,19 +62,16 @@ func MergeSources(sourceDirs []string, destDir string) error {
 	metaDocs := map[string]map[string]any{}
 
 	for _, src := range sourceDirs {
-		// Each source is read through an os.Root, so nothing in it (a symlink
-		// named like a proto, say) can make the merge read outside it: a fetched
-		// dependency must never copy a host file into the merged tree.
-		srcRoot, err := os.OpenRoot(src)
-		if err != nil {
-			return fmt.Errorf("open proto source %q: %w", src, err)
-		}
-		walkErr := fs.WalkDir(srcRoot.FS(), ".", func(slashRel string, d fs.DirEntry, err error) error {
+		// Each source is read through an os.Root (fsroot.Walk), so nothing in
+		// it (a symlink named like a proto, say) can make the merge read outside
+		// it: a fetched dependency must never copy a host file into the merged
+		// tree.
+		walkErr := fsroot.Walk(src, func(srcRoot *os.Root, rel string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
 			// Skip hidden paths entirely (.git, .gitlab-ci.yml, .DS_Store, ...).
-			if base := path.Base(slashRel); strings.HasPrefix(base, ".") && slashRel != "." {
+			if base := filepath.Base(rel); strings.HasPrefix(base, ".") && rel != "." {
 				if d.IsDir() {
 					return fs.SkipDir
 				}
@@ -82,20 +80,19 @@ func MergeSources(sourceDirs []string, destDir string) error {
 			if d.IsDir() {
 				return nil
 			}
-			rel := filepath.FromSlash(slashRel)
 			// Merge only what generation consumes: proto files, yaml metadata,
 			// and a fleet build's lock at the root (the compiler reads each
 			// service's depends from it when it scopes a generation). Everything
 			// else (READMEs, release scripts, CI config) is per-repo housekeeping
 			// that must not cause cross-source conflicts.
-			switch path.Ext(slashRel) {
+			switch filepath.Ext(rel) {
 			case ".proto", ".yaml", ".yml":
 			default:
 				if rel != "fleet.lock" {
 					return nil
 				}
 			}
-			data, err := fs.ReadFile(srcRoot.FS(), slashRel)
+			data, err := srcRoot.ReadFile(rel)
 			if err != nil {
 				if d.Type()&fs.ModeSymlink != 0 {
 					return fmt.Errorf("proto source %q: %s is a symlink that does not resolve inside the source; merging never reads outside a source tree: %w", src, rel, err)
@@ -142,12 +139,8 @@ func MergeSources(sourceDirs []string, destDir string) error {
 			origin[rel] = src
 			return nil
 		})
-		closeErr := srcRoot.Close()
 		if walkErr != nil {
 			return walkErr
-		}
-		if closeErr != nil {
-			return fmt.Errorf("close proto source %q: %w", src, closeErr)
 		}
 	}
 
@@ -350,22 +343,18 @@ func FileLayers(sourceDirs, layers []string) map[string]string {
 		if i < len(layers) {
 			layer = layers[i]
 		}
-		_ = filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		_ = fsroot.Walk(src, func(_ *os.Root, rel string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			if base := filepath.Base(path); strings.HasPrefix(base, ".") && path != src {
-				if info.IsDir() {
+			if base := filepath.Base(rel); strings.HasPrefix(base, ".") && rel != "." {
+				if d.IsDir() {
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			if info.IsDir() || filepath.Ext(path) != ".proto" {
+			if d.IsDir() || filepath.Ext(rel) != ".proto" {
 				return nil
-			}
-			rel, err := filepath.Rel(src, path)
-			if err != nil {
-				return err
 			}
 			rel = filepath.ToSlash(rel)
 			if claimed[rel] {

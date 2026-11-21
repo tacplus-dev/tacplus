@@ -140,11 +140,10 @@ func stageDependency(dir string) (string, func(), error) {
 		return "", nil, err
 	}
 	cleanup := func() { os.RemoveAll(staged) }
-	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+	err = fsroot.Walk(dir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, _ := filepath.Rel(dir, p)
 		if d.IsDir() {
 			if rel != "." && d.Name()[0] == '.' {
 				return filepath.SkipDir
@@ -154,14 +153,14 @@ func stageDependency(dir string) (string, func(), error) {
 		if rel == "dependencies.yaml" {
 			return nil
 		}
-		data, err := os.ReadFile(p)
+		data, err := r.ReadFile(rel)
 		if err != nil {
 			return err
 		}
 		if rel == "registry.yaml" {
 			data, err = wireOnlyLock(data)
 			if err != nil {
-				return fmt.Errorf("%s: %w", p, err)
+				return fmt.Errorf("%s: %w", filepath.Join(dir, rel), err)
 			}
 		}
 		dst := filepath.Join(staged, rel)
@@ -279,11 +278,11 @@ func OwnDeclarations(protoDir string, services, vservices []string) ([]string, [
 // package of a file that identifies its service by package.
 func declaredNames(protoDir string) map[string]bool {
 	own := map[string]bool{}
-	_ = filepath.WalkDir(protoDir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".proto") {
+	_ = fsroot.Walk(protoDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
-		data, err := os.ReadFile(p)
+		data, err := r.ReadFile(rel)
 		if err != nil {
 			return nil
 		}
@@ -320,11 +319,11 @@ var (
 // "" when none does or several do.
 func ownServicePackage(protoDir string) string {
 	pkgs := map[string]bool{}
-	_ = filepath.WalkDir(protoDir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".proto") {
+	_ = fsroot.Walk(protoDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
-		data, err := os.ReadFile(p)
+		data, err := r.ReadFile(rel)
 		if err != nil {
 			return nil
 		}
@@ -349,11 +348,11 @@ func ownServicePackage(protoDir string) string {
 // (first segment) and a service or grpc_config in it.
 func declaresPackage(dir, pkg string) bool {
 	found := false
-	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || found || d.IsDir() || !strings.HasSuffix(p, ".proto") {
+	_ = fsroot.Walk(dir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || found || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
-		data, err := os.ReadFile(p)
+		data, err := r.ReadFile(rel)
 		if err != nil {
 			return nil
 		}

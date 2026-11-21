@@ -5,12 +5,14 @@ package service
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/strutil"
 	protogen "github.com/tacplus-dev/tacplus/pkg/internal/proto"
@@ -660,15 +662,13 @@ func DetectServicesForWrapper(config *tactype.Config, inputDir string, outputDir
 
 	var servicesInfo []ServiceInfo
 
-	err = filepath.Walk(inputDir, func(path string, info os.FileInfo, walkErr error) error {
+	err = fsroot.Walk(inputDir, func(_ *os.Root, relPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(relPath, ".proto") {
 			return nil
 		}
-
-		relPath, _ := filepath.Rel(inputDir, path)
 		fileDesc, err := descriptorParser.GetFileDescriptor(relPath)
 		if err != nil {
 			zap.L().Debug("Skipping proto file (no descriptor)", zap.String("path", relPath), zap.Error(err))

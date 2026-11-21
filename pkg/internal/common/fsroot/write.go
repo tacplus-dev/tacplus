@@ -1,10 +1,6 @@
 // Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
 
-// Package fsroot confines the compiler's file operations to the tree each one
-// is meant for (the generated output, the staged proto copy, a fleet
-// repository, a fetched checkout) with os.Root: a symlink under the tree that
-// leads out of it makes the operation fail instead of following it (#754).
 package fsroot
 
 import (

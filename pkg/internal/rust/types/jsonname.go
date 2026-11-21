@@ -27,11 +27,11 @@ var jsonKeyOption = regexp.MustCompile(`\(spec\.json_key\)\s*=\s*("(?:[^"\\]|\\.
 // and Java honour json_key in their own serializers and compile no proto with
 // it, so this runs for Rust only.
 func injectJsonNameForJsonKey(protoDir string) error {
-	return filepath.WalkDir(protoDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".proto") {
+	return fsroot.Walk(protoDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return err
 		}
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(rel)
 		if err != nil {
 			return err
 		}
@@ -49,8 +49,8 @@ func injectJsonNameForJsonKey(protoDir string) error {
 		if !changed {
 			return nil
 		}
-		if err := fsroot.WriteFile(protoDir, path, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
-			return fmt.Errorf("inject json_name into %s: %w", path, err)
+		if err := r.WriteFile(rel, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+			return fmt.Errorf("inject json_name into %s: %w", filepath.Join(protoDir, rel), err)
 		}
 		return nil
 	})

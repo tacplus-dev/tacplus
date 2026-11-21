@@ -848,18 +848,18 @@ func formatGeneratedGoFiles(root string) error {
 		return fmt.Errorf("gofmt not found in PATH")
 	}
 	var files []string
-	if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	if err := fsroot.Walk(root, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
-			if info.Name() == ".git" {
+		if d.IsDir() {
+			if rel != "." && d.Name() == ".git" {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if strings.HasSuffix(path, ".go") {
-			files = append(files, path)
+		if strings.HasSuffix(rel, ".go") {
+			files = append(files, filepath.Join(root, rel))
 		}
 		return nil
 	}); err != nil {
@@ -894,24 +894,20 @@ func protoPackageForPath(dir, relPath string) string {
 func copyProtoFiles(config *tactype.Config, tempProtoDir string) ([]string, error) {
 	var protoFiles []string
 
-	err := filepath.Walk(config.InputDir, func(path string, info os.FileInfo, err error) error {
+	err := fsroot.Walk(config.InputDir, func(r *os.Root, relPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(relPath, ".proto") {
 			return nil
 		}
-
-		relPath, err := filepath.Rel(config.InputDir, path)
-		if err != nil {
-			return err
-		}
+		path := filepath.Join(config.InputDir, relPath)
 
 		protoFiles = append(protoFiles, relPath)
 
 		// Read proto file
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(relPath)
 		if err != nil {
 			return fmt.Errorf("failed to read %s: %w", path, err)
 		}
@@ -990,12 +986,12 @@ func addGoPackageToSysProtos(config *tactype.Config, tempProtoDir string) error 
 	packageRegex := regexp.MustCompile(`(?m)^package\s+([\w.]+)\s*;`)
 	goPackageRegex := regexp.MustCompile(`(?m)^option\s+go_package\s*=`)
 
-	return filepath.Walk(sysDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
+	return fsroot.Walk(sysDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return err
 		}
 
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(rel)
 		if err != nil {
 			return err
 		}
@@ -1005,10 +1001,7 @@ func addGoPackageToSysProtos(config *tactype.Config, tempProtoDir string) error 
 			return nil
 		}
 
-		relPath, err := filepath.Rel(tempProtoDir, path)
-		if err != nil {
-			return err
-		}
+		relPath := filepath.Join("sys", rel)
 
 		matches := packageRegex.FindStringSubmatch(string(content))
 		if len(matches) < 2 {
@@ -1027,7 +1020,7 @@ func addGoPackageToSysProtos(config *tactype.Config, tempProtoDir string) error 
 		modifiedContent := packageRegex.ReplaceAllString(string(content),
 			fmt.Sprintf("package %s;\noption go_package = \"%s\";", matches[1], goPackage))
 
-		if err := fsroot.WriteFile(tempProtoDir, path, []byte(modifiedContent), 0644); err != nil {
+		if err := r.WriteFile(rel, []byte(modifiedContent), 0644); err != nil {
 			return err
 		}
 
@@ -1047,12 +1040,12 @@ func addGoPackageToEmbeddedProtos(config *tactype.Config, tempProtoDir, subdir s
 	packageRegex := regexp.MustCompile(`(?m)^package\s+([\w.]+)\s*;`)
 	goPackageRegex := regexp.MustCompile(`(?m)^option\s+go_package\s*=`)
 
-	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
+	return fsroot.Walk(dir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return err
 		}
 
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(rel)
 		if err != nil {
 			return err
 		}
@@ -1061,10 +1054,7 @@ func addGoPackageToEmbeddedProtos(config *tactype.Config, tempProtoDir, subdir s
 			return nil
 		}
 
-		relPath, err := filepath.Rel(tempProtoDir, path)
-		if err != nil {
-			return err
-		}
+		relPath := filepath.Join(subdir, rel)
 
 		matches := packageRegex.FindStringSubmatch(string(content))
 		if len(matches) < 2 {
@@ -1083,7 +1073,7 @@ func addGoPackageToEmbeddedProtos(config *tactype.Config, tempProtoDir, subdir s
 		modifiedContent := packageRegex.ReplaceAllString(string(content),
 			fmt.Sprintf("package %s;\noption go_package = \"%s\";", matches[1], goPackage))
 
-		if err := fsroot.WriteFile(tempProtoDir, path, []byte(modifiedContent), 0644); err != nil {
+		if err := r.WriteFile(rel, []byte(modifiedContent), 0644); err != nil {
 			return err
 		}
 
@@ -1911,24 +1901,19 @@ func copyHelperFiles(builderTempDir, outputDir string) error {
 	}
 
 	// Walk through all generated files
-	return filepath.Walk(golangDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+	return fsroot.Walk(golangDir, func(r *os.Root, relPath string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
 			return err
 		}
 
 		// Only copy helpers.go, graph_*.go, timeseries_*.go, extraction_*.go, and test files
-		isTestFile := strings.HasSuffix(path, "_test.go")
-		isGeneratedCode := strings.HasSuffix(path, "helpers.go")
-		isTimeseriesHelper := strings.HasPrefix(filepath.Base(path), "timeseries_") && strings.HasSuffix(path, ".go")
-		isExtractionHelper := strings.HasPrefix(filepath.Base(path), "extraction_") && strings.HasSuffix(path, ".go")
+		isTestFile := strings.HasSuffix(relPath, "_test.go")
+		isGeneratedCode := strings.HasSuffix(relPath, "helpers.go")
+		isTimeseriesHelper := strings.HasPrefix(filepath.Base(relPath), "timeseries_") && strings.HasSuffix(relPath, ".go")
+		isExtractionHelper := strings.HasPrefix(filepath.Base(relPath), "extraction_") && strings.HasSuffix(relPath, ".go")
 
 		if !isGeneratedCode && !isTestFile && !isTimeseriesHelper && !isExtractionHelper {
 			return nil
-		}
-
-		relPath, err := filepath.Rel(golangDir, path)
-		if err != nil {
-			return err
 		}
 
 		dstFile := filepath.Join(outputDir, relPath)
@@ -1936,7 +1921,7 @@ func copyHelperFiles(builderTempDir, outputDir string) error {
 			return err
 		}
 
-		if err := copyFile(path, outputDir, dstFile); err != nil {
+		if err := copyFile(r, relPath, outputDir, dstFile); err != nil {
 			return err
 		}
 		zap.L().Debug("Copied helper file", zap.String("path", relPath))
@@ -2128,9 +2113,9 @@ func removeSubdirs(root *os.Root, subdir string) error {
 	return nil
 }
 
-// copyFile copies src to dst, which must be under dstDir.
-func copyFile(src, dstDir, dst string) error {
-	content, err := os.ReadFile(src)
+// copyFile copies src, relative to r, to dst, which must be under dstDir.
+func copyFile(r *os.Root, src, dstDir, dst string) error {
+	content, err := r.ReadFile(src)
 	if err != nil {
 		return err
 	}

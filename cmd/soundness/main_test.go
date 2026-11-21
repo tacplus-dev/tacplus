@@ -296,3 +296,38 @@ class Verify {
 		t.Fatalf("rules = %v, want %v; violations=%+v", rules, want, violations)
 	}
 }
+
+// Seeds the confined-walk probe (tacplus#753): a filepath.Walk or WalkDir in a
+// pkg/ source file is flagged, under an aliased import too; the fsroot helper,
+// tests, testdata and a mention in a comment are not.
+func TestConfinedWalkSoundnessSeededViolations(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"pkg/a/a.go":                           "package a\n\nimport \"path/filepath\"\n\nfunc f() { _ = filepath.Walk(\".\", nil) }\n",
+		"pkg/b/b.go":                           "package b\n\nimport fp \"path/filepath\"\n\n// filepath.Walk( in a comment\nvar g = fp.WalkDir\n",
+		"pkg/c/c.go":                           "package c\n\nimport \"io/fs\"\n\nfunc f() { _ = fs.WalkDir(nil, \".\", nil) }\n",
+		"pkg/a/a_test.go":                      "package a\n\nimport \"path/filepath\"\n\nfunc g() { _ = filepath.Walk(\".\", nil) }\n",
+		"pkg/a/testdata/t.go":                  "package t\n\nimport \"path/filepath\"\n\nfunc g() { _ = filepath.Walk(\".\", nil) }\n",
+		"pkg/internal/common/fsroot/fsroot.go": "package fsroot\n\nimport \"path/filepath\"\n\nfunc g() { _ = filepath.WalkDir(\".\", nil) }\n",
+	}
+	for rel, content := range files {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	violations, err := confinedWalkViolations(root)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	want := []confinedWalkViolation{
+		{RelPath: "pkg/a/a.go", Line: 5, Call: "filepath.Walk"},
+		{RelPath: "pkg/b/b.go", Line: 6, Call: "filepath.WalkDir"},
+	}
+	if !reflect.DeepEqual(violations, want) {
+		t.Fatalf("got %+v, want %+v", violations, want)
+	}
+}

@@ -458,12 +458,8 @@ func ScanRegistryNames(protoDir string) (services []string, vservices []string, 
 		return nil, nil, nil
 	}
 	var protoFiles []string
-	if err := filepath.Walk(protoDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".proto") {
-			return err
-		}
-		relPath, err := filepath.Rel(protoDir, path)
-		if err != nil {
+	if err := fsroot.Walk(protoDir, func(_ *os.Root, relPath string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(relPath, ".proto") {
 			return err
 		}
 		protoFiles = append(protoFiles, filepath.ToSlash(relPath))
@@ -578,19 +574,15 @@ func writeDescriptorGeneratedStubs(root string) error {
 }
 
 func copyProtoTree(srcRoot, dstRoot string) error {
-	return filepath.Walk(srcRoot, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || filepath.Ext(path) != ".proto" {
-			return err
-		}
-		relPath, err := filepath.Rel(srcRoot, path)
-		if err != nil {
+	return fsroot.Walk(srcRoot, func(r *os.Root, relPath string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(relPath) != ".proto" {
 			return err
 		}
 		dstPath := filepath.Join(dstRoot, relPath)
 		if err := fsroot.MkdirAll(dstRoot, filepath.Dir(dstPath), 0755); err != nil {
 			return err
 		}
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(relPath)
 		if err != nil {
 			return err
 		}

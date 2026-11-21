@@ -14,6 +14,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/packages"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/tmplutil"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
@@ -259,23 +260,25 @@ func requiredWorkspaceDependencyRefs(rustRootDir string, manifests ...[]byte) (m
 		}
 	}
 
-	rootCargo := filepath.Join(rustRootDir, "Cargo.toml")
-	typesCargo := filepath.Join(rustRootDir, "types", "Cargo.toml")
-	if err := filepath.WalkDir(rustRootDir, func(path string, d os.DirEntry, err error) error {
+	if err := fsroot.Walk(rustRootDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
+			name := d.Name()
+			if rel == "." {
+				name = filepath.Base(rustRootDir)
+			}
+			switch name {
 			case "target", ".git":
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if d.Name() != "Cargo.toml" || path == rootCargo || path == typesCargo {
+		if d.Name() != "Cargo.toml" || rel == "Cargo.toml" || rel == filepath.Join("types", "Cargo.toml") {
 			return nil
 		}
-		refs, err := workspaceDependencyRefsInCargo(path)
+		refs, err := workspaceDependencyRefsInCargo(r, rel)
 		if err != nil {
 			return err
 		}
@@ -290,8 +293,8 @@ func requiredWorkspaceDependencyRefs(rustRootDir string, manifests ...[]byte) (m
 	return required, nil
 }
 
-func workspaceDependencyRefsInCargo(path string) (map[string]struct{}, error) {
-	data, err := os.ReadFile(path)
+func workspaceDependencyRefsInCargo(r *os.Root, rel string) (map[string]struct{}, error) {
+	data, err := r.ReadFile(rel)
 	if err != nil {
 		return nil, err
 	}
@@ -503,22 +506,22 @@ func crateReferences(crateDir string, names []string) (map[string]bool, error) {
 		patterns[name] = regexp.MustCompile(`(?:^|[^\w:]|(?:^|[^\w:])::)` + quoted + `::|\b(?:use|extern\s+crate)\s+` + quoted + `\b`)
 	}
 	refs := map[string]bool{}
-	err := filepath.WalkDir(crateDir, func(path string, d os.DirEntry, err error) error {
+	err := fsroot.Walk(crateDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			if path == crateDir {
+			if rel == "." {
 				return nil
 			}
 			switch d.Name() {
 			case "target", ".git":
 				return filepath.SkipDir
 			}
-			if path == filepath.Join(crateDir, "tests") {
+			if rel == "tests" {
 				return filepath.SkipDir
 			}
-			if _, err := os.Stat(filepath.Join(path, "Cargo.toml")); err == nil {
+			if _, err := r.Stat(filepath.Join(rel, "Cargo.toml")); err == nil {
 				return filepath.SkipDir
 			}
 			return nil
@@ -526,7 +529,7 @@ func crateReferences(crateDir string, names []string) (map[string]bool, error) {
 		if !strings.HasSuffix(d.Name(), ".rs") {
 			return nil
 		}
-		data, err := os.ReadFile(path)
+		data, err := r.ReadFile(rel)
 		if err != nil {
 			return err
 		}

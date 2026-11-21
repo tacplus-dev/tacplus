@@ -36,6 +36,7 @@ package fleet
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -788,18 +789,17 @@ func extractContract(protoDir, name string, isService bool) (string, func(), err
 // dirs and tacplus-supplied trees.
 func protoFiles(dir string) ([]string, error) {
 	var out []string
-	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+	err := fsroot.Walk(dir, func(_ *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, _ := filepath.Rel(dir, p)
 		if d.IsDir() {
 			if rel != "." && (d.Name()[0] == '.' || isTacplusProto(rel+"/")) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if strings.HasSuffix(p, ".proto") {
+		if strings.HasSuffix(rel, ".proto") {
 			out = append(out, filepath.ToSlash(rel))
 		}
 		return nil

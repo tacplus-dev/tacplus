@@ -200,3 +200,20 @@ async fn generated_c2d_standalone_host_over_socket() {
     assert!(std::fs::metadata(SOCKET_PATH).is_err(), "socket file still present after shutdown");
     assert_eq!(state.shutdown_calls.load(Ordering::SeqCst), 1);
 }
+
+// The Windows pipe name the generated Rust daemon serves on and its clients
+// dial (issue #314): the same vectors as the compiler's service.C2DPipeName
+// (pkg/internal/common/service/c2d_pipe_test.go), the generated Go
+// serviceconnection.C2DPipeName, and the C# client's default.
+#[test]
+fn generated_c2d_pipe_name() {
+    for (socket_path, pipe) in [
+        ("/run/mydaemon.sock", r"\\.\pipe\tacplus-c2d--run-mydaemon.sock"),
+        ("/tmp/c2d_server-1.sock", r"\\.\pipe\tacplus-c2d--tmp-c2d_server-1.sock"),
+        (r"C:\ProgramData\My App\d.sock", r"\\.\pipe\tacplus-c2d-C--ProgramData-My-App-d.sock"),
+        ("/run/é/x.sock", r"\\.\pipe\tacplus-c2d--run---x.sock"),
+        ("", r"\\.\pipe\tacplus-c2d-"),
+    ] {
+        assert_eq!(c2d::pipe_name(socket_path), pipe, "pipe_name({socket_path:?})");
+    }
+}

@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 /**
@@ -483,32 +484,42 @@ public class DiskStoreTest {
             RedoLog log = RedoLog.open(base, "/drpepper", "verifying_keys", 0, Codec.NONE);
             ArchiveShipper shipper = new ArchiveShipper(sink, "", "node-a", "verifying_keys", Codec.NONE, 1);
             log.attachShipper(shipper);
+            // A few appends, each fsynced. An append that waits on the
+            // failing upload never finishes, so any finite bound tells the
+            // bug from a slow disk; this one is far above the cost of ten
+            // fsyncs on a saturated one: with the gates running concurrently
+            // (#300) a runner stalled on I/O took over 60 s for them.
+            AtomicBoolean stop = new AtomicBoolean();
+            AtomicReference<Throwable> thrown = new AtomicReference<>();
+            Thread writer = new Thread(() -> {
+                try {
+                    for (int i = 0; i < 10 && !stop.get(); i++) {
+                        log.append(RedoLog.Record.upsert("k" + i, "{\"v\":" + i + "}"));
+                    }
+                } catch (Throwable t) {
+                    thrown.set(t);
+                }
+            });
             try {
                 log.append(RedoLog.Record.upsert("seed", "{\"v\":0}"));
                 log.roll(RedoLog.dedupFile(log.activePath()));
                 check(awaitFailures(shipper, 1), "the seeded segment's upload should be failing");
 
-                // A few appends, each fsynced. An append that waits on the
-                // failing upload never finishes, so any finite bound tells the
-                // bug from a slow disk; this one is far above the cost of ten
-                // fsyncs on a saturated one: with the gates running concurrently
-                // (#300) a runner stalled on I/O took over 60 s for them.
-                Thread writer = new Thread(() -> {
-                    for (int i = 0; i < 10; i++) {
-                        log.append(RedoLog.Record.upsert("k" + i, "{\"v\":" + i + "}"));
-                    }
-                });
                 writer.start();
                 writer.join(600_000L);
-                boolean appended = !writer.isAlive();
+                check(!writer.isAlive(), "appends must not wait on a failing upload");
+                check(thrown.get() == null, "appends while an upload fails must not throw: " + thrown.get());
+                check(shipper.pending() > 0, "the upload must still be failing when the appends finish");
 
                 sink.failPuts.set(0);
-                // A writer still running is released by the recovered sink, or
-                // at least finishes before close() pulls the log from under it.
-                writer.join(60_000L);
-                check(appended, "appends must not wait on a failing upload");
                 check(awaitDrained(shipper), "the queue should drain once the sink recovers");
             } finally {
+                // Stop the writer and release it with a recovered sink before
+                // close() pulls the log from under it (#539): a failed check
+                // reports its one FAIL line, not a NullPointerException.
+                stop.set(true);
+                sink.failPuts.set(0);
+                writer.join(60_000L);
                 log.close();
                 shipper.close();
             }

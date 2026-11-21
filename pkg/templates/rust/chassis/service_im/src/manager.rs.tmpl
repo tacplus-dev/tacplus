@@ -209,6 +209,11 @@ impl IdentityManager {
     /// jti, exp at most 600 seconds out. Never cached — an external verifier
     /// (e.g. workload identity federation) rejects a replayed jti.
     pub async fn token_for_external(&self, audience: &str) -> Result<String, Box<dyn std::error::Error>> {
+        self.token_for_external_traced(audience, "").await
+    }
+
+    /// `token_for_external` with `trace_id` on the mint request it sends (#327).
+    pub async fn token_for_external_traced(&self, audience: &str, trace_id: &str) -> Result<String, Box<dyn std::error::Error>> {
 {{- if .MintExternalServiceTokenMethod }}
         let input_token = self.get_token().await?;
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
@@ -220,6 +225,7 @@ impl IdentityManager {
                     input_token,
                     aud: audience.to_string(),
                     exp: now + EXTERNAL_TOKEN_LIFETIME_SECS,
+                    trace_id: trace_id.to_string(),
                     ..Default::default()
                 },
             )),
@@ -230,7 +236,7 @@ impl IdentityManager {
         let token = resp.into_inner().access_token.ok_or("external token mint response missing access_token")?;
         Ok(token.base64)
 {{- else }}
-        let _ = audience;
+        let _ = (audience, trace_id);
         Err("IM: the token minter declares no MintExternalServiceTokenRequest RPC".into())
 {{- end }}
     }

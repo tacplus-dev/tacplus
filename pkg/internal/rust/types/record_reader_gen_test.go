@@ -223,9 +223,9 @@ func TestRecordReaderThreadsIncludeDeleted(t *testing.T) {
 		"        page_token: String,\n        include_deleted: bool,\n",
 		// each passes it on,
 		"include_deleted,\n                ..Default::default()",
-		"self.query_page(filter, page_size, page_token.into(), include_deleted)",
+		"self.query_page(filter, page_size, page_token.into(), include_deleted, trace_id)",
 		// and it lands on the request that installs the predicate.
-		"OpenMessageQueryRequest {\n                filter,\n                standing: false,\n                include_deleted,\n",
+		"OpenMessageQueryRequest {\n                filter,\n                standing: false,\n                trace_id: trace_id.to_string(),\n                include_deleted,\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("generated reader missing %q:\n%s", want, out)
@@ -246,10 +246,10 @@ func TestRecordReaderWithoutDeletedFlagIsUnchanged(t *testing.T) {
 	for _, want := range []string{
 		"        delivery_id: &str,\n    ) -> Result<Option<Message>, tonic::Status> {",
 		"        page_token: impl Into<String>,\n    ) -> Result<(Vec<Message>, String, i64), tonic::Status> {",
-		"        page_token: String,\n    ) -> Result<(Vec<Message>, String, i64), tonic::Status> {",
-		"limit: 1,\n                ..Default::default()",
-		"self.query_page(filter, page_size, page_token.into()).await\n",
-		"OpenMessageQueryRequest {\n                filter,\n                standing: false,\n                ..Default::default()\n",
+		"        page_token: String,\n        trace_id: &str,\n    ) -> Result<(Vec<Message>, String, i64), tonic::Status> {",
+		"limit: 1,\n                trace_id: trace_id.to_string(),\n                ..Default::default()",
+		"self.query_page(filter, page_size, page_token.into(), trace_id).await\n",
+		"OpenMessageQueryRequest {\n                filter,\n                standing: false,\n                trace_id: trace_id.to_string(),\n                ..Default::default()\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("unflagged reader's API changed; missing %q:\n%s", want, out)
@@ -268,7 +268,7 @@ func TestRecordReaderRoutedThreadsTheTenant(t *testing.T) {
 		"        &self,\n        tenant: &str,\n        delivery_id: &str,\n",
 		"        &self,\n        tenant: &str,\n        filter: Option<MessageFilter>,\n        page_size: i32,\n        page_token: impl Into<String>,\n",
 		"        &self,\n        tenant: &str,\n        filter: Option<MessageFilter>,\n        page_size: i32,\n        page_token: String,\n",
-		"self.query_page(tenant, filter, page_size, page_token.into()).await\n",
+		"self.query_page(tenant, filter, page_size, page_token.into(), trace_id).await\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("routed reader missing %q:\n%s", want, out)

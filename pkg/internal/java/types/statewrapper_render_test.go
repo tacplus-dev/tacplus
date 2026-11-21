@@ -186,7 +186,7 @@ func TestStateWrapperSingletonFetchRetriesUnavailableWithChassisBackoff(t *testi
 	})
 
 	const want = "Demo.Config value = com.example.tacplus.chassis.backoff.Backoff.retryWhileUnavailable(\n" +
-		"                    () -> stateStub.getConfig(Trace.TraceRequest.getDefaultInstance()),\n" +
+		"                    () -> stateStub.getConfig(Trace.TraceRequest.newBuilder().setTraceId(traceId).build()),\n" +
 		"                    com.example.tacplus.chassis.backoff.Backoff.THREAD_SLEEPER);"
 	if !strings.Contains(rendered, want) {
 		t.Fatalf("singleton fetch does not route its Get through the chassis UNAVAILABLE backoff:\n%s", rendered)

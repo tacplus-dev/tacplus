@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by looper (#931).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-21 by looper (#258).
 
 - **Version / line:** v2.6.13 (latest release, 2026-11-15, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -10,8 +10,8 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by lo
   tenant and Apply. Tenant-owned services routed by a declared `(spec.rpc).route_field` (and
   `RPC_FLAG_ANY_TENANT`) in every language, registry.json carrying it, `Dispatcher.Conn` taking the target tenant;
   `mcp.McpRequest.tenant`, stamped from the caller's token by the Go/Java/Rust MCP carrier, never from the model (#170).
-  The record store ↔ redo contract, sys `redolog.Redo` (`sys/redo.proto`: `Append`/`Replay`, tenant-routed through
-  the new `(spec.service_s2s).host_tenant_owned`), and the Go server wrapper of a sys contract a service hosts by
+  The record store ↔ redo contract, sys `redolog.Redo` (`sys/redo.proto`: `Append`/`Replay`; redo is a `/system` service
+  since #258, so neither is tenant-routed), and the Go server wrapper of a sys contract a service hosts by
   label (`minter.Minter` on kernel had none), and instance health for a service that serves only such a surface
   (#163 D5). JWK verification takes a missing alg from the token within the key's family (#179).
   In 2.6: `grpcconfig.disk_persistence.archive.member` names the Java archive member instead of the instance
@@ -55,6 +55,10 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by lo
   (`JWT_PAYLOAD_TYPE_TID` 30, stamped by kernel, tacplus-dev/kernel#32): the MCP session tenant and the c2s record
   reader read it only, never derive a tid from the namespace (a name), and refuse a caller without it (#284;
   backported to release/2.6 by #326 and to release/2.5 by #316, each the line's next patch once it merges).
+  S2S never crosses tenants (#258): a tenant-owned instance refuses another tenant's service or workload token on
+  every rpc, `RPC_FLAG_ANY_TENANT` included (the flag opens it to users only), in all five server languages; the
+  Go/Java/Rust S2S client of a tenant's own service routes to its own `tid` claim only, stamping an empty route
+  field and refusing another tid (`PERMISSION_DENIED`) before sending.
   Deterministic builds (#193): a repository pins the exact release and the build image digest in `tacplus.lock`
   (`tacplus pin` writes it; moving it is a commit); there is no tacplus image (the old tags stay, deprecated, and
   2.6 gets none); `build:X.Y` per line, rebuilt on every release as an immutable `build:X.Y.Z`, carries Kani and

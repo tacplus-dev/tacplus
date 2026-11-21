@@ -117,6 +117,10 @@ func generateAllHelpers(pf model.ProtoFile, baseDir, subdir string, config *tact
 		}
 		zap.L().Debug("Generated helpers.go", zap.String("package", pf.Package))
 	}
+	// flock state (tacplus#206): the merge of every flock entry in the package.
+	if err := generateGoFlock(pf, baseDir, subdir, config, parser.NewFlockIndex(allFiles)); err != nil {
+		return fmt.Errorf("failed to generate Go flock merge: %w", err)
+	}
 
 	return nil
 }

@@ -28,6 +28,7 @@ import (
 	swifttypes "github.com/tacplus-dev/tacplus/pkg/internal/swift/types"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 	typescripttypes "github.com/tacplus-dev/tacplus/pkg/internal/typescript/types"
+	"github.com/tacplus-dev/tacplus/pkg/registry"
 )
 
 // Builder orchestrates the entire build process for protobuf code generation
@@ -187,6 +188,13 @@ func (b *Builder) validateSemanticAnnotations() error {
 	// The legacy egress redaction still generates, deprecated until 3.0.
 	if w := parser.LegacyRedactWarning(allParsedFiles); w != "" {
 		fmt.Fprintln(os.Stderr, w)
+	}
+	// flock state (tacplus#206): every field of a flock entry merges by a rule.
+	if err := parser.ValidateFlockAnnotations(allParsedFiles); err != nil {
+		return err
+	}
+	if err := pinFlockRules(b.config.InputDir, allParsedFiles); err != nil {
+		return err
 	}
 	if err := parser.ValidateReservedFieldNumbers(allParsedFiles); err != nil {
 		return err
@@ -675,4 +683,21 @@ func containsProtocOutput(dir string) bool {
 		return nil
 	})
 	return found
+}
+
+// pinFlockRules pins every flock merge rule in the source's registry.yaml and
+// fails generation if a released rule changed (tacplus#206).
+func pinFlockRules(inputDir string, allParsedFiles []model.ProtoFile) error {
+	rules := parser.FlockRules(allParsedFiles)
+	if len(rules) == 0 || inputDir == "" {
+		return nil
+	}
+	reg, err := registry.Load(inputDir)
+	if err != nil {
+		return err
+	}
+	if err := reg.PinFlockRules(rules); err != nil {
+		return err
+	}
+	return reg.Save()
 }

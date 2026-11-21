@@ -160,6 +160,7 @@ func TestPersistenceHasOneValueReadSite(t *testing.T) {
 	allowedNamers := map[string]string{
 		"../common/boundaries/boundaries.go": "reads the value onto the registry descriptor",
 		"../proto/state.go":                  "presence test: refuses the annotation on a queue/topic/priority_queue and on a kernel-labelled state root",
+		"../common/parser/flock.go":          "presence test: requires the annotation on every boundary of a flock state root (tacplus#206)",
 	}
 
 	namers := map[string]bool{}

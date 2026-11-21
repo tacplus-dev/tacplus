@@ -850,6 +850,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   one that tacplus would then have to follow. Depends on #352 (registered slice field numbers). Open questions are
   on the issue: which Stratum record holds a slice, the version's source, whether the owner keeps a slice after its
   stream breaks, the slice's identity, and Java-first parity.
+- **Rebuild the build images when an upstream stage image moves** (2026-11-20, #901): `docker:29-cli` moved to
+  29.10.0 (go1.27.4, fixing CVE-2026-97054) on 2026-11-16 22:07Z. Every `build:*` had been built that morning, so the
+  nightly sweep failed for days on a fix that was already published. `build:latest` is rebuilt only when its files
+  change, and each `build:X.Y` only by the weekly line rebuild or a patch tag. The Images workflow could record
+  the digest of each floating `FROM` it copies a binary from (`docker:29-cli`, `golang:1.27-trixie`) and rebuild
+  `build` when one moves. Another option: the nightly sweep dispatches a rebuild when a finding is `fixed` upstream.
 
 ## Promoted / declined
 - **A floor check over every version tacplus emits, and template manifests that take versions from one place**

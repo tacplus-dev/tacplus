@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"text/template"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/service"
@@ -46,20 +47,85 @@ func TestJavaGrpcClientRoutesUnaryByRouteField(t *testing.T) {
 		m    *parser.MethodInfo
 		call string
 	}{
-		{"unary", routedMethodForTest("Hail", false, false), "return stub.hail(request);"},
-		{"server streaming", routedMethodForTest("Hail", false, true), "stub.hail(request, "},
+		{"unary", routedMethodForTest("Hail", false, false), "return stub.hail(__routedRequest);"},
+		{"server streaming", routedMethodForTest("Hail", false, true), "stub.hail(__routedRequest, "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := renderJavaClientMethodForTest(tc.m)
 			validate := strings.Index(got, "Helpers.validateHailRequest(request)")
-			route := strings.Index(got, `final String __routeTenant = RouteTenant.require("target_tenant", request.getTargetTenant());`)
+			route := strings.Index(got, `final String __routeTenant = RouteTenant.forCaller("target_tenant", request.getTargetTenant(), __ownToken());`)
+			stamp := strings.Index(got, `final Crew.HailRequest __routedRequest = __routeTenant.equals(request.getTargetTenant()) ? request : request.toBuilder().setTargetTenant(__routeTenant).build();`)
 			option := strings.Index(got, ".withOption(RouteTenant.CALL_OPTION, __routeTenant);")
 			call := strings.Index(got, tc.call)
-			if validate < 0 || route < 0 || option < 0 || call < 0 || !(validate < route && route < option && option < call) {
-				t.Fatalf("a routed client must validate, read the route field, then send to that tenant (validate %d, route %d, option %d, call %d):\n%s",
-					validate, route, option, call, got)
+			if validate < 0 || route < 0 || stamp < 0 || option < 0 || call < 0 || !(validate < route && route < stamp && stamp < option && option < call) {
+				t.Fatalf("a routed client must validate, route by the caller's own token, stamp the request, then send to that tenant (validate %d, route %d, stamp %d, option %d, call %d):\n%s",
+					validate, route, stamp, option, call, got)
+			}
+			if strings.Contains(got, "RouteTenant.require(") || strings.Contains(got, "stub.hail(request") {
+				t.Fatalf("a routed client must route through RouteTenant.forCaller and send the routed request:\n%s", got)
 			}
 		})
+	}
+}
+
+// Issue #258: S2S never crosses tenants. Every shape of a routed client hands
+// the caller's own token to RouteTenant.forCaller, which stamps an empty route
+// field with a tenant service's own tid and refuses another before dialling.
+// The PAGE seam sends the routed request too; its auto-pager routes each page
+// through the page seam.
+func TestJavaGrpcClientRoutesByCallersOwnToken(t *testing.T) {
+	page := javaPageMethod()
+	page.AuthDisabled = false
+	page.RouteField = &parser.RouteFieldDescriptor{Field: "target_tenant", JSONName: "targetTenant", Number: 3}
+	got := generateJavaGrpcClientMethod(&parser.ServiceInfo{Name: "CatalogService"}, page,
+		"Catalog.ListEventsRequest", "Catalog.ListEventsPage", "", "", nil)
+	for _, want := range []string{
+		`final String __routeTenant = RouteTenant.forCaller("target_tenant", request.getTargetTenant(), __ownToken());`,
+		`final Catalog.ListEventsRequest __routedRequest = __routeTenant.equals(request.getTargetTenant()) ? request : request.toBuilder().setTargetTenant(__routeTenant).build();`,
+		"var stub = blockingStubWithDeadline().withOption(RouteTenant.CALL_OPTION, __routeTenant);",
+		"return stub.listEvents(__routedRequest);",
+		"listEventsPage(__req);",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("routed PAGE client missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// The routed client's own token: the token provider's, or none when it is
+// absent or fails (RouteTenant.forCaller then requires the named tenant, and
+// the auth block refuses an authenticated call anyway). Only a client with a
+// routed rpc declares it.
+func TestJavaGrpcClientDeclaresOwnTokenWhenRouted(t *testing.T) {
+	tmplStr, err := loadTemplate("grpcclient.java.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, routed := range []bool{true, false} {
+		var b strings.Builder
+		tmpl := template.Must(template.New("grpcclient").Parse(tmplStr))
+		if err := tmpl.Execute(&b, map[string]any{"ClientName": "CrewServiceGrpcClient", "ServiceName": "CrewService", "HasRoute": routed}); err != nil {
+			t.Fatal(err)
+		}
+		got := b.String()
+		decl := "private String __ownToken() {"
+		if !routed {
+			if strings.Contains(got, decl) {
+				t.Fatalf("an unrouted client must not declare __ownToken:\n%s", got)
+			}
+			continue
+		}
+		i := strings.Index(got, decl)
+		if i < 0 {
+			t.Fatalf("a routed client must declare __ownToken:\n%s", got)
+		}
+		body := got[i:]
+		body = body[:strings.Index(body, "\n    }\n")]
+		for _, want := range []string{"if (tokenProvider == null) {", "return tokenProvider.get();", "catch (RuntimeException e) {", "return null;"} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("__ownToken missing %q:\n%s", want, body)
+			}
+		}
 	}
 }
 
@@ -78,7 +144,7 @@ func TestJavaGrpcClientStreamFixesTenantAtOpen(t *testing.T) {
 			got := renderJavaClientMethodForTest(tc.m)
 			for _, want := range []string{
 				"public StreamObserver<Crew.HailRequest> hail(String tenant, StreamObserver<Crew.HailResponse> responseObserver) {",
-				`final String __routeTenant = RouteTenant.require("target_tenant", tenant);`,
+				`final String __routeTenant = RouteTenant.forCaller("target_tenant", tenant, __ownToken());`,
 				"var stub = asyncStub.withOption(RouteTenant.CALL_OPTION, __routeTenant);",
 				`if (!__routeTenant.equals(request.getTargetTenant())) {`,
 			} {
@@ -86,7 +152,7 @@ func TestJavaGrpcClientStreamFixesTenantAtOpen(t *testing.T) {
 					t.Fatalf("routed stream client missing %q:\n%s", want, got)
 				}
 			}
-			if strings.Index(got, "RouteTenant.require(") > strings.Index(got, "stub.hail(") {
+			if r := strings.Index(got, "RouteTenant.forCaller("); r < 0 || r > strings.Index(got, "stub.hail(") {
 				t.Fatalf("the stream's tenant must be checked before the stream is opened:\n%s", got)
 			}
 			onNext := got[strings.Index(got, "public void onNext("):]

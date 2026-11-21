@@ -8,10 +8,17 @@
 //!
 //! Every rpc of a tenant-owned service names the request field that carries
 //! the TARGET TENANT ID, a tid: exactly 8 characters of `[0-9a-z]`. That value
-//! decides which tenant's instance receives the call, and nothing else. It is
-//! never defaulted from the caller's token and never falls back to another
-//! tenant's instance: an empty or malformed one is refused, INVALID_ARGUMENT,
-//! before anything is dialled.
+//! decides which tenant's instance receives the call, and nothing else. It
+//! never falls back to another tenant's instance: an empty or malformed one is
+//! refused, INVALID_ARGUMENT, before anything is dialled.
+//!
+//! S2S never crosses tenants (tacplus-dev/roadmap
+//! `decisions/s2s-never-crosses-tenants-2026-10-31.md`): when the generated
+//! client's caller is a tenant's service (or workload), the value is that
+//! caller's own tid, its service token's `tid` claim. An empty one is stamped
+//! with it and another tenant's is refused, PERMISSION_DENIED, before anything
+//! is dialled ([`caller_route_tenant`]). Anyone else (a /system service, a
+//! user) names the target tenant itself.
 //!
 //! One implementation serves every router: the generated S2S clients, the REST
 //! dispatcher and the gateway's gRPC proxy (which holds only the raw request
@@ -45,6 +52,52 @@ pub fn route_tenant(field: &str, value: &str) -> Result<String, tonic::Status> {
         )));
     }
     Ok(value.to_string())
+}
+
+/// The route field's value of a call a generated client sends with the
+/// caller's own token `own_token` (the token its token provider attaches): S2S
+/// never crosses tenants.
+///
+/// The token is the caller's own, so it is parsed, not verified. A tenant's
+/// service or workload (`sub_type` `service`/`workload`, namespace under
+/// `/tenants/`) routes to its own tid, its `tid` claim (see
+/// [`caller_tenant`]): an empty value is stamped with it, the same one passes,
+/// and any other is refused, PERMISSION_DENIED, as is such a token with no tid
+/// claim (fail closed) or a token that does not parse. Anyone else (no token,
+/// a user's token, a /system service) names the target tenant: see
+/// [`route_tenant`].
+pub fn caller_route_tenant(field: &str, value: &str, own_token: Option<&str>) -> Result<String, tonic::Status> {
+    let Some(raw) = own_token.filter(|t| !t.is_empty()) else {
+        return route_tenant(field, value);
+    };
+    let token = ::token::Token::parse(raw).map_err(|e| {
+        tonic::Status::permission_denied(format!(
+            "route field {:?}: the caller's own token does not parse ({}), so its tenant is unknown",
+            field, e
+        ))
+    })?;
+    if !matches!(token.sub_type(), Some("service") | Some("workload")) {
+        return route_tenant(field, value);
+    }
+    let tenants = format!("/{}/", ::spiffe::TENANTS_SEGMENT);
+    if token.namespace().and_then(|ns| ns.strip_prefix(tenants.as_str())).is_none() {
+        return route_tenant(field, value);
+    }
+    let own = caller_tenant(token.tid()).ok_or_else(|| {
+        tonic::Status::permission_denied(format!(
+            "route field {:?}: the caller is a tenant's service whose token carries no tid claim; S2S never crosses tenants",
+            field
+        ))
+    })?;
+    if value.is_empty() || value == own {
+        return Ok(own);
+    }
+    Err(tonic::Status::permission_denied(format!(
+        "route field {:?} names tenant {:?}, but the caller is tenant {}'s service: S2S never crosses tenants",
+        field,
+        shown(value),
+        own
+    )))
 }
 
 /// A bounded rendering of a refused value, so a hostile request cannot fill a
@@ -399,6 +452,74 @@ mod tests {
         assert_eq!(caller_tenant(None), None);
         for bad in ["", "ACME0001", "acme", "/tenants/aaaaaaaa", "aaaaaaaaa", "aaaaaaa"] {
             assert_eq!(caller_tenant(Some(bad)), None, "{bad:?}");
+        }
+    }
+
+    /// The caller's own token, unsigned (it is parsed, never verified, on
+    /// the caller's side): `sub_type`, `namespace` and, when given, `tid`.
+    fn own_token(sub_type: &str, namespace: &str, tid: Option<&str>) -> String {
+        let tid = tid.map(|t| format!(r#","tid":"{t}""#)).unwrap_or_default();
+        // Braces pushed one at a time: this file is a Go template.
+        let mut claims = String::from("{");
+        claims.push_str(&format!(
+            r#""iss":"kernel","sub":"spiffe://example.com/tenants/aaaaaaaa/services/harbor","namespace":"{namespace}","sub_type":"{sub_type}"{tid}"#
+        ));
+        claims.push('}');
+        let enc = |v: &str| key::base64_utils::encode_base64_url(v.as_bytes());
+        format!("{}.{}.", enc(r#"{"alg":"ES256","typ":"JWT"}"#), enc(&claims))
+    }
+
+    // #258: S2S never crosses tenants. A tenant's service (or workload) routes
+    // to its own tid only: an empty field is stamped with it, another tenant's
+    // is refused before anything is dialled.
+    #[test]
+    fn a_tenants_service_routes_to_its_own_tenant_only() {
+        for sub_type in ["service", "workload"] {
+            let alpha = own_token(sub_type, "/tenants/alpha", Some("aaaaaaaa"));
+            let err = caller_route_tenant("tenant", "bbbbbbbb", Some(&alpha)).unwrap_err();
+            assert_eq!(err.code(), tonic::Code::PermissionDenied, "{sub_type}");
+            assert!(err.message().contains("S2S never crosses tenants"), "{}", err.message());
+            assert!(err.message().contains("bbbbbbbb") && err.message().contains("aaaaaaaa"), "{}", err.message());
+            assert_eq!(caller_route_tenant("tenant", "", Some(&alpha)).unwrap(), "aaaaaaaa", "{sub_type}");
+            assert_eq!(caller_route_tenant("tenant", "aaaaaaaa", Some(&alpha)).unwrap(), "aaaaaaaa", "{sub_type}");
+            // A malformed value is another tenant's too, and shown bounded.
+            let long = "x".repeat(100);
+            let err = caller_route_tenant("tenant", &long, Some(&alpha)).unwrap_err();
+            assert_eq!(err.code(), tonic::Code::PermissionDenied);
+            assert!(!err.message().contains(&long), "{}", err.message());
+        }
+    }
+
+    // A tenant's service whose token carries no tid (or a malformed one) has
+    // no tenant to route to: refused, never sent to the named one. A token
+    // that does not parse is refused too.
+    #[test]
+    fn a_tenants_service_without_a_tid_claim_is_refused() {
+        for tid in [None, Some(""), Some("ACME0001")] {
+            let alpha = own_token("service", "/tenants/alpha", tid);
+            for value in ["", "aaaaaaaa", "bbbbbbbb"] {
+                let err = caller_route_tenant("tenant", value, Some(&alpha)).unwrap_err();
+                assert_eq!(err.code(), tonic::Code::PermissionDenied, "{tid:?} {value:?}");
+            }
+        }
+        let err = caller_route_tenant("tenant", "bbbbbbbb", Some("not.a-token")).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    }
+
+    // A /system service, a user (RPC_FLAG_ANY_TENANT C2S stays open to them)
+    // and a caller without a token name the target tenant: route_tenant.
+    #[test]
+    fn anyone_else_names_the_target_tenant() {
+        let system = own_token("service", "/system", None);
+        let user = own_token("user", "/tenants/alpha", Some("aaaaaaaa"));
+        let tenants_root = own_token("service", "/tenantsx/alpha", Some("aaaaaaaa"));
+        for token in [Some(system.as_str()), Some(user.as_str()), Some(tenants_root.as_str()), Some(""), None] {
+            assert_eq!(caller_route_tenant("tenant", "bbbbbbbb", token).unwrap(), "bbbbbbbb", "{token:?}");
+            let err = caller_route_tenant("tenant", "", token).unwrap_err();
+            assert_eq!(err.code(), tonic::Code::InvalidArgument, "{token:?}");
+            assert!(err.message().contains("\"tenant\""), "{}", err.message());
+            let err = caller_route_tenant("tenant", "BBBBBBBB", token).unwrap_err();
+            assert_eq!(err.code(), tonic::Code::InvalidArgument, "{token:?}");
         }
     }
 

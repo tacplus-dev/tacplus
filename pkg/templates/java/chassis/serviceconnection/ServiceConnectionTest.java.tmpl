@@ -62,6 +62,7 @@ public class ServiceConnectionTest {
         checkReconcileGrace();
         checkRouteTenant();
         checkRouteTenantFromWire();
+        checkRouteTenantForCaller();
         checkTenantRouting();
         checkPlatformProviderUnaffected();
 
@@ -268,6 +269,90 @@ public class ServiceConnectionTest {
                 "spiffe://example.com/tenants/acme/services/crew",
                 "spiffe://example.com/tenants/aaaaaaaa/workspaces/dev/services/crew"}) {
             expect(RouteTenant.tenantOfInstance(id).isEmpty(), "instance \"" + id + "\" is not routable by tenant");
+        }
+    }
+
+    /**
+     * An unsigned JWT (header.payload.sig) carrying the given claims; null
+     * values are omitted. forCaller reads the caller's own token without
+     * verifying it, so no key is needed.
+     */
+    private static String ownToken(String subType, String namespace, String tid) {
+        StringBuilder payload = new StringBuilder("{\"sub\":\"caller\"");
+        if (subType != null) {
+            payload.append(",\"sub_type\":\"").append(subType).append('"');
+        }
+        if (namespace != null) {
+            payload.append(",\"namespace\":\"").append(namespace).append('"');
+        }
+        if (tid != null) {
+            payload.append(",\"tid\":\"").append(tid).append('"');
+        }
+        payload.append('}');
+        java.util.Base64.Encoder enc = java.util.Base64.getUrlEncoder().withoutPadding();
+        return enc.encodeToString("{\"alg\":\"none\"}".getBytes(StandardCharsets.UTF_8)) + "."
+                + enc.encodeToString(payload.toString().getBytes(StandardCharsets.UTF_8)) + ".sig";
+    }
+
+    /**
+     * S2S never crosses tenants (roadmap decision s2s-never-crosses-tenants):
+     * a tenant's service or workload routes only to its own tid, stamped when
+     * the field is empty, and another is refused PERMISSION_DENIED; a user and
+     * a /system caller name the target tenant (require); no own token is require.
+     */
+    private static void checkRouteTenantForCaller() {
+        String serviceA = ownToken("service", "/tenants/alpha", "aaaaaaaa");
+        String workloadA = ownToken("workload", "/tenants/alpha/workspaces/dev", "aaaaaaaa");
+        for (String own : List.of(serviceA, workloadA)) {
+            expectProto(ProtoException.PERMISSION_DENIED, "a tenant A caller routed to tenant B",
+                    () -> RouteTenant.forCaller("tenant", "bbbbbbbb", own));
+            expectProto(ProtoException.PERMISSION_DENIED, "a tenant A caller routed to a malformed tenant",
+                    () -> RouteTenant.forCaller("tenant", "BBBBBBBB", own));
+            expect("aaaaaaaa".equals(RouteTenant.forCaller("tenant", "", own)),
+                    "a tenant A caller's empty route field is stamped with its own tid");
+            expect("aaaaaaaa".equals(RouteTenant.forCaller("tenant", null, own)),
+                    "a tenant A caller's absent route field is stamped with its own tid");
+            expect("aaaaaaaa".equals(RouteTenant.forCaller("tenant", "aaaaaaaa", own)),
+                    "a tenant A caller may route to its own tenant");
+        }
+        try {
+            RouteTenant.forCaller("tenant", "bbbbbbbb", serviceA);
+        } catch (ProtoException e) {
+            expect(e.getMessage().contains("aaaaaaaa") && e.getMessage().contains("bbbbbbbb")
+                    && e.getMessage().contains("S2S never crosses tenants"),
+                    "the cross-tenant refusal names both tenants and the rule, got " + e.getMessage());
+        }
+        // A user's token stays open: RPC_FLAG_ANY_TENANT C2S is for users.
+        String userA = ownToken("user", "/tenants/alpha", "aaaaaaaa");
+        expect("bbbbbbbb".equals(RouteTenant.forCaller("tenant", "bbbbbbbb", userA)),
+                "a user of tenant A names tenant B");
+        expectProto(ProtoException.INVALID_ARGUMENT, "a user's empty route field",
+                () -> RouteTenant.forCaller("tenant", "", userA));
+        // A /system caller names its target.
+        String system = ownToken("service", "/system/aws", null);
+        expect("bbbbbbbb".equals(RouteTenant.forCaller("tenant", "bbbbbbbb", system)),
+                "a /system service names tenant B");
+        expectProto(ProtoException.INVALID_ARGUMENT, "a /system service's empty route field",
+                () -> RouteTenant.forCaller("tenant", "", system));
+        expectProto(ProtoException.INVALID_ARGUMENT, "a /system service's malformed route field",
+                () -> RouteTenant.forCaller("tenant", "Bbbbbbbb", system));
+        // A tenant's service without a tid claim (or a malformed one) fails closed.
+        for (String tid : new String[] {null, "", "alpha", "AAAAAAAA"}) {
+            String noTid = ownToken("service", "/tenants/alpha", tid);
+            expectProto(ProtoException.PERMISSION_DENIED, "a tenant service whose tid claim is \"" + tid + "\" routed to B",
+                    () -> RouteTenant.forCaller("tenant", "bbbbbbbb", noTid));
+            expectProto(ProtoException.PERMISSION_DENIED, "a tenant service whose tid claim is \"" + tid + "\" with an empty field",
+                    () -> RouteTenant.forCaller("tenant", "", noTid));
+        }
+        // An unparseable own token fails closed.
+        expectProto(ProtoException.PERMISSION_DENIED, "an unparseable own token",
+                () -> RouteTenant.forCaller("tenant", "bbbbbbbb", "not-a-jwt"));
+        // No own token: the value is required as before.
+        for (String none : new String[] {null, ""}) {
+            expect("bbbbbbbb".equals(RouteTenant.forCaller("tenant", "bbbbbbbb", none)),
+                    "without an own token the named tenant is routed");
+            expectProto(ProtoException.INVALID_ARGUMENT, "without an own token an empty route field",
+                    () -> RouteTenant.forCaller("tenant", "", none));
         }
     }
 

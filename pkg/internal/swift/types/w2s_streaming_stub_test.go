@@ -139,6 +139,23 @@ func TestSwiftW2SSSETransport(t *testing.T) {
 	}
 }
 
+// Linux's FoundationNetworking has no URLSession.bytes(for:), so the SSE
+// transport did not compile there (the kitchensink found it, tacplus#196: it
+// builds the generated Swift on Linux). There a streaming call throws, naming
+// why; Apple platforms keep the transport.
+func TestSwiftW2SSSETransportCompilesWithoutURLSessionBytes(t *testing.T) {
+	tmpl, err := loadSwiftTemplate("W2SClient.swift.tmpl")
+	if err != nil {
+		t.Fatalf("loadSwiftTemplate: %v", err)
+	}
+	guard := strings.Index(tmpl, "#if canImport(FoundationNetworking)\n        throw W2SClientError.stream(")
+	bytesCall := strings.Index(tmpl, "session.bytes(for: httpRequest)")
+	end := strings.Index(tmpl[max(bytesCall, 0):], "#endif")
+	if guard < 0 || bytesCall < guard || end < 0 {
+		t.Fatalf("invokeStream must throw under FoundationNetworking and call session.bytes(for:) only in the #else branch:\n%s", tmpl)
+	}
+}
+
 // PAR-4 regression: Swift C2D client must validate the socket path. Removing
 // the precondition from the template fails this test.
 func TestSwiftC2DValidation(t *testing.T) {

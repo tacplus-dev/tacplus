@@ -223,6 +223,9 @@ public struct W2SClient: Sendable {
     /// nature, so `requestTimeout` (a unary deadline) would cut a healthy stream
     /// short. A caller that wants a deadline cancels the enclosing `Task`, which
     /// cancels the HTTP request and ends the stream.
+    ///
+    /// On Linux it throws `W2SClientError.stream`: FoundationNetworking has no
+    /// `URLSession.bytes(for:)` to read the event stream with.
     public func invokeStream<Request: SwiftProtobuf.Message, Response: SwiftProtobuf.Message>(
         method: String,
         path: String,
@@ -243,6 +246,9 @@ public struct W2SClient: Sendable {
             httpRequest.setValue(authorization, forHTTPHeaderField: "authorization")
         }
 
+#if canImport(FoundationNetworking)
+        throw W2SClientError.stream("\(method) \(path): server-streaming over SSE needs URLSession.bytes(for:), which Linux Foundation lacks; request \(httpRequest.url?.absoluteString ?? path) from an Apple platform")
+#else
         let (bytes, response) = try await self.session.bytes(for: httpRequest)
         if let httpResponse = response as? HTTPURLResponse,
            httpResponse.statusCode < 200 || httpResponse.statusCode >= 300 {
@@ -276,6 +282,7 @@ public struct W2SClient: Sendable {
                 task.cancel()
             }
         }
+#endif
     }
 
     /// Decodes one SSE payload into `Response`, unwrapping the gateway's JSON

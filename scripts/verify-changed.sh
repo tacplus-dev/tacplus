@@ -18,11 +18,11 @@ depends=(
   pkg/                      # the generator, its templates and registries, the embedded protos, the verifier driver
   cmd/verify/               # `tacplus verify`
   main.go go.mod go.sum     # the compiler itself
-  cross-test/proto/         # the fixture verification generates
-  cross-test/dependencies.yaml
+  cross-test/kitchensink/proto/   # the kitchensink member verification generates (its pins included)
+  cross-test/kitchensink/verify/  # and the harnesses it runs
   images/base.Dockerfile    # the toolchain pins: the SDKs,
   images/build.Dockerfile   # Kani and OpenJML
-  cross-test/lib/java-compile.sh  # the pom the Java fixture compiles under
+  cross-test/lib/java-compile.sh  # the pom the Java kitchensink compiles under
   scripts/verify.sh scripts/verify-changed.sh
 )
 

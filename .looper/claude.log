@@ -1,0 +1,50 @@
+= init
+= thinking_tokens
+= thinking_tokens
+> Bash git fetch -q origin && git log --oneline 1fd98b34..origin/main && git diff --stat 1fd98b34 origin/main && gh issue view 909 --repo tacplus-dev/tacplus --comments | tail -20 && git log -1 --format='%h %cI' origin/looper/build-tacplus-train 2>/dev/null; git diff origin/main origin/looper/build-tacplus...
+< 2b2ec2ea PROPOSALS.md: the nightly scan's proposals (looper)  PROPOSALS.md | 7 ++++++-  1 file changed, 6 insertions(+), 1 deletion(-) The looper of tacplus starts this issue on `claude-opus-5-5`, the default model. Its limit 4h is capped at 4h by this job (https://gitlab.com/tacplus-dev/looper/-/jo...
+> Bash git ls-remote origin 'refs/heads/looper/build-*'; git grep -n '^gates' origin/main -- justfile | head; git grep -n 'Sign-in' origin/main -- docs/USER.md | head -3
+< origin/main:justfile:188:gates: origin/main:justfile:194:gates-container:
+= thinking_tokens
+= thinking_tokens
+> Bash git show origin/main:justfile | sed -n 180,200p; git log --oneline -8 origin/main; gh issue list --repo tacplus-dev/tacplus --label looper:landing --state open --limit 40 --json number,title | head -c 2500
+< # Runs against the HOST toolchain, so it starts with protoc-check. If your # host protoc is newer than the pinned ceiling and no older build is # installable, use `just gates-container` instead: it runs these same gates # inside the CI base image, whose protoc is pinned well under the ceiling. # # T...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash git log -1 --oneline HEAD && git diff --stat | tail -3 && git diff HEAD origin/main --stat && grep -rn '^<<<<<<<\|^>>>>>>>' --include='*' -l . 2>/dev/null | grep -v '^./.git' | head
+< 2b2ec2ea PROPOSALS.md: the nightly scan's proposals (looper)  pkg/templates/rust/types/cargo.toml.tmpl |   5 ++  scripts/generated.sh                     |   2 +-  18 files changed, 314 insertions(+), 6 deletions(-)
+= thinking_tokens
+= thinking_tokens
+> Bash (just generate && go vet ./... && go test ./... && go run ./cmd/soundness) > /tmp/909-verify.log 2>&1; echo rc=$?; tail -15 /tmp/909-verify.log; git status --short | head -40
+= task_started
+= task_notification
+< rc=0 - `csharp W2S streaming method stub` ✓ (pkg/templates/csharp/types/W2SClient.cs.tmpl) - `swift W2S structured errors` ✓ (pkg/templates/swift/types/W2SClient.swift.tmpl) - `csharp W2S structured errors` ✓ (pkg/templates/csharp/types/W2SClient.cs.tmpl)  ## SPIFFE/literal soundness probes (ENFORCE...
+Checks pass on current main (generate, vet, test, soundness). The conflicting train branch is gone and main has no uni-config, so I'm committing and landing now.
+> Bash git diff PROPOSALS.md | head -40; git diff STATE.md | head -30
+< diff --git a/PROPOSALS.md b/PROPOSALS.md index 33ca512a..15d1655e 100644 --- a/PROPOSALS.md +++ b/PROPOSALS.md @@ -4,6 +4,30 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones  the looper then marks it `promoted` or `declined` here with the date.    ## Open +- **The ...
+Good. Commit as three commits and land.
+> Bash git add -A -- . ':!PROPOSALS.md' ':!STATE.md' && git commit -q -F - <<'EOF' The LLM rule as a generated build gate in Rust and Go (#909)  The platform rule (2026-11-19) is that an LLM may propose but never holds a token or a write path. tacplus.yaml `advisor: {path}` now makes tacplus generate the a...
+< 03f38330 STATE.md: the LLM-rule gate in Rust and Go, Java pending (#909) c1926523 PROPOSALS.md: follow-ups of the LLM-rule gate (#909) e8bb6cd5 The LLM rule as a generated build gate in Rust and Go (#909) 2b2ec2ea PROPOSALS.md: the nightly scan's proposals (looper)
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 909 --land 2>&1 | tail -15
+= task_started
+= task_notification
+< [2026-11-21T10:08:00Z] checkpoint of #909 (land queued) pushed to looper/tacplus-909:  47 files changed, 3176 insertions(+), 6 deletions(-) [2026-11-21T10:08:01Z] queued: the manager of tacplus lands looper/tacplus-909 in its next batch, with the lands queued before it (the merge train, looper#86), ...
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 909 --checkpoint "Land queued on main 2b2ec2ea: e8bb6cd5 Rust+Go gate, c1926523 PROPOSALS, 03f38330 STATE (alone). The train looper/build-tacplus-train that carried the conflicting uni-config justfile/USER.md edits is gone and main has none of it, so...
+< [2026-11-21T10:08:10Z] checkpoint of #909 (a step) pushed to looper/tacplus-909:  47 files changed, 3180 insertions(+), 6 deletions(-)
+I committed the Rust and Go parts of the LLM-rule gate and queued them with the manager to land on main. They have not had a full build yet: `cross-test/llm-rule` has never run against real generation, so the manager's build will be its first run.
+
+- **Why now:** the push to main only touched `PROPOSALS.md`. But the manager's train branch that held the conflicting `justfile` and `docs/USER.md` edits is gone, and main doesn't have those edits. So nothing blocked the land any more.
+- **Commits:** `e8bb6cd5` (the Rust and Go gate), `c1926523` (`PROPOSALS.md` follow-ups) and `03f38330` (`STATE.md` on its own).
+- **Checked locally on main `2b2ec2ea`:** `just generate`, `go vet ./...`, `go test ./...` and `go run ./cmd/soundness` all pass.
+
+The issue stays open after a merge because Java isn't built. It still needs Jody's answer on whether Java gets a Maven module split or a `jdeps` check, and there was none at 10:08Z. If there's still no answer when the next run starts, it will comment the merge result on the issue and add `needs-decision`. If the manager sends the land back, the next run will fix the failing gate or the conflict and land again.
+= success: I committed the Rust and Go parts of the LLM-rule gate and queued them with the manager to land on main. They have not had a full build yet: `cross-test/llm-rule` has never run against real generation, so the manager's build will be its first run.
+
+- **Why now:** the push to main only touched `PROPOSALS.md`. But the manager's train branch that held the conflicting `justfile` and `docs/USER.md` edits is gone, and main doesn't have those edits. So nothing blocked the land any more.
+- **Commits:** `e8bb6cd5` (the Rust and Go gate), `c1926523` (`PROPOSALS.md` follow-ups) and `03f38330` (`STATE.md` on its own).
+- **Checked locally on main `2b2ec2ea`:** `just generate`, `go vet ./...`, `go test ./...` and `go run ./cmd/soundness` all pass.
+
+The issue stays open after a merge because Java isn't built. It still needs Jody's answer on whether Java gets a Maven module split or a `jdeps` check, and there was none at 10:08Z. If there's still no answer when the next run starts, it will comment the merge result on the issue and add `needs-decision`. If the manager sends the land back, the next run will fix the failing gate or the conflict and land again.
+= usage: {"claude-opus-5-5":{"inputTokens":20,"outputTokens":3517,"cacheReadInputTokens":359473,"cacheCreationInputTokens":31247,"webSearchRequests":0,"costUSD":0.3922906,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":488,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}

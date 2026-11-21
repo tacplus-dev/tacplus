@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by looper (#931).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-21 by looper (#909).
 
 - **Version / line:** v2.6.13 (latest release, 2026-11-15, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -188,10 +188,17 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by lo
   G115, G404, G703 or G704: each was fixed (enum parse bounded to int32, gRPC codes, IP packing via encoding/binary,
   JWK exponent, the AWS STS region validated) or annotated with its reason (wire two's complement, retry jitter,
   operator-named paths). Backported to release/2.0 through release/2.6 by pull request, each line's next patch.
+  On main (2.7): the LLM rule as a generated gate (#909; an LLM may propose, it never holds a token or a write
+  path). tacplus.yaml `advisor: {path}` makes tacplus generate, in Rust and Go, the advisor's model port (typed on
+  llmproxy's own messages, never its client), the core's adapter over the llmproxy S2S client (the service's token,
+  the advisor's `trace_id`) and the gate: in Rust the port's build script, which fails every build of the model
+  crate when the advisor's `Cargo.toml` names a generated crate, a path dependency other than the port, git or a
+  patch; in Go a generated test over `go list -deps -test` of the advisor's packages. registry.json marks the
+  service `advisor: true`. `cross-test/llm-rule` (in `just gates`) builds green and red advisors in both.
 - **Released / deployed:** v2.6.0 is the newest release: the binaries and `checksums.txt`, and
   `ghcr.io/tacplus-dev/tacplus/build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c`
   (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.
-- **Known gaps:** The member port needs kernel to mint `member:<svc>` (tacplus-dev/kernel#30) before Stratum adopts
+- **Known gaps:** Java refuses tacplus.yaml `advisor:` until its LLM-rule gate is decided and built (#909: a Maven module split or a jdeps check, asked on the issue). The member port needs kernel to mint `member:<svc>` (tacplus-dev/kernel#30) before Stratum adopts
   it (stratum#17); its ServiceManager wiring is compiled, not run (KNOWN_TEST_GAPS MP-1); no cross-language rotation
   leg yet, and the member ports keep their own rotation code (KNOWN_TEST_GAPS RT-1). The redo service and the per-tenant Stratum that implement the redo contract are their repos'
   (tacplus-dev/redo#1, tacplus-dev/stratum#2). The gateway does not yet route by the route field nor stamp `McpRequest.tenant`

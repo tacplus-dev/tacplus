@@ -1,0 +1,39 @@
+= init
+= thinking_tokens
+= thinking_tokens
+> Bash git status --short && git log --oneline -3 && git diff --stat && gh issue view 918 --repo tacplus-dev/tacplus --comments | tail -30
+<  M pkg/formatter/formatter.go  M pkg/formatter/formatter_test.go 1fd98b34 HISTORY.md: #931 (looper) 8ef5537f HISTORY.md: #930 (looper) b35f308b merging sources never reads through a symlink out of a source  pkg/formatter/formatter.go      | 46 +++++++++++++++++++++++++++-----  pkg/formatter/formatte...
+Again no gate ran (cancelled, never started). Let me check the diff once and run local tests.
+> Bash git diff && go vet ./pkg/formatter && go test ./pkg/formatter 2>&1 | tail -5 && gofmt -l pkg/formatter
+= task_started
+= task_notification
+< diff --git a/pkg/formatter/formatter.go b/pkg/formatter/formatter.go index 323d446a..7cd042a3 100644 --- a/pkg/formatter/formatter.go +++ b/pkg/formatter/formatter.go @@ -5,6 +5,7 @@ package formatter    import (  	"context" +	"errors"  	"fmt"  	"io/fs"  	"os" @@ -17,7 +18,19 @@ import (  	"github.c...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+The change is intact and tests pass; the last red was a cancelled pipeline that never started (no gate ran), and the member directed re-queueing unchanged. Committing and re-landing.
+> Bash git add pkg/formatter && git commit -q -F - <<'EOF' formatter: scale black's deadline to the files it formats  A fixed 2m deadline sized for an idle machine killed black on a loaded build pod ('black failed: signal: killed'), failing jwk-alg-python in the merge train (#918). The deadline is now 5m p...
+= task_started
+= task_notification
+< f3aef5e6 formatter: scale black's deadline to the files it formats [2026-11-21T08:38:16Z] checkpoint of #918 (land queued) pushed to looper/tacplus-918:  5 files changed, 342 insertions(+), 6 deletions(-) [2026-11-21T08:38:19Z] queued: the manager of tacplus lands looper/tacplus-918 in its next batc...
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 918 --checkpoint "Land re-queued: f3aef5e6, the same change as 80265c43/682b4959 (black's deadline is 5m + 5s per .py/.pyi file, and the error names the deadline; tests pass locally). The last red was a cancelled pipeline that never started (30970937...
+< [2026-11-21T08:38:25Z] checkpoint of #918 (a step) pushed to looper/tacplus-918:  5 files changed, 346 insertions(+), 6 deletions(-)
+I re-queued the fix for #918 with the manager as commit `f3aef5e6`. Nothing is merged yet; the manager posts its verdict on the issue.
+
+- **Why re-queue:** the last red result was not caused by the change. The manager's pipeline 3097093702 was cancelled before it started, so no gate ran. The earlier red was a lost build runner, and Jody said to re-queue unchanged.
+- **The fix:** it is the same change as the earlier attempts (80265c43 and 682b4959). Black's deadline is now 5 minutes plus 5 seconds per `.py`/`.pyi` file, instead of a fixed 2 minutes. If black does run out of time, the error now states the deadline instead of a bare "signal: killed".
+- **Checks run:** `go vet` and `go test ./pkg/formatter` pass locally. I did not run the full gates myself this time: my last full-gates build lost its runner too, so the manager's build is the real test.
+- **Backports:** the pull requests to release/2.0–2.6 (#920–#926) are open, each naming the patch tag to cut once it merges. No tag is cut from main, because main is already the 2.7 line.
+- **Traces:** this change touches no service handlers, so the trace rule doesn't apply.
+
+The next run acts on the verdict. If the land merges, it writes the outcome comment and closes the issue. If a named gate fails, it fixes that and lands again. If the build infrastructure fails again, it re-lands unchanged.
+= success: I re-queued the fix for #918 with the manager as commit `f3aef5e6`. Nothing is merged yet; the manager posts its verdict on the issue.
+
+- **Why re-queue:** the last red result was not caused by the change. The manager's pipeline 3097093702 was cancelled before it started, so no gate ran. The earlier red was a lost build runner, and Jody said to re-queue unchanged.
+- **The fix:** it is the same change as the earlier attempts (80265c43 and 682b4959). Black's deadline is now 5 minutes plus 5 seconds per `.py`/`.pyi` file, instead of a fixed 2 minutes. If black does run out of time, the error now states the deadline instead of a bare "signal: killed".
+- **Checks run:** `go vet` and `go test ./pkg/formatter` pass locally. I did not run the full gates myself this time: my last full-gates build lost its runner too, so the manager's build is the real test.
+- **Backports:** the pull requests to release/2.0–2.6 (#920–#926) are open, each naming the patch tag to cut once it merges. No tag is cut from main, because main is already the 2.7 line.
+- **Traces:** this change touches no service handlers, so the trace rule doesn't apply.
+
+The next run acts on the verdict. If the land merges, it writes the outcome comment and closes the issue. If a named gate fails, it fixes that and lands again. If the build infrastructure fails again, it re-lands unchanged.
+= usage: {"claude-opus-5-5":{"inputTokens":10,"outputTokens":1843,"cacheReadInputTokens":138017,"cacheCreationInputTokens":21532,"webSearchRequests":0,"costUSD":0.23675939999999998,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":221,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}

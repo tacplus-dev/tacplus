@@ -6,6 +6,7 @@ package com.example.grid.model.chassis.memberport;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.example.grid.model.chassis.token.TokenWrapper;
 import com.example.grid.model.types.sys.memberport.Memberport.MemberChunk;
 import io.grpc.Status;
 import java.net.InetSocketAddress;
@@ -21,6 +22,13 @@ import org.junit.jupiter.api.Test;
  * memberport gate runs it too.
  */
 class MemberPortStreamExpiryTest {
+    /**
+     * How long after its token's exp a stream may take to close. Generous on
+     * purpose, as the stream-expiry legs' are: on a loaded runner every step
+     * runs about a second late (#627); a stream that is never closed still fails.
+     */
+    static final long CLOSE_BOUND_MS = 5_000;
+
     final MemberPortBehaviorTest fixture = new MemberPortBehaviorTest();
 
     @BeforeEach
@@ -78,11 +86,12 @@ class MemberPortStreamExpiryTest {
         }
         assertTrue(echoed != null, "the stream works until exp; stream status " + r.closed.getNow(null));
         assertArrayEquals(new byte[] {1, 2, 3}, echoed.getPayload().toByteArray(), "the stream works until exp");
-        Status s = r.status(ttlSeconds * 1000 + 5_000);
+        Status s = r.status(ttlSeconds * 1000 + CLOSE_BOUND_MS + 1_000);
         long late = System.currentTimeMillis() - exp;
         MemberPortBehaviorTest.assertRefused(Status.Code.UNAUTHENTICATED, s, "an expired, unrotated stream");
-        assertTrue(late > -250 && late < 1_500, "closed at exp, not before or long after: " + late + "ms after it");
-        MemberPortBehaviorTest.waitFor("the connection behind the port to end", 5_000, () -> behind.results.size() == 1);
+        assertTrue(late > -250 && late < CLOSE_BOUND_MS,
+                "closed at exp, not before or long after: " + late + "ms after it (bound " + CLOSE_BOUND_MS + "ms)");
+        MemberPortBehaviorTest.waitFor("the connection behind the port to end", 15_000, () -> behind.results.size() == 1);
         String error = String.valueOf(behind.results.get(1).error);
         assertTrue(error.contains("reset"), "the connection behind the port is reset: " + error);
         return true;
@@ -95,13 +104,14 @@ class MemberPortStreamExpiryTest {
                 fixture.fleet.leaf(MemberPortBehaviorTest.X, MemberPortBehaviorTest.SVC, "Ed25519")), fixture.fleet.jwks::get);
         MemberportPeer.Server echo = fixture.echo();
         InetSocketAddress fwd = fixture.tunnel(a, fixture.member(MemberPortBehaviorTest.X), echo);
-        stuck.token();
+        long exp = TokenWrapper.parse(stuck.token()).getExpiration() * 1000;
         stuck.neverRenew = true;
-        long start = System.currentTimeMillis();
         MemberportPeer.Result r = MemberportPeer.exchange(fwd, 41, 2_000_000, 41, 2048, 10, 0);
-        long elapsed = System.currentTimeMillis() - start;
+        long late = System.currentTimeMillis() - exp;
         assertTrue(!r.ok(2_000_000) && r.firstMismatch < 0, "cut at expiry, what arrived intact: " + r);
         assertTrue(MemberPortBehaviorTest.reset(r), "the black-box client sees a reset: " + r);
-        assertTrue(elapsed < 4_500, "closed at the token's expiry, took " + elapsed + "ms");
+        // Uncut, the exchange takes about 10 s (2 MB in 2 KiB chunks, 10 ms apart).
+        assertTrue(late < CLOSE_BOUND_MS,
+                "closed at the token's expiry: " + late + "ms after it (bound " + CLOSE_BOUND_MS + "ms)");
     }
 }

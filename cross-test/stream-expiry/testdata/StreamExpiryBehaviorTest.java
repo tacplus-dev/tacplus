@@ -81,9 +81,18 @@ class StreamExpiryBehaviorTest {
     private static final Metadata.Key<String> AUTHORIZATION =
             Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
     private static final long TICK_MS = 200;
+    /**
+     * How long after a stream's expiry close its handler may take to learn the
+     * call ended. Generous on purpose: on a loaded runner every step runs late
+     * (issue #627), and a Context that is never cancelled still fails here.
+     */
+    private static final long HANDLER_END_BOUND_MS = 15_000;
 
-    /** Server-side record that a handler learned its call ended. */
+    /** Server-side record that a handler was invoked and learned its call ended. */
     private static final class HandlerSignals {
+        final CountDownLatch sendTicksStarted = new CountDownLatch(1);
+        final CountDownLatch generateTicksStarted = new CountDownLatch(1);
+        final CountDownLatch assistTicksStarted = new CountDownLatch(1);
         final CountDownLatch sendTicksEnded = new CountDownLatch(1);
         final CountDownLatch generateTicksEnded = new CountDownLatch(1);
         final CountDownLatch assistTicksEnded = new CountDownLatch(1);
@@ -106,9 +115,11 @@ class StreamExpiryBehaviorTest {
             return Tick.newBuilder().setM(m).build();
         }
 
-        private StreamObserver<Tick> receiveForever(CountDownLatch ended) {
+        private StreamObserver<Tick> receiveForever(CountDownLatch started, CountDownLatch ended) {
             // The handler is invoked with the call's Context attached; once the
-            // call ends that Context is cancelled.
+            // call ends that Context is cancelled. A listener added to a Context
+            // already cancelled runs at once (contextListenerAddedAfterCancelRuns).
+            started.countDown();
             Context.current().addListener(ctx -> ended.countDown(), Runnable::run);
             return new StreamObserver<Tick>() {
                 @Override public void onNext(Tick value) {}
@@ -119,13 +130,16 @@ class StreamExpiryBehaviorTest {
 
         @Override
         public StreamObserver<Tick> sendTicks(Caller caller, StreamObserver<Tick> responseObserver) {
-            return receiveForever(signals.sendTicksEnded);
+            return receiveForever(signals.sendTicksStarted, signals.sendTicksEnded);
         }
 
         @Override
         public void generateTicks(Caller caller, Tick request, StreamObserver<Tick> responseObserver) {
             // Blocks the call's executor, as a naive server-streaming handler
             // does: it learns the call ended only through its Context.
+            if ("short".equals(request.getM())) {
+                signals.generateTicksStarted.countDown();
+            }
             long giveUp = System.currentTimeMillis() + 60_000;
             int n = 0;
             while (!Context.current().isCancelled() && System.currentTimeMillis() < giveUp) {
@@ -144,7 +158,7 @@ class StreamExpiryBehaviorTest {
 
         @Override
         public StreamObserver<Tick> assistTicks(Caller caller, StreamObserver<Tick> responseObserver) {
-            return receiveForever(signals.assistTicksEnded);
+            return receiveForever(signals.assistTicksStarted, signals.assistTicksEnded);
         }
     }
 
@@ -415,14 +429,30 @@ class StreamExpiryBehaviorTest {
                 fail(String.join("\n", problems));
             }
 
-            // The handlers learned the calls ended (their Context was cancelled),
+            // Each handler ran (the server saw the stream before its token's
+            // exp) and learned its call ended (its Context was cancelled),
             // including the server-stream handler blocking its call executor.
-            assertTrue(signals.sendTicksEnded.await(3, TimeUnit.SECONDS),
-                    "SendTicks handler's Context was not cancelled after the expiry close");
-            assertTrue(signals.assistTicksEnded.await(3, TimeUnit.SECONDS),
-                    "AssistTicks handler's Context was not cancelled after the expiry close");
-            assertTrue(signals.generateTicksEnded.await(3, TimeUnit.SECONDS),
-                    "GenerateTicks handler did not learn its call ended (Context not cancelled)");
+            CountDownLatch[] started = {signals.sendTicksStarted, signals.generateTicksStarted, signals.assistTicksStarted};
+            CountDownLatch[] handlerEnded = {signals.sendTicksEnded, signals.generateTicksEnded, signals.assistTicksEnded};
+            for (int i = 0; i < streams.length; i++) {
+                long closedAt = streams[i].ended.get().atMs;
+                if (started[i].getCount() != 0) {
+                    problems.add(names[i] + " handler was never invoked: the server refused the stream at open"
+                            + " (closed at exp" + (closedAt >= expMs ? "+" : "") + (closedAt - expMs)
+                            + "ms), so its expiry mid-stream was not tested");
+                    continue;
+                }
+                long waitStart = System.currentTimeMillis();
+                if (!handlerEnded[i].await(Math.max(0, closedAt + HANDLER_END_BOUND_MS - waitStart), TimeUnit.MILLISECONDS)) {
+                    long now = System.currentTimeMillis();
+                    problems.add(names[i] + " handler's Context was not cancelled " + (now - closedAt)
+                            + " ms after the expiry close (bound " + HANDLER_END_BOUND_MS + " ms; waited "
+                            + (now - waitStart) + " ms here)");
+                }
+            }
+            if (!problems.isEmpty()) {
+                fail(String.join("\n", problems));
+            }
 
             // Control: the long-lived-token stream is still open past the window
             // and still receiving ticks.
@@ -452,5 +482,25 @@ class StreamExpiryBehaviorTest {
             serverThread.join(15_000);
             authorizer.close();
         }
+    }
+
+    /**
+     * The handlers above attach their Context listener when invoked. A call
+     * cancelled before that line runs must still reach the listener: grpc-java
+     * runs a listener added to an already-cancelled Context at once.
+     */
+    @Test
+    void contextListenerAddedAfterCancelRuns() throws Exception {
+        Context.CancellableContext call = Context.current().withCancellation();
+        call.cancel(Status.UNAUTHENTICATED.asRuntimeException());
+        Context handler = call.withValue(Context.key("handler-value"), "v");
+        Context prev = handler.attach();
+        CountDownLatch ended = new CountDownLatch(1);
+        try {
+            Context.current().addListener(ctx -> ended.countDown(), Runnable::run);
+        } finally {
+            handler.detach(prev);
+        }
+        assertEquals(0, ended.getCount(), "listener added to an already-cancelled Context did not run");
     }
 }

@@ -11,13 +11,16 @@ import {
   configDefaults,
   mergeConfig,
   validateConfig,
-  BOOTSTRAP_CONFIG_ENV,
+  BOOTSTRAP_CONFIG_PATH,
 } from './helpers.js';
 import * as WinstonConfigurator from '../logger/WinstonConfigurator.js';
 
 /**
- * Loads a Config from a config file and/or PROTO_SYS_GRPCCONFIG_CONFIG_* env vars.
- * File values take precedence over env values.
+ * Loads a Config from a config file and/or PROTO_SYS_GRPCCONFIG_CONFIG_* env vars
+ * (which the config types declare). The file is the one a -c/--config arg names,
+ * else the platform's fixed path BOOTSTRAP_CONFIG_PATH when it exists; no
+ * environment variable moves it (tacplus#262). File values take precedence over
+ * env values.
  */
 export async function loadConfig(): Promise<Config> {
   const args = process.argv;
@@ -29,9 +32,13 @@ export async function loadConfig(): Promise<Config> {
     }
   }
 
-  // Fall back to env var
+  // Fall back to the fixed path when the deployment put a file there; one that
+  // is there but unreadable fails below rather than being skipped.
   if (!path) {
-    path = process.env[BOOTSTRAP_CONFIG_ENV] ?? '';
+    const { existsSync } = await import('node:fs');
+    if (existsSync(BOOTSTRAP_CONFIG_PATH)) {
+      path = BOOTSTRAP_CONFIG_PATH;
+    }
   }
 
   let fileCfg: Config | null = null;
@@ -67,7 +74,7 @@ export async function loadConfig(): Promise<Config> {
     cfg = envCfg as Config;
   } else {
     throw new Error(
-      `no config provided: use -c/--config flag or set ${BOOTSTRAP_CONFIG_ENV} env var`
+      `no config provided: no file at ${BOOTSTRAP_CONFIG_PATH} and no -c/--config flag`
     );
   }
 

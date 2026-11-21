@@ -4,7 +4,7 @@
 #
 # CODE GENERATED - DO NOT EDIT
 
-"""Config loader from CLI flags and environment variables."""
+"""Config loader from CLI flags, the platform's fixed config path and declared env vars."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from {{.PythonPackageBase}}.types.sys.grpcconfig.helpers import (
     config_defaults,
     merge_config,
     validate_config,
-    BOOTSTRAP_CONFIG_ENV,
+    BOOTSTRAP_CONFIG_PATH,
 )
 from {{.PythonPackageBase}}.chassis.logger import LoggerConfigurator
 
@@ -29,8 +29,11 @@ from {{.PythonPackageBase}}.chassis.logger import LoggerConfigurator
 def load_config() -> grpcconfig_pb2.Config:
     """Load a Config from:
 
-    1. A config file specified via -c/--config arg or BOOTSTRAP_CONFIG env var
-    2. Individual PROTO_SYS_GRPCCONFIG_CONFIG_* env vars
+    1. The config file named by a -c/--config arg, else the platform's fixed
+       path BOOTSTRAP_CONFIG_PATH when it exists. No environment variable
+       moves it (tacplus#262: the uni-config is the config).
+    2. Individual PROTO_SYS_GRPCCONFIG_CONFIG_* env vars, which the config
+       types declare
     3. Merges (file takes precedence), applies defaults, validates
 
     Returns:
@@ -55,9 +58,10 @@ def load_config() -> grpcconfig_pb2.Config:
             path = args[i + 1]
             break
 
-    # Fall back to env var
-    if not path:
-        path = os.environ.get(BOOTSTRAP_CONFIG_ENV, "")
+    # Fall back to the fixed path when the deployment put a file there; one
+    # that is there but unreadable fails below rather than being skipped.
+    if not path and os.path.lexists(BOOTSTRAP_CONFIG_PATH):
+        path = BOOTSTRAP_CONFIG_PATH
 
     file_cfg = None
     if path:
@@ -86,7 +90,7 @@ def load_config() -> grpcconfig_pb2.Config:
         cfg = env_cfg
     else:
         raise RuntimeError(
-            f"no config provided: use -c/--config flag or set {BOOTSTRAP_CONFIG_ENV} env var"
+            f"no config provided: no file at {BOOTSTRAP_CONFIG_PATH} and no -c/--config flag"
         )
 
     config_defaults(cfg)

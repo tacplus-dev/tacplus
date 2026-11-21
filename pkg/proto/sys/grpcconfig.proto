@@ -24,8 +24,17 @@ import "sys/x509.proto";
 import "sys/trace.proto";
 import "sys/diskstore.proto";
 
-// Environment variable name for bootstrap config file path.
-option (spec.string_const) = { name: "BOOTSTRAP_CONFIG_ENV", value: "BOOTSTRAP_CONFIG" };
+// The bootstrap config's fixed, well-known location: a platform constant, not
+// an environment variable (tacplus#262, the uni-config). The generated config
+// loader reads this file when no -c/--config argument names another, and no
+// environment variable moves it.
+option (spec.string_const) = { name: "BOOTSTRAP_CONFIG_PATH", value: "/etc/tacplus/bootstrap.yaml" };
+
+// The fixed, well-known location of a service's Secrets: its secret inputs,
+// one serialized message, delivered from the uni-config beside the bootstrap
+// config. Read it with the generated <T>FromFile reader (Go; secrets_from_file
+// in Rust, secretsFromFile in Java), never from the environment.
+option (spec.string_const) = { name: "SECRETS_PATH", value: "/etc/tacplus/secrets.yaml" };
 
 // ============================================================================
 // Unified Service Configuration
@@ -213,6 +222,18 @@ message Config {
   // fails without it) and ignored by any other. An init-time setting: it is not
   // hot-reloaded.
   MemberPortConfig member_port = 22;
+
+  // ============================================================================
+  // Bootstrap — Kubernetes Identity
+  // ============================================================================
+
+  // k8s_token_file is the projected Kubernetes service-account token the
+  // identity manager presents to the token authority (the in-cluster bootstrap
+  // path). The kubelet rotates it in place, so it is re-read on every exchange.
+  // When empty, cloud-native identity is attempted instead. It replaces the
+  // KERNEL_K8S_TOKEN_FILE environment variable (tacplus#262): the chassis
+  // reads it from config, never from the environment.
+  string k8s_token_file = 23 [(spec.assert_max_size) = 4096];
 
 }
 

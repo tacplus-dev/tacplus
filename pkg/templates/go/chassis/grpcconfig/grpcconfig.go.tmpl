@@ -18,21 +18,32 @@ import (
 )
 
 // LoadConfig loads a grpcconfig.Config from:
-//  1. A config file specified via -c/--config arg or BOOTSTRAP_CONFIG env var
-//  2. Individual PROTO_SYS_GRPCCONFIG_CONFIG_* env vars
+//  1. The config file named by a -c/--config arg, else the platform's fixed
+//     path grpcconfig_pb.BootstrapConfigPath when it exists. No environment
+//     variable moves it (tacplus#262: the uni-config is the config).
+//  2. Individual PROTO_SYS_GRPCCONFIG_CONFIG_* env vars, which the config
+//     types declare
 //  3. Merges (file takes precedence), validates
 func LoadConfig() (*grpcconfig_pb.Config, error) {
-	// Scan os.Args for -c <path> or --config <path>
+	return loadConfig(os.Args, grpcconfig_pb.BootstrapConfigPath)
+}
+
+// loadConfig is LoadConfig with its arguments and its fixed path as parameters.
+func loadConfig(args []string, fixedPath string) (*grpcconfig_pb.Config, error) {
+	// Scan args for -c <path> or --config <path>
 	path := ""
-	for i := 1; i < len(os.Args)-1; i++ {
-		if os.Args[i] == "-c" || os.Args[i] == "--config" {
-			path = os.Args[i+1]
+	for i := 1; i < len(args)-1; i++ {
+		if args[i] == "-c" || args[i] == "--config" {
+			path = args[i+1]
 			break
 		}
 	}
-	// Fall back to env var
+	// Fall back to the fixed path when the deployment put a file there; one
+	// that is there but unreadable fails below rather than being skipped.
 	if path == "" {
-		path = os.Getenv(grpcconfig_pb.BootstrapConfigEnv)
+		if _, err := os.Stat(fixedPath); !os.IsNotExist(err) {
+			path = fixedPath
+		}
 	}
 
 	var fileCfg *grpcconfig_pb.Config
@@ -76,8 +87,7 @@ func LoadConfig() (*grpcconfig_pb.Config, error) {
 	} else if envCfg != nil {
 		cfg = envCfg
 	} else {
-		return nil, fmt.Errorf("no config provided: use -c/--config flag or set %s env var",
-			grpcconfig_pb.BootstrapConfigEnv)
+		return nil, fmt.Errorf("no config provided: no file at %s and no -c/--config flag", fixedPath)
 	}
 
 	grpcconfig_pb.ConfigDefaults(cfg)

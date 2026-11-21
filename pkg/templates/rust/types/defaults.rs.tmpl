@@ -28,7 +28,7 @@ if msg.{{.FieldName}}.is_none() || msg.{{.FieldName}} == Some(false) {
 msg.{{.FieldName}} = Some({{.ConstName}});
 }
 {{- else if eq .Kind "host"}}
-if msg.{{.FieldName}}.is_none() { msg.{{.FieldName}} = Some(Host { host: "{{.HostHost}}".into(), port: {{.HostPort}}, protocol: 0 }); }
+if msg.{{.FieldName}}.is_none() { msg.{{.FieldName}} = Some(Host { host: "{{.HostHost}}".into(), port: {{.HostPort}}, protocol: 0, ..Default::default() }); }
 {{- end}}
 {{- else}}
 {{- if eq .Kind "string"}}
@@ -56,7 +56,7 @@ if !msg.{{.FieldName}} {
 msg.{{.FieldName}} = {{.ConstName}};
 }
 {{- else if eq .Kind "host"}}
-if msg.{{.FieldName}}.is_none() { msg.{{.FieldName}} = Some(Host { host: "{{.HostHost}}".into(), port: {{.HostPort}}, protocol: 0 }); }
+if msg.{{.FieldName}}.is_none() { msg.{{.FieldName}} = Some(Host { host: "{{.HostHost}}".into(), port: {{.HostPort}}, protocol: 0, ..Default::default() }); }
 {{- end}}
 {{- end}}
 {{- end}}

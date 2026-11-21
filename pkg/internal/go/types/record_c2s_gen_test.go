@@ -49,10 +49,11 @@ func TestGoRecordC2SHandlerPinsCallerAndCopiesCriteria(t *testing.T) {
 		"ActivityId:      &key,",
 		"OwnerSubject:    &principal,",
 		"TenantNamespace: &namespace,",
-		"g.sm.ScottyActivityRecordReader().List(ctx, filter, 1, \"\")",
+		// The handler's reads carry its request's trace_id (#327).
+		"g.sm.ScottyActivityRecordReader().ListTraced(ctx, filter, 1, \"\", req.GetTraceId())",
 		"UpdatedAtMsFrom: supplied.UpdatedAtMsFrom,",
 		"UpdatedAtMsTo:   supplied.UpdatedAtMsTo,",
-		"g.sm.ScottyActivityRecordReader().List(ctx, filter, req.GetPageSize(), req.GetPageToken())",
+		"g.sm.ScottyActivityRecordReader().ListTraced(ctx, filter, req.GetPageSize(), req.GetPageToken(), req.GetTraceId())",
 		"NextPageToken: next, TotalCount: total",
 	} {
 		if !strings.Contains(src, want) {
@@ -84,7 +85,7 @@ func TestGoRecordC2SRoutedReadsTheCallersTidClaim(t *testing.T) {
 		`status.Error(codes.PermissionDenied, method+": the caller's token carries no tid claim, and the record store is one instance per tenant")`,
 		`tenant, err := recordC2STenant("GetScottyActivity", caller)`,
 		`tenant, err := recordC2STenant("GetScottyActivityPage", caller)`,
-		"g.sm.ScottyActivityRecordReader().List(ctx, tenant, filter, 1, \"\")",
+		"g.sm.ScottyActivityRecordReader().ListTraced(ctx, tenant, filter, 1, \"\", req.GetTraceId())",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("routed plane handler missing %q:\n%s", want, src)

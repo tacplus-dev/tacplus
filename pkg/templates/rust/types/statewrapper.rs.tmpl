@@ -304,17 +304,32 @@ impl {{.StateRootName}}Client {
 {{end}}
     /// Fetches all entries from the {{.FieldName}} collection via GetAll RPC.
     pub async fn fetch_all_{{.FieldName}}(&self) -> Result<HashMap<String, {{.TypeName}}>, tonic::Status> {
-        self.inner.fetch_all_{{.FieldName}}().await
+        self.inner.fetch_all_{{.FieldName}}_traced("").await
+    }
+
+    /// `fetch_all_{{.FieldName}}` with `trace_id` on the request it sends (#327).
+    pub async fn fetch_all_{{.FieldName}}_traced(&self, trace_id: &str) -> Result<HashMap<String, {{.TypeName}}>, tonic::Status> {
+        self.inner.fetch_all_{{.FieldName}}_traced(trace_id).await
     }
 {{if not $.ReadOnly}}
     /// Puts a single entry into the {{.FieldName}} collection via Put RPC.
     pub async fn put_{{.FieldName}}(&self, key: String, value: {{.TypeName}}) -> Result<(), tonic::Status> {
-        self.inner.put_{{.FieldName}}(key, value).await
+        self.inner.put_{{.FieldName}}_traced(key, value, "").await
+    }
+
+    /// `put_{{.FieldName}}` with `trace_id` on the request it sends (#327).
+    pub async fn put_{{.FieldName}}_traced(&self, key: String, value: {{.TypeName}}, trace_id: &str) -> Result<(), tonic::Status> {
+        self.inner.put_{{.FieldName}}_traced(key, value, trace_id).await
     }
 
     /// Deletes a single entry from the {{.FieldName}} collection via Delete RPC.
     pub async fn delete_{{.FieldName}}(&self, key: String) -> Result<(), tonic::Status> {
-        self.inner.delete_{{.FieldName}}(key).await
+        self.inner.delete_{{.FieldName}}_traced(key, "").await
+    }
+
+    /// `delete_{{.FieldName}}` with `trace_id` on the request it sends (#327).
+    pub async fn delete_{{.FieldName}}_traced(&self, key: String, trace_id: &str) -> Result<(), tonic::Status> {
+        self.inner.delete_{{.FieldName}}_traced(key, trace_id).await
     }
 {{end}}{{end}}
     // ==================== View Accessors (read-only unions) ====================
@@ -769,31 +784,34 @@ impl {{.StateRootName}}ClientInner {
         }
     }
 
-    /// Fetches all entries from the {{.FieldName}} collection via GetAll RPC.
-    pub async fn fetch_all_{{.FieldName}}(&self) -> Result<HashMap<String, {{.TypeName}}>, tonic::Status> {
-        let req = self.authorized_request({{.FieldPascal}}GetAllRequest { ..Default::default() }).await?;
+    /// Fetches all entries from the {{.FieldName}} collection via GetAll RPC,
+    /// with `trace_id` on the request (#327).
+    pub async fn fetch_all_{{.FieldName}}_traced(&self, trace_id: &str) -> Result<HashMap<String, {{.TypeName}}>, tonic::Status> {
+        let req = self.authorized_request({{.FieldPascal}}GetAllRequest { trace_id: trace_id.to_string(), ..Default::default() }).await?;
         let mut stub = {{$.StateServiceClientType}}::new(self.channel.clone());
         let response = stub.get_all_{{.FieldName}}(req).await?;
         Ok(response.into_inner().entries)
     }
 {{if not $.ReadOnly}}
-    /// Puts a single entry into the {{.FieldName}} collection via Put RPC.
-    pub async fn put_{{.FieldName}}(&self, key: String, value: {{.TypeName}}) -> Result<(), tonic::Status> {
+    /// Puts a single entry into the {{.FieldName}} collection via Put RPC, with
+    /// `trace_id` on the PutRequest itself (#327).
+    pub async fn put_{{.FieldName}}_traced(&self, key: String, value: {{.TypeName}}, trace_id: &str) -> Result<(), tonic::Status> {
 {{- if .ClearTrace}}
         // A stored value never keeps a trace (#313). `value` is the caller's
         // owned copy, so clearing it here never touches the caller's message.
         let mut value = value;
         value.trace_id = String::new();
 {{- end}}
-        let req = self.authorized_request({{.FieldPascal}}PutRequest { key, value: Some(value), lock_counter: 0, ..Default::default() }).await?;
+        let req = self.authorized_request({{.FieldPascal}}PutRequest { key, value: Some(value), lock_counter: 0, trace_id: trace_id.to_string(), ..Default::default() }).await?;
         let mut stub = {{$.StateServiceClientType}}::new(self.channel.clone());
         stub.put_{{.FieldName}}(req).await?;
         Ok(())
     }
 
-    /// Deletes a single entry from the {{.FieldName}} collection via Delete RPC.
-    pub async fn delete_{{.FieldName}}(&self, key: String) -> Result<(), tonic::Status> {
-        let req = self.authorized_request({{.FieldPascal}}GetRequest { key, ..Default::default() }).await?;
+    /// Deletes a single entry from the {{.FieldName}} collection via Delete RPC,
+    /// with `trace_id` on the request (#327).
+    pub async fn delete_{{.FieldName}}_traced(&self, key: String, trace_id: &str) -> Result<(), tonic::Status> {
+        let req = self.authorized_request({{.FieldPascal}}GetRequest { key, trace_id: trace_id.to_string(), ..Default::default() }).await?;
         let mut stub = {{$.StateServiceClientType}}::new(self.channel.clone());
         stub.delete_{{.FieldName}}(req).await?;
         Ok(())
@@ -957,11 +975,22 @@ impl {{$.StateRootName}}{{.FieldPascal}}Accessor {
     /// check, and the retry loop burns its whole budget on a value that should
     /// have passed.
     pub async fn fetch(&self) -> Result<{{.TypeName}}, tonic::Status> {
+        self.fetch_traced("").await
+    }
+
+    /// `fetch` with `trace_id` on each request it sends (#327).
+    pub async fn fetch_traced(&self, trace_id: &str) -> Result<{{.TypeName}}, tonic::Status> {
         let timeout = self.inner.config_fetch_timeout();
         let deadline = tokio::time::Instant::now() + timeout;
         let mut attempt = 0u32;
         loop {
-            let req = self.inner.authorized_request(Default::default()).await?;
+            let req = self
+                .inner
+                .authorized_request(crate::types::sys::trace::TraceRequest {
+                    trace_id: trace_id.to_string(),
+                    ..Default::default()
+                })
+                .await?;
             let mut stub = {{$.StateServiceClientType}}::new(self.inner.channel.clone());
             let response = stub.get_{{.FieldName}}(req).await?;
             let mut value = response.into_inner();

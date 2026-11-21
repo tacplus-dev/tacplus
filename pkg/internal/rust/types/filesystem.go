@@ -44,6 +44,7 @@ fn mode_to_permission(mode: u32) -> super::Permission {
         owner: (m >> 6) & 7,
         group: (m >> 3) & 7,
         other: m & 7,
+        ..Default::default()
     }
 }
 
@@ -81,6 +82,7 @@ pub fn directory_from_filesystem(path: &Path) -> io::Result<super::Directory> {
         permission: Some(mode_to_permission(mode)),
         directories: Vec::new(),
         files: Vec::new(),
+        ..Default::default()
     };
 
     let mut entries: Vec<fs::DirEntry> = fs::read_dir(path)?
@@ -108,6 +110,7 @@ pub fn directory_from_filesystem(path: &Path) -> io::Result<super::Directory> {
                 name: entry.file_name().to_string_lossy().into_owned(),
                 permission: Some(mode_to_permission(file_mode)),
                 content,
+                ..Default::default()
             });
         }
     }

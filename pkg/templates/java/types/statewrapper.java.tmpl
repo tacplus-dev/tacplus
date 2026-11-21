@@ -405,6 +405,15 @@ public class StateClient implements AutoCloseable {
      * loop burns its whole budget on a value that should have passed.</p>
      */
     public {{.JavaType}} fetch{{.FieldPascal}}() {
+        return fetch{{.FieldPascal}}("");
+    }
+
+    /**
+     * The same call as {@link #fetch{{.FieldPascal}}()}, with {@code traceId} on
+     * the TraceRequest it sends (#327): pass the trace_id of the request that
+     * caused this fetch, or "" for none.
+     */
+    public {{.JavaType}} fetch{{.FieldPascal}}(String traceId) {
         if (stateStub == null) {
             throw new IllegalStateException("stateStub not initialized - call setChannel() first");
         }
@@ -412,7 +421,7 @@ public class StateClient implements AutoCloseable {
         long deadlineNanos = System.nanoTime() + timeoutSeconds * 1_000_000_000L;
         for (int attempt = 0; ; attempt++) {
             {{.JavaType}} value = {{$.BackoffFQN}}.retryWhileUnavailable(
-                    () -> stateStub.get{{.FieldPascal}}(Trace.TraceRequest.getDefaultInstance()),
+                    () -> stateStub.get{{.FieldPascal}}(Trace.TraceRequest.newBuilder().setTraceId(traceId).build()),
                     {{$.BackoffFQN}}.THREAD_SLEEPER);
 {{- if .DefaultsRef}}
             value = {{.DefaultsRef}}(value).build();
@@ -506,11 +515,21 @@ public class StateClient implements AutoCloseable {
      * Requires setChannel() to have been called.
      */
     public Map<String, {{.JavaType}}> fetchAll{{.FieldPascal}}() {
+        return fetchAll{{.FieldPascal}}("");
+    }
+
+    /**
+     * The same call as {@link #fetchAll{{.FieldPascal}}()}, with {@code traceId}
+     * on the GetAll request it sends (#327).
+     */
+    public Map<String, {{.JavaType}}> fetchAll{{.FieldPascal}}(String traceId) {
         if (stateStub == null) {
             throw new IllegalStateException("stateStub not initialized - call setChannel() first");
         }
         {{$.OuterClassName}}.{{.FieldPascal}}GetAllRequest req =
-                {{$.OuterClassName}}.{{.FieldPascal}}GetAllRequest.getDefaultInstance();
+                {{$.OuterClassName}}.{{.FieldPascal}}GetAllRequest.newBuilder()
+                        .setTraceId(traceId)
+                        .build();
         {{$.OuterClassName}}.{{.FieldPascal}}EntriesResponse resp = stateStub.getAll{{.FieldPascal}}(req);
         return resp.getEntriesMap();
     }
@@ -543,12 +562,22 @@ public class StateClient implements AutoCloseable {
      * Requires setChannel() to have been called.
      */
     public void put{{.FieldPascal}}(String key, {{.JavaType}} value) {
+        put{{.FieldPascal}}(key, value, "");
+    }
+
+    /**
+     * The same call as {@link #put{{.FieldPascal}}(String, {{.JavaType}})}, with
+     * {@code traceId} on the Put request it sends (#327). The stored value
+     * itself still keeps no trace.
+     */
+    public void put{{.FieldPascal}}(String key, {{.JavaType}} value, String traceId) {
         if (stateStub == null) {
             throw new IllegalStateException("stateStub not initialized - call setChannel() first");
         }
         {{$.OuterClassName}}.{{.FieldPascal}}PutRequest req =
                 {{$.OuterClassName}}.{{.FieldPascal}}PutRequest.newBuilder()
                         .setKey(key)
+                        .setTraceId(traceId)
 {{- if .ClearTrace}}
                         // A stored value never keeps a trace (#313).
                         .setValue(value.toBuilder().clearTraceId().build())
@@ -564,12 +593,21 @@ public class StateClient implements AutoCloseable {
      * Requires setChannel() to have been called.
      */
     public void delete{{.FieldPascal}}(String key) {
+        delete{{.FieldPascal}}(key, "");
+    }
+
+    /**
+     * The same call as {@link #delete{{.FieldPascal}}(String)}, with
+     * {@code traceId} on the Delete request it sends (#327).
+     */
+    public void delete{{.FieldPascal}}(String key, String traceId) {
         if (stateStub == null) {
             throw new IllegalStateException("stateStub not initialized - call setChannel() first");
         }
         {{$.OuterClassName}}.{{.FieldPascal}}GetRequest req =
                 {{$.OuterClassName}}.{{.FieldPascal}}GetRequest.newBuilder()
                         .setKey(key)
+                        .setTraceId(traceId)
                         .build();
         stateStub.delete{{.FieldPascal}}(req);
     }
@@ -1073,6 +1111,14 @@ public class StateClient implements AutoCloseable {
          */
         public {{.JavaType}} fetch() {
             return parent.fetch{{.FieldPascal}}();
+        }
+
+        /**
+         * The same call as {@link #fetch()}, with {@code traceId} on the
+         * TraceRequest it sends (#327).
+         */
+        public {{.JavaType}} fetch(String traceId) {
+            return parent.fetch{{.FieldPascal}}(traceId);
         }
 
         /**

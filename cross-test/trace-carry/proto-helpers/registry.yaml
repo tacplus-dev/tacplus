@@ -1,0 +1,13 @@
+# Managed by tacplus — do not edit IDs manually.
+services:
+    - name: tracehelpers
+      id: 1
+    - name: eventbus
+      id: 2
+    - name: helperstratum
+      id: 3
+vservices:
+    - name: tracehelpers
+      field_id: 30
+    - name: helperquery
+      field_id: 31

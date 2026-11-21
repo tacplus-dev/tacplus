@@ -70,12 +70,18 @@ func New{{.StructName}}(client *{{.ClientAlias}}.{{.ClientStruct}}) *{{.StructNa
 // asks for it explicitly.
 {{- end}}
 func (r *{{.StructName}}) Get(ctx context.Context, {{if .Routed}}tenant string, {{end}}key {{.KeyGoType}}{{if .HasDeletedFlag}}, includeDeleted bool{{end}}) (*{{.RecordAlias}}.{{.RecordName}}, error) {
+	return r.GetTraced(ctx, {{if .Routed}}tenant, {{end}}key{{if .HasDeletedFlag}}, includeDeleted{{end}}, "")
+}
+
+// GetTraced is Get with traceID on the request it sends (#327).
+func (r *{{.StructName}}) GetTraced(ctx context.Context, {{if .Routed}}tenant string, {{end}}key {{.KeyGoType}}{{if .HasDeletedFlag}}, includeDeleted bool{{end}}, traceID string) (*{{.RecordAlias}}.{{.RecordName}}, error) {
 	k := key
 	// The direct read: no result set, so nothing a connection failover between
 	// two calls could lose.
 	resp, err := r.client.{{.RowsFn}}(ctx, &{{.PlaneAlias}}.{{.RowsReqType}}{
 		Filter: &{{.PlaneAlias}}.{{.FilterType}}{ {{.KeyGoField}}: &k },
-		Limit:  1,
+		Limit:   1,
+		TraceId: traceID,
 {{- if .Routed}}
 		{{.RouteGoField}}: tenant,
 {{- end}}
@@ -103,7 +109,13 @@ func (r *{{.StructName}}) Get(ctx context.Context, {{if .Routed}}tenant string, 
 // a living-query concern the plane models with Watch<T>, and this method
 // deliberately does not pretend to offer it.
 func (r *{{.StructName}}) List(ctx context.Context, {{if .Routed}}tenant string, {{end}}filter *{{.PlaneAlias}}.{{.FilterType}}, pageSize int32, pageToken string{{if .HasDeletedFlag}}, includeDeleted bool{{end}}) ([]*{{.RecordAlias}}.{{.RecordName}}, string, int64, error) {
-	return r.queryPage(ctx, {{if .Routed}}tenant, {{end}}filter, pageSize, pageToken{{if .HasDeletedFlag}}, includeDeleted{{end}})
+	return r.ListTraced(ctx, {{if .Routed}}tenant, {{end}}filter, pageSize, pageToken{{if .HasDeletedFlag}}, includeDeleted{{end}}, "")
+}
+
+// ListTraced is List with traceID on each request it sends: the query's
+// create, its page and its release (#327).
+func (r *{{.StructName}}) ListTraced(ctx context.Context, {{if .Routed}}tenant string, {{end}}filter *{{.PlaneAlias}}.{{.FilterType}}, pageSize int32, pageToken string{{if .HasDeletedFlag}}, includeDeleted bool{{end}}, traceID string) ([]*{{.RecordAlias}}.{{.RecordName}}, string, int64, error) {
+	return r.queryPage(ctx, {{if .Routed}}tenant, {{end}}filter, pageSize, pageToken{{if .HasDeletedFlag}}, includeDeleted{{end}}, traceID)
 }
 
 // queryPage is the full Create -> List -> Delete lifecycle, with the handle
@@ -114,10 +126,11 @@ func (r *{{.StructName}}) List(ctx context.Context, {{if .Routed}}tenant string,
 // store's problem to expire and losing a successful read to a failed cleanup
 // would be strictly worse. If the List failed, that error is the one returned;
 // the cleanup's failure would only mask it.
-func (r *{{.StructName}}) queryPage(ctx context.Context, {{if .Routed}}tenant string, {{end}}filter *{{.PlaneAlias}}.{{.FilterType}}, pageSize int32, pageToken string{{if .HasDeletedFlag}}, includeDeleted bool{{end}}) ([]*{{.RecordAlias}}.{{.RecordName}}, string, int64, error) {
+func (r *{{.StructName}}) queryPage(ctx context.Context, {{if .Routed}}tenant string, {{end}}filter *{{.PlaneAlias}}.{{.FilterType}}, pageSize int32, pageToken string{{if .HasDeletedFlag}}, includeDeleted bool{{end}}, traceID string) ([]*{{.RecordAlias}}.{{.RecordName}}, string, int64, error) {
 	handle, err := r.client.{{.CreateFn}}(ctx, &{{.PlaneAlias}}.{{.OpenReqType}}{
 		Filter:   filter,
 		Standing: false,
+		TraceId:  traceID,
 {{- if .Routed}}
 		{{.RouteGoField}}: tenant,
 {{- end}}
@@ -132,11 +145,12 @@ func (r *{{.StructName}}) queryPage(ctx context.Context, {{if .Routed}}tenant st
 		QueryId:   handle.GetQueryId(),
 		PageSize:  pageSize,
 		PageToken: pageToken,
+		TraceId:   traceID,
 {{- if .Routed}}
 		{{.RouteGoField}}: tenant,
 {{- end}}
 	})
-	_, _ = r.client.{{.DeleteFn}}(ctx, &{{.PlaneAlias}}.QueryHandle{QueryId: handle.GetQueryId(){{if .Routed}}, {{.RouteGoField}}: tenant{{end}}})
+	_, _ = r.client.{{.DeleteFn}}(ctx, &{{.PlaneAlias}}.QueryHandle{QueryId: handle.GetQueryId(){{if .Routed}}, {{.RouteGoField}}: tenant{{end}}, TraceId: traceID})
 	if pullErr != nil {
 		return nil, "", 0, pullErr
 	}

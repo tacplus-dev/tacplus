@@ -1170,7 +1170,10 @@ func Validate%[1]s%[3]sWithDepth(m *%[1]s, depth int) error {
 				"subscribe",
 				"identity_namespace", "identity_subject",
 				"identity_spiffe_subject", "identity_spiffe_resource",
-				"principal", "store_principal", "namespace", "store_namespace":
+				"principal", "store_principal", "namespace", "store_namespace",
+				"store_epoch", "deleted_flag",
+				// flock state (tacplus#206): read by flock_gen.go.
+				"merge", "identity", "unique":
 
 				// Non-validation annotations — used by other code generators (statedb, constants, etc.)
 				// Silently skip: these do not produce validation code.

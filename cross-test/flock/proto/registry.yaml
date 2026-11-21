@@ -1,0 +1,53 @@
+# Managed by tacplus — do not edit IDs manually.
+services:
+    - name: flockcheck
+      id: 1
+flock:
+    - field: flockcheck.Person
+      rule: fields
+    - field: flockcheck.Person.aliases
+      rule: last_write
+    - field: flockcheck.Person.devices
+      rule: set_remove_wins
+    - field: flockcheck.Person.devices[].first_seen_ms
+      rule: min
+    - field: flockcheck.Person.devices[].last_seen_ms
+      rule: max
+    - field: flockcheck.Person.devices[].name
+      rule: last_write
+    - field: flockcheck.Person.display
+      rule: last_write
+    - field: flockcheck.Person.first_seen_ms
+      rule: min
+    - field: flockcheck.Person.generation
+      rule: max
+    - field: flockcheck.Person.home_region
+      rule: immutable
+    - field: flockcheck.Person.links
+      rule: set_remove_wins
+    - field: flockcheck.Person.links[].added_ms
+      rule: min
+    - field: flockcheck.Person.links[].assurance
+      rule: last_write
+    - field: flockcheck.Person.links[].idp
+      rule: identity
+    - field: flockcheck.Person.links[].subject
+      rule: identity
+    - field: flockcheck.Person.memberships
+      rule: set_remove_wins
+    - field: flockcheck.Person.memberships[].role
+      rule: last_write
+    - field: flockcheck.Person.memberships[].tenant
+      rule: identity
+    - field: flockcheck.Person.profile
+      rule: nested
+    - field: flockcheck.Person.profile.emails
+      rule: set_add_wins
+    - field: flockcheck.Person.profile.last_sign_in_day
+      rule: max
+    - field: flockcheck.Person.profile.nickname
+      rule: last_write
+    - field: flockcheck.Person.tags
+      rule: set_add_wins
+    - field: flockcheck.Session
+      rule: last_write

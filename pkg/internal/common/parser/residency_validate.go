@@ -88,6 +88,11 @@ func storeEpochFields(msg *MessageDescriptor) (ok []string, malformed []string) 
 		if !f.Annotations["store_epoch"].BoolValue {
 			continue
 		}
+		// A flock entry's hybrid clock (tacplus#206): ValidateFlockAnnotations
+		// owns it, and refuses one outside a flock entry.
+		if f.TypeKind == "message" && f.Type == FlockPackage+".Hlc" {
+			continue
+		}
 		switch {
 		case f.TypeKind != "scalar" || f.Type != "int64":
 			malformed = append(malformed, fmt.Sprintf("%s is %s, not int64", f.Name, f.Type))

@@ -13,14 +13,17 @@ import (
 
 	protoerrors "{{.ModuleBasePath}}/types/sys/errors"
 	wrapperSpiffe "{{.ModuleBasePath}}/chassis/spiffe"
+	wrapperToken "{{.ModuleBasePath}}/chassis/token"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
 // Tenant routing ((spec.rpc).route_field). Every rpc of a tenant-owned service
 // names the request field carrying the TARGET tenant id (a tid). That value,
-// and nothing else, decides which tenant's instance receives the call: it is
-// never defaulted from the caller's token, and a call whose value is empty or
-// not a tid is refused before anything is dialled.
+// and nothing else, decides which tenant's instance receives the call, and a
+// call whose value is empty or not a tid is refused before anything is
+// dialled. The one value a tenant's own service may name is its own tid,
+// which its generated client stamps when the field is empty
+// (CallerRouteTenant); every other caller names the tenant itself.
 
 // TenantIDLength is the exact length of a tid.
 const TenantIDLength = 8
@@ -53,6 +56,44 @@ func RouteTenant(field, value string) (string, error) {
 			"route field %s is %q, which is not a tenant id (8 characters of [0-9a-z])", field, value)
 	}
 	return value, nil
+}
+
+// CallerRouteTenant is RouteTenant for a generated S2S client, which knows its
+// own token: S2S never crosses tenants (roadmap
+// decisions/s2s-never-crosses-tenants-2026-10-31.md). A tenant's service or
+// workload (its token's namespace is in /tenants) routes every call to its own
+// tid, its token's tid claim: an empty route field gets that tid, the one the
+// client stamps on the request, and another tid is PERMISSION_DENIED before
+// anything is dialled. A token in a tenant without a tid claim is refused the
+// same way, fail closed, as the MCP carrier refuses one (#284). A /system
+// service, a user (RPC_FLAG_ANY_TENANT is for users) and a call without a
+// token name the target tenant themselves, as RouteTenant checks. ownToken is
+// never verified here: it is the caller's own, and the target verifies it.
+func CallerRouteTenant(field, value, ownToken string) (string, error) {
+	if ownToken == "" {
+		return RouteTenant(field, value)
+	}
+	tw, err := wrapperToken.ParseToken(ownToken)
+	if err != nil {
+		return "", protoerrors.NewErrPermissionDenied(err,
+			"route field %s: the caller's own token cannot be read, so its tenant is unknown", field)
+	}
+	if subType := tw.GetSubType(); subType != "service" && subType != "workload" {
+		return RouteTenant(field, value)
+	}
+	if !strings.HasPrefix(tw.GetNamespace(), "/"+wrapperSpiffe.TenantsSegment+"/") {
+		return RouteTenant(field, value)
+	}
+	own, ok := CallerTenant(tw.GetTid())
+	if !ok {
+		return "", protoerrors.NewErrPermissionDenied(nil,
+			"route field %s: the caller is a service of tenant %q and its token carries no tid claim", field, tw.GetNamespace())
+	}
+	if value != "" && value != own {
+		return "", protoerrors.NewErrPermissionDenied(nil,
+			"route field %s is %q, but the caller is a service of tenant %q: S2S never crosses tenants", field, value, own)
+	}
+	return own, nil
 }
 
 // RouteTenantFromWire reads the route field out of a request message's raw

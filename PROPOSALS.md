@@ -826,6 +826,16 @@ the looper then marks it `promoted` or `declined` here with the date.
   on the issue: which Stratum record holds a slice, the version's source, whether the owner keeps a slice after its
   stream breaks, the slice's identity, and Java-first parity.
 
+- **A Rust client stream's open stamps a tenant's own tid too** (2026-11-18, #258): the generated S2S client of a
+  tenant's own service fills an empty route field with its own `tid` claim on unary, server-streaming and bidi calls
+  (`tenant_route::caller_route_tenant`), but a Rust client-streaming open is not async, so it cannot read the token
+  first: it still refuses an empty `tenant` (`INVALID_ARGUMENT`) and checks the token only in the stream's task.
+  An async open (or one taking the token) would make the three languages agree; Go and Java stamp at open.
+- **The typed clients stamp the route field before validating the request** (2026-11-18, #258): Go, Java and Rust
+  validate the request (`(spec.assert_required)` and friends) before the route check stamps an empty route field
+  with the caller's own tid, so a route field the proto marks required is refused as missing before it is stamped.
+  No contract marks its route field required today; swapping the two (stamp, then validate) removes the trap.
+
 ## Promoted / declined
 - **`just generated <dir>`: tacplus's security checks scan its generated output** (2026-11-09, #376): promoted
   2026-11-09, ROADMAP.md's line for #376 (Jody, hub). Built by #376.

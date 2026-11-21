@@ -1044,8 +1044,11 @@ func generateGoBidiMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, go
 // block a typed client method runs after request validation: read the target
 // tenant off the request, refuse a missing or malformed one (INVALID_ARGUMENT,
 // before any network call), and carry it on the call context, where a
-// tenant-routed ChannelProvider picks that tenant's instance. ret is the
-// return prefix for the method's non-error results. A platform rpc gets "".
+// tenant-routed ChannelProvider picks that tenant's instance. A tenant's own
+// service routes to its own tid only (CallerRouteTenant): an empty route field
+// is stamped with it, another tid is PERMISSION_DENIED before any network
+// call. ret is the return prefix for the method's non-error results. A
+// platform rpc gets "".
 func goClientRouteBlock(method *parser.MethodInfo) func(ret string) string {
 	return func(ret string) string {
 		if method.RouteField == nil {
@@ -1053,13 +1056,17 @@ func goClientRouteBlock(method *parser.MethodInfo) func(ret string) string {
 		}
 		return fmt.Sprintf(`
 	// Tenant routing: the request names its target tenant, and the call goes
-	// to that tenant's instance only.
-	tenant, routeErr := serviceconnection.RouteTenant(%q, req.%s())
+	// to that tenant's instance only. A tenant's own service calls its own
+	// tenant only, stamped here when the request names none.
+	tenant, routeErr := serviceconnection.CallerRouteTenant(%[1]q, req.%[2]s(), c.ownToken())
 	if routeErr != nil {
-		return %srouteErr
+		return %[4]srouteErr
+	}
+	if req != nil && req.%[3]s == "" {
+		req.%[3]s = tenant
 	}
 	ctx = serviceconnection.WithRouteTenant(ctx, tenant)
-`, method.RouteField.Field, goRouteGetter(method.RouteField.Field), ret)
+`, method.RouteField.Field, goRouteGetter(method.RouteField.Field), toGoFieldName(method.RouteField.Field), ret)
 	}
 }
 
@@ -1072,9 +1079,11 @@ func goClientRoutedClientStream(svc *parser.ServiceInfo, method *parser.MethodIn
 	getter := goRouteGetter(field)
 	return fmt.Sprintf(`// %s calls %s.%s (client streaming) on tenant's instance. The
 // stream's tenant is fixed here: tenant must be a tenant id, and every message
-// sent on the stream must name it in %s.
+// sent on the stream must name it in %s. A tenant's own service opens it to
+// its own tenant only: an empty tenant is its own tid, another is refused.
 func (c *{{.ClientName}}) %s(ctx context.Context, tenant string, opts ...grpc.CallOption) (grpc.ClientStreamingClient[%s, %s], error) {
-	if _, err := serviceconnection.RouteTenant("tenant", tenant); err != nil {
+	tenant, err := serviceconnection.CallerRouteTenant("tenant", tenant, c.ownToken())
+	if err != nil {
 		return nil, err
 	}
 	ctx = serviceconnection.WithRouteTenant(ctx, tenant)

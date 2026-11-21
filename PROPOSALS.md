@@ -344,7 +344,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   (the checkout and `generated/`). Accepting G115, G404, G703 or G704 for the generated Go (#359's Also list) also
   accepts them in tacplus's own source, where nobody reviewed them. A `where` prefix on an exception (say
   `generated/`) would scope it; that is a looper change (looper-scan's `read_exceptions` and policy), to propose
-  there.
+  there. Update (nightly scan 2026-11-21): looper-scan now reads a `where` on an exception (looper README, Security
+  checks). Its report (run 20261121T093834Z-scan, summary.md "Warnings") warns on each of the 74 rule-wide
+  entries, for example "exception G404 has no where: it accepts G404 in every file (scope it: where)". So what is
+  left is tacplus's part: give each entry in `security-exceptions.yaml` the `where` its reason names
+  (`generated/` for #359's list, the named compiler files for the #340 bridge), and drop the header comment saying
+  the scanner has no path key.
 - **Make the generated tree cheaper to scan** (2026-11-14, #376): `just generated` writes 21 proto sets, 57 trees,
   about 1.5 GB, most of it the same chassis and sys types again in each set. On a loaded runner the generation took
   about 25 minutes with 3 sets at once, and `looper-scan local` spent 66 minutes in Semgrep alone (4.4 GB resident). #196's kitchensink (one proto set reaching every emitter) replaces the list; until then, a

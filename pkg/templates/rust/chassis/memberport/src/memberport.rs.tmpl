@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use base64::Engine as _;
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::CertificateDer;
 use rustls::sign::CertifiedKey;
 use tokio::net::{TcpListener, TcpStream};
@@ -105,9 +106,8 @@ pub fn certificates(certs: &[X509Cert]) -> Result<Vec<CertificateDer<'static>>, 
             .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(c.base64.trim()))
             .map_err(|e| err(format!("certificate {:?} is not base64: {}", c.id, e)))?;
         if raw.starts_with(b"-----BEGIN") {
-            let mut reader = raw.as_slice();
             let mut found = false;
-            for cert in rustls_pemfile::certs(&mut reader) {
+            for cert in CertificateDer::pem_slice_iter(&raw) {
                 out.push(cert.map_err(|e| err(format!("certificate {:?}: {}", c.id, e)))?);
                 found = true;
             }

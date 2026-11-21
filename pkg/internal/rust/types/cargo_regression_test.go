@@ -97,7 +97,6 @@ func TestCreateWorkspaceCargoTomlDeclaresOnlyReferencedDependencies(t *testing.T
     prost-wkt-types: 0.7.1
     regex: 1.12.3
     rustls: 0.23.35
-    rustls-pemfile: 2.2.0
     serde: 1.0.228
     serde_json: 1.0.149
     serde_yaml: 0.9.34
@@ -179,7 +178,7 @@ webpki-roots = { workspace = true }
 			t.Errorf("a member references %s, which [workspace.dependencies] does not declare", name)
 		}
 	}
-	for _, name := range []string{"webpki-roots", "tokio-rustls", "rustls-pemfile"} {
+	for _, name := range []string{"webpki-roots", "tokio-rustls"} {
 		if !declared[name] {
 			t.Errorf("[workspace.dependencies] lacks %s", name)
 		}
@@ -207,7 +206,6 @@ func TestMoveUnusedCrateDependencies(t *testing.T) {
     regex: 1.12.3
     reqwest: 0.12.18
     rustls: 0.23.35
-    rustls-pemfile: 2.2.0
     serde: 1.0.228
     serde_json: 1.0.149
     serde_yaml: 0.9.34

@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by looper (#931).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-21 by looper (#196).
 
 - **Version / line:** v2.6.13 (latest release, 2026-11-15, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -188,6 +188,19 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by lo
   G115, G404, G703 or G704: each was fixed (enum parse bounded to int32, gRPC codes, IP packing via encoding/binary,
   JWK exponent, the AWS STS region validated) or annotated with its reason (wire two's complement, retry jitter,
   operator-named paths). Backported to release/2.0 through release/2.6 by pull request, each line's next patch.
+  The kitchensink (#196): the generator is verified once per release, not per service. `cross-test/kitchensink`
+  (members.yaml: its own `proto` and `proto-service` plus the mandatory gates' fixtures) covers every generator
+  feature the fleet uses; `just kitchensink` (to be run by the Release workflow before it publishes, and nightly: that
+  wiring waits on a push under .github/workflows/, which the looper's token may not make: #196) generates
+  it in go, java, rust, typescript, swift and csharp, compiles it and fuzzes Go, Rust and Java; `just verify` proves
+  its Rust validators with Kani through the kitchensink's own harnesses (`verify/rust`), and its Java validators'
+  JML specs with OpenJML ESC (#257). `tacplus build` refuses a feature the shipped coverage manifest (`pkg/coverage/kitchensink.json`)
+  does not cover in the build's language (`--allow-uncovered` warns). No Kani or JBMC harness is generated into a
+  service any more (the Rust harnesses #211 generated are gone too). It found and fixed: Go `optional bytes` did not
+  compile; Java compared uint32/uint64 bounds as signed; Java `map<_, enum>` JSON decoding did not compile; TypeScript
+  named a `required_if_eq` enum value by its proto name (protobuf-es strips the shared prefix) and merged a proto3
+  optional scalar as if always present; the Swift W2S streaming client did not compile on Linux (it now throws
+  there; PROPOSALS.md).
 - **Released / deployed:** v2.6.0 is the newest release: the binaries and `checksums.txt`, and
   `ghcr.io/tacplus-dev/tacplus/build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c`
   (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.
@@ -198,13 +211,14 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by lo
   (tacplus-dev/gateway#3 and its MCP follow-up). MCP on a tenant-owned service is same-tenant only (PROPOSALS.md).
   No C2S record writes (by decision, 2.5). The Rust wrapper renders no (spec.store_namespace) predicate pin on the
   query plane (PROPOSALS.md). The looper image's tacplus runs the tacplus image, which 2.6 does not have
-  (PROPOSALS.md). The generated Rust Kani harnesses prove only that `validate()` refuses each
-  integer/enum field bound, and only for messages whose `validate()` Kani can compile and run (#211): `just verify
-  rust` verifies all 52 on cross-test/proto (Kani 0.68); messages with regex-backed, nested-message, map or sensitive
-  checks get none, and #196 still moves verification to a kitchensink proto set. Formal verification is not a gate (#275): `just verify` runs it,
-  `just verify-changed <sha>` says whether the nightly needs it; the pipeline that runs them on release tags and
-  nightly is tacplus-dev/looper#74, its nightly off until #257 passes. Java's (#257) covers
-  cross-test/proto until the kitchensink (#196) lands; string byte bounds have no spec (PROPOSALS.md). The new build image (Kani, cargo-fuzz, the launcher) is verified by
+  (PROPOSALS.md). No harness is generated into a service (#196); on the released lines (2.6 and older) `tacplus
+  verify` runs the generated Rust harnesses (#211). ESC on the kitchensink's Java ran only under qemu (#257: the
+  validators that loop over elements ended UNKNOWN there, PROPOSALS.md); its first amd64 run is the first `just verify`
+  after #196; string byte bounds have no spec (PROPOSALS.md). Formal verification is
+  not a gate (#275): `just verify` runs it (Kani on the kitchensink's Rust, ESC on its Java), `just verify-changed <sha>` says whether
+  the nightly needs it; the pipeline that runs them on release tags and nightly is tacplus-dev/looper#74, its nightly off
+  until #257 passes. Kani does
+  not run in a land, so the kitchensink harnesses of #196 were not run under Kani before landing. The new build image (Kani, cargo-fuzz, the launcher) is verified by
   images.yml once pushed; the launcher and `tacplus pin` by the gates. The fleet build's image lookup on a private package is
   verified against a fake registry only: the looper's token has no `read:packages` (a public image resolves live).
   Rootless BuildKit (#315) needs a user namespace (`--security-opt seccomp=unconfined

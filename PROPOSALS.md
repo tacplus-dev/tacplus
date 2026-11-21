@@ -346,6 +346,10 @@ the looper then marks it `promoted` or `declined` here with the date.
   infrastructure case, then the state-store mapping of `ServiceConfigState`), so `go build` fails. 2.1 and later
   generate the same proto cleanly. #456's 2.0 backport gives its fixture a gRPC service instead. If 2.0 is to get
   the fix, it is a `bug` against that line.
+- **release/2.0: its unit tests are red on cargo 1.100** (2026-11-21, #456): `TestPruneCargoWorkspaceKeepsSharedDependencies`
+  fails on release/2.0 itself ("the build left no rlib to prune"), so every 2.0 pull request's "Unit tests and
+  soundness" check is red (#881's is). Main fixed the test for cargo 1.100's layout in 88caed68 (#829); release/2.0
+  never got it. Backporting #829's test change would make 2.0's check meaningful again.
 - **Kani harnesses beyond integer bounds** (2026-11-06, #211): the generated Rust harnesses now prove only that
   `validate()` refuses each integer/enum bound, and skip a message whose `validate()` reaches the regex crate (Kani
   0.68 panics compiling it), a nested message, a map field (prost's `HashMap` default makes a syscall Kani does not

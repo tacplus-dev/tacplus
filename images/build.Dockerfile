@@ -21,7 +21,7 @@ ARG BASE_IMAGE=ghcr.io/tacplus-dev/tacplus/base:latest
 ARG GO_VERSION=1.27
 ARG RUST_VERSION=1
 ARG NODE_VERSION=26
-ARG SWIFT_VERSION=6.4.2
+ARG SWIFT_VERSION=6.4.3
 ARG DOCKER_VERSION=29
 # docker-buildx is built from its release's source rather than copied from
 # the docker CLI image: its releases (through 0.38.1) vendor moby/go-archive

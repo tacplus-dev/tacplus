@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by looper (#931).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-21 by looper (#206).
 
 - **Version / line:** v2.6.13 (latest release, 2026-11-15, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -180,6 +180,21 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by lo
   `cross-test/redact` (`just redact`, in the gates) against a hand-built fixture. The legacy egress redaction
   (`(spec.redact)`, `(spec.data_entitlement)`, `Sanitize<T>`, `<T>Entitlement`) is deprecated (generation warns),
   removed in 3.0. Gaps: no cross-package sensitive tree, no oneof leaves, no client-only target (PROPOSALS.md).
+  flock state (#206, the merge half; ships in 2.7): a `(spec.service_state)` root labelled `flock` (a well-known
+  label, like `kernel`) holds fleet-wide convergent tables. Every entry field merges by its `(spec.merge)` rule
+  (IMMUTABLE, MIN, MAX, LAST_WRITE, SET_ADD_WINS, SET_REMOVE_WINS; a nested message field by field; LAST_WRITE on a
+  boundary replaces the whole entry), set elements by `(spec.identity)`, and generation refuses a flock root with a
+  field that has no rule. The entry's `(spec.store_epoch)` is a hybrid clock (`flock.Hlc`) and its
+  `(spec.deleted_flag)` a `flock.DeletionMark` (MERGED/USER/EXPIRED, `merged_into`); `sys/flock.proto` holds the
+  types and tacplus adds `flock.Meta flock_meta` (stamps, causal set ops, conflicts) to each entry. Go, Rust and
+  Java generate two-argument merge, merge_entries (the older entry survives and absorbs the other, removals
+  included), the writers, the unique check (a local conflict refused, the partition race merged, any other overlap
+  quarantined), the marks (deterministic order, purged once every copy acknowledged, a copy away 30 days rebuilt),
+  the clock (a far-future time held) and a canonical digest. Merge rules are pinned in the source's
+  `registry.yaml`: a released rule cannot change. `cross-test/flock` (`just flock`; not yet in `just gates`, PROPOSALS.md) runs property
+  tests, a multi-copy simulation (convergence, no resurrection, no redirect cycles) and a cross-language digest
+  vector in all three. Gaps: no flock service yet (copies, gossip over #204, membership, catch-up), no compaction of
+  set ops, and the `scope: FLEET` spelling the design note later chose (PROPOSALS.md).
   The generated Go chassis pins a TLS peer on every handshake, a resumed one too (#359): `x509.TLSConfig` verifies
   in `VerifyConnection` (crypto/tls skips `VerifyPeerCertificate` on resumption, gosec G123), and the mesh and
   bootstrap clients (servicemanager, service_im) share `x509.SpiffeClientTLSConfig`, whose `InsecureSkipVerify` is

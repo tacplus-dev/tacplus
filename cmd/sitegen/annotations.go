@@ -95,7 +95,7 @@ func protocBinary() (string, error) {
 	if !filepath.IsAbs(env) {
 		return "", fmt.Errorf("PROTOC_BINARY=%q: not an absolute path", env)
 	}
-	fi, err := os.Stat(env)
+	fi, err := os.Stat(env) // #nosec G703 -- operator-provided tool path, not repository content, not under a root
 	if err != nil {
 		return "", fmt.Errorf("PROTOC_BINARY=%q: %w", env, err)
 	}

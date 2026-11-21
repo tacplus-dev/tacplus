@@ -72,7 +72,7 @@ SETS=(
   "base|proto|com.gitlab.example.dummy.proto||go rust java python typescript"
   "c2sonly|proto-c2sonly|com.gitlab.example.dummy.c2sonly||go"
   "healthonly|proto-healthonly|com.gitlab.example.dummy.healthonly||rust"
-  "zerorpc|proto-zerorpc|com.gitlab.example.dummy.zerorpc|depends: [\"llmproxy\"]|rust"
+  "zerorpc|proto-zerorpc|com.gitlab.example.dummy.zerorpc|depends: [\"llmproxy\"];advisor: {path: advisor}|rust"
   "requiresdevice|proto-requiresdevice|com.gitlab.example.dummy.vault||go rust java"
   "recordegress|proto-recordegress|com.gitlab.example.dummy.egressvault|depends: [\"eventbus\", \"egressstratum\"]|go rust java"
   "recordegress-host|proto-recordegress|com.gitlab.example.dummy.egressstratum|records: \"all\"|go rust java"

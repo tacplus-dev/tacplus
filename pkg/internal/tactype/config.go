@@ -101,6 +101,11 @@ type Config struct {
 	// (e.g. "gateway", "identity"). Used to identify the service's own proto
 	// package for self-referencing logic.
 	SelfPackage string
+	// AdvisorDir is the absolute directory of this service's LLM advisor
+	// (tacplus.yaml advisor.path, tacplus#909); empty when it has none. The
+	// generator emits the advisor's model port and the gate that keeps the
+	// advisor from any state client, S2S client or token.
+	AdvisorDir string
 	// IsGateway is true when the service's proto has option (spec.service).gateway = true.
 	// Changes TLS behavior: gateway watches GatewayTlsState for public certs instead of
 	// using X509Mint auto-cert. Populated during proto parsing, not from tacplus.yaml.

@@ -592,6 +592,17 @@ func Generate(config *tactype.Config) error {
 					return fmt.Errorf("failed to generate root gRPC clients: %w", err)
 				}
 			}
+			// The advisor's model port and the core's adapter over these
+			// clients (tacplus#909).
+			if err := generateGoAdvisorPort(config, clientServices, generatedClients); err != nil {
+				return err
+			}
+		}
+	}
+	if config.AdvisorDir != "" && !hasGrpcS2SClients {
+		// Refused: an advisor with no S2S client to its model service.
+		if err := generateGoAdvisorPort(config, nil, nil); err != nil {
+			return err
 		}
 	}
 

@@ -53,6 +53,11 @@ regex = { workspace = true }
 {{.Name}} = { path = "chassis/{{.Name}}" }
 {{- end}}
 {{- end}}
+{{- if .HasAdvisor}}
+# The model port of the service's LLM advisor (tacplus#909): advisor_port.rs
+# implements it over the generated S2S client.
+{{.AdvisorPortCrate}} = { path = "advisor" }
+{{- end}}
 {{- if .HasMcpRpcs}}
 # The MCP SDK backing the generated Model Context Protocol termination for
 # services declaring (spec.rpc) principal: RPC_PRINCIPAL_MCP. Pinned rather than

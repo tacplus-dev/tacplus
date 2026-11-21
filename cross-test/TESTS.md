@@ -139,6 +139,24 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   reach the peer, and the host must publish no instance health, ask for no
   serving cert and bind no listener. Rust only. Local (`just zero-rpc-s2s`, part
   of `just gates`); not yet in CI.
+- `llm-rule` (`cross-test/llm-rule/run.sh`): the LLM rule as a generated
+  build gate (#909). Generates `cross-test/proto-zerorpc` with tacplus.yaml
+  `advisor: {path: advisor}`. Green: an advisor depending only on the
+  generated model port passes its own test through the port, and a core
+  handing it the generated `ModelPortAdapter` builds. Red: an advisor manifest
+  naming the token or servicemanager chassis crate (renamed too), the model
+  crate, the types crate, the core, another local crate, a git crate, a
+  `[patch]`, a workspace-inherited token, or no manifest at all fails the
+  model crate's build with the port's build script naming it. Builds, does
+  not run the adapter against a peer (the call's trace is pinned by
+  `pkg/internal/rust/types/advisor_gen_test.go`). Then Go, on
+  `cross-test/proto-advisor` (Go has no zero-rpc host): the module builds with
+  a core holding `sm.NewModelPortAdapter`, the advisor's test and the generated
+  `model/advisor/llm_rule_test.go` pass, and an advisor package importing the
+  ServiceManager, the token chassis (from a test), the types package, the key
+  chassis (from a subpackage) or the core fails that test naming the import.
+  Java refuses `advisor:` until its gate follows. Local (`just llm-rule`, part
+  of `just gates`).
 - `jwk-alg` (`cross-test/jwk-alg/run.sh`): JWK alg-selection gate (#179) for
   the generated jwk and token chassis in Go, Java, Python, Rust and
   TypeScript. Every leg verifies the same pre-signed tokens from

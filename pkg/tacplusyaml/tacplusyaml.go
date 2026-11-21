@@ -95,6 +95,7 @@ type Config struct {
 	States      string        `yaml:"states,omitempty"`       // "all": this project generates from every service's config and state (the kernel holds them all); unset: its own and its depends'. See CheckScope
 	Records     string        `yaml:"records,omitempty"`      // "all": this project generates from every (spec.record) in the fleet (the record store subscribes to them all); unset: its own and its depends'. See CheckScope
 	Contribute  *Contribute   `yaml:"contribute,omitempty"`   // what a kind: service project contributes to its fleet's gateway: a webapp module and clients, each built by a fixed recipe. See CheckContribute
+	Advisor     *Advisor      `yaml:"advisor,omitempty"`      // where this service's LLM advisor lives; tacplus generates its model port and the gate that keeps it from any state client, S2S client or token. See CheckAdvisor
 	Header      string        `yaml:"header,omitempty"`       // free-form text stamped as a comment at the top of every generated file (e.g. a copyright line and an SPDX identifier); its first line is also the author of generated package manifests. Unset: generated code carries no copyright line
 }
 
@@ -138,6 +139,9 @@ func Read(dir string) (*Config, error) {
 		return nil, err
 	}
 	if err := CheckContribute(cfg.Kind, cfg.Contribute); err != nil {
+		return nil, err
+	}
+	if err := CheckAdvisor(cfg.Kind, cfg.Advisor); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
@@ -256,6 +260,9 @@ func ReadFiles(paths []string) (*Config, error) {
 	if err := CheckContribute(result.Kind, result.Contribute); err != nil {
 		return nil, err
 	}
+	if err := CheckAdvisor(result.Kind, result.Advisor); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -315,6 +322,11 @@ func MergeConfigs(base, overlay *Config) *Config {
 	// Contribute: overlay wins if it declares one (same semantics as Sources)
 	if overlay.Contribute != nil {
 		result.Contribute = overlay.Contribute
+	}
+
+	// Advisor: overlay wins if it declares one (same semantics as Contribute)
+	if overlay.Advisor != nil {
+		result.Advisor = overlay.Advisor
 	}
 
 	// Header: overlay wins if non-empty

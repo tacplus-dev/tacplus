@@ -1682,6 +1682,8 @@ func generateRegistry(config *tactype.Config, _servicesInfo []ServiceInfo, input
 		Language:    "go",
 		PackageBase: config.ModuleBasePath,
 		FileLayers:  config.SourceLayers,
+		Advisor:     config.AdvisorDir != "",
+		SelfPackage: config.SelfPackage,
 	}, allParsedFiles, dp)
 }
 

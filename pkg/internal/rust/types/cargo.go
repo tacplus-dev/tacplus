@@ -42,6 +42,8 @@ type cargoWorkspaceData struct {
 	RmcpVersion        string
 	SchemarsVersion    string
 	LibCrates          []cargoLibCrate
+	HasAdvisor         bool
+	AdvisorPortCrate   string
 }
 
 // typesCargoData holds data for the types-only crate Cargo.toml.
@@ -94,6 +96,12 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 				}
 			}
 		}
+	}
+	// The advisor's model port (tacplus#909): a member, and a dependency of the
+	// model crate, whose adapter implements its trait.
+	hasAdvisor := config.AdvisorDir != ""
+	if hasAdvisor {
+		members = append(members, advisorPortDir)
 	}
 	// Workspace dependency versions come from the package registry
 	allDeps := registry.GetAllRustDependencies()
@@ -149,6 +157,8 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 		RmcpVersion:        rmcpCrateVersion,
 		SchemarsVersion:    schemarsCrateVersion,
 		LibCrates:          libCrates,
+		HasAdvisor:         hasAdvisor,
+		AdvisorPortCrate:   advisorPortCrate(crateName),
 	}
 
 	typeFS, err := fs.Sub(templates.FS, "rust/types")

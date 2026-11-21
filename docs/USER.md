@@ -23,8 +23,9 @@ Reference for developers using tacplus to build services — writing proto files
 15. [registry.json and the Semantic IR](#registryjson-and-the-semantic-ir)
 16. [Generated Libraries](#generated-libraries)
 17. [Service Lifecycle](#service-lifecycle)
-18. [Distributed Tracing](#distributed-tracing)
-19. [Well-Known Names (Conventions)](#well-known-names-conventions)
+18. [An LLM Advisor: The LLM Rule](#an-llm-advisor-the-llm-rule)
+19. [Distributed Tracing](#distributed-tracing)
+20. [Well-Known Names (Conventions)](#well-known-names-conventions)
 
 ---
 
@@ -121,6 +122,7 @@ Only `language` and `output-dir` are required. `pkg` is commonly set explicitly,
 | `pkg` | string | No | Canonical package name (Java-style reverse DNS, e.g. `com.example.myservice`). Each segment must be a valid identifier (letters, digits, underscores — no hyphens). Converted to native format per language (see table below). |
 | `kind` | string | No | What this project is: `service` (hosts a surface, has a registry identity; a fleet runs it), `client` (calls services, hosts nothing: a CLI, daemon or app), `library` (contracts only: protos other projects build against). A statement of intent the generator and the fleet build can check against the protos. Unset means not stated. |
 | `depends` | list | No | Services this one calls, by registry name: `llmproxy` or `weather@1.2` (MAJOR.MINOR, the latest patch; never a patch pin). Each is resolved through the global registry named by `global:` in `proto/registry.yaml` to the repo that declares it, fetched at that version, and merged into this generation, so the `(spec.grpc_s2s_client)` declared in proto has a proto to generate from. A dependency's own `depends` are followed too, each name once; a name this project's own proto declares is never fetched, so a dependency that depends back on this project sees this checkout's proto, not the published one. Fetched with the same credentials as `src` (below). |
+| `advisor` | mapping | No | Where this service's LLM advisor lives: `advisor: {path: advisor}`, a directory of this repo (relative, without `..`, not the root, outside `output-dir`). tacplus generates the advisor's model port, the core's adapter over the `llmproxy` S2S client and the build gate that fails the build when the advisor's unit depends on anything else of the service, and marks the service `advisor: true` in `registry.json`. Needs `llmproxy` in `depends`. Refused on `kind: client` and `kind: library`. Rust and Go today; Java refuses it until its gate follows. See [An LLM Advisor](#an-llm-advisor-the-llm-rule). |
 | `contribute` | mapping | No | What a `kind: service` project contributes to its fleet's gateway: a `webapp` module (`dir`, `title`) and `clients`, each by one fixed recipe key (`rust:`, `go:`, `swift:`, `dotnet:`). Refused on any other kind. See [Contributing to the gateway](#contributing-to-the-gateway). |
 | `tacplus` | string | No | Minimum tacplus `MAJOR.MINOR` this project needs, e.g. `"2.2"`. A floor, not a pin: MAJOR must match and the running MINOR must be at least this. A patch component is rejected: the exact release a build runs is pinned in [`tacplus.lock`](#tacpluslock-the-pinned-release), not here. Unset means no floor. An unstamped local build (`0.0.0`) cannot satisfy a floor. |
 
@@ -2182,6 +2184,119 @@ no s2s client edge keeps the health-only server. Covered by
 `cross-test/zero-rpc-s2s`.
 
 ---
+
+## An LLM Advisor: The LLM Rule
+
+The platform's rule (tacplus-dev/roadmap
+`decisions/skipper-and-admiral-2026-11-01.md`, 2026-11-19): **an LLM may
+propose; it never holds a token or a write path.** A service built around an
+LLM (the Skipper, the Admiral) has a deterministic core, which alone holds the
+state clients, the S2S clients and the tokens, and works with no model at all;
+and an advisor, which reads what the core hands it and proposes typed values
+the core validates, shows and acts on with the user's approval. tacplus makes
+the split structural: the advisor is its own unit, and the build fails if that
+unit depends on anything of the service but the one interface tacplus
+generates for it.
+
+Declare where the advisor lives in `tacplus.yaml` (a crate in Rust, a package
+directory of the service's module in Go), and depend on llmproxy, the one
+service an advisor reaches a model through:
+
+```yaml
+kind: service
+language: rust
+depends: [llmproxy]
+advisor:
+  path: advisor     # the advisor's own crate
+```
+
+and declare the client in proto as for any S2S call:
+`option (spec.grpc_s2s_client) = {service: "llmproxy.LlmProxy"};`.
+Generation refuses an advisor whose service has no S2S client to the service
+whose `(spec.service).name` is `llmproxy`.
+
+### What tacplus generates (Rust)
+
+| Generated | Where | What it is |
+|---|---|---|
+| The model port | `<output>/advisor/`, crate `<crate>-advisor` | `ModelPort`, one async method per unary rpc of llmproxy's service, typed on llmproxy's own messages (`wire::`), each taking the `trace_id` of the request the advisor answers. `wire::` re-exports llmproxy's messages and enums only, never the raw transport client beside them. `ModelPortError` carries the failed call's status code and message. |
+| The gate | `<output>/advisor/build.rs` | Fails every build of the model crate, so every build of the core, when the advisor's `Cargo.toml` could reach the service. |
+| The core's adapter | `<crate>::advisor_port::ModelPortAdapter` | `ModelPort` over the generated llmproxy S2S client: the service's own token on every call, and the advisor's `trace_id` on the request. |
+
+The core builds the adapter from its ServiceManager and passes the advisor
+only the port:
+
+```rust
+use std::sync::Arc;
+use skipper_model::advisor_port::{ModelPort, ModelPortAdapter};
+
+let model: Arc<dyn ModelPort> = Arc::new(ModelPortAdapter::new(sm.clone()));
+let advisor = advisor::Advisor::new(model, reads); // reads: a trait the advisor defines, the core implements
+```
+
+The advisor's crate depends on the port and nothing else of the service:
+
+```toml
+[dependencies]
+skipper-model-advisor = { path = "../target/generated-sources/model/advisor" }
+```
+
+What else it reads (ticket status, the redacted config) it defines as traits
+of its own, which the core implements and passes in: the advisor imports
+nothing of the core, the state clients or the chassis.
+
+### The gate
+
+The port's build script reads the advisor's manifest as TOML, never its source
+text, and refuses a dependency, in any of its dependency tables (normal, dev,
+build, and target-specific ones), when:
+
+- its package is a crate of the generated tree, renamed or not: the model
+  crate (its state clients, S2S clients and ServiceManager), the types crate
+  (its raw transport stubs), any chassis crate (`token`, `key`,
+  `servicemanager`, ...);
+- it is a path dependency other than the port: the core, or any other crate of
+  the repository;
+- it comes from git;
+- the advisor's manifest, or the workspace it belongs to, patches or replaces
+  it.
+
+A `{ workspace = true }` dependency is judged by the entry it inherits. An
+advisor directory with no readable `Cargo.toml` fails the build too. The build
+fails with `tacplus LLM rule:` and one line per dependency it refused. It is
+an ordinary build failure: a service's `just gates` runs it with no tacplus
+verb.
+
+### What tacplus generates (Go)
+
+| Generated | Where | What it is |
+|---|---|---|
+| The model port | `<output>/advisor/`, package `advisor` | `ModelPort`, one method per unary rpc of llmproxy's service: `Generate(ctx, traceID string, req *CompleteRequest) (*CompleteResponse, error)`, typed on llmproxy's own messages, which the package aliases (`advisor.CompleteRequest`), with their oneof wrapper types and enum values, and never the raw transport client beside them. An error is the call's gRPC status error. |
+| The gate | `<output>/advisor/llm_rule_test.go` | `TestLLMRule`, run by the service's `go test ./...`: fails when the advisor's packages could reach the service. |
+| The core's adapter | `<output>/s2sm/advisor_port.go`: `sm.NewModelPortAdapter(*ServiceManager)` | `advisor.ModelPort` over the generated llmproxy S2S client, with a copy of the request carrying the advisor's `trace_id`. |
+
+```go
+import (
+	"example.com/skipper/advisor"            // the advisor: imports only model/advisor
+	sm "example.com/skipper/model/s2sm"
+)
+
+var model = sm.NewModelPortAdapter(serviceManager) // an advisor.ModelPort
+```
+
+The Go gate reads what `go list -deps -test` resolves for the advisor's
+packages, not their source text. It fails when one of them (its tests
+included) imports, of the service's module or the generated tree, anything but
+the model port and the advisor's own packages: the ServiceManager and its
+clients, the state clients, the chassis (`token`, `key`, ...), the types
+packages (their raw transport stubs), the core. And it fails when anything the
+advisor depends on there is not something the model port itself depends on.
+An advisor directory with no Go package fails too.
+
+The gate is about what the advisor can name. It does not stop an advisor that
+depends on a third-party network library (a crates.io crate, a Go module) from
+opening a connection of its own; such a connection carries no token, so a
+tacplus service refuses it.
 
 ## Distributed Tracing
 

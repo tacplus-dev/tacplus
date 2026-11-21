@@ -186,7 +186,7 @@ protoc-check:
 # per gate would let another job interleave a regeneration between two of them.
 # The nested `just` calls re-enter this same lock.
 gates:
-  {{lock}} bash scripts/gates.sh soundness test current-generation determinism cert-stream stream-expiry rotation memberport claims-provenance accounting-identity w2s-validate c2d-server zero-rpc-s2s jwk-alg redact trace-carry tacplus-script
+  {{lock}} bash scripts/gates.sh soundness test current-generation determinism cert-stream stream-expiry rotation memberport claims-provenance accounting-identity w2s-validate c2d-server zero-rpc-s2s llm-rule jwk-alg redact trace-carry tacplus-script
 
 # Run `just gates` inside the tacplus build image instead of against the
 # host toolchain: every SDK and tool at the pinned versions, with no host
@@ -496,6 +496,14 @@ c2d-server: c2d-server-go c2d-server-java c2d-server-rust c2d-server-swift
 # parent service (no instance health, no serving cert, no listener).
 zero-rpc-s2s:
   {{lock}} bash cross-test/zero-rpc-s2s/run.sh
+
+# The LLM rule as a generated build gate (#909): an advisor whose manifest
+# depends only on the generated model port builds; one that reaches a state
+# client, an S2S client, a token, the core or any other crate of the service
+# fails the build (Rust) or the generated gate test (Go) with the gate's
+# message.
+llm-rule:
+  {{lock}} bash cross-test/llm-rule/run.sh
 
 c2d-server-go:
   {{lock}} bash cross-test/c2d-server/run.sh --language go

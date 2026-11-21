@@ -17,7 +17,7 @@ public sealed class C2DClient : IDisposable
     public string PipeName { get; }
 
     private readonly GrpcChannel _channel;
-
+{{if .DefaultPipeName}}
     /// <summary>
     /// Creates a C2D client dialing <paramref name="pipeName"/>, or the default
     /// daemon pipe when null.
@@ -25,6 +25,16 @@ public sealed class C2DClient : IDisposable
     public C2DClient(string? pipeName = null)
     {
         PipeName = pipeName ?? DefaultNamedPipeName();
+{{- else}}
+    /// <summary>
+    /// Creates a C2D client dialing <paramref name="pipeName"/>. The services
+    /// this client covers declare different socket paths, so there is no
+    /// default pipe: pass the one of the daemon serving them.
+    /// </summary>
+    public C2DClient(string pipeName)
+    {
+        PipeName = pipeName;
+{{- end}}
 
         if (string.IsNullOrEmpty(PipeName))
             throw new ArgumentException("C2DClient: pipeName must not be null or empty", nameof(pipeName));
@@ -33,9 +43,16 @@ public sealed class C2DClient : IDisposable
             "http://localhost",
             new GrpcChannelOptions { HttpHandler = NamedPipesConnectionFactory.Create(PipeName) });
     }
+{{- if .DefaultPipeName}}
 
-    /// <summary>The default daemon named pipe name.</summary>
-    public static string DefaultNamedPipeName() => "{{.DaemonDirectory}}-daemon";
+    /// <summary>
+    /// The default daemon named pipe: the one the generated Go and Rust
+    /// daemons serve on Windows for the services' socket_path,
+    /// <c>\\.\pipe\tacplus-c2d-</c> + socket_path with every character
+    /// outside <c>[A-Za-z0-9._-]</c> mapped to <c>-</c>.
+    /// </summary>
+    public static string DefaultNamedPipeName() => @"{{.DefaultPipeName}}";
+{{- end}}
 {{range .Services}}
     /// <summary>Typed gRPC client for the {{.ClientType}} service.</summary>
     public {{.ClientType}} {{.MethodName}}() => new {{.ClientType}}(_channel);

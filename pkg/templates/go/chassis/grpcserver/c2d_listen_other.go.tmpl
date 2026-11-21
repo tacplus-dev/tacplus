@@ -1,0 +1,39 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build !windows
+
+package grpcserver
+
+import (
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+)
+
+// listenC2D binds the c2d Unix socket at socketPath, owner-only (0600).
+func listenC2D(socketPath string) (net.Listener, string, error) {
+	// Remove stale socket file.
+	if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, "", fmt.Errorf("c2d: remove stale socket %s: %w", socketPath, err)
+	}
+	// Ensure parent directory exists.
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
+		return nil, "", fmt.Errorf("c2d: create socket directory for %s: %w", socketPath, err)
+	}
+
+	lis, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("c2d: listen on %s: %w", socketPath, err)
+	}
+
+	// Fail closed: for c2d these permissions ARE the access boundary, so a
+	// socket that was never locked down must not serve.
+	if err := os.Chmod(socketPath, 0o600); err != nil {
+		lis.Close()
+		return nil, "", fmt.Errorf("c2d: failed to set owner-only (0600) permissions on socket %s: %w; refusing to serve without the socket's access boundary", socketPath, err)
+	}
+	return lis, socketPath, nil
+}

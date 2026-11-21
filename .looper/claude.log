@@ -1,0 +1,120 @@
+= init
+> Bash git status | head -50 && git log --oneline -3 && grep -n '^<<<<<<<\|^=======\|^>>>>>>>' STATE.md pkg/templates/rust/types/service_manager.rs.tmpl
+< On branch looper/tacplus-314 Your branch is up to date with 'origin/main'.  Changes not staged for commit:   (use "git add <file>..." to update what will be committed)   (use "git restore <file>..." to discard changes in working directory) 	modified:   PROPOSALS.md 	modified:   STATE.md 	modified:  ...
+> Bash gh issue view 314 --repo tacplus-dev/tacplus --comments | tail -30
+< -- author:	tacplus-looper association:	none edited:	false status:	none -- The run queued its land and ended, as the merge train asks (looper#86: reports never wait for a build). Its commits are queued with the manager of tacplus, which merges them after the run and gives its verdict here. Its work i...
+> Bash sed -n 1,10p STATE.md | cut -c1-600 && echo ---- && sed -n 1990,2060p pkg/templates/rust/types/service_manager.rs.tmpl
+< # State: tacplus  <<<<<<< HEAD Overwritten to stay current (loopers and agents). Last updated: 2026-11-21 by looper (#314). ======= Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by looper (#931). >>>>>>> origin/main  - **Version / line:** v2.6.13 (latest release, 2026-11...
+Resolve: keep main's `additional_routes` and the branch's comment wording.
+> Bash python3 - <<'EOF' p='pkg/templates/rust/types/service_manager.rs.tmpl' s=open(p).read() old=s[s.index('<<<<<<< HEAD\n        // c2d'):s.index('>>>>>>> origin/main\n')+len('>>>>>>> origin/main\n')] s=s.replace(old,'''        // c2d services are excluded — they run on a separate local IPC server.     ...
+< 195:    #[cfg(unix)] 2402:        // Start the c2d server for local daemon IPC services (a unix socket; on 2654:/// The unix socket this build's service_c2d services declare  STATE.md | 9 ++++++++-  1 file changed, 8 insertions(+), 1 deletion(-) diff --git a/STATE.md b/STATE.md index c4c66a27..e9321...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash sed -n 190,200p pkg/templates/rust/types/service_manager.rs.tmpl; grep -n 'additional_services()' pkg/templates/rust/types/service_manager.rs.tmpl; (go build ./... && go vet ./pkg/... && go test ./... 2>&1 | grep -v '^ok' | tail -20; echo rc=$?) 2>&1 | tail -25
+< async fn shutdown_signal() {     let ctrl_c = async {         signal::ctrl_c().await.ok();     };      #[cfg(unix)]     let terminate = async {         match signal::unix::signal(signal::unix::SignalKind::terminate()) {             Ok(mut sig) => {                 sig.recv().await;             } 201...
+> Bash grep -n -A8 '^test\|^proto\|^soundness' justfile | head -50; which protoc protoc-gen-go just
+< 31:protoc_version := "36.0" 32- 33-default: install 34- 35-generate: 36-  {{lock}} go generate ./pkg/internal/proto/spec/... 37- 38-build: generate 39-  mkdir -p bin -- 54:test: generate soundness 55-  {{lock}} go test ./... 56- 57-# Model/template soundness gate. Runs as part of `test`. 58:soundnes...
+> Bash just test 2>&1 | grep -v '^ok\|no test files' | tail -25; echo rc=${PIPESTATUS[0]}
+= task_started
+= task_notification
+< include timeouts, structured errors, and streaming-method stubs. - `swift C2D client template` ✓ (pkg/templates/swift/types/C2DClient.swift.tmpl) - `swift W2S client template` ✓ (pkg/templates/swift/types/W2SClient.swift.tmpl) - `swift W2S streaming method stub` ✓ (pkg/templates/swift/types/W2SClien...
+= thinking_tokens
+= thinking_tokens
+> Bash /usr/local/bin/looper-trace check 2>&1 | grep -i 'flag\|missing\|drop' | head
+<   causal cross-test/server-runtime/client/go/main.go:74 GetPublicContract: DROPS the inbound trace_id   causal cross-test/server-runtime/client/go/main.go:89 ListEvents: DROPS the inbound trace_id   causal cross-test/server-runtime/client/go/main.go:114 ListEventsPaged: DROPS the inbound trace_id   ...
+Same pre-existing findings only (untouched test client). Committing.
+> Bash git add -A && git reset -q STATE.md && git commit -q -F - <<'EOF' C2D on Windows: Go and Rust daemons and clients use a named pipe (#314)  docs/API.md defines C2D as local IPC over Unix sockets or named pipes, and the C# client dials a named pipe on Windows, but no generated daemon could accept one....
+< c8c5b1e9 STATE.md: C2D on Windows over named pipes, Go/Rust/C# (#314) 762bf82b C2D on Windows: Go and Rust daemons and clients use a named pipe (#314) b35f308b merging sources never reads through a symlink out of a source
+= thinking_tokens
+= thinking_tokens
+> Bash nohup /usr/local/bin/repo-looper --repo tacplus --issue 314 --build > /tmp/build-314.log 2>&1 & echo $! > /tmp/build-314.pid; cat /tmp/build-314.pid
+< 18135
+> Bash sleep 240; cat /tmp/build-314.log | tail -20
+< <tool_use_error>Blocked: sleep 240 followed by: cat /tmp/build-314.log tail -20. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain shorter sleeps to work around this block.</t...
+> Bash cat /tmp/build-314.log | tail -20
+< [2026-11-21T04:49:34Z] checkpoint of #314 (a build) pushed to looper/tacplus-314:  32 files changed, 1225 insertions(+), 166 deletions(-) [2026-11-21T04:49:34Z] build requested: tacplus c8c5b1e, the gates full (cross-test/c2d-server/run.sh matches no gate set)
+> Bash pid=$(cat /tmp/build-314.pid); end=$((SECONDS+3000)); while kill -0 $pid 2>/dev/null && [ $SECONDS -lt $end ]; do sleep 30; done; tail -8 /tmp/build-314.log; kill -0 $pid 2>/dev/null && echo STILL-RUNNING
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bnfjclz7d. Output is being written to: /builds/looper/tacplus/homes/looper-314/tmp/claude-61000/-builds-looper-tacplus-issues-314/00ba41bb-a105-4da9-9db2-c0bfba0792c3/tasks/bnfjclz7d.output. You will be notified when it completes. To check interim output, use R...
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 314 --checkpoint "Conflicts with main resolved (service_manager.rs.tmpl: main's #931 additional_routes kept, branch's local-IPC comment; STATE.md header). Committed 762bf82b (code) + c8c5b1e9 (STATE.md). Local just test green. Own --build of c8c5b1e ...
+< [2026-11-21T04:49:41Z] checkpoint of #314 (a step) pushed to looper/tacplus-314:  32 files changed, 1234 insertions(+), 166 deletions(-)
+I've resolved both merge conflicts and committed. `just test` passes locally. I'm now waiting on the full-gates build of c8c5b1e and will queue the land once it gives a verdict or the wait runs out.
+> Read /tmp/build-314.log
+< 1	[2026-11-21T04:49:34Z] checkpoint of #314 (a build) pushed to looper/tacplus-314:  32 files changed, 1225 insertions(+), 166 deletions(-) 2	[2026-11-21T04:49:34Z] build requested: tacplus c8c5b1e, the gates full (cross-test/c2d-server/run.sh matches no gate set) 3	the build job https://gitlab.com/...
+= thinking_tokens
+= thinking_tokens
+> Bash pid=$(cat /tmp/build-314.pid); end=$((SECONDS+580)); while kill -0 $pid 2>/dev/null && [ $SECONDS -lt $end ]; do sleep 20; done; tail -3 /tmp/build-314.log; kill -0 $pid 2>/dev/null && echo STILL-RUNNING
+= task_started
+= task_notification
+< [2026-11-21T04:49:34Z] checkpoint of #314 (a build) pushed to looper/tacplus-314:  32 files changed, 1225 insertions(+), 166 deletions(-) [2026-11-21T04:49:34Z] build requested: tacplus c8c5b1e, the gates full (cross-test/c2d-server/run.sh matches no gate set) the build job https://gitlab.com/tacplu...
+> Bash pid=$(cat /tmp/build-314.pid); end=$((SECONDS+580)); while kill -0 $pid 2>/dev/null && [ $SECONDS -lt $end ]; do sleep 20; done; tail -2 /tmp/build-314.log; kill -0 $pid 2>/dev/null && echo STILL-RUNNING
+= task_started
+= task_notification
+< Exit code 1 no runner: the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096776631 has not started within 15m (no tacplus-dev/build status on c8c5b1e, not even pending): no runner has taken its jobs; it stays queued, and a later wait takes it up build times: https://gitlab.com/tacplus-...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 314 --land 2>&1 | tail -5
+= task_started
+= task_notification
+< [2026-11-21T05:04:54Z] checkpoint of #314 (land queued) pushed to looper/tacplus-314:  33 files changed, 1266 insertions(+), 166 deletions(-) [2026-11-21T05:04:56Z] queued: the manager of tacplus lands looper/tacplus-314 in its next batch, with the lands queued before it (the merge train, looper#86)...
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 314 --checkpoint "Land queued 05:04Z: 762bf82b (C2D Windows named pipes, Go/Rust/C# name/docs; rebased on main b35f308b, service_manager.rs.tmpl conflict resolved: main's #931 additional_routes kept, branch's local-IPC comment) + c8c5b1e9 (STATE.md)....
+< [2026-11-21T05:05:02Z] checkpoint of #314 (a step) pushed to looper/tacplus-314:  33 files changed, 1270 insertions(+), 166 deletions(-)
+= task_updated
+= task_notification
+= background_tasks_changed
+The fix for #314 is queued to land again, but it has not been built: no runner took my own full-gates build within 15 minutes.
+
+**Conflicts resolved:**
+- `pkg/templates/rust/types/service_manager.rs.tmpl`: kept main's change from #931 (`additional_routes`) and this branch's comment that C2D runs on a separate local IPC server.
+- `STATE.md`: kept the header line, now 2026-11-21 by #314.
+
+**Committed:**
+- 762bf82b: the change itself. The Go and Rust C2D daemons listen on a named pipe on Windows, and their clients dial it. Only the current user can connect and remote clients are refused. The C# client's default pipe name now matches, and the docs have a table of transport by language and OS.
+- c8c5b1e9: `STATE.md`, in a commit of its own.
+
+**Checks:**
+- `just test` passes locally (soundness plus `go test ./...`).
+- The full-gates build of c8c5b1e (pipeline 3096776631) had no runner within 15 minutes. Earlier runs waited more than two hours without a result, so I queued the land without it. The manager builds the batch before merging.
+- `looper-trace check` reports only the four findings it reported on earlier runs, all in `cross-test/server-runtime/client/go/main.go`, a test client this change doesn't touch.
+
+**Left for the next run, once the manager gives its verdict:**
+- If it merged: post the outcome comment (commits, gates, gate set and batch) and close #314. The comment must say the named-pipe code has never run on Windows, because no Windows runner exists yet (#490).
+- If it's sent back: fix it and land again.
+- No patch release: Jody decided on 2026-11-08 that this ships in 2.7 only.
+= success: The fix for #314 is queued to land again, but it has not been built: no runner took my own full-gates build within 15 minutes.
+
+**Conflicts resolved:**
+- `pkg/templates/rust/types/service_manager.rs.tmpl`: kept main's change from #931 (`additional_routes`) and this branch's comment that C2D runs on a separate local IPC server.
+- `STATE.md`: kept the header line, now 2026-11-21 by #314.
+
+**Committed:**
+- 762bf82b: the change itself. The Go and Rust C2D daemons listen on a named pipe on Windows, and their clients dial it. Only the current user can connect and remote clients are refused. The C# client's default pipe name now matches, and the docs have a table of transport by language and OS.
+- c8c5b1e9: `STATE.md`, in a commit of its own.
+
+**Checks:**
+- `just test` passes locally (soundness plus `go test ./...`).
+- The full-gates build of c8c5b1e (pipeline 3096776631) had no runner within 15 minutes. Earlier runs waited more than two hours without a result, so I queued the land without it. The manager builds the batch before merging.
+- `looper-trace check` reports only the four findings it reported on earlier runs, all in `cross-test/server-runtime/client/go/main.go`, a test client this change doesn't touch.
+
+**Left for the next run, once the manager gives its verdict:**
+- If it merged: post the outcome comment (commits, gates, gate set and batch) and close #314. The comment must say the named-pipe code has never run on Windows, because no Windows runner exists yet (#490).
+- If it's sent back: fix it and land again.
+- No patch release: Jody decided on 2026-11-08 that this ships in 2.7 only.
+= usage: {"claude-opus-5-5":{"inputTokens":38,"outputTokens":5109,"cacheReadInputTokens":819077,"cacheCreationInputTokens":37156,"webSearchRequests":0,"costUSD":0.5633954,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":581,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}
+= init
+That notification only means my background watcher of the build log has exited. Nothing has changed: the build never got a runner. The land of 762bf82b and c8c5b1e9 is still queued with the manager, and its verdict will appear on #314. This run is finished.
+= success: That notification only means my background watcher of the build log has exited. Nothing has changed: the build never got a runner. The land of 762bf82b and c8c5b1e9 is still queued with the manager, and its verdict will appear on #314. This run is finished.
+= usage: {"claude-opus-5-5":{"inputTokens":42,"outputTokens":5219,"cacheReadInputTokens":869022,"cacheCreationInputTokens":38261,"webSearchRequests":0,"costUSD":0.5844404,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":609,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}

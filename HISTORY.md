@@ -179,3 +179,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-20 looper issue current-generation: run a chassis self-test once per gate when its rendered source is identical across fixtures (content hash) (#843)
 - 2026-11-21 looper issue Patch buildx past containerd v2.4.1 (CVE-2026-95839) in the build image on main and 2.6; file build-image findings once, upstream (#930)
 - 2026-11-21 looper issue A Rust service's handler-provided streams end at their token's exp, as API.md promises of every stream (#931)
+- 2026-11-21 looper issue memberport interop leg (Go/Rust <-> Java) is bounded by wall time: the Java peer is cut off mid-stream on a loaded runner (#919)

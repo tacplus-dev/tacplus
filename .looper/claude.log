@@ -1,0 +1,103 @@
+= init
+= thinking_tokens
+= thinking_tokens
+> Bash git status --short && git diff --stat && git log --oneline -3 && gh issue view 456 --repo tacplus-dev/tacplus --comments | tail -20
+<  M PROPOSALS.md  M cross-test/TESTS.md  M cross-test/current-generation/run.sh  M pkg/internal/java/types/statewrapper_gen.go  M pkg/templates/java/types/statewrapper.java.tmpl ?? cross-test/proto-statequeue/ ?? pkg/internal/java/types/statewrapper_queue_test.go  PROPOSALS.md                        ...
+= thinking_tokens
+= thinking_tokens
+The last red was a cancelled pipeline (never started), not a code failure. Let me check the work in progress is intact and still sound on the new main.
+> Bash git diff pkg/ && cat pkg/internal/java/types/statewrapper_queue_test.go | head -80 && ls -R cross-test/proto-statequeue | head -30
+< diff --git a/pkg/internal/java/types/statewrapper_gen.go b/pkg/internal/java/types/statewrapper_gen.go index 6a3044d0..84d9583c 100644 --- a/pkg/internal/java/types/statewrapper_gen.go +++ b/pkg/internal/java/types/statewrapper_gen.go @@ -81,6 +81,17 @@ type javaTopicBoundary struct {  	SubscribeRec...
+= thinking_tokens
+= thinking_tokens
+The work is the same as the previous queued land. Quick local checks, then recommit and re-queue.
+> Bash gofmt -l pkg/internal/java/types/ ; go vet ./pkg/internal/java/types/ 2>&1 | tail -5; go test ./scripts/ 2>&1 | tail -3; go test ./pkg/internal/java/types/ -run Queue 2>&1 | tail -5
+= task_started
+= task_notification
+< pkg/internal/java/types/runtime_templates_regression_test.go go: downloading google.golang.org/grpc v1.83.2 go: downloading google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa go: downloading golang.org/x/sys v0.47.0 pkg/internal/common/parser/descriptor.go:20:2: no required...
+The gofmt hit is in a file this change doesn't touch (it's that way on main too). Committing in the same three commits as before.
+> Bash git add pkg/internal/java/types/statewrapper_gen.go pkg/templates/java/types/statewrapper.java.tmpl pkg/internal/java/types/statewrapper_queue_test.go && git commit -q -F - <<'EOF' Java: a state queue or priority_queue boundary gets queue accessors (#456)  The Java StateClient classified (spec.queue...
+< 7d5ae2bd current-generation: generate and compile a state queue in every language (#456) 46d31c42 PROPOSALS: follow-ups found working #456 7655bc2d Java: a state queue or priority_queue boundary gets queue accessors (#456) b35f308b merging sources never reads through a symlink out of a source
+= thinking_tokens
+= thinking_tokens
+Verifying with a build job before re-queueing.
+> Bash nohup /usr/local/bin/repo-looper --repo tacplus --issue 456 --build > /tmp/build456.log 2>&1 & echo $!
+< 8188
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Bash while kill -0 8188 2>/dev/null; do sleep 20; done; tail -15 /tmp/build456.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bgfkc1kkp. Output is being written to: /builds/looper/tacplus/homes/looper-456/tmp/claude-61000/-builds-looper-tacplus-issues-456/e713a881-5539-439a-a075-b0b339ca7b74/tasks/bgfkc1kkp.output. You will be notified when it completes. To check interim output, use R...
+Waiting on the build job; I'll be notified when it finishes.
+> Bash sleep 5; cat /tmp/build456.log | tail -5
+= task_started
+= task_notification
+< [2026-11-21T07:09:03Z] checkpoint of #456 (a build) pushed to looper/tacplus-456:  11 files changed, 802 insertions(+), 3 deletions(-) [2026-11-21T07:09:03Z] build requested: tacplus 7d5ae2b, the gates full (cross-test/current-generation/run.sh matches no gate set) the build job https://gitlab.com/t...
+= thinking_tokens
+= thinking_tokens
+> Bash for i in $(seq 58); do kill -0 8188 2>/dev/null || break; sleep 10; done; kill -0 8188 2>/dev/null && echo running; tail -3 /tmp/build456.log
+= task_started
+= task_notification
+< running [2026-11-21T07:09:03Z] checkpoint of #456 (a build) pushed to looper/tacplus-456:  11 files changed, 802 insertions(+), 3 deletions(-) [2026-11-21T07:09:03Z] build requested: tacplus 7d5ae2b, the gates full (cross-test/current-generation/run.sh matches no gate set) the build job https://gitl...
+> Bash for i in $(seq 58); do kill -0 8188 2>/dev/null || break; sleep 10; done; kill -0 8188 2>/dev/null && echo running; tail -3 /tmp/build456.log
+= task_started
+= task_notification
+< [2026-11-21T07:19:12Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096982545 on 7d5ae2b: queued for 11m, not started no runner: the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096982545 has not started within 15m (no tacplus-dev/build st...
+= thinking_tokens
+= thinking_tokens
+No runner took the build (exit 4, no verdict). The manager builds the land anyway, and this same change already passed its statequeue legs in earlier runs. Re-queueing the land.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 456 --land 2>&1 | tail -8
+= task_started
+= task_updated
+= task_notification
+= background_tasks_changed
+= task_notification
+< [2026-11-21T07:24:21Z] checkpoint of #456 (land queued) pushed to looper/tacplus-456:  13 files changed, 831 insertions(+), 5 deletions(-) [2026-11-21T07:24:24Z] queued: the manager of tacplus lands looper/tacplus-456 in its next batch, with the lands queued before it (the merge train, looper#86), a...
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 456 --checkpoint "Land re-queued on main b35f308: 7655bc2d (fix), 46d31c42 (PROPOSALS), 7d5ae2bd (statequeue fixture, deps at main's floors). Previous send-back was a cancelled pipeline that never started, not a code failure. This run's --build (pipe...
+< [2026-11-21T07:24:31Z] checkpoint of #456 (a step) pushed to looper/tacplus-456:  13 files changed, 838 insertions(+), 5 deletions(-)
+I've queued the #456 fix with the manager again; nothing has merged yet.
+
+**Why it came back:** the last land wasn't red because of the code. Its build pipeline was cancelled before it ever started, so there was no verdict. Jody's earlier dependency-floor red was already fixed in the work I picked up.
+
+**This run:**
+- I recommitted the work on main `b35f308` as three commits:
+  - `7655bc2d`: the fix. The Java state client now gives a queue or priority queue offer/consume/peek/size methods at parity with Go, instead of treating it as a singleton.
+  - `46d31c42`: the follow-ups added to PROPOSALS.md.
+  - `7d5ae2bd`: a statequeue fixture in the current-generation gate, so a gate now generates and compiles a state queue in every language. Its dependency pins meet main's floors.
+- I started a build job (pipeline 3096982545), but no runner picked it up within 15 minutes, so it gave no verdict. The manager builds the land itself before merging.
+
+**Not verified this run:**
+- `go test ./scripts/` passes here.
+- The new Java queue test, `statewrapper_queue_test.go`, needs generated protos and only runs in the build job.
+- The statequeue fixture's Go, Java and Rust legs passed in an earlier run of this same change. The full current-generation gate has not been rerun with it since then.
+
+**Left for the run after the manager's verdict:**
+- If it merges: post the outcome comment (no service handlers were touched; looper-trace's only findings belong to #311), then close the issue.
+- If it comes back red: fix it and land again.
+- The backport PRs are already open: 2.0 #881 (v2.0.33), 2.1 #882 (v2.1.26), 2.2 #883 (v2.2.23), 2.3 #884 (v2.3.25), 2.4 #878 (v2.4.25), 2.5 #879 (v2.5.26) and 2.6 #880 (v2.6.14).
+- There is no tag to cut on main, because `v2.6.2` already exists on release/2.6; 2.6's patch is #880's `v2.6.14`.
+- Once this lands, #327 puts the queues back into its `proto-helpers` fixture.
+= success: I've queued the #456 fix with the manager again; nothing has merged yet.
+
+**Why it came back:** the last land wasn't red because of the code. Its build pipeline was cancelled before it ever started, so there was no verdict. Jody's earlier dependency-floor red was already fixed in the work I picked up.
+
+**This run:**
+- I recommitted the work on main `b35f308` as three commits:
+  - `7655bc2d`: the fix. The Java state client now gives a queue or priority queue offer/consume/peek/size methods at parity with Go, instead of treating it as a singleton.
+  - `46d31c42`: the follow-ups added to PROPOSALS.md.
+  - `7d5ae2bd`: a statequeue fixture in the current-generation gate, so a gate now generates and compiles a state queue in every language. Its dependency pins meet main's floors.
+- I started a build job (pipeline 3096982545), but no runner picked it up within 15 minutes, so it gave no verdict. The manager builds the land itself before merging.
+
+**Not verified this run:**
+- `go test ./scripts/` passes here.
+- The new Java queue test, `statewrapper_queue_test.go`, needs generated protos and only runs in the build job.
+- The statequeue fixture's Go, Java and Rust legs passed in an earlier run of this same change. The full current-generation gate has not been rerun with it since then.
+
+**Left for the run after the manager's verdict:**
+- If it merges: post the outcome comment (no service handlers were touched; looper-trace's only findings belong to #311), then close the issue.
+- If it comes back red: fix it and land again.
+- The backport PRs are already open: 2.0 #881 (v2.0.33), 2.1 #882 (v2.1.26), 2.2 #883 (v2.2.23), 2.3 #884 (v2.3.25), 2.4 #878 (v2.4.25), 2.5 #879 (v2.5.26) and 2.6 #880 (v2.6.14).
+- There is no tag to cut on main, because `v2.6.2` already exists on release/2.6; 2.6's patch is #880's `v2.6.14`.
+- Once this lands, #327 puts the queues back into its `proto-helpers` fixture.
+= usage: {"claude-opus-5-5":{"inputTokens":26,"outputTokens":4203,"cacheReadInputTokens":485645,"cacheCreationInputTokens":32327,"webSearchRequests":0,"costUSD":0.43990900000000005,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":576,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}

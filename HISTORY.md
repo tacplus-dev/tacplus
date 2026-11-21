@@ -177,3 +177,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-19 looper issue runtime-smoke: run.sh fails at setup, copies consumer-contract/proto/platform/health.proto that #161 removed (#657)
 - 2026-11-19 looper issue Published base images were not rebuilt with #711: base:latest and base:2.6 still carry linux-libc-dev 6.12.116-1 (six HIGH), failing the nightly security sweep on main (#757)
 - 2026-11-20 looper issue current-generation: run a chassis self-test once per gate when its rendered source is identical across fixtures (content hash) (#843)
+- 2026-11-21 looper issue Patch buildx past containerd v2.4.1 (CVE-2026-95839) in the build image on main and 2.6; file build-image findings once, upstream (#930)

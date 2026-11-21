@@ -12,6 +12,19 @@ the looper then marks it `promoted` or `declined` here with the date.
   `C2DClient()` default dial. Two gate runs in different checkouts on one runner can still collide there:
   `scripts/with-tree-lock.sh` serializes one checkout only. A machine-wide lock around that leg, or a Swift
   default taken from an env override in the test only, would isolate it.
+- **Work down the generated tree's security baseline** (2026-11-18, #854): `security-baseline.json` records the
+  generated tree's 8827 MEDIUM, LOW and UNKNOWN findings of the 2026-11-18 scan (Jody's decision on #854: baseline
+  them, no issue per finding). #854's triage says what to read first, since a few of them may be real defects:
+  semgrep `bypass-tls-verification` in the Go `x509.go` and `memberport.go` templates (check them against #359's
+  fix), `missing-ssl-minversion` (Go httpclient, x509) and `weak-ssl-context` (Java `ImmutableCertChain`,
+  `TypedClient`), spotbugs `REDOS`, `PATH_TRAVERSAL_IN`, `NP_NULL_ON_SOME_PATH_FROM_RETURN_VALUE` and the `AT_*`
+  races, `python-logger-credential-disclosure` in the Python `client_im/manager.py`, and RUSTSEC-2026-0543
+  (`chrono` unmaintained: a `time` or `jiff` dependency decision, like #308 and #320). Its "accept by design" list
+  is the rest: G103 in protoc-gen-go output, `use-snakeyaml-constructor` (SnakeYAML 2.5), G101, G104, G304, B110,
+  `DM_DEFAULT_ENCODING`, and the jitter math/rand hits. Each fix lowers its entries' counts: re-record them. The
+  baseline keys a finding by file, so one template's finding is an entry per set that renders it (up to 19):
+  keying generated findings once per template (looper-scan, the path less its `generated/<set>/`) would shrink
+  the file by an order of magnitude and survive a set's rename.
 - **Rust self-tests once per content hash in the other gates that run them** (2026-11-17, #843):
   `current-generation` runs each Rust chassis crate's self-tests once per gate for each source they test
   (`cross-test/lib/rust-selftest-once.sh`). `cross-test/consumer-contract/run.sh` runs some of the same crates'

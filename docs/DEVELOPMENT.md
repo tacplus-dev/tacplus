@@ -595,6 +595,16 @@ too: say why it holds for both. A new fixture that reaches an emitter no other
 one does goes into `SETS` in `scripts/generated.sh` as well; #196's kitchensink
 replaces that list.
 
+`security-baseline.json` at the root records the findings a scan takes as its
+starting point (`looper-scan baseline FINDINGS`, tacplus-dev/looper#146): per
+tool, rule and file, a count of MEDIUM, LOW and UNKNOWN findings no policy fails,
+never a secret or a HIGH. It holds the generated tree's 8827 findings of its
+first scan (Jody's decision on #854, 2026-11-18), keyed by `generated/<set>/`
+path, and the compiler tree's 1331 of 2026-11-13 (Jody's decision on #585), so
+a report shows only findings new against it. A template fix lowers its
+entries' counts, and a renamed set or a moved template file makes its findings
+new again: re-record the generated entries from that build's `findings.json`.
+
 Open soundness work belongs in `../roadmap/README.md` or the local
 `todo/` ledger, not in standalone report files.
 Examples include runtime proof for streaming/error-path trace/accounting

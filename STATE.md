@@ -105,7 +105,7 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by lo
   The base image's Maven carries guava 33.7.2-jre in place of the 33.6.0-jre Maven 3.9.16 ships (CVE-2026-102554;
   checksum-pinned, `mvn` builds a project in the image build, `tacplus-smoke` checks the floor) (#222; backported
   with #190 on each release line's pull request).
-  The base and build images carry Go 1.27, Node 26 (LTS) and Swift 6.4.2 (#255; main only, from 2.6: the
+  The base and build images carry Go 1.27, Node 26 (LTS) and Swift 6.4.3 (#255, #947; main only, from 2.6: the
   supported `build:X.Y` lines keep their toolchains). The rule beside the pins: Go follows the newest release, Node
   the newest LTS, Swift the newest release.
   On main (2.7): the build image builds images itself, with rootless BuildKit 0.34.2 under RootlessKit 3.3.0 as the

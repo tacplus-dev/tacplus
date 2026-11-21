@@ -96,7 +96,8 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-21 by lo
   The generated code is scanned at the source (#376, tacplus-dev/looper#108): `just generated DIR` writes every proto
   set the current-generation gate builds, in Go, Rust and Java (services) and Python and TypeScript (clients), as
   trees the build's security checks load; the gates job keeps it as `generated/` and the security job scans it with
-  `security-exceptions.yaml` (docs/DEVELOPMENT.md). Gap: until #196's kitchensink, an emitter no fixture reaches is
+  `security-exceptions.yaml` and `security-baseline.json`, which records the generated tree's 8827 MEDIUM and LOW
+  findings of its first scan (#854), so a report shows only new ones (docs/DEVELOPMENT.md). Gap: until #196's kitchensink, an emitter no fixture reaches is
   not scanned; Swift and C# lite clients are not generated into it.
   The build image's docker-buildx is built from the v0.39.1 source with moby/go-archive 0.3.3 (CVE-2026-17106); its
   release carries golang.org/x/net 0.62.0 (CVE-2026-78669, CVE-2026-78661, CVE-2026-97045) and containerd v2.4.2

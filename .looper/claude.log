@@ -1,0 +1,129 @@
+= init
+> Bash git status --short && git log --oneline -3 && git diff --stat HEAD && grep -n '<<<<<<<\|>>>>>>>\|=======' cross-test/memberport/testdata/MemberPortStreamExpiryTest.java; gh issue view 627 --repo tacplus-dev/tacplus --comments | tail -30
+<  M PROPOSALS.md  M cross-test/memberport/testdata/MemberPortStreamExpiryTest.java  M cross-test/stream-expiry/testdata/StreamExpiryBehaviorTest.java  M cross-test/stream-expiry/testdata/stream_expiry_behavior_test.rs b35f308b merging sources never reads through a symlink out of a source 57292992 mem...
+= thinking_tokens
+= thinking_tokens
+> Bash git show 57292992 --stat && git show 57292992 -- cross-test/memberport/testdata/MemberPortStreamExpiryTest.java && git diff HEAD -- cross-test/memberport/testdata/MemberPortStreamExpiryTest.java
+< commit 57292992a7a4e45121ff054c0769f18f54b6274e Author: jodydadescott <jody@thescottsweb.com> Date:   Fri Nov 20 19:35:33 2026 +0000      memberport: bound interop and expiry legs by progress, not wall time (#919)          On a loaded runner the memberport interop leg cut the Java peer off about    ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Read /builds/looper/tacplus/issues/627/cross-test/memberport/testdata/MemberPortStreamExpiryTest.java
+< 1	// Copyright (c) 2026 Jody Scott 2	// SPDX-License-Identifier: Apache-2.0 3	 4	package com.example.grid.model.chassis.memberport; 5	 6	import static org.junit.jupiter.api.Assertions.assertArrayEquals; 7	import static org.junit.jupiter.api.Assertions.assertTrue; 8	 9	<<<<<<< HEAD 10	import com.exam...
+= thinking_tokens
+= thinking_tokens
+> Bash f=cross-test/memberport/testdata/MemberPortStreamExpiryTest.java && python3 - "$f" <<'EOF' import sys,re p=sys.argv[1]; s=open(p).read() s=s.replace("""<<<<<<< HEAD import com.example.grid.model.chassis.token.TokenWrapper; import io.grpc.ManagedChannel; ======= import com.example.grid.model.types.sy...
+< 0 diff --git a/cross-test/memberport/testdata/MemberPortStreamExpiryTest.java b/cross-test/memberport/testdata/MemberPortStreamExpiryTest.java index d6cb5bc0..c244b09d 100644 --- a/cross-test/memberport/testdata/MemberPortStreamExpiryTest.java +++ b/cross-test/memberport/testdata/MemberPortStreamExp...
+= thinking_tokens
+= thinking_tokens
+> Bash grep -rn "class TokenWrapper\|getExpiration" --include=*.java . | head -5; git diff origin/main -- cross-test/stream-expiry PROPOSALS.md
+< ./cross-test/memberport/testdata/MemberPortBehaviorTest.java:202:                long left = TokenWrapper.parse(cached).getExpiration() - System.currentTimeMillis() / 1000; ./cross-test/memberport/testdata/MemberPortStreamExpiryTest.java:107:        long exp = TokenWrapper.parse(stuck.token()).getEx...
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n "import static\|import io.grpc.Context\|import io.grpc.Status;" cross-test/stream-expiry/testdata/StreamExpiryBehaviorTest.java
+< 3:import static org.junit.jupiter.api.Assertions.assertEquals; 4:import static org.junit.jupiter.api.Assertions.assertFalse; 5:import static org.junit.jupiter.api.Assertions.assertTrue; 6:import static org.junit.jupiter.api.Assertions.fail; 20:import io.grpc.Context; 24:import io.grpc.Status;
+Resolved. Committing and verifying with a build before landing.
+> Bash git add -A && git commit -q -F - <<'EOF' stream-expiry: bound handler and close checks generously, name the wait (#627)  On a loaded runner every step of the stream-expiry legs ran about a second late, and the Java self-test gave each handler's Context cancellation a fixed 3 s after the expiry close...
+< 3a9cd328 stream-expiry: bound handler and close checks generously, name the wait (#627) b35f308b merging sources never reads through a symlink out of a source [2026-11-21T04:50:24Z] checkpoint of #627 (a step) pushed to looper/tacplus-627:  6 files changed, 439 insertions(+), 21 deletions(-)
+= thinking_tokens
+= thinking_tokens
+> Bash nohup /usr/local/bin/repo-looper --repo tacplus --issue 627 --build > /tmp/build627.log 2>&1 & echo $!
+< 1230
+> ToolSearch {"query":"select:Monitor","max_results":1}
+< 
+> Bash until ! kill -0 1230 2>/dev/null; do sleep 30; done; tail -15 /tmp/build627.log
+= background_tasks_changed
+= task_started
+< Command running in background with ID: bz2imkbuz. Output is being written to: /builds/looper/tacplus/homes/looper-627/tmp/claude-61000/-builds-looper-tacplus-issues-627/ae6ca5e5-ade6-4c54-b324-2270231bbb5d/tasks/bz2imkbuz.output. You will be notified when it completes. To check interim output, use R...
+> Bash sleep 60; cat /tmp/build627.log
+< <tool_use_error>Blocked: sleep 60 followed by: cat /tmp/build627.log. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain shorter sleeps to work around this block.</tool_use_err...
+> Bash cat /tmp/build627.log
+< [2026-11-21T04:50:30Z] checkpoint of #627 (a build) pushed to looper/tacplus-627:  6 files changed, 444 insertions(+), 21 deletions(-) [2026-11-21T04:50:30Z] build requested: tacplus 3a9cd32, the gates full (cross-test/memberport/testdata/MemberPortStreamExpiryTest.java matches no gate set) the buil...
+I resolved the conflict, committed it as 3a9cd32, and the full gates are building it now (pipeline 3096778248). I'm waiting for the build's result before I queue the land.
+> Monitor until ! kill -0 1230 2>/dev/null; do sleep 30; done; echo "build process exited"; tail -5 /tmp/build627.log
+= permission_denied
+< This Bash command contains multiple operations. The following parts require approval: kill -0 1230, tail -5 /tmp/build627.log
+= thinking_tokens
+= thinking_tokens
+> Bash timeout 590 bash -c 'while kill -0 1230 2>/dev/null; do sleep 20; done'; tail -4 /tmp/build627.log
+= task_started
+= task_notification
+< [2026-11-21T04:50:30Z] checkpoint of #627 (a build) pushed to looper/tacplus-627:  6 files changed, 444 insertions(+), 21 deletions(-) [2026-11-21T04:50:30Z] build requested: tacplus 3a9cd32, the gates full (cross-test/memberport/testdata/MemberPortStreamExpiryTest.java matches no gate set) the buil...
+> Bash timeout 590 bash -c 'while kill -0 1230 2>/dev/null; do sleep 20; done'; tail -3 /tmp/build627.log
+> Bash timeout 590 bash -c 'while kill -0 1230 2>/dev/null; do sleep 20; done'; tail -3 /tmp/build627.log
+> Bash timeout 590 bash -c 'while kill -0 1230 2>/dev/null; do sleep 20; done'; tail -3 /tmp/build627.log
+> Bash timeout 590 bash -c 'while kill -0 1230 2>/dev/null; do sleep 20; done'; tail -3 /tmp/build627.log
+= task_started
+> Bash timeout 590 bash -c 'while kill -0 1230 2>/dev/null; do sleep 20; done'; tail -3 /tmp/build627.log
+> Bash timeout 590 bash -c 'while kill -0 1230 2>/dev/null; do sleep 20; done'; tail -3 /tmp/build627.log
+> Bash timeout 590 bash -c 'while kill -0 1230 2>/dev/null; do sleep 20; done'; tail -3 /tmp/build627.log
+> Bash timeout 590 bash -c 'while kill -0 1230 2>/dev/null; do sleep 20; done'; tail -3 /tmp/build627.log
+> Bash timeout 590 bash -c 'while kill -0 1230 2>/dev/null; do sleep 20; done'; tail -3 /tmp/build627.log
+> Bash timeout 590 bash -c 'while kill -0 1230 2>/dev/null; do sleep 20; done'; tail -3 /tmp/build627.log
+= task_notification
+< [2026-11-21T05:00:40Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 on 3a9cd32: queued for 11m, not started no runner: the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 has not started within 15m (no tacplus-dev/build st...
+< [2026-11-21T05:00:40Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 on 3a9cd32: queued for 11m, not started no runner: the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 has not started within 15m (no tacplus-dev/build st...
+< [2026-11-21T05:00:40Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 on 3a9cd32: queued for 11m, not started no runner: the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 has not started within 15m (no tacplus-dev/build st...
+< [2026-11-21T05:00:40Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 on 3a9cd32: queued for 11m, not started no runner: the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 has not started within 15m (no tacplus-dev/build st...
+< [2026-11-21T05:00:40Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 on 3a9cd32: queued for 11m, not started no runner: the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 has not started within 15m (no tacplus-dev/build st...
+< [2026-11-21T05:00:40Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 on 3a9cd32: queued for 11m, not started no runner: the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 has not started within 15m (no tacplus-dev/build st...
+< [2026-11-21T05:00:40Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 on 3a9cd32: queued for 11m, not started no runner: the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 has not started within 15m (no tacplus-dev/build st...
+< [2026-11-21T05:00:40Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 on 3a9cd32: queued for 11m, not started no runner: the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 has not started within 15m (no tacplus-dev/build st...
+< [2026-11-21T05:00:40Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 on 3a9cd32: queued for 11m, not started no runner: the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 has not started within 15m (no tacplus-dev/build st...
+< [2026-11-21T05:00:40Z] waiting for the verdict of the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 on 3a9cd32: queued for 11m, not started no runner: the build job https://gitlab.com/tacplus-dev/build/-/pipelines/3096778248 has not started within 15m (no tacplus-dev/build st...
+No runner took the build (exit 4), so I have no verdict from it. Jody's direction is to re-queue the change, so I'll queue the land and let the manager's build give the verdict.
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 627 --land 2>&1 | tail -5
+= task_started
+= task_notification
+< [2026-11-21T05:05:57Z] checkpoint of #627 (land queued) pushed to looper/tacplus-627:  7 files changed, 492 insertions(+), 21 deletions(-) [2026-11-21T05:05:58Z] queued: the manager of tacplus lands looper/tacplus-627 in its next batch, with the lands queued before it (the merge train, looper#86), a...
+= task_updated
+= task_notification
+= background_tasks_changed
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 627 --checkpoint "Resolved the memberport conflict with main 57292992 (#919). Took main's retry on longer tokens and dropped this branch's tokenless warm-up stream: main's retry covers the same cold-open case, and the warm-up was the one part of this...
+< [2026-11-21T05:06:07Z] checkpoint of #627 (a step) pushed to looper/tacplus-627:  7 files changed, 499 insertions(+), 21 deletions(-)
+The #627 fix is queued with the manager again, on top of current main, but it is unverified: no build runner took my full-gates build within 15 minutes, so there is no verdict yet.
+
+**The conflict:** main changed `cross-test/memberport/testdata/MemberPortStreamExpiryTest.java` in #919 (commit 57292992). It now handles a slow-starting stream by trying again on a token twice as long. My branch handled the same case differently, by opening a stream with no token first to warm the connection. I kept main's approach and dropped that warm-up. Of everything in this change, the warm-up was the part I most suspected of causing the earlier batch builds that hung, so removing it also removes that suspect. What stays on top of main in that file is a single 5 s limit on how long after its token's expiry a stream may take to close (it was 1.5 s in one check and 4.5 s in another).
+
+**The commit, 3a9cd32**, contains the same fix as before:
+- **Java stream-expiry test:** each handler gets 15 s after the stream closes to see its call end, instead of a fixed 3 s. A failure says how long it waited. A handler that never ran (the stream was refused when it opened) is reported as that rather than as a late cancellation. A new test checks that a listener attached after the call was already cancelled still runs.
+- **Rust stream-expiry test:** the control stream may go 5 s without a message before it counts as stalled, up from 2 s, and the failure says how long it waited.
+- **Go:** no change needed, because main's Go test already measures this by elapsed time.
+
+**Still to do in the next run, after the manager's verdict:**
+- **If a batch hangs again:** the trace line in the build log names the leg that was still running, and that leg gets fixed.
+- **If it merges:**
+  - Update backport PRs #636 to #642 to cite main's commit in place of 7cf43dbb/74307086, noting that the Go part and the memberport file differ on main.
+  - Comment the outcome on the issue (gate set, batch; no handlers are touched by this change; the trace-check findings belong to #311, which is still open), then close the issue.
+
+There is no v2.6.2 tag from main, because main has taken features since v2.6.1; the patch ships through the release-branch backports.
+= success: The #627 fix is queued with the manager again, on top of current main, but it is unverified: no build runner took my full-gates build within 15 minutes, so there is no verdict yet.
+
+**The conflict:** main changed `cross-test/memberport/testdata/MemberPortStreamExpiryTest.java` in #919 (commit 57292992). It now handles a slow-starting stream by trying again on a token twice as long. My branch handled the same case differently, by opening a stream with no token first to warm the connection. I kept main's approach and dropped that warm-up. Of everything in this change, the warm-up was the part I most suspected of causing the earlier batch builds that hung, so removing it also removes that suspect. What stays on top of main in that file is a single 5 s limit on how long after its token's expiry a stream may take to close (it was 1.5 s in one check and 4.5 s in another).
+
+**The commit, 3a9cd32**, contains the same fix as before:
+- **Java stream-expiry test:** each handler gets 15 s after the stream closes to see its call end, instead of a fixed 3 s. A failure says how long it waited. A handler that never ran (the stream was refused when it opened) is reported as that rather than as a late cancellation. A new test checks that a listener attached after the call was already cancelled still runs.
+- **Rust stream-expiry test:** the control stream may go 5 s without a message before it counts as stalled, up from 2 s, and the failure says how long it waited.
+- **Go:** no change needed, because main's Go test already measures this by elapsed time.
+
+**Still to do in the next run, after the manager's verdict:**
+- **If a batch hangs again:** the trace line in the build log names the leg that was still running, and that leg gets fixed.
+- **If it merges:**
+  - Update backport PRs #636 to #642 to cite main's commit in place of 7cf43dbb/74307086, noting that the Go part and the memberport file differ on main.
+  - Comment the outcome on the issue (gate set, batch; no handlers are touched by this change; the trace-check findings belong to #311, which is still open), then close the issue.
+
+There is no v2.6.2 tag from main, because main has taken features since v2.6.1; the patch ships through the release-branch backports.
+= usage: {"claude-opus-5-5":{"inputTokens":36,"outputTokens":7280,"cacheReadInputTokens":895340,"cacheCreationInputTokens":51776,"webSearchRequests":0,"costUSD":0.7390200000000001,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":1072,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}

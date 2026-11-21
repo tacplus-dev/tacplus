@@ -1,0 +1,62 @@
+= init
+> Bash git status | head -80 && git log --oneline -3 && grep -n '^<<<<<<<\|^=======\|^>>>>>>>' STATE.md cross-test/memberport/run.sh
+< On branch looper/tacplus-258 Your branch is up to date with 'origin/main'.  Changes not staged for commit:   (use "git add <file>..." to update what will be committed)   (use "git restore <file>..." to discard changes in working directory) 	modified:   PROPOSALS.md 	modified:   STATE.md 	modified:  ...
+> Bash sed -n 1,10p STATE.md | cut -c1-600; echo ----; sed -n 1,75p cross-test/memberport/run.sh; echo ----; sed -n 440,480p cross-test/memberport/run.sh
+< # State: tacplus  <<<<<<< HEAD Overwritten to stay current (loopers and agents). Last updated: 2026-11-19 by looper (#258). ======= Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by looper (#931). >>>>>>> origin/main  - **Version / line:** v2.6.13 (latest release, 2026-11...
+Both sides are additive; I'll combine them.
+> Bash python3 - <<'EOF' import re p='cross-test/memberport/run.sh' s=open(p).read() blocks=[ ("""<<<<<<< HEAD # MemberPortBehaviorTest and MemberPortStreamExpiryTest, Hazelcast aside) with # -race inside the generated module, and testdata/go/s2sm (MemberPortConfigTest's # twin, #258) in the generated s2sm...
+< ok 18:# MemberportPeerTest, MemberPortBehaviorTest and MemberPortStreamExpiryTest, 19:# Hazelcast aside) with -race inside the generated module, and testdata/go/s2sm 20:# (MemberPortConfigTest's twin, #258) in the generated s2sm package. --test 22:# (default ^TestMemberPort; cross-test/stream-expiry...
+= thinking_tokens
+= thinking_tokens
+> Bash sed -n 340,370p cross-test/memberport/run.sh; sed -n 515,620p cross-test/memberport/run.sh | grep -n 'TESTS\|Peer\|Config'; ls cross-test/memberport/testdata/go cross-test/memberport/testdata/go/s2sm; grep -n '^func Test' cross-test/memberport/testdata/go/s2sm/*.go cross-test/memberport/testdata/go/...
+<     sed "s#src: .*#src: \"$NO_TLS\"#" "$WORK/tacplus.yaml" > "$WORK/no-tls/tacplus.yaml"     if out="$(cd "$WORK/no-tls" && "$TACPLUS_BIN" build --config tacplus.yaml --src "$NO_TLS" 2>&1)"; then       die "a (spec.member_port) service without auto_tls was generated"     fi     grep -q "declare auto...
+= thinking_tokens
+= thinking_tokens
+> Bash git diff --check | head; grep -rln '^<<<<<<< \|^>>>>>>> ' --exclude-dir=.git . | head; (go build ./... && go vet ./pkg/... ./scripts/ && go test ./... 2>&1 | tail -40) > /tmp/gt258.log 2>&1; tail -40 /tmp/gt258.log
+< go: downloading github.com/spf13/cobra v1.10.2 go: downloading go.uber.org/zap v1.27.1 go: downloading google.golang.org/protobuf v1.36.11 go: downloading gopkg.in/yaml.v3 v3.0.1 go: downloading golang.org/x/tools v0.49.0 go: downloading github.com/BurntSushi/toml v1.6.0 go: downloading golang.org/x...
+> Bash grep -n -A8 '^test\b\|^test:' justfile | head -30; which protoc buf just
+< Exit code 1 54:test: generate soundness 55-  {{lock}} go test ./... 56- 57-# Model/template soundness gate. Runs as part of `test`. 58-soundness: 59-  {{lock}} go run ./cmd/soundness -root . 60- 61-vet: 62-  go vet ./... /usr/local/bin/protoc /usr/local/bin/just
+> Bash timeout 1500 just test > /tmp/jt258.log 2>&1; echo rc=$?; grep -v '^ok\|no test files' /tmp/jt258.log | tail -30
+= task_started
+= task_notification
+< rc=0  ## Lite-client (swift/csharp) soundness probes (ENFORCED)  Swift and C# are client-lite targets (no validation emitters, not in langOrder). These probes verify that the client surfaces they DO generate are present and include timeouts, structured errors, and streaming-method stubs. - `swift C2...
+Green. Commit the fix, then STATE.md alone, and land.
+> Bash git add -A && git reset -q STATE.md && git status --short | grep -v '^[MA] ' ; git commit -q -F - <<'EOF' Enforce: S2S never crosses tenants (#258)  The tenant door refused other tenants' callers only on rpcs without RPC_FLAG_ANY_TENANT, so a tenant's service could reach another tenant's service thr...
+<  M STATE.md 6f6dc6a7 STATE.md: S2S never crosses tenants (#258) 92f6c31e Enforce: S2S never crosses tenants (#258) b35f308b merging sources never reads through a symlink out of a source
+= thinking_tokens
+= thinking_tokens
+> Bash git show --stat HEAD | tail -3 && /usr/local/bin/repo-looper --repo tacplus --issue 258 --land 2>&1 | tail -15
+= task_started
+= task_notification
+<  STATE.md | 10 +++++++---  1 file changed, 7 insertions(+), 3 deletions(-) [2026-11-21T04:48:17Z] checkpoint of #258 (land queued) pushed to looper/tacplus-258:  47 files changed, 2496 insertions(+), 284 deletions(-) [2026-11-21T04:48:18Z] queued: the manager of tacplus lands looper/tacplus-258 in i...
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 258 --checkpoint "Land queued (04:48Z), verdict pending. This run: resolved the main-merge conflicts. STATE.md: one 'Last updated' line. memberport/run.sh: kept main's MemberportPeerTest legs (default TESTS, Rust --test memberport_peer, header commen...
+< [2026-11-21T04:48:26Z] checkpoint of #258 (a step) pushed to looper/tacplus-258:  47 files changed, 2500 insertions(+), 284 deletions(-)
+I resolved the two merge conflicts with main and queued #258 to land again. The land has no verdict yet, so the issue stays open.
+
+**How I resolved the conflicts**
+- **`cross-test/memberport/run.sh`:** both sides only added tests, so I kept both. Main's `MemberportPeerTest` legs stay: it is in the default test list, Rust maps `--test memberport_peer`, and the header comments name it. #258's member-port config checks stay beside them: `MemberPortConfigTest` in Java, the Go `s2sm` test and the Rust `memberport_config` test. `bash -n` reports no syntax errors.
+- **`STATE.md`:** the only conflict was the "Last updated" line, which is now a single line dated today for #258.
+
+**Checks:** `just test` passed locally: the soundness checks plus `go test ./...`. I did not run a separate `--build`, because earlier ones took hours or never got a runner. The manager's gates on the land will be the first full build of this tree.
+
+**Commits:** `92f6c31e` is the fix and `6f6dc6a7` touches `STATE.md` alone. Both are queued with the manager and the checkpoint is pushed.
+
+**What's left for the next run**
+- If the land comes back red, read the manager's gate table, fix the failure and land again.
+- If it merges, comment on #258 with the commits, gates and batch, then close the issue.
+- The backports #758 (release/2.6) and #759 (release/2.5) are still open and depend on #284's backports, #326 and #316, which merge first.
+= success: I resolved the two merge conflicts with main and queued #258 to land again. The land has no verdict yet, so the issue stays open.
+
+**How I resolved the conflicts**
+- **`cross-test/memberport/run.sh`:** both sides only added tests, so I kept both. Main's `MemberportPeerTest` legs stay: it is in the default test list, Rust maps `--test memberport_peer`, and the header comments name it. #258's member-port config checks stay beside them: `MemberPortConfigTest` in Java, the Go `s2sm` test and the Rust `memberport_config` test. `bash -n` reports no syntax errors.
+- **`STATE.md`:** the only conflict was the "Last updated" line, which is now a single line dated today for #258.
+
+**Checks:** `just test` passed locally: the soundness checks plus `go test ./...`. I did not run a separate `--build`, because earlier ones took hours or never got a runner. The manager's gates on the land will be the first full build of this tree.
+
+**Commits:** `92f6c31e` is the fix and `6f6dc6a7` touches `STATE.md` alone. Both are queued with the manager and the checkpoint is pushed.
+
+**What's left for the next run**
+- If the land comes back red, read the manager's gate table, fix the failure and land again.
+- If it merges, comment on #258 with the commits, gates and batch, then close the issue.
+- The backports #758 (release/2.6) and #759 (release/2.5) are still open and depend on #284's backports, #326 and #316, which merge first.
+= usage: {"claude-opus-5-5":{"inputTokens":22,"outputTokens":4697,"cacheReadInputTokens":611335,"cacheCreationInputTokens":52359,"webSearchRequests":0,"costUSD":0.635167,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":392,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}

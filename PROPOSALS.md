@@ -4,6 +4,11 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **chrono out of the generated Rust graph, the breaking half** (2026-11-18, #855, #862): 2.6.2 drops the unused
+  `pbjson-types` and the logger chassis's unused `chrono`. chrono 0.4 (RUSTSEC-2026-0543) still reaches every
+  generated Rust service through `prost-wkt-types` (the sys protos' WKT fields) and the `token` chassis's public
+  `expires_in() -> Option<chrono::Duration>`. Replacing them changes the generated surface, so it is #862, for the
+  next minor or major (its ROADMAP.md line is the hub's).
 - **The c2d-server swift leg's socket is one path per machine, not per run** (2026-11-15, #778): the go, java and
   rust self-tests now serve on a socket under a per-run `mktemp -d` (`C2D_SELFTEST_SOCKET`, set by
   `cross-test/c2d-server/run.sh`): `just gates` runs the four legs at once, and on the one declared path

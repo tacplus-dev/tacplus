@@ -54,6 +54,10 @@ func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExc
 	if err != nil {
 		return err
 	}
+	typeScriptVersion, err := typeScriptCompilerVersion()
+	if err != nil {
+		return err
+	}
 
 	// The proto package containing the authoritative token mint service.
 	texPkg := ""
@@ -105,6 +109,7 @@ func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExc
 		AcceptedAudiences      []string // every `aud` the Authorizer accepts: own label + hosted traits
 		BufbuildProtobuf       string   // @bufbuild/protobuf version from dependencies.yaml
 		NodeEngine             string   // engines.node: dependencies.yaml tools.node
+		TypeScript             string   // devDependencies.typescript: dependencies.yaml tools.typescript
 		ClientOnly             bool
 		// Client-reachable (C2S) mint — used by client_im.
 		HasClientTokenExchanger     bool
@@ -127,6 +132,7 @@ func writeLibTemplates(config *tactype.Config, info, clientInfo *parser.TokenExc
 		AcceptedAudiences:           acceptedAudiences,
 		BufbuildProtobuf:            bufbuildVersion,
 		NodeEngine:                  nodeEngine,
+		TypeScript:                  typeScriptVersion,
 		ClientOnly:                  true,
 		HasClientTokenExchanger:     hasClientTokenExchanger,
 		ClientTokenExchangerPackage: clientTexPkg,

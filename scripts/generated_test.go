@@ -19,7 +19,8 @@ import (
 // and the recipe may not change a tracked file. It is not a gate.
 
 // fakeGenTacplus stands in for tacplus: `build` writes a model with each
-// language's manifest under tacplus/model, or fails for FAKE_FAIL (a language).
+// language's manifest under tacplus/model (a lite client's package, with no
+// model, under tacplus), or fails for FAKE_FAIL (a language).
 const fakeGenTacplus = `#!/usr/bin/env bash
 set -euo pipefail
 lang="$(sed -n 's/^language: *"\{0,1\}\([a-z]*\)"\{0,1\}$/\1/p' tacplus.yaml)"
@@ -32,8 +33,10 @@ case "$lang" in
   go) mkdir -p "$m/chassis/x509"; echo 'package x509' >"$m/chassis/x509/x509.go" ;;
   rust) printf '[workspace]\nmembers = ["."]\n' >"$m/Cargo.toml" ;;
   java) mkdir -p "$m/src/main/java/com/x"; echo 'class X {}' >"$m/src/main/java/com/x/X.java" ;;
-  python) echo '[project]' >"$m/pyproject.toml" ;;
+  python) echo '[project]' >"$m/pyproject.toml"; mkdir -p "$m/types/x"; echo '[project]' >"$m/types/x/pyproject.toml" ;;
   typescript) echo '{}' >"$m/package.json" ;;
+  csharp) rm -rf "$m"; echo '<Project/>' >tacplus/Model.csproj ;;
+  swift) rm -rf "$m"; echo '// swift-tools-version: 6.1' >tacplus/Package.swift ;;
 esac
 `
 
@@ -51,6 +54,15 @@ mkdir -p target/classes/com/x target/maven-status target/generated-sources
 echo class >target/classes/com/x/X.class`,
 	"npm": `echo "npm $* $PWD" >>"$FAKE_LOG"
 echo '{}' >package-lock.json`,
+	"uv": `echo "uv $* $PWD" >>"$FAKE_LOG"
+[[ "$*" == *"pip compile"* ]] && echo 'protobuf==6.33.6' >requirements.lock.txt
+exit 0`,
+	"dotnet": `echo "dotnet $* $PWD" >>"$FAKE_LOG"
+mkdir -p obj; echo '{}' >obj/project.assets.json
+echo '{"version": 1}' >packages.lock.json`,
+	"swift": `echo "swift $* $PWD" >>"$FAKE_LOG"
+mkdir -p .build/checkouts/swift-protobuf
+echo '{"pins": []}' >Package.resolved`,
 }
 
 type genRun struct {
@@ -86,6 +98,7 @@ func runGenerated(t *testing.T, dir string, env ...string) genRun {
 	cmd.Env = append(os.Environ(),
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"TACPLUS_BIN="+filepath.Join(bin, "tacplus"),
+		"TACPLUS_UV="+filepath.Join(bin, "uv"),
 		"TACPLUS_GENERATED_WORK="+filepath.Join(tmp, "work"),
 		"FAKE_LOG="+log)
 	cmd.Env = append(cmd.Env, env...)
@@ -121,7 +134,14 @@ func TestGenerated(t *testing.T) {
 			"base/rust/tacplus/model/Cargo.lock",
 			"base/java/pom.xml",
 			"base/python/tacplus/model/pyproject.toml",
+			// What a client resolves to, for OSV-Scanner (tacplus#949): a
+			// requirements file it reads by its .txt name, beside the root
+			// pyproject.toml.
+			"base/python/tacplus/model/requirements.lock.txt",
 			"base/typescript/tacplus/model/package-lock.json",
+			// The lite clients, of the one fixture with a C2D service.
+			"c2dserver/csharp/tacplus/packages.lock.json",
+			"c2dserver/swift/tacplus/Package.resolved",
 			// A full service build: servers, S2S clients, the state singleton.
 			"requiresdevice/go/go.sum",
 			"requiresdevice/rust/tacplus/model/Cargo.lock",
@@ -131,6 +151,12 @@ func TestGenerated(t *testing.T) {
 		} {
 			if _, err := os.Stat(filepath.Join(dir, want)); err != nil {
 				t.Errorf("no %s in the generated tree: %v", want, err)
+			}
+		}
+		// The restore's and the resolve's work trees are no source to scan.
+		for _, absent := range []string{"c2dserver/csharp/tacplus/obj", "c2dserver/swift/tacplus/.build", "base/python/tacplus/model/types/x/requirements.lock.txt"} {
+			if _, err := os.Stat(filepath.Join(dir, absent)); err == nil {
+				t.Errorf("%s is in the generated tree", absent)
 			}
 		}
 		// Python and TypeScript are client targets: a service build refuses them.
@@ -161,7 +187,8 @@ func TestGenerated(t *testing.T) {
 		if !strings.HasPrefix(string(mod), "module gitlab.com/example/dummy/vault\n") {
 			t.Errorf("requiresdevice/go/go.mod: want module gitlab.com/example/dummy/vault, got:\n%s", mod)
 		}
-		for _, want := range []string{"go mod tidy", "cargo generate-lockfile", "mvn -q -DskipTests compile", "npm install --package-lock-only"} {
+		for _, want := range []string{"go mod tidy", "cargo generate-lockfile", "mvn -q -DskipTests compile", "npm install --package-lock-only",
+			"uv pip compile --quiet --universal --no-header pyproject.toml -o requirements.lock.txt", "dotnet restore --use-lock-file", "swift package resolve"} {
 			if !strings.Contains(r.calls, want) {
 				t.Errorf("generated.sh did not run %q; calls:\n%s", want, r.calls)
 			}

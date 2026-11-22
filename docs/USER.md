@@ -2138,6 +2138,18 @@ the package back would install. Those releases do not install on 3.8 or 3.9
 (#264). A regeneration over an existing `pyproject.toml` raises
 `requires-python` and these floors in place.
 
+**The floors a generated manifest declares are `dependencies.yaml`'s.** Each
+Rust chassis crate takes every crate `dependencies.yaml` lists from the
+generated workspace (`{ workspace = true }`), and each TypeScript chassis
+package's `typescript` is `tools.typescript`, so raising a pin there raises it
+in every generated manifest at once (#949). A Rust build whose
+`dependencies.yaml` lacks a crate a generated chassis crate takes fails
+generation naming it (`rust dependencies.yaml missing required workspace
+dependency versions`): copy its pin from `example/proto/dependencies.yaml`. Its
+chassis crates are written for `base64` 0.22 and `tonic` 0.14.6 or later.
+tacplus checks every floor its own inventories and generated manifests declare
+against OSV on each land (`just floors`).
+
 ---
 
 ## Service Lifecycle

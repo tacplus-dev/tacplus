@@ -5,7 +5,7 @@ edition = "2021"
 description = "Cryptographic key management and shared utilities"
 
 [dependencies]
-base64 = "0.22"
+base64 = { workspace = true }
 # RSA and ECDSA (issue #186): aws-lc-rs, never the rsa crate (RUSTSEC-2023-0071)
 # nor the elliptic-curve 0.13 stack (crypto-bigint 0.5, RUSTSEC-2026-0387).
 aws-lc-rs = "1"
@@ -13,6 +13,6 @@ ed25519-dalek = { version = "3", features = ["pkcs8", "pem"] }
 pkcs8 = { version = "0.11", features = ["pem", "std"] }
 signature = "3"
 rand = "0.8.6"
-pem = "3"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+pem = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

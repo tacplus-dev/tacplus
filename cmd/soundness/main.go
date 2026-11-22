@@ -1116,6 +1116,7 @@ func main() {
 	failures += renderLiteClientSoundness(*root)
 	failures += renderSpiffeSoundness(*root)
 	failures += renderStoreVendorSoundness(*root)
+	failures += renderChassisManifestVersions(*root)
 
 	if failures > 0 {
 		os.Exit(1)

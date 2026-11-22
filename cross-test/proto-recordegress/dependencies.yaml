@@ -90,7 +90,7 @@ lang:
             anyhow: 1.0.103
             async-trait: 0.1.89
             axum: 0.8.8
-            base64: 0.21.7
+            base64: 0.22.1
             bytes: 1.11.1
             chrono: 0.4.43
             env_logger: 0.11.8
@@ -123,7 +123,7 @@ lang:
             tokio-test: 0.4.4
             tokio-tungstenite: 0.30.0
             tokio-util: 0.7.15
-            tonic: 0.14.0
+            tonic: 0.14.6
             tonic-health: 0.14.0
             tonic-prost: 0.14.0
             tonic-prost-build: 0.14.0

@@ -500,6 +500,21 @@ Current durable gates:
   outbound timeout, bounded outbound retry/backoff, client request validation,
   unary client response validation, unified readiness, and
   ServiceManager-owned task teardown.
+- `just floors` (`scripts/floors.sh`, `cmd/floors`, #949) checks every version
+  floor tacplus hands a consumer against OSV, its database queried at run time
+  (the time printed under "Checked against"): each `dependencies.yaml`
+  inventory of the checkout (Go, Java, Rust, TypeScript, Python) and each
+  `Cargo.toml`, `package.json`, `pyproject.toml`, `.csproj` and
+  `Package.swift` of the cross-test models it generates. A lock resolves the
+  newest compatible release, so the lock scanners pass while a consumer holding
+  a package at its floor gets the vulnerable version; this fails on an
+  advisory the floor itself admits, unless `security-exceptions.yaml` accepts
+  it (a RustSec informational advisory, such as unmaintained, warns). It fails
+  too when its models stop reaching a Rust chassis crate: add a set that does.
+  So a chassis manifest template names no version for a package the inventory
+  declares (soundness, "Chassis manifest versions come from the inventory"):
+  Rust takes `{ workspace = true }`, TypeScript a template value, and the
+  inventory is the one place such a floor moves.
 - Generated-contract tests must compile or execute current generated output.
   Do not rely on stale committed generated fixtures.
 - Consumer-contract runtime tests should cover handler/wrapper/client behavior
@@ -559,9 +574,11 @@ tacplus-dev/looper#108), so tacplus scans it here, once (#376).
 `just generated DIR` (`scripts/generated.sh`) generates each proto set the
 current-generation gate builds into `DIR/<set>/<language>/`: Go, Rust and Java
 as full services (the chassis included) in the languages the gate compiles each
-set in, Python and TypeScript as clients, each made loadable by its scanners (a
-`go.mod` and `go.sum`, a `Cargo.lock`, a `pom.xml`, an npm lock; compiled
-`target/classes` for one set, as many as SpotBugs' heap holds), and gitleaks
+set in, Python and TypeScript as clients, and the C2D fixture as a Swift and a C#
+client, each made loadable by its scanners (a `go.mod` and `go.sum`, a
+`Cargo.lock`, a `pom.xml`, an npm lock, a Python `requirements.lock.txt` from
+`uv pip compile`, a C# `packages.lock.json`, a Swift `Package.resolved`;
+compiled `target/classes` for one set, as many as SpotBugs' heap holds), and gitleaks
 reads it with `scripts/generated.gitleaks.toml`, the root `.gitleaks.toml`'s
 allowlist for what those templates generate. After `just gates` passes, the build
 pipeline's gates job runs it and keeps `DIR` as its artifact `generated/`; the

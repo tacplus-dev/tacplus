@@ -1073,7 +1073,7 @@ func generateTypesPyProject(config *tactype.Config, typesDir, typeDir, protoPack
 	}
 
 	content := fmt.Sprintf(`[build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=84.1.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -1087,7 +1087,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0.0",
+    "pytest>=9.0.3",
     "mypy>=1.0.0"
 ]
 

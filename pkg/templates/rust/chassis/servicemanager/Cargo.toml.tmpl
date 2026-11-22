@@ -9,13 +9,13 @@ description = "Multi-endpoint gRPC connection pool with latency-based rebalancin
 jwk = { path = "../jwk" }
 token = { path = "../token" }
 spiffe = { path = "../spiffe" }
-tonic = { version = "0.14.6", features = ["tls-ring"] }
-prost = "0.14"
+tonic = { workspace = true, features = ["tls-ring"] }
+prost = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-tracing = "0.1"
+tracing = { workspace = true }
 # Custom rustls SPIFFE verifier — used via tonic's `tls_config_with_verifier`.
 rustls = { workspace = true }
-rustls-pemfile = "2"
+rustls-pemfile = { workspace = true }
 x509-parser = "0.16"
 
 [dev-dependencies]

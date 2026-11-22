@@ -38,3 +38,17 @@ func typeScriptNodeEngine() (string, error) {
 	}
 	return defaultNodeEngine, nil
 }
+
+// typeScriptCompilerVersion is the typescript devDependency of the generated
+// manifests, the root's and each chassis package's: dependencies.yaml's
+// tools.typescript, so a floor moves there alone (tacplus#949).
+func typeScriptCompilerVersion() (string, error) {
+	registry, err := packages.GetPackageRegistry()
+	if err != nil {
+		return "", fmt.Errorf("failed to load package registry: %w", err)
+	}
+	if ver, ok := registry.GetToolVersion("typescript"); ok && ver != "" {
+		return ver, nil
+	}
+	return "", fmt.Errorf("typescript tool version not found in dependencies.yaml")
+}

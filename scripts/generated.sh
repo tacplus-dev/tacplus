@@ -27,17 +27,24 @@
 #               the JAVA_BYTECODE set, target/classes (mvn compile): SpotBugs
 #               with FindSecBugs
 #   typescript  package-lock.json (npm, the lock only): OSV-Scanner
-#   python      the sources and pyproject.toml: Bandit
+#   python      the sources and pyproject.toml: Bandit; requirements.lock.txt
+#               (uv pip compile --universal of the root pyproject.toml):
+#               OSV-Scanner, which reads a requirements file by its .txt name
+#               and passes requirements.lock by
+#   csharp      packages.lock.json (dotnet restore --use-lock-file): OSV-Scanner
+#   swift       Package.resolved (swift package resolve): OSV-Scanner
 # Semgrep and gitleaks read every file; gitleaks with DIR/.gitleaks.toml
 # (scripts/generated.gitleaks.toml: the root .gitleaks.toml's decisions, for
 # what those templates generate). A lock is the newest compatible
-# release of each dependency, not the floor a generated manifest declares
-# (PROPOSALS.md, "A floor check over every version tacplus emits").
+# release of each dependency, not the floor a generated manifest declares:
+# `just floors` (scripts/floors.sh) checks the floors (tacplus#949).
 #
 #   TACPLUS_BIN             an existing tacplus binary (default: built from the checkout)
 #   TACPLUS_GENERATED_WORK  where the logs go (default: target/generated-work)
 #   TACPLUS_PYTHON          the Python interpreter tacplus runs grpc_tools.protoc with
 #   TACPLUS_GENERATED_JOBS  how many proto sets generate at once (default 3)
+#   TACPLUS_UV              a uv binary (default: uv on PATH, else UV_VERSION
+#                           installed into the work directory)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -67,7 +74,8 @@ die() {
 # Each set's languages are the ones the gate compiles it in, so every tree here
 # is one a service builds (the scanners load it). Python and TypeScript are
 # client targets: a service build refuses them, so they generate the base set
-# alone.
+# alone. Swift and C# generate only a C2D, C2S or W2S client, which the base
+# set has not: they generate the c2d-server gate's fixture (tacplus#949).
 SETS=(
   "base|proto|com.gitlab.example.dummy.proto||go rust java python typescript"
   "c2sonly|proto-c2sonly|com.gitlab.example.dummy.c2sonly||go"
@@ -90,7 +98,12 @@ SETS=(
   "tenantslice-ledger|proto-tenantslice|com.gitlab.example.dummy.ledger|depends: [\"tenancy\", \"registrar\"]|go rust java"
   "tenantslice-registrar|proto-tenantslice|com.gitlab.example.dummy.registrar|states: \"all\"|go rust java"
   "tenantslice-tenancy|proto-tenantslice|com.gitlab.example.dummy.tenancy|states: \"all\"|go rust java"
+  "c2dserver|c2d-server/proto|com.example.c2dserver||csharp swift"
 )
+
+# The uv that locks the Python tree: pinned, as the image's other Python
+# tools are, and installed into the work directory when the image has none.
+UV_VERSION=0.13.9
 
 # The one set whose Java is compiled for SpotBugs, a full service with the
 # state singleton. SpotBugs reads every target/classes of the tree in one run,
@@ -127,6 +140,16 @@ if [[ -z "$TACPLUS_BIN" ]]; then
   (cd "$ROOT" && go generate ./pkg/internal/proto/spec/... && go build -o "$TACPLUS_BIN" .) || die "building tacplus failed"
 fi
 
+# Before the sets run side by side: one install, not one per set.
+UV="${TACPLUS_UV:-$(command -v uv || true)}"
+if [[ -z "$UV" ]]; then
+  echo "==> Installing uv $UV_VERSION into $WORK/uv"
+  python3 -m venv "$WORK/uv" >>"$WORK/uv.log" 2>&1 &&
+    "$WORK/uv/bin/pip" install --quiet "uv==$UV_VERSION" >>"$WORK/uv.log" 2>&1 ||
+    { tail -40 "$WORK/uv.log" >&2; die "installing uv $UV_VERSION failed (log: $WORK/uv.log)"; }
+  UV="$WORK/uv/bin/uv"
+fi
+
 # step LOG DIR CMD...: runs CMD in DIR, its output appended to LOG; on failure
 # shows the log's tail and dies.
 step() {
@@ -158,9 +181,17 @@ generate() { # set src pkg extra language
 
   echo "==> $set/$language"
   step "$log" "$dir" env TACPLUS_PYTHON="${TACPLUS_PYTHON:-}" "$TACPLUS_BIN" build --config tacplus.yaml --src "$src"
-  registries="$(find "$dir/tacplus" -maxdepth 3 -type f -name registry.json)"
-  [[ -n "$registries" && "$(wc -l <<<"$registries")" -eq 1 ]] || die "$set/$language: not one generated model under $dir/tacplus"
-  output="$(dirname "$registries")"
+
+  case "$language" in
+    # The lite clients write a package, not a model: its manifest marks it.
+    csharp) output="$(one_manifest "$set/$language" "$dir/tacplus" '*.csproj')" ;;
+    swift) output="$(one_manifest "$set/$language" "$dir/tacplus" Package.swift)" ;;
+    *)
+      registries="$(find "$dir/tacplus" -maxdepth 3 -type f -name registry.json)"
+      [[ -n "$registries" && "$(wc -l <<<"$registries")" -eq 1 ]] || die "$set/$language: not one generated model under $dir/tacplus"
+      output="$(dirname "$registries")"
+      ;;
+  esac
 
   case "$language" in
     go)
@@ -188,8 +219,35 @@ generate() { # set src pkg extra language
     typescript)
       step "$log" "$output" npm install --package-lock-only --ignore-scripts --no-audit --no-fund
       ;;
-    python) ;;
+    python)
+      # The root pyproject.toml (the shallowest), whose dependencies are the
+      # package's; each types package's pyproject.toml declares a subset.
+      local pyproject
+      pyproject="$(find "$dir/tacplus" -type f -name pyproject.toml | awk -F/ '{print NF, $0}' | sort -n | head -1 | cut -d' ' -f2-)"
+      [[ -n "$pyproject" ]] || die "$set/$language: no pyproject.toml under $dir/tacplus"
+      step "$log" "$(dirname "$pyproject")" "$UV" pip compile --quiet --universal --no-header pyproject.toml -o requirements.lock.txt
+      ;;
+    csharp)
+      command -v dotnet >/dev/null || die "dotnet is required to lock the generated C#"
+      step "$log" "$output" env DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet restore --use-lock-file
+      # The lock is what OSV-Scanner reads; restore's obj/ is no source.
+      rm -rf "$output/obj"
+      ;;
+    swift)
+      command -v swift >/dev/null || die "swift is required to resolve the generated Swift package"
+      step "$log" "$output" swift package resolve
+      # Package.resolved is what OSV-Scanner reads; the checkouts are no source.
+      rm -rf "$output/.build"
+      ;;
   esac
+}
+
+# one_manifest LABEL DIR NAME: the directory of the one file NAME under DIR.
+one_manifest() {
+  local found
+  found="$(find "$2" -maxdepth 3 -type f -name "$3")"
+  [[ -n "$found" && "$(wc -l <<<"$found")" -eq 1 ]] || die "$1: not one $3 under $2"
+  dirname "$found"
 }
 
 # The sets generate side by side, JOBS at a time (each set's languages in

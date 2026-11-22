@@ -134,7 +134,7 @@ extra-index-url = ["%s"]
 	}
 
 	pyprojectContent := fmt.Sprintf(`[build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=84.1.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]

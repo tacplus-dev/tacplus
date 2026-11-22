@@ -186,7 +186,7 @@ protoc-check:
 # per gate would let another job interleave a regeneration between two of them.
 # The nested `just` calls re-enter this same lock.
 gates:
-  {{lock}} bash scripts/gates.sh soundness test current-generation determinism cert-stream stream-expiry rotation memberport claims-provenance accounting-identity w2s-validate c2d-server zero-rpc-s2s jwk-alg redact trace-carry tacplus-script
+  {{lock}} bash scripts/gates.sh soundness test current-generation determinism cert-stream stream-expiry rotation memberport claims-provenance accounting-identity w2s-validate c2d-server zero-rpc-s2s jwk-alg redact trace-carry floors tacplus-script
 
 # Run `just gates` inside the tacplus build image instead of against the
 # host toolchain: every SDK and tool at the pinned versions, with no host
@@ -264,6 +264,14 @@ verify-changed SHA="":
 # (scripts/generated_test.go); all of it lives in scripts/generated.sh.
 generated DIR:
   {{lock}} bash scripts/generated.sh {{quote(DIR)}}
+
+# The version floors tacplus hands its consumers, against OSV (#949): every
+# floor a generated manifest (Cargo.toml, package.json, pyproject.toml, .csproj,
+# Package.swift) or a dependencies.yaml inventory declares, the database
+# queried at run time. Fails on an advisory the floor itself admits. A gate;
+# all of it lives in scripts/floors.sh.
+floors:
+  {{lock}} bash scripts/floors.sh
 
 # The build image's tacplus (images/tacplus.sh, #193) against a fake release
 # forge: a pin runs exactly; a checksum mismatch, a missing pin and a line

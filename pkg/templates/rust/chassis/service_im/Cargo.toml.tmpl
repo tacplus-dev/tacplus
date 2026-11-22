@@ -9,21 +9,22 @@ description = "Service identity manager: token exchange, caching, and renewal"
 key = { path = "../key" }
 token = { path = "../token" }
 grpcconfig = { path = "../grpcconfig" }
-tonic = { version = "0.14", features = ["tls-ring"] }
-prost = "0.14"
+tonic = { workspace = true, features = ["tls-ring"] }
+prost = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
-base64 = "0.22"
+reqwest = { workspace = true, features = ["rustls-tls"] }
+base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 sha2 = "0.11"
 hmac = "0.13"
 hex = "0.4"
 rand = "0.8.6"
 ed25519-dalek = "3"
-async-trait = "0.1"
-tracing = "0.1"
-url = "2"
+async-trait = { workspace = true }
+tracing = { workspace = true }
+# 2.5.9: RUSTSEC-2026-0592 below it (`just floors`, tacplus#949).
+url = "2.5.9"
 urlencoding = "2"
-prost-wkt-types = "0.7"
+prost-wkt-types = { workspace = true }

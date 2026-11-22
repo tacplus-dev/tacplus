@@ -17,14 +17,14 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-tokio-util = "0.7"
-tokio-stream = { version = "0.1", features = ["net"] }
-futures = "0.3"
+tokio-util = { workspace = true }
+tokio-stream = { workspace = true, features = ["net"] }
+futures = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 
 # Auth dependencies
-base64 = "0.22"
+base64 = { workspace = true }
 regex = { workspace = true }
 token = { path = "../token" }
 jwk = { path = "../jwk" }

@@ -176,7 +176,9 @@ func TestTypeScriptWriteLibTemplatesEmitsTagsHelpers(t *testing.T) {
 	out := t.TempDir()
 	protoDir := t.TempDir()
 	depsDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(depsDir, "dependencies.yaml"), []byte(`lang:
+	if err := os.WriteFile(filepath.Join(depsDir, "dependencies.yaml"), []byte(`tools:
+  typescript: ^5.3.3
+lang:
   typescript:
     dependencies:
       "@bufbuild/protobuf": "^2.0.0"

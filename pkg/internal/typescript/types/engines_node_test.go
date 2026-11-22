@@ -16,10 +16,29 @@ import (
 	"github.com/tacplus-dev/tacplus/templates"
 )
 
+// chassisManifest is what these tests read of a chassis package.json.
+type chassisManifest struct {
+	Engines         map[string]string `json:"engines"`
+	DevDependencies map[string]string `json:"devDependencies"`
+}
+
 // writeChassisWithDeps renders the TypeScript chassis against the given
 // dependencies.yaml and returns every emitted package.json's engines.node,
 // keyed by chassis directory.
 func writeChassisWithDeps(t *testing.T, depsYAML string) map[string]string {
+	t.Helper()
+	manifests := writeChassisManifests(t, depsYAML)
+	engines := make(map[string]string, len(manifests))
+	for dir, manifest := range manifests {
+		engines[dir] = manifest.Engines["node"]
+	}
+	return engines
+}
+
+// writeChassisManifests renders the TypeScript chassis against the given
+// dependencies.yaml and returns every emitted package.json, keyed by chassis
+// directory.
+func writeChassisManifests(t *testing.T, depsYAML string) map[string]chassisManifest {
 	t.Helper()
 	out := t.TempDir()
 	depsDir := t.TempDir()
@@ -43,21 +62,39 @@ func writeChassisWithDeps(t *testing.T, depsYAML string) map[string]string {
 	if len(manifests) == 0 {
 		t.Fatal("no chassis package.json emitted")
 	}
-	engines := make(map[string]string, len(manifests))
+	parsed := make(map[string]chassisManifest, len(manifests))
 	for _, path := range manifests {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
-		var manifest struct {
-			Engines map[string]string `json:"engines"`
-		}
+		var manifest chassisManifest
 		if err := json.Unmarshal(raw, &manifest); err != nil {
 			t.Fatalf("%s is not valid JSON: %v\n%s", path, err, raw)
 		}
-		engines[filepath.Base(filepath.Dir(path))] = manifest.Engines["node"]
+		parsed[filepath.Base(filepath.Dir(path))] = manifest
 	}
-	return engines
+	return parsed
+}
+
+// TestTypeScriptChassisTypeScriptIsToolsTypeScript: every generated chassis
+// package.json's typescript devDependency is dependencies.yaml's
+// tools.typescript, as the root manifest's is, so the inventory is the one
+// place that floor moves (tacplus#949).
+func TestTypeScriptChassisTypeScriptIsToolsTypeScript(t *testing.T) {
+	const pinned = "^5.9.3"
+	manifests := writeChassisManifests(t, `tools:
+  typescript: '`+pinned+`'
+lang:
+  typescript:
+    dependencies:
+      "@bufbuild/protobuf": "^2.11.0"
+`)
+	for dir, manifest := range manifests {
+		if got := manifest.DevDependencies["typescript"]; got != pinned {
+			t.Errorf("chassis/%s/package.json devDependencies.typescript = %q, want tools.typescript %q", dir, got, pinned)
+		}
+	}
 }
 
 // TestTypeScriptChassisEnginesNodeIsToolsNode: every generated chassis
@@ -68,6 +105,7 @@ func TestTypeScriptChassisEnginesNodeIsToolsNode(t *testing.T) {
 	const fleetNode = "^24.22.2 || >=26.0.0"
 	engines := writeChassisWithDeps(t, `tools:
   node: '`+fleetNode+`'
+  typescript: ^5.3.3
 lang:
   typescript:
     dependencies:
@@ -84,7 +122,9 @@ lang:
 // defaultNodeEngine, at or above what the TypeScript pins require
 // (@bufbuild/protoc-gen-es 2.16 needs Node >=22), never an end-of-life line.
 func TestTypeScriptChassisEnginesNodeDefault(t *testing.T) {
-	engines := writeChassisWithDeps(t, `lang:
+	engines := writeChassisWithDeps(t, `tools:
+  typescript: ^5.3.3
+lang:
   typescript:
     dependencies:
       "@bufbuild/protobuf": "^2.11.0"

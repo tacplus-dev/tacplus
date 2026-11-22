@@ -6,5 +6,5 @@ edition = "2021"
 [dependencies]
 {{.CrateBasePath}}-types = { path = "../../types" }
 tokio = { workspace = true, features = ["time", "sync"] }
-tonic = "0.14"
-tracing = "0.1"
+tonic = { workspace = true }
+tracing = { workspace = true }

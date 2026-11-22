@@ -287,17 +287,6 @@ the looper then marks it `promoted` or `declined` here with the date.
   (the generator can see their validators); a stub of `RandomState::new` for map fields; regex validators stubbed by
   `#[kani::stub]` with the claim restricted to the other fields. The "accepts every value inside the bounds" claim
   needs a model of every check of the message, which #196's kitchensink is the place for.
-- **A floor check over every version tacplus emits, and template manifests that take versions from one place**
-  (2026-11-06, nightly scan, #338): four nights of scans found advisories in floors the generated manifests declare
-  (#264, #309, #312, #338). No scanner sees them: a lockfile resolve, including `just generated`
-  (#376), picks the newest compatible release, so `cargo audit`/`npm audit`/OSV-Scanner on it pass while the
-  manifest still promises a vulnerable floor. Two parts: (1) a check (soundness or a gate) that generates the
-  cross-test models, collects every declared floor (`Cargo.toml`, `package.json`, `pyproject.toml`, the Go/Java
-  inventory) and fails on an OSV advisory at the floor itself, with its database fetched at run time like
-  govulncheck's; (2) a soundness rule that a chassis template's manifest names no version literal for a crate or
-  package the inventory declares (`{ workspace = true }` in Rust, a template variable in TypeScript/Python), so
-  `dependencies.yaml` is the single place a floor moves. #338 found the same crates at three different floors
-  across sibling chassis.
 - **Verification only under the nightly set in gates.yaml** (2026-11-04, #275): once tacplus-dev/looper#48 maps
   tacplus, its `gates.yaml` lists `just verify` under the nightly and release sets only, never a land's. tacplus has no
   gates.yaml yet, so #275 landed without it.
@@ -782,16 +771,6 @@ the looper then marks it `promoted` or `declined` here with the date.
   every time without the lock. Java's `AppendLogTest.testConcurrentAppendsStayWholeAndComplete`
   (`pkg/templates/java/chassis/diskstore/AppendLogTest.java.tmpl`) does 4x200, twice Go's old count, with no
   timeout to hit but the same minutes spent on a loaded `current-generation` run.
-- **`just generated`: a resolved Python lock, and the C# and Swift trees, for the build's advisory checks**
-  (2026-11-18, nightly scan, #854): `scripts/generated.sh` gives OSV-Scanner a lock for Go, Rust, Java (pom.xml) and
-  TypeScript (package-lock.json), but Python gets only its sources and `pyproject.toml` (Bandit), and C# (`.csproj`)
-  and Swift (`Package.swift`) are not generated into the tree at all. So no advisory check sees what a generated Python,
-  C# or Swift client resolves to: the nightly scan queries OSV by hand (2026-11-18: PyPI floors only #264's and #309's
-  advisories; the NuGet `Google.Protobuf 3.27.2`, `Grpc.* 2.65.0` and the Swift `swift-protobuf 1.38.0`,
-  `grpc-swift-* 2.4.0` defaults clean). A `requirements.lock` per Python tree (`pip-compile` or `uv pip compile` of
-  the generated `pyproject.toml`), and a C# `packages.lock.json` (`dotnet restore --use-lock-file`) and Swift
-  `Package.resolved` for one set, would let the build's OSV-Scanner read all three. This complements "A floor check
-  over every version tacplus emits" above (the floors) with the resolved versions.
 - **The member port's refused rotation can overtake its session's clean end** (2026-11-18, #877): #877 found the
   generated stream rotation's clients (Go, Java, Rust) faulting a stream PERMISSION_DENIED when a rotation reached the
   server just after the handler returned (the session forgotten: "no such live session"), over the handler's own
@@ -820,8 +799,24 @@ the looper then marks it `promoted` or `declined` here with the date.
   means what it does today. The questions for Jody are on the issue: does `export_to` require or imply `export`; are
   importers named by package; does the list also govern tenant-pinned TenantConfig reads and the event-C2S topics of
   an exported root; does `registry.json` carry it.
+- **The versions generator code still names, outside `dependencies.yaml`** (2026-11-22, #949): `just floors`
+  checks them where they are emitted, but they move only by a change to tacplus: the C# (`Google.Protobuf`,
+  `Grpc.*`) and Swift (`swift-protobuf`, `grpc-swift-*`) defaults in `pkg/internal/{csharp,swift}/types/generator.go`,
+  used when `dependencies.yaml` has no `csharp`/`swift` section; the Python `[build-system]` `setuptools` and the
+  `dev` extra's `pytest`/`mypy` (`pkg/internal/python/types/{generator,pyproject}.go`); and the Rust chassis crates
+  no inventory lists (`rand`, `sha2`, `hmac`, `ed25519-dalek`, `url`, `x509-parser`, `hyper-util`, ...). #949 raised
+  the three that admitted advisories (setuptools 84.1.0, pytest 9.0.3, url 2.5.9). Declaring them in
+  `dependencies.yaml` would make it the one place every floor moves, at the cost of every consumer's inventory
+  growing those entries (a missing one fails generation, as for the crates #949 moved).
+- **uv in the build image** (2026-11-22, #949): `just generated` locks the Python tree with `uv pip compile`, and the
+  image has no uv, so `scripts/generated.sh` installs its pinned `UV_VERSION` into the work directory on each run.
+  Installing it into the image's `/opt/venv` beside black and twine would drop that download.
 
 ## Promoted / declined
+- **A floor check over every version tacplus emits, and template manifests that take versions from one place**
+  (2026-11-06, #338) and **`just generated`: a resolved Python lock, and the C# and Swift trees** (2026-11-18, #854):
+  promoted 2026-11-22, ROADMAP.md's line for #949 (Jody's standing authority, hub). Built by #949: `just floors`,
+  the soundness rule on chassis manifests, and the three locks.
 - **`just generated <dir>`: tacplus's security checks scan its generated output** (2026-11-09, #376): promoted
   2026-11-09, ROADMAP.md's line for #376 (Jody, hub). Built by #376.
 - **Member port onto gRPC with make-before-break session rotation (Java)** (2026-11-06, #321): promoted 2026-11-05,

@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 {{.CrateBasePath}}-types = { path = "../../types" }
-tonic = { version = "0.14", features = ["tls-ring"] }
+tonic = { workspace = true, features = ["tls-ring"] }
 tokio = { workspace = true, features = ["sync", "time", "rt"] }
-tracing = "0.1"
-base64 = "0.22"
+tracing = { workspace = true }
+base64 = { workspace = true }

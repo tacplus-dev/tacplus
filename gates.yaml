@@ -28,3 +28,9 @@ images:
   run: just test && just images && just tacplus-script
   minutes: 30
   paths: [images/]
+# The pre-land gate (tacplus-dev/looper#196): `just test` on the land rebased
+# onto current main, before it is queued and when the manager stages it onto a
+# newer main, so a land older than a repo-wide check goes back before a batch.
+pre-land:
+  run: just test
+  minutes: 5

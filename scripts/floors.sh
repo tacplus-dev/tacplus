@@ -18,7 +18,9 @@
 # Usage:  scripts/floors.sh
 #
 # A gate (`just floors`, in `just gates`). No tracked file changes (the tree
-# guard fails the run if one does).
+# guard fails the run if one does), and the models go when it ends, pass or
+# fail: they hold the generated test keys, which the build's secret scan of
+# the checkout would read; the logs stay.
 #
 #   TACPLUS_BIN           an existing tacplus binary (default: built from the checkout)
 #   TACPLUS_FLOORS_WORK   the work directory (default: target/floors-work)
@@ -56,6 +58,7 @@ tree_guard_begin "$ROOT"
 WORK="${TACPLUS_FLOORS_WORK:-$ROOT/target/floors-work}"
 rm -rf "$WORK"
 mkdir -p "$WORK/trees" "$WORK/logs"
+trap 'rm -rf "$WORK/trees"' EXIT
 
 TACPLUS_BIN="${TACPLUS_BIN:-}"
 if [[ -z "$TACPLUS_BIN" ]]; then

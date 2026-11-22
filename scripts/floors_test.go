@@ -43,8 +43,8 @@ esac
 `
 
 type floorsRun struct {
-	out, calls, queried string
-	err                 error
+	out, calls, queried, work string
+	err                       error
 }
 
 // runFloors runs floors.sh with the fake tacplus against a fake OSV that
@@ -103,7 +103,7 @@ func runFloors(t *testing.T, vulnerable map[string]string, env ...string) floors
 	cmd.Env = append(cmd.Env, env...)
 	out, runErr := cmd.CombinedOutput()
 	calls, _ := os.ReadFile(log)
-	return floorsRun{string(out), string(calls), queried.String(), runErr}
+	return floorsRun{string(out), string(calls), queried.String(), filepath.Join(tmp, "work"), runErr}
 }
 
 func TestFloors(t *testing.T) {
@@ -132,6 +132,11 @@ func TestFloors(t *testing.T) {
 		if !strings.Contains(r.out, "### Checked against") {
 			t.Errorf("the output does not say what it checked against:\n%s", r.out)
 		}
+		// The models hold generated test keys: none stays for the checkout's
+		// secret scan.
+		if _, err := os.Stat(filepath.Join(r.work, "trees")); err == nil {
+			t.Errorf("the generated models are left in %s", r.work)
+		}
 		if after := trackedStatus(t); after != before {
 			t.Errorf("floors.sh changed tracked files:\nbefore:\n%s\nafter:\n%s", before, after)
 		}
@@ -155,6 +160,9 @@ func TestFloors(t *testing.T) {
 		r := runFloors(t, nil, "FAKE_FAIL=swift")
 		if r.err == nil || !strings.Contains(r.out, "fake generation failed for swift") {
 			t.Fatalf("floors.sh passed or hid the log though swift generation failed: err %v\n%s", r.err, r.out)
+		}
+		if _, err := os.Stat(filepath.Join(r.work, "trees")); err == nil {
+			t.Errorf("a failed run left the generated models in %s", r.work)
 		}
 	})
 }

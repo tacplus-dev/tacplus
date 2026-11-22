@@ -35,6 +35,9 @@
 #
 # Separate from runtime-smoke and NOT part of `just test`: it needs the go, java
 # (maven) and rust (cargo) toolchains concurrently.
+# --allow-uncovered: this fixture is not a kitchensink member in every language
+# this test generates (cross-test/kitchensink/members.yaml); it tests a
+# behaviour, not a release's coverage (tacplus#196).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -214,7 +217,7 @@ generate_model() {
   local log="$dir/generate.log"
   echo "==> Generating $language model"
   write_config "$dir" "$language"
-  (cd "$dir" && "$TACPLUS_BIN" build --config tacplus.yaml --src "$PROTO_SRC" --tag latest) >"$log" 2>&1 || {
+  (cd "$dir" && "$TACPLUS_BIN" build --config tacplus.yaml --src "$PROTO_SRC" --tag latest --allow-uncovered) >"$log" 2>&1 || {
     cat "$log" >&2
     die "$language generation failed"
   }

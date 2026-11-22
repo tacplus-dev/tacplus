@@ -1,0 +1,17 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// The (spec.trait) that asks for the record query plane, hosted by ksstratum.
+
+syntax = "proto3";
+
+package ksquery;
+
+import "sys/spec.proto";
+
+option (spec.trait) = {
+  name: "ksquery"
+  host: "ksstratum"
+  s2s_service: "KsRecordMap"
+  c2s_service: "KsRecordQuery"
+  auth_services: ["kssvc"]
+};

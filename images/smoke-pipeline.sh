@@ -12,7 +12,9 @@
 #   go:   generated, tested (go test), verified (`tacplus verify` reports Go as
 #         skipped, by design) and fuzzed (go test -fuzz);
 #   rust: generated, tested (cargo test), verified (`tacplus verify` runs Kani
-#         on the harnesses generated into the model) and fuzzed (cargo fuzz).
+#         on a harness of the repository's own, as a service verifies its
+#         hand-written code: tacplus generates none, tacplus#196) and fuzzed
+#         (cargo fuzz).
 #
 # Usage, from the checkout:
 #   docker run --rm -v "$PWD:/src:ro" <build image> bash /src/images/smoke-pipeline.sh [go|rust]...
@@ -125,8 +127,26 @@ smoke_rust() {
     die "cargo test failed"
   }
   step "rust: verify (Kani)"
-  # tacplus verify runs Kani on every crate with a #[kani::proof] harness: the
-  # ones tacplus generates into the model's types crate (#211).
+  # tacplus verify runs Kani on every crate with a #[kani::proof] harness.
+  # tacplus generates none into the model (#196), so the repository brings one
+  # of its own, beside the model, as a service does for its own code.
+  mkdir -p proof/src
+  printf '[package]\nname = "smoke-proof"\nversion = "0.0.0"\nedition = "2021"\npublish = false\n\n[lints.rust]\nunexpected_cfgs = { level = "allow", check-cfg = [%s] }\n\n[workspace]\n' "'cfg(kani)'" >proof/Cargo.toml
+  cat >proof/src/lib.rs <<'EOF'
+/// A port is valid when it fits in 16 bits.
+pub fn valid_port(port: u32) -> bool {
+    port <= u16::MAX as u32
+}
+
+#[cfg(kani)]
+mod proof {
+    #[kani::proof]
+    fn every_u16_is_a_valid_port() {
+        let port: u16 = kani::any();
+        assert!(super::valid_port(port as u32));
+    }
+}
+EOF
   tacplus verify >verify.log 2>&1 || {
     tail -80 verify.log
     die "tacplus verify (Kani) failed"

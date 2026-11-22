@@ -506,6 +506,40 @@ Current durable gates:
   at the generated API seam, including auth-required, auth-disabled, validation,
   namespace mismatch, response validation, stream teardown, and backpressure.
 
+### The Kitchensink
+
+The generator is verified once per release, on the kitchensink, and services
+inherit it: tacplus generates no proof harness into a service (tacplus#196).
+
+- `cross-test/kitchensink/members.yaml` lists the proto trees that together
+  use every generator feature, each with the languages it is generated in and
+  the gate that does it. A member may claim a language only if a gate that
+  every landing (`just gates`, or CI's `just example`) or every release
+  (`just kitchensink`) runs generates and compiles it there. A cross-test that
+  generates a fixture in a language its member does not claim (it tests a
+  behaviour, not coverage) builds with `--allow-uncovered` and says so.
+- `pkg/coverage` names the features a proto tree uses (spec options with
+  their enum values and enum combinations, field shapes, streaming) from a
+  descriptor set prepared as `tacplus build` prepares it.
+  `pkg/coverage/kitchensink.json`, the manifest, is computed from the members
+  by `just kitchensink-manifest` and embedded in the binary;
+  `TestManifestIsCurrent` fails when it is stale. `tacplus build` refuses a
+  feature the manifest does not cover in the build's language
+  (`Builder.checkCoverage`; `--allow-uncovered` warns instead).
+- `just kitchensink` (`cross-test/kitchensink/run.sh`), the release gate, needs
+  the build image (`just kitchensink-container`): it generates the
+  kitchensink's own members (`proto` in go, java, rust, typescript, swift,
+  csharp; `proto-service` in go, java, rust), compiles them, checks that no
+  proof harness was generated, and fuzzes Go (`testdata/go`), Rust
+  (`fuzz/rust`, cargo-fuzz) and Java (`fuzz/java`). The Release workflow runs
+  it before it publishes, and the nightly gates run it.
+- `just verify` (`scripts/verify.sh`, below) generates `proto` in Rust and
+  Java and proves their validators: Rust with Kani (`verify/rust`, through
+  `tacplus verify`), Java with OpenJML ESC on the generated JML specs (#257).
+- A fuzz or verify property states what the proto declares, independently of
+  the generated code: for a validator, "accepted exactly when the declared
+  bounds hold". Finding a generator bug is the point; fix the generator.
+
 ### The gates run concurrently
 
 `just gates` runs its gates, and the language legs of each, concurrently,
@@ -538,7 +572,8 @@ reaches runs a verifier. The build pipeline (tacplus-dev/looper#74) runs
 `just verify-changed <last verified sha>` (`scripts/verify-changed.sh`) prints
 `run`. A new input of `scripts/verify.sh` (a fixture, a kitchensink proto set,
 a toolchain pin) goes into the `depends` list of `scripts/verify-changed.sh` too.
-The kitchensink release gate (#196) follows the same split.
+The kitchensink (#196) follows the same split: `just kitchensink` generates,
+compiles and fuzzes it, `just verify` proves it.
 
 Java's verifier (`pkg/verification/openjml.go`, #257) runs OpenJML ESC over the
 JML specs `jmlSpecs` (`pkg/internal/java/types/validation.go`) writes on each
@@ -786,6 +821,7 @@ templates must preserve these invariants:
 - [ ] Implement code generation for Java
 - [ ] Implement code generation for Rust
 - [ ] Update USER.md annotation reference
+- [ ] Cover it in the kitchensink (see [The Kitchensink](#the-kitchensink)): use it in a member, run `just kitchensink-manifest`, commit the manifest. Until then every service using it fails `tacplus build`'s coverage check
 - [ ] Test: `tacplus build` in a consumer project
 - [ ] Test: full-service build-tests pass for go/rust/java; full-client tests pass for python/typescript; lite client (C2D/C2S/W2S) and rejection tests pass for swift/csharp
 

@@ -181,3 +181,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-21 looper issue A Rust service's handler-provided streams end at their token's exp, as API.md promises of every stream (#931)
 - 2026-11-21 looper issue memberport interop leg (Go/Rust <-> Java) is bounded by wall time: the Java peer is cut off mid-stream on a loaded runner (#919)
 - 2026-11-22 looper issue c2d-server Java self-test: the standalone host must bind and chmod its socket within a fixed 10s, fails on a loaded runner (gates red) (#778)
+- 2026-11-22 looper issue semgrep dockerfile.security.missing-user (HIGH) at Dockerfile:26: the root Dockerfile, of the deprecated tacplus image, runs as root (#580)

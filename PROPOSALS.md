@@ -517,12 +517,6 @@ the looper then marks it `promoted` or `declined` here with the date.
   then retries successfully, failed `current-generation` and the land of #255. Pre-fetching the crates
   (`cargo fetch`) before the checked build, or not counting cargo's retry warnings, would keep a network blip from
   failing a 3h gate run.
-- **The Rust client recipe's cross toolchain in the build image** (2026-11-22, #195): `tacplus fleet gateway` builds a
-  `rust:` client's linux/amd64, linux/arm64 (musl) and windows/amd64 (mingw) targets with `cargo zigbuild`, but the
-  build image has neither cargo-zigbuild nor zig, nor those rustup targets. Until it does, a fleet with a `rust:`
-  client cannot build its gateway. Add them to `images/build.Dockerfile` (zig by a pinned, checksummed release,
-  cargo-zigbuild by `cargo install --locked` at a pinned version, `rustup target add` the three), and to
-  `images/smoke.sh`.
 - **The macos runner's job in a fleet's pipeline** (2026-11-22, #195): `tacplus fleet gateway --clients-only` on the
   `macos` runner builds the darwin/arm64 `rust:` and `swift:` clients, and the Linux job takes its
   `build/gateway/clients` as `--prebuilt`. No fleet's pipeline wires the two jobs yet, and the Mac needs the

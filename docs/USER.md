@@ -2667,7 +2667,8 @@ a tree that is not this lock's), in the build image, named by digest in
 3. **The clients**, each by its recipe after `tacplus build --src build/proto` in the service's
    checkout, as `clients/<service>/<client>/<client>-<os>-<arch>[.exe]`, which the gateway
    serves at `/-/clients/<service>/<client>/<os>/<arch>`. Rust builds linux/amd64, linux/arm64
-   (musl, static) and windows/amd64 (mingw) with `cargo zigbuild`.
+   (musl, static) and windows/amd64 (mingw) with `cargo zigbuild`, which the build image carries
+   with zig and those three Rust targets.
 4. **The launcher**, at its locked commit, by the `go:` recipe for the image's platform.
 5. **The image**: the gateway's Dockerfile over those parts (and an empty `web-dist/`: a fleet
    has no customer web app), built by `tacplus-image-build` for `linux/<this machine's arch>`

@@ -81,7 +81,7 @@ toolchains (tacplus-dev/roadmap: decisions/tacplus-images-2026-10-27.md).
 | image | contents | rebuilt when |
 |---|---|---|
 | `ghcr.io/tacplus-dev/tacplus/base` | OS and every SDK tacplus is built and tested with: Go, Java (JDK, Maven), Rust, Python, Node (TypeScript), Swift, .NET | weekly (`latest` from main, each supported line's `X.Y` from its release branch), or when an SDK pin changes |
-| `ghcr.io/tacplus-dev/tacplus/build` | `base` plus every tool: protoc and every plugin, grpcio-tools, Kani, JBMC and OpenJML, cargo-fuzz and its nightly Rust, just, the docker CLI, gcloud. Its `tacplus` is `images/tacplus.sh`, which runs the release the repository pins. What a repository's build runs in (generate, compile, test, fuzz, verify), and what tacplus's own gates run in: CI, the nightly gates, `just gates-container` | every release (one image per line, built fresh), weekly for each supported line from its release branch, and when a tool pin changes |
+| `ghcr.io/tacplus-dev/tacplus/build` | `base` plus every tool: protoc and every plugin, grpcio-tools, Kani, JBMC and OpenJML, cargo-fuzz and its nightly Rust, cargo-zigbuild and zig (the fleet builder's `rust:` client recipe), just, the docker CLI, gcloud. Its `tacplus` is `images/tacplus.sh`, which runs the release the repository pins. What a repository's build runs in (generate, compile, test, fuzz, verify), and what tacplus's own gates run in: CI, the nightly gates, `just gates-container` | every release (one image per line, built fresh), weekly for each supported line from its release branch, and when a tool pin changes |
 
 `ghcr.io/tacplus-dev/tacplus/tacplus` is deprecated: its tags up to the 2.5
 line stay as they are, and it is never pushed again.

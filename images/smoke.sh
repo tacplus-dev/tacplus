@@ -66,7 +66,7 @@ idmap_check() {
 }
 (return 0 2>/dev/null) && return 0
 gen=(protoc protoc-gen-go protoc-gen-go-grpc protoc-gen-grpc-java protoc-gen-es protoc-gen-prost protoc-gen-tonic protoc-gen-prost-serde protoc-gen-prost-crate protoc-gen-swift protoc-gen-grpc-swift-2 git node gofmt python3)
-sdk=(go java mvn cargo rustc swift dotnet npm just jq jbmc gh docker gcloud black cargo-kani kani cargo-fuzz curl tacplus)
+sdk=(go java mvn cargo rustc swift dotnet npm just jq jbmc gh docker gcloud black cargo-kani kani cargo-fuzz cargo-zigbuild zig curl tacplus)
 # Image builds inside the container and the compiler cache (#315).
 build=(buildkitd buildctl buildkit-runc rootlesskit newuidmap newgidmap setpriv sccache tacplus-image-build tacplus-cache)
 for t in "${gen[@]}" "${sdk[@]}" "${build[@]}"; do
@@ -121,6 +121,12 @@ python3 -c 'import grpc_tools.protoc'
 protoc --version; protoc-gen-swift --version; protoc-gen-grpc-swift-2 --version; node --version
 go version; java -version 2>&1 | head -1; cargo --version; swift --version 2>&1 | head -1; dotnet --version
 jbmc --version; just --version; cargo kani --version; cargo +"$RUST_NIGHTLY" fuzz --version
+# The fleet builder's rust: client recipe (#195): cargo-zigbuild, zig, and the
+# three cross targets it builds from Linux.
+zig version; cargo zigbuild --version
+for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-gnu; do
+  rustup target list --installed | grep -qx "$target" || { echo "missing Rust target: $target" >&2; exit 1; }
+done
 # Rootless BuildKit runs as `build`, from its subordinate IDs, and emulates a
 # foreign platform's RUN steps with its own QEMU helper (images/image-build.sh).
 buildkitd --version; buildctl --version; rootlesskit --version; sccache --version

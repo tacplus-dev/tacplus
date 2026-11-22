@@ -3,7 +3,8 @@
 # that generating, building, testing, fuzzing and formally verifying uses:
 # protoc and the plugin for every target language, grpcio-tools and the Python
 # packaging tools, the verifiers (Kani for Rust; JBMC and OpenJML for Java),
-# cargo-fuzz and the nightly Rust it runs on, just, the gh CLI, the docker CLI,
+# cargo-fuzz and the nightly Rust it runs on, cargo-zigbuild and zig (the
+# fleet builder's rust: client recipe), just, the gh CLI, the docker CLI,
 # gcloud, rootless BuildKit (tacplus-image-build builds images inside the
 # container, #315) and sccache. tacplus itself is not in it: /usr/local/bin/tacplus is
 # images/tacplus.sh, which runs the release the repository pins
@@ -58,6 +59,14 @@ ARG GCLOUD_VERSION=549.0.0
 ARG OPENJML_VERSION=21-0.23
 ARG KANI_VERSION=0.68.0
 ARG CARGO_FUZZ_VERSION=0.13.2
+# The fleet builder's rust: client recipe (tacplus fleet gateway, #195)
+# cross-builds linux/amd64, linux/arm64 (musl) and windows/amd64 (mingw)
+# with cargo-zigbuild, which links with zig: a release archive, checked
+# against its sha256 per architecture. Move the version with its two digests.
+ARG CARGO_ZIGBUILD_VERSION=0.24.1
+ARG ZIG_VERSION=0.17.1
+ARG ZIG_SHA256_AMD64=3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a
+ARG ZIG_SHA256_ARM64=a1546d5646eb184437918d6635ca6b762a0e889eac09cef720ee7a1ed3fe7795
 # Rootless BuildKit and the compiler cache (#315). buildkitd, buildctl, runc
 # (the one BuildKit's release ships) and RootlessKit are built from their
 # release tag, checked to be the pinned commit: their release binaries carry
@@ -98,8 +107,11 @@ ARG BUILDKIT_SHA256_ARM64
 ARG SCCACHE_VERSION
 ARG SCCACHE_SHA256_AMD64
 ARG SCCACHE_SHA256_ARM64
+ARG ZIG_VERSION
+ARG ZIG_SHA256_AMD64
+ARG ZIG_SHA256_ARM64
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip xz-utils \
     && rm -rf /var/lib/apt/lists/*
 RUN case "$TARGETARCH" in \
       arm64) PROTOC_ARCH=aarch_64; JUST_ARCH=aarch64; GCLOUD_ARCH=arm ;; \
@@ -143,6 +155,16 @@ RUN case "$TARGETARCH" in \
     && echo "${SC_SHA}  /tmp/sccache.tar.gz" | sha256sum -c - \
     && tar -xz --strip-components=1 -C /opt/buildkit/bin -f /tmp/sccache.tar.gz "sccache-v${SCCACHE_VERSION}-${SC_ARCH}-unknown-linux-musl/sccache" \
     && rm /tmp/sccache.tar.gz && chmod +x /opt/buildkit/bin/*
+# zig, which cargo-zigbuild links with (the rust: client recipe, #195).
+RUN case "$TARGETARCH" in \
+      arm64) ZIG_ARCH=aarch64; ZIG_SHA=$ZIG_SHA256_ARM64 ;; \
+      amd64) ZIG_ARCH=x86_64; ZIG_SHA=$ZIG_SHA256_AMD64 ;; \
+      *) echo "unsupported TARGETARCH '$TARGETARCH'" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/zig.tar.xz \
+       "https://ziglang.org/download/${ZIG_VERSION}/zig-${ZIG_ARCH}-linux-${ZIG_VERSION}.tar.xz" \
+    && echo "${ZIG_SHA}  /tmp/zig.tar.xz" | sha256sum -c - \
+    && mkdir -p /opt/zig && tar -xJ --strip-components=1 -C /opt/zig -f /tmp/zig.tar.xz && rm /tmp/zig.tar.xz
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS go-tools
 ARG TARGETARCH
@@ -217,13 +239,15 @@ ARG PROTOC_GEN_PROST_SERDE_VERSION
 ARG PROTOC_GEN_PROST_CRATE_VERSION
 ARG KANI_VERSION
 ARG CARGO_FUZZ_VERSION
+ARG CARGO_ZIGBUILD_VERSION
 RUN cargo install --locked --root /out \
     "protoc-gen-prost@${PROTOC_GEN_PROST_VERSION}" \
     "protoc-gen-tonic@${PROTOC_GEN_TONIC_VERSION}" \
     "protoc-gen-prost-serde@${PROTOC_GEN_PROST_SERDE_VERSION}" \
     "protoc-gen-prost-crate@${PROTOC_GEN_PROST_CRATE_VERSION}" \
     "kani-verifier@${KANI_VERSION}" \
-    "cargo-fuzz@${CARGO_FUZZ_VERSION}"
+    "cargo-fuzz@${CARGO_FUZZ_VERSION}" \
+    "cargo-zigbuild@${CARGO_ZIGBUILD_VERSION}"
 
 FROM node:${NODE_VERSION}-trixie-slim AS node-tools
 ARG PROTOC_GEN_ES_VERSION
@@ -251,7 +275,7 @@ ARG GRPCIO_TOOLS_VERSION
 ARG RUST_NIGHTLY
 ARG TACPLUS_LINE
 LABEL org.opencontainers.image.title="tacplus build" \
-      org.opencontainers.image.description="tacplus base plus protoc and every plugin, grpcio-tools, Kani, JBMC/OpenJML, cargo-fuzz, just, the docker CLI, gcloud, rootless BuildKit and sccache; its tacplus runs the repository's pinned release" \
+      org.opencontainers.image.description="tacplus base plus protoc and every plugin, grpcio-tools, Kani, JBMC/OpenJML, cargo-fuzz, cargo-zigbuild and zig, just, the docker CLI, gcloud, rootless BuildKit and sccache; its tacplus runs the repository's pinned release" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus"
 # The Debian packages it adds are images/build.packages (#554); both lists are
 # copied, as the base it starts from may predate this file's.
@@ -287,6 +311,7 @@ COPY --from=gh /out/gh /usr/local/bin/gh
 COPY --from=fetch /opt/google-cloud-sdk /opt/google-cloud-sdk
 COPY --from=fetch /opt/openjml /root/.cache/tacplus/tools/openjml
 COPY --from=fetch /opt/buildkit/bin/ /usr/local/bin/
+COPY --from=fetch /opt/zig /opt/zig
 COPY --from=buildkit /out/ /usr/local/bin/
 COPY --from=runc /out/buildkit-runc /usr/local/bin/buildkit-runc
 COPY --from=go-tools /out/ /usr/local/bin/
@@ -305,6 +330,10 @@ COPY images/cache.sh /usr/local/bin/tacplus-cache
 RUN cargo kani setup \
     && rustup toolchain install "${RUST_NIGHTLY}" --profile minimal \
     && cargo kani --version && cargo +"${RUST_NIGHTLY}" fuzz --version
+# The rust: client recipe's cross targets (cargo zigbuild, #195).
+RUN ln -s /opt/zig/zig /usr/local/bin/zig \
+    && rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-gnu \
+    && zig version && cargo zigbuild --version
 RUN ln -s ../lib/node_modules/@bufbuild/protoc-gen-es/bin/protoc-gen-es /usr/local/bin/protoc-gen-es
 # Python codegen runs `python -m grpc_tools.protoc`; black/twine/build are
 # what the Python client gates use. One venv, first on PATH. The floors

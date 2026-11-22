@@ -1,0 +1,108 @@
+= init
+= thinking_tokens
+= thinking_tokens
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue-text 951 | tail -20; echo ---; /usr/local/bin/repo-looper --repo tacplus --issue-text fleetbox#1 | head -80; echo ---; gh issue view 1 --repo tacplus-dev/fleetbox --json state,title; gh issue view 2 --repo tacplus-dev/fleetbox --json state,title
+< # Fleet build: `box: true` in fleet.yaml also builds the fleet's fleetbox image (every service in one container) from its lock  When a fleet's `fleet.yaml` sets `box: true` (off by default), `fleet build` also:  - writes the fleetbox manifest for the fleet (format: tacplus-dev/fleetbox#1): each serv...
+= thinking_tokens
+= thinking_tokens
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue-text fleetbox#2; echo ---; gh api repos/tacplus-dev/roadmap/contents/decisions/fleetbox-2026-11-22.md -H 'Accept: application/vnd.github.raw'
+< <<issue-text nonce=[redacted] author=jodydadescott association=MEMBER role=direction>> # The fleetbox image: the services' release binaries by digest, a Java runtime and the manifest, arm64  A Dockerfile/build that assembles one image from a fleet's lock: each service's binary ...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /tmp && rm -rf fb951 && mkdir fb951 && cd fb951 && gh repo clone tacplus-dev/fleetbox -- -q && cd fleetbox && git log --oneline | head; ls -R | head -60; wc -l docs/USER.md
+< 374234e STATE.md: the image (#2) bd8f266 The fleetbox image: a box from its lock, every image by digest (#2) 7b4b1ca HISTORY.md: #1 (looper) 4090354 STATE.md: the supervisor (#1) 677d9c8 The supervisor: fleetbox, the box's PID 1, from a versioned manifest (#1) c7c41f2 Repository skeleton: README, RO...
+> Bash cd /tmp/fb951/fleetbox && cat docs/USER.md tests/image/box.lock tests/image/manifest.yaml image/smoke.sh Dockerfile
+< # fleetbox: user guide  `fleetbox` is the supervisor of a fleetbox image: the container's PID 1. It runs every service of a fleet (the kernel, gateway, eventbus, oauth and the rest) as separate processes, from a manifest the fleet build writes. Design: tacplus-dev/roadmap `decisions/fleetbox-2026-11...
+= thinking_tokens
+= thinking_tokens
+> Bash ls; wc -l docs/*.md; grep -n "^#" docs/USER.md | grep -i -n fleet | head -40; grep -rln "fleet.lock" --include=*.go --include=*.py --include=*.rs . | head -30
+< AGENTS.md CODE_OF_CONDUCT.md CONTRIBUTING.md HISTORY.md LICENSE PROPOSALS.md README.md README.src.md ROADMAP.md SECURITY.md STATE.md build.lock cmd cross-test docs example gates.yaml go.mod go.sum images justfile main.go pkg roadmap scripts security-baseline.json security-exceptions.yaml site   1226...
+I'm reading the issue's blocker (closed now), fleetbox's manifest/box-lock formats, and the tacplus fleet build code before changing anything.
+> Bash sed -n 2285,2470p docs/USER.md; ls pkg/fleet cmd/fleet; wc -l pkg/fleet/*.go cmd/fleet/*.go
+< ## Fleet Build  A service is generated alone, in its own repo, against its own proto plus the sys contract and the protos of its `depends`. A **fleet** is what runs those services together, and it is declared in a deployment repo, one per fleet:  ```yaml # fleet.yaml registries:   - https://github.c...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n -i -B2 -A8 "fleetbox\|box" ROADMAP.md PROPOSALS.md STATE.md | head -80; echo ----; grep -n -i -A6 "tacplus\|fleet build\|manifest" /tmp/fb951/fleetbox/PROPOSALS.md | head -80
+< PROPOSALS.md-271-  readers, record-plane and kernel state helpers) gets a form that takes `trace_id`, beside today's, and every sys PROPOSALS.md-272-  contract wire message gets field 200 (not `spec.proto` option schemas, `<T>Public` or `TraceEvent`). Unblocks PROPOSALS.md:273:  coop#7, oauth#19, bl...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash grep -rln "Dockerfile" pkg cmd | grep -v _test | head -20; grep -rn "docker\b\|\"docker\"\|buildx" pkg/fleet cmd/fleet | head; grep -n "^##\|^###" docs/USER.md | sed -n 1,200p | head -120
+< 7:## Table of Contents 31:## Patterns for Service Implementers 35:### Use the Generated Service Manager 54:### Use Generated gRPC Wrappers 64:### Use Generated Clients and State Accessors 74:### Use Generated Serializers and Deserializers 84:### Use Generated Validation 95:### Hand-Written Code Is A...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash sed -n 109,130p docs/USER.md; sed -n 2143,2186p docs/USER.md; grep -rn -i "port" docs/USER.md | grep -i "default\|listen\|8443\|50051" | head -20
+< ## tacplus.yaml Reference  `tacplus.yaml` is the project-local generation config. It should declare only facts that cannot logically be defined in proto: the target language, generated package/module name, output location, proto source, config composition, and which client transport surfaces this pa...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash grep -n "^func \|^type \|yaml:\"" pkg/fleet/fleet.go | head -90; cat cmd/fleet/cmd.go | sed -n 1,112p | grep -n "Flag\|Use\|docker" 
+< 65:type Manifest struct { 66:	Registries []string      `yaml:"registries"` 67:	Tacplus    string        `yaml:"tacplus,omitempty"` 68:	Services   []ServiceSpec `yaml:"services"` 74:type ServiceSpec struct { 75:	Name    string `yaml:"name"` 76:	Version string `yaml:"version,omitempty"` 77:	Repo    st...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash gh label list --repo tacplus-dev/tacplus --search needs-decision; sed -n 170,260p pkg/fleet/fleet.go | grep -n "dependencies\|tacplus.yaml\|Depends" | head
+< needs-decision	The looper needs a decision it may not make	#5319E7 13:	pins := filepath.Join(manifestDir, "dependencies.yaml") 15:		return nil, fmt.Errorf("fleet: %s/dependencies.yaml is required: it holds the language and tool pins for everything generated from the fleet's merged protos", manifestD...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cat > /tmp/c951.md <<'EOF' The blocker, tacplus-dev/fleetbox#1, is closed. The manifest format is fixed (fleetbox `docs/USER.md`, The manifest, version 1), and so is the box lock that fleetbox#2 added (The box lock, version 1). Before I write any code, this issue needs decisions on public contracts ...
+< https://github.com/tacplus-dev/tacplus/issues/951#issuecomment-7087515453 https://github.com/tacplus-dev/tacplus/issues/951
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 951 --checkpoint "Nothing committed. Asked for decisions (issuecomment-7087515453, label needs-decision): 1) where each service's binary/args/ports/readiness/copies come from (rec: a box: section in the service's tacplus.yaml); 2) the fleetbox base i...
+< [2026-11-22T23:21:47Z] checkpoint of #951 (a step) pushed to looper/tacplus-951:  2 files changed, 219 insertions(+)
+= thinking_tokens
+= thinking_tokens
+> Bash git status --short; git log --oneline -2; git show --stat HEAD | head
+< 6667ac96 HISTORY.md: #580 (looper) e32fc099 HISTORY.md: #778 (looper) commit 6667ac964b1001454bb3ee3a01c90fda53ecc05a Author: jodydadescott <jody@thescottsweb.com> Date:   Sun Nov 22 17:19:15 2026 +0000      HISTORY.md: #580 (looper)   HISTORY.md | 1 +  1 file changed, 1 insertion(+)
+I didn't change any code for #951. The issue leaves open some public contracts I'm not allowed to decide, so I asked on the issue (issuecomment-7087515453), added the `needs-decision` label, and stopped. Nothing is committed.
+
+The blocker, tacplus-dev/fleetbox#1, is closed. fleetbox#2 has since fixed the formats for the manifest and the box lock. But `tacplus fleet build` can't fill them in today, and the issue doesn't say where the missing facts should come from. I asked three questions, each with a recommendation:
+
+1. **Each service's run facts.** The manifest and box lock need each service's binary, args, ports, readiness check, config, and which files to copy from its release image. tacplus knows none of these, because it doesn't build the release images. I recommend a `box:` section in each service's own `tacplus.yaml`, read at the locked commit the way `contribute:` is. A fleet with `box: true` would refuse a service that lacks it. The dependencies, the kernel and the gateway already come from the fleet's closure.
+2. **The fleetbox base image.** fleetbox has no release yet, so there is no published image to build on. Its own image check has never run, because its CI workflow is waiting for a label on fleetbox#2. I recommend pinning it by digest in the fleet's `dependencies.yaml`.
+3. **Who builds and pushes the image.** `fleet build` uses no Docker today, and nothing names a registry to push to. I recommend splitting it the way the planned gateway image step is split:
+   - `fleet build` writes and checks `build/box/manifest.yaml` and `box.lock`, which can be tested in the gates.
+   - A separate `tacplus fleet box --push <registry>` builds and pushes the image and records its digest in `fleet.lock`.
+
+   This departs from the issue's wording ("`fleet build` also builds the image"), which is why I asked rather than chose. The other option is to keep it inside `fleet build` and require a registry flag and Docker whenever `box: true`.
+
+The checkpoint on `looper/tacplus-951` records this, and the next run implements it once the questions are answered.
+= success: I didn't change any code for #951. The issue leaves open some public contracts I'm not allowed to decide, so I asked on the issue (issuecomment-7087515453), added the `needs-decision` label, and stopped. Nothing is committed.
+
+The blocker, tacplus-dev/fleetbox#1, is closed. fleetbox#2 has since fixed the formats for the manifest and the box lock. But `tacplus fleet build` can't fill them in today, and the issue doesn't say where the missing facts should come from. I asked three questions, each with a recommendation:
+
+1. **Each service's run facts.** The manifest and box lock need each service's binary, args, ports, readiness check, config, and which files to copy from its release image. tacplus knows none of these, because it doesn't build the release images. I recommend a `box:` section in each service's own `tacplus.yaml`, read at the locked commit the way `contribute:` is. A fleet with `box: true` would refuse a service that lacks it. The dependencies, the kernel and the gateway already come from the fleet's closure.
+2. **The fleetbox base image.** fleetbox has no release yet, so there is no published image to build on. Its own image check has never run, because its CI workflow is waiting for a label on fleetbox#2. I recommend pinning it by digest in the fleet's `dependencies.yaml`.
+3. **Who builds and pushes the image.** `fleet build` uses no Docker today, and nothing names a registry to push to. I recommend splitting it the way the planned gateway image step is split:
+   - `fleet build` writes and checks `build/box/manifest.yaml` and `box.lock`, which can be tested in the gates.
+   - A separate `tacplus fleet box --push <registry>` builds and pushes the image and records its digest in `fleet.lock`.
+
+   This departs from the issue's wording ("`fleet build` also builds the image"), which is why I asked rather than chose. The other option is to keep it inside `fleet build` and require a registry flag and Docker whenever `box: true`.
+
+The checkpoint on `looper/tacplus-951` records this, and the next run implements it once the questions are answered.
+= usage: {"claude-opus-5-5":{"inputTokens":30,"outputTokens":8514,"cacheReadInputTokens":686107,"cacheCreationInputTokens":51478,"webSearchRequests":0,"costUSD":0.7194454,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":3554,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}

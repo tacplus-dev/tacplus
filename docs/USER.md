@@ -2219,6 +2219,7 @@ registries:
   - https://github.com/tacplus-dev/registry.git     # ordered; disjoint; unioned
   - https://gitlab.com/acme/registry.git            # a private one, if any
 tacplus: "2.2"                                      # floor, MAJOR.MINOR
+images: release                                     # optional: release (default) or source, below
 services:
   - name: kernel
     version: "0.1"                                  # release line, MAJOR.MINOR -> its highest released patch; required
@@ -2251,11 +2252,24 @@ refused. The repo must be on github.com, and a private package needs `GH_TOKEN` 
 `GITHUB_TOKEN`) with `read:packages`, the token the fetch layer already sends to
 github.com.
 
+**A fleet that builds its own images says `images: source`.** Then the fleet build asks
+for no published image: it locks each service's release by its tag's commit, which is
+what the fleet's own image build (`images/build.sh` in a deployment repo, say) builds
+from, with `build/proto`. `fleet.lock` reads `images: source` and records no `image` for
+any service; everything else (the version resolution, the floors, the dependency closure,
+the proto merge and the whole-fleet checks) is unchanged. The build makes no request to
+ghcr.io and needs no `read:packages` token. It is the bridge for services whose release
+images are not published yet (tacplus-dev/roadmap `decisions/ci-on-gitlab-2026-10-27.md`,
+2026-11-22 addendum): a published image proves the service's own release built it, a
+source lock only the commit. Deleting the line returns the fleet to published images.
+Any other value of `images` is refused.
+
 `dependencies.yaml` beside it holds the language and tool pins for everything
 generated from the fleet's merged protos. `tacplus fleet build` then:
 
 1. unions the registries, refusing a name or id that appears in two;
-2. resolves each service's version to its exact release and that release's image (above),
+2. resolves each service's version to its exact release and, unless `images: source`,
+   that release's image (above),
    fetches the implementation at its tag (for its commit and its `depends`) and gathers its **contract** from the registry's home for it: the proto
    whose file-level identity is the name, plus everything it imports, so a proto repo
    shared by many services contributes only this service's files. The contract's
@@ -2269,7 +2283,7 @@ generated from the fleet's merged protos. `tacplus fleet build` then:
    runs the whole-fleet checks: routing and C2S host labels served, one SMB authority,
    exactly one minter, a complete and collision-free registry;
 5. writes `fleet.lock`: the commit of every registry and, for every service, the exact
-   version, its tag's commit, its release image by digest, its `inputs_digest`, and what it
+   version, its tag's commit, its release image by digest (none under `images: source`), its `inputs_digest`, and what it
    contributes to the gateway ([below](#contributing-to-the-gateway)).
 
 ```yaml
@@ -2294,8 +2308,9 @@ line's release once one is out, so the fleet can return to the line.
 
 The merged tree is what the fleet-side services, the state host, the gateway and the
 operator, are generated from: `tacplus build --src build/proto` in their repos at the
-locked commits. Service binaries and images are not built here; each is built and
-published by its own repo's release, and the shared registry locks guarantee the two agree.
+locked commits. Service binaries and images are not built here: each is built and
+published by its own repo's release or, under `images: source`, by the fleet from the
+locked commit, and the shared registry locks guarantee the two agree.
 
 ### Contributing to the gateway
 

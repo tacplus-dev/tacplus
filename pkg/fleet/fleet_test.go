@@ -197,6 +197,21 @@ func TestReadManifestRequiresRepoAndVersion(t *testing.T) {
 	}
 }
 
+// images is release (the default) or source, and nothing else.
+func TestReadManifestImages(t *testing.T) {
+	dir := t.TempDir()
+	for _, images := range []string{"", "images: release\n", "images: source\n"} {
+		write(t, filepath.Join(dir, ManifestFile), images+"registries: [r]\nservices:\n  - {name: alpha, repo: x, version: \"0.4\"}\n")
+		if _, err := ReadManifest(dir); err != nil {
+			t.Errorf("%q: %v", images, err)
+		}
+	}
+	write(t, filepath.Join(dir, ManifestFile), "images: banana\nregistries: [r]\nservices:\n  - {name: alpha, repo: x, version: \"0.4\"}\n")
+	if _, err := ReadManifest(dir); err == nil || !strings.Contains(err.Error(), `images "banana"`) {
+		t.Fatalf("err = %v, want images \"banana\" refused", err)
+	}
+}
+
 // serviceRepoID is serviceRepo with a plain integer id.
 func serviceRepoID(t *testing.T, root, name string, id int, registryRef string, depends []string) string {
 	t.Helper()

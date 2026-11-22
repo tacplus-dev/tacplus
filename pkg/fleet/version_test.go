@@ -117,6 +117,36 @@ func TestBuildRefusesAReleaseWithoutAnImage(t *testing.T) {
 	}
 }
 
+// A fleet that builds its own images (images: source) locks each release at
+// its tag's commit and never asks for a published image.
+func TestBuildLocksASourceBuiltFleetByTagCommit(t *testing.T) {
+	releaseImage = func(repo, version string) (string, error) {
+		t.Errorf("releaseImage(%s, %s) called for a source-built fleet", repo, version)
+		return "", errors.New("not published")
+	}
+	t.Cleanup(func() { releaseImage = fakeImage })
+	root := t.TempDir()
+	fl, beta := twoServiceFleet(t, root, "1.2")
+	manifest := filepath.Join(fl, ManifestFile)
+	data, _ := os.ReadFile(manifest)
+	write(t, manifest, "images: source\n"+string(data))
+
+	res, err := Build(fl, filepath.Join(root, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := res.Lock.Services[1]; b.Version != "1.2.9" || b.Commit != commitOfTag(t, beta, "v1.2.9") || b.Image != "" {
+		t.Fatalf("beta lock = %+v, want 1.2.9 at its tag's commit with no image", b)
+	}
+	lock, _ := os.ReadFile(filepath.Join(fl, LockFile))
+	if !strings.Contains(string(lock), "\nimages: source\n") || strings.Contains(string(lock), "image:") {
+		t.Fatalf("%s must say images: source and record no image:\n%s", LockFile, lock)
+	}
+	if l, err := ReadLock(fl); err != nil || l.Images != ImagesSource {
+		t.Fatalf("ReadLock = %+v, %v", l, err)
+	}
+}
+
 // A plain directory has no releases to resolve.
 func TestBuildRefusesALocalDirectoryService(t *testing.T) {
 	root := t.TempDir()

@@ -165,7 +165,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by lo
   an explicit `MAJOR.MINOR.PATCH-pre`), and `tacplus fleet build` resolves it to the line's highest released tag,
   pre-releases excluded, and to that release's image on ghcr.io by digest; `fleet.lock` records version, commit and
   image; `--check` reports newer patches and minors. A service without a version, a plain-directory repo, an
-  unresolvable line and a release without its image are refused.
+  unresolvable line and a release without its image are refused. A fleet that builds its own images says
+  `images: source` (#950): no image lookup, each release locked by its tag's commit, `fleet.lock` reads
+  `images: source` and records no image.
   Gateway contributions, part 1 (#195): a `kind: service` project's `tacplus.yaml` may declare `contribute:` (a
   `webapp` module and `clients`, each by one fixed recipe key: `rust:`, `go:`, `swift:`, `dotnet:`), validated on
   read; `tacplus fleet build` checks each recipe's inputs at the locked commit and records the contribution under
@@ -222,7 +224,7 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by lo
   The record plane's tenant checks assume a tenant's
   namespace is `/tenants/<tid>`; kernel#23's `/tenants/<name>` namespaces need #202 first (PROPOSALS.md).
   The record write surface stamps no `(spec.identity_spiffe_subject)` (PROPOSALS.md). A fleet's service images must be on ghcr.io from a
-  github.com repo (PROPOSALS.md).
+  github.com repo unless the fleet builds them itself (`images: source`, #950) (PROPOSALS.md).
 - **Blocked on:** #195's gateway build (`tacplus fleet gateway`: the merged webapp, the clients, the image and the
   lock's `gateway:` section) waits on tacplus-dev/gateway#6 (its first release) and tacplus-dev/gateway#21 (serving
   `/-/`). The example module is done (tenantecho v0.2.0).

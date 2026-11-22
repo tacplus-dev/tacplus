@@ -8,6 +8,7 @@ Latest release: v2.4.1 (2026-10-27). 2.4 is the line with the global registry an
 Release lines with branches: 2.0 through 2.4.
 
 ## Next
+- The security floor reads the versions tacplus hands its consumers: every generated manifest's floor checked against OSV by a `just floors` gate, and resolved locks for the generated Python, C# and Swift trees (#949). Hub, on Jody's standing authority, 2026-11-22 (`tacplus-dev/roadmap:suggestions/2026-11-22-the-security-floor-reads-the-versions-tacplus-hands-its-consumers-every-generated-manifest-s-floor-checked-against-osv-and-a-resolved-lock-for-the-generated-python-c-and-swift-trees.md`).
 - The LLM rule as a generated build gate: an agent's advisor module gets no state client and no token handle (#909). Hub, at Jody's request (Skipper/Admiral huddles), 2026-11-19.
 - Product layer: `/products/<name>` between `/system` and the tenants; tenant → product and product → `/system` only; tenant data there only as a custodian keyed by the token's tid; design first (#475) (Jody, 2026-11-08)
 - Formal verification out of the gates: nightly (and on release tags), not per land (#275) (Jody, 2026-11-02)

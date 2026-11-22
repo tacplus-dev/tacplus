@@ -90,10 +90,15 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-20 by lo
   also print as it ends, and a leg past `GATES_TIMEOUT` (5400 s) is stopped and fails naming itself; every Java
   fixture logs io.grpc and io.netty at INFO, which kept the trace under GitLab's 4 MiB (#893).
   The generated code is scanned at the source (#376, tacplus-dev/looper#108): `just generated DIR` writes every proto
-  set the current-generation gate builds, in Go, Rust and Java (services) and Python and TypeScript (clients), as
-  trees the build's security checks load; the gates job keeps it as `generated/` and the security job scans it with
-  `security-exceptions.yaml` (docs/DEVELOPMENT.md). Gap: until #196's kitchensink, an emitter no fixture reaches is
-  not scanned; Swift and C# lite clients are not generated into it.
+  set the current-generation gate builds, in Go, Rust and Java (services) and Python and TypeScript (clients), and
+  the C2D fixture as Swift and C# clients, as trees the build's security checks load (a Python
+  `requirements.lock.txt`, a C# `packages.lock.json` and a Swift `Package.resolved` among the locks, #949); the
+  gates job keeps it as `generated/` and the security job scans it with `security-exceptions.yaml`
+  (docs/DEVELOPMENT.md). Gap: until #196's kitchensink, an emitter no fixture reaches is not scanned.
+  `just floors` (#949, in `just gates`) checks every floor tacplus hands a consumer against OSV at run time: each
+  dependencies.yaml inventory and each manifest of the cross-test models it generates (Rust, Python, TypeScript,
+  C#, Swift), failing on an advisory the floor admits; a chassis manifest template names no version the inventory
+  declares (soundness). Versions generator code still names outside the inventory are in PROPOSALS.md.
   The build image's docker-buildx is built from the v0.39.1 source with moby/go-archive 0.3.3 (CVE-2026-17106); its
   release carries golang.org/x/net 0.62.0 (CVE-2026-78669, CVE-2026-78661, CVE-2026-97045) and containerd v2.4.2
   (CVE-2026-95839, #930); `tacplus-smoke` checks the floors

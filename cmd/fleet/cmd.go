@@ -94,6 +94,48 @@ func runCheck() error {
 	return nil
 }
 
+var (
+	clientsOnly bool
+	prebuilt    string
+)
+
+var gatewayCmd = &cobra.Command{
+	Use:   "gateway",
+	Short: "Build the fleet's gateway image, with the merged webapp and clients, from fleet.lock",
+	Long: `Read fleet.lock (never re-resolving) and build the fleet's gateway image:
+at the locked gateway release, the gateway generated against the merged protos
+tacplus fleet build wrote under <out>/proto, its own webapp at /, every module
+a service contributes at /-/apps/<service>/ with their index /-/apps.json, every
+contributed client at /-/clients/<service>/<client>/<os>/<arch>, and the
+launcher. Each part is built by its fixed recipe at its locked commit, the
+image by tacplus-image-build at the gateway commit's time with rewritten
+timestamps, into <out>/gateway/image.tar (an OCI layout); nothing is pushed.
+It runs in the build image, named by digest in TACPLUS_BUILD_IMAGE, and
+writes fleet.lock's gateway: section: every input and output by digest.
+
+--check rebuilds and fails when any digest differs from the lock's, changing
+nothing: building twice gives the same image.
+
+The darwin/arm64 builds of rust: and swift: clients are the macos runner's:
+there, --clients-only builds them into <out>/gateway/clients; pass that
+directory to the Linux build as --prebuilt.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		g, err := fleet.Gateway(manifestDir, outDir, fleet.GatewayOptions{Check: check, ClientsOnly: clientsOnly, Prebuilt: prebuilt})
+		if err != nil {
+			return err
+		}
+		switch {
+		case clientsOnly:
+			fmt.Printf("fleet: this host's clients built in %s/gateway/clients\n", outDir)
+		case check:
+			fmt.Printf("fleet: the gateway rebuilt to the locked digests; image %s\n", g.Image)
+		default:
+			fmt.Printf("fleet: gateway %s image %s in %s/gateway/image.tar; lock written\n", g.Version, g.Image, outDir)
+		}
+		return nil
+	},
+}
+
 func short(c string) string {
 	if len(c) > 12 {
 		return c[:12]
@@ -106,6 +148,13 @@ func init() {
 	buildCmd.Flags().StringVar(&outDir, "out", "build", "output directory (merged protos land in <out>/proto)")
 	buildCmd.Flags().BoolVar(&check, "check", false, "report newer patches and minors of every service, change nothing; fail when re-locking would change fleet.lock")
 	rootCmd.AddCommand(buildCmd)
+
+	gatewayCmd.Flags().StringVar(&manifestDir, "manifest-dir", ".", "deployment repo directory holding fleet.lock")
+	gatewayCmd.Flags().StringVar(&outDir, "out", "build", "tacplus fleet build's output directory (the merged protos in <out>/proto); the gateway builds in <out>/gateway")
+	gatewayCmd.Flags().BoolVar(&check, "check", false, "rebuild and fail when any digest differs from fleet.lock's gateway: section, changing nothing")
+	gatewayCmd.Flags().BoolVar(&clientsOnly, "clients-only", false, "build only the clients this host builds (the macos runner's darwin/arm64), into <out>/gateway/clients; no image, no lock")
+	gatewayCmd.Flags().StringVar(&prebuilt, "prebuilt", "", "a clients directory the macos runner built (its <out>/gateway/clients), for the targets this host does not build")
+	rootCmd.AddCommand(gatewayCmd)
 }
 
 // GetCmd returns the fleet command for use as a subcommand.

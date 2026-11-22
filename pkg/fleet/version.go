@@ -229,10 +229,13 @@ func (a Available) Stale() bool {
 	return a.Locked == "" || a.Patch != ""
 }
 
+// launcherName is the launcher's line in Check's report.
+const launcherName = "(launcher)"
+
 // Check reports, for every service in the manifest in manifestDir, the
 // releases newer than its lock: a newer patch of its line, which re-locking
-// takes, and a newer minor, which needs a fleet.yaml change. It reads the
-// service repos' tags and changes nothing.
+// takes, and a newer minor, which needs a fleet.yaml change; and the same for
+// the launcher. It reads the repos' tags and changes nothing.
 func Check(manifestDir string) ([]Available, error) {
 	m, err := ReadManifest(manifestDir)
 	if err != nil {
@@ -243,11 +246,18 @@ func Check(manifestDir string) ([]Available, error) {
 		for _, s := range lock.Services {
 			locked[s.Name] = s.Version
 		}
+		if lock.Launcher != nil {
+			locked[launcherName] = lock.Launcher.Version
+		}
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
+	specs := m.Services
+	if l := m.Launcher; l != nil {
+		specs = append(specs[:len(specs):len(specs)], ServiceSpec{Name: launcherName, Version: l.Version, Repo: l.Repo})
+	}
 	var out []Available
-	for _, spec := range m.Services {
+	for _, spec := range specs {
 		tags, err := serviceTags(spec.Repo)
 		if err != nil {
 			return nil, fmt.Errorf("fleet: service %q: %w", spec.Name, err)

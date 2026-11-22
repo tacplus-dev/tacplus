@@ -517,9 +517,21 @@ the looper then marks it `promoted` or `declined` here with the date.
   then retries successfully, failed `current-generation` and the land of #255. Pre-fetching the crates
   (`cargo fetch`) before the checked build, or not counting cargo's retry warnings, would keep a network blip from
   failing a 3h gate run.
-- **Refuse a `contribute.webapp` from the gateway itself** (2026-10-31, #195): the gateway's own webapp is the base at
-  `/`, not a contribution, but the fleet build does not know which listed service is the gateway until
-  `tacplus fleet gateway` requires one (part 3). It should then refuse a `webapp` contribution from it by name.
+- **The Rust client recipe's cross toolchain in the build image** (2026-11-22, #195): `tacplus fleet gateway` builds a
+  `rust:` client's linux/amd64, linux/arm64 (musl) and windows/amd64 (mingw) targets with `cargo zigbuild`, but the
+  build image has neither cargo-zigbuild nor zig, nor those rustup targets. Until it does, a fleet with a `rust:`
+  client cannot build its gateway. Add them to `images/build.Dockerfile` (zig by a pinned, checksummed release,
+  cargo-zigbuild by `cargo install --locked` at a pinned version, `rustup target add` the three), and to
+  `images/smoke.sh`.
+- **The macos runner's job in a fleet's pipeline** (2026-11-22, #195): `tacplus fleet gateway --clients-only` on the
+  `macos` runner builds the darwin/arm64 `rust:` and `swift:` clients, and the Linux job takes its
+  `build/gateway/clients` as `--prebuilt`. No fleet's pipeline wires the two jobs yet, and the Mac needs the
+  `macos-build:X.Y` image (#261) to run a pinned tacplus there. A fleet with only `go:` clients and webapp modules
+  does not need it.
+- **A multi-architecture gateway image** (2026-11-22, #195): `tacplus fleet gateway` builds the image for the
+  machine's own `linux/<arch>` (the gateway binary is a native cargo build) and records it as `platform`. A fleet
+  whose nodes are another architecture builds on a runner of that architecture. Building both (cargo-zigbuild for
+  the other, `tacplus-image-build --platform linux/amd64,linux/arm64`) and locking each digest would remove that.
 - **Per-client target subsets** (2026-10-31, #195): each recipe builds its fixed target set (rust/go: four, swift:
   darwin/arm64, dotnet: windows/amd64). A Linux-only CLI or a daemon with no Windows port has no way to say so; an
   optional `targets:` narrowing the recipe's set (never widening it) would cover that, if a service needs it.

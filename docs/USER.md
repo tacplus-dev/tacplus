@@ -381,6 +381,7 @@ own implementation of, say, kernel under the same name and id.
 | `tacplus verify` | Run formal verification on Rust or Java code |
 | `tacplus registry` | Update the service / vservice / trait registry from proto definitions |
 | `tacplus fleet build` | Build a fleet from a deployment repo's `fleet.yaml`: resolve every service's release line to its exact release and image, check ids and dependencies against the registries, merge the protos, run the whole-fleet checks, write `fleet.lock`; `--check` lists newer patches and minors (see [Fleet Build](#fleet-build)) |
+| `tacplus fleet gateway` | Build the fleet's gateway image from `fleet.lock` alone: the gateway with its own webapp, every contributed webapp module and client, and the launcher, reproducibly, into an OCI layout; write the lock's `gateway:` section; `--check` rebuilds and fails on any digest that differs (see [The gateway image](#the-gateway-image)) |
 | `tacplus upgrade` | Upgrade tacplus to the latest patch release |
 | `tacplus version` | Print the version and build information |
 
@@ -2484,6 +2485,9 @@ services:
   - name: llmproxy
     version: "0.2.1-rc.1"                           # an explicit pre-release: only when named
     repo: https://github.com/tacplus-dev/llmproxy.git
+launcher:                                           # required with a gateway: what its image runs under
+  version: "0.1"                                    # a release line, as for a service
+  repo: https://github.com/tacplus-dev/launcher.git
 ```
 
 ### Service versions
@@ -2505,7 +2509,8 @@ directory has no releases to resolve.
 **Images come from the service's release.** Each service's release CI publishes
 `ghcr.io/<owner>/<repo>:<version>` from its `vX.Y.Z` tag; the fleet build looks up that
 tag's digest and the fleet deploys that image, by digest. A release without its image is
-refused. The repo must be on github.com, and a private package needs `GH_TOKEN` (or
+refused. The one exception is the `gateway`: its image is the one the fleet builds
+([below](#the-gateway-image)), so the build asks no registry for it. The repo must be on github.com, and a private package needs `GH_TOKEN` (or
 `GITHUB_TOKEN`) with `read:packages`, the token the fetch layer already sends to
 github.com.
 
@@ -2529,7 +2534,9 @@ generated TypeScript chassis package, `>=22.0.0` when it has none). `tacplus fle
    exactly one minter, a complete and collision-free registry;
 5. writes `fleet.lock`: the commit of every registry and, for every service, the exact
    version, its tag's commit, its release image by digest, its `inputs_digest`, and what it
-   contributes to the gateway ([below](#contributing-to-the-gateway)).
+   contributes to the gateway ([below](#contributing-to-the-gateway)); and the launcher's
+   version and commit. A re-lock that moves nothing keeps the `gateway:` section
+   `tacplus fleet gateway` wrote.
 
 ```yaml
 # fleet.lock (excerpt)
@@ -2555,6 +2562,7 @@ The merged tree is what the fleet-side services, the state host, the gateway and
 operator, are generated from: `tacplus build --src build/proto` in their repos at the
 locked commits. Service binaries and images are not built here; each is built and
 published by its own repo's release, and the shared registry locks guarantee the two agree.
+The gateway's is the exception: the fleet builds it ([below](#the-gateway-image)).
 
 ### Contributing to the gateway
 
@@ -2639,16 +2647,64 @@ services:
         - {name: echo, recipe: rust, source: echo, targets: [darwin/arm64, linux/amd64, linux/arm64, windows/amd64], path: /-/clients/tenantecho/echo/}
 ```
 
-**The gateway image (to come).** A separate step, `tacplus fleet gateway`, reads only
-`fleet.lock`: at the locked gateway release it builds the gateway's own webapp and every
-contributed module and client by the recipes above, then the gateway's image, with
-`SOURCE_DATE_EPOCH` and buildx `rewrite-timestamp=true`, so its digest depends only on its
-inputs. It adds a `gateway:` section to the lock (the gateway's version and commit, the
-build image and base image by digest, each output's sha256, the merged webapp's, and the
-image digest), and `--check` rebuilds and fails on any digest that differs. That step
-waits on the gateway's first release and its serving of `/-/` (tacplus-dev/gateway#6 and
-tacplus-dev/gateway#21), with tenantecho's page as the example (tacplus-dev/tenantecho#7);
-today the fleet build checks and locks contributions only.
+A webapp module from the gateway itself is refused: its own webapp is the base at `/`.
+
+### The gateway image
+
+`tacplus fleet gateway` builds the fleet's gateway image from `fleet.lock` alone: it never
+re-resolves, and refuses a tag that no longer points at its locked commit. It runs after
+`tacplus fleet build` (it reads the merged protos that wrote under `build/proto`, and refuses
+a tree that is not this lock's), in the build image, named by digest in
+`TACPLUS_BUILD_IMAGE` (`CI_JOB_IMAGE` on GitLab when it is a digest):
+
+1. **The gateway**, at its locked release: `tacplus build --src build/proto`, then
+   `cargo build --release --locked`, with the checkout's and cargo's paths remapped and
+   `SOURCE_DATE_EPOCH` the commit's time.
+2. **The merged webapp**: the gateway's own `webapp/` at `/`, then each contributed module by
+   the `webapp` recipe at `/-/apps/<service>/`, each from its own build (never one bundle), and
+   the index `/-/apps.json`, `[{"service","title","version","path"}]` sorted by service.
+   A module's `dir` must still be the tree the lock recorded.
+3. **The clients**, each by its recipe after `tacplus build --src build/proto` in the service's
+   checkout, as `clients/<service>/<client>/<client>-<os>-<arch>[.exe]`, which the gateway
+   serves at `/-/clients/<service>/<client>/<os>/<arch>`. Rust builds linux/amd64, linux/arm64
+   (musl, static) and windows/amd64 (mingw) with `cargo zigbuild`.
+4. **The launcher**, at its locked commit, by the `go:` recipe for the image's platform.
+5. **The image**: the gateway's Dockerfile over those parts (and an empty `web-dist/`: a fleet
+   has no customer web app), built by `tacplus-image-build` for `linux/<this machine's arch>`
+   at the gateway commit's `SOURCE_DATE_EPOCH` with `rewrite-timestamp=true`, into
+   `build/gateway/image.tar`, an OCI layout. Nothing is pushed: publishing is the pipeline's.
+   Every base image of the Dockerfile (`FROM`, `COPY --from`) must be pinned by digest.
+
+The darwin/arm64 builds of `rust:` clients and every `swift:` client are the `macos`
+runner's: there, `tacplus fleet gateway --clients-only` builds just those into
+`build/gateway/clients`, and the Linux build takes that directory as `--prebuilt <dir>` (it
+refuses, naming the runner, when one is missing). Their digests are locked like any other.
+
+The step writes the lock's `gateway:` section (into `fleet.lock` and the merged tree's copy):
+
+```yaml
+# fleet.lock (excerpt)
+launcher: {version: 0.1.0, repo: https://github.com/tacplus-dev/launcher.git, commit: d130ea…}
+gateway:
+  version: 0.3.0
+  commit: 04d76a…
+  platform: linux/amd64
+  build_image: ghcr.io/tacplus-dev/tacplus/build@sha256:5c1f…
+  base_images:
+    - debian:trixie-slim@sha256:a72b…
+    - ghcr.io/grpc-ecosystem/grpc-health-probe:v0.4.63@sha256:1d6c…
+  outputs:                                  # each part's sha256 (a directory's over its paths, modes and contents)
+    - {name: binary, sha256: 7e0a…}
+    - {name: client/tenantecho/echo/linux/amd64, sha256: 91bd…}
+    - {name: launcher, sha256: 2c44…}
+    - {name: webapp, sha256: e1f9…}          # the merged webapp
+    - {name: webapp/gateway, sha256: 0b7d…}  # the gateway's own
+    - {name: webapp/tenantecho, sha256: 5a12…}
+  image: sha256:c3d8…
+```
+
+`tacplus fleet gateway --check` rebuilds and fails, naming each part, when any digest differs
+from the lock's; it changes nothing. Building twice gives the same image: that is the check.
 
 ## The Sys Contract a Fleet Provides
 

@@ -35,6 +35,7 @@
 package fleet
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -66,6 +67,9 @@ type Manifest struct {
 	Registries []string      `yaml:"registries"`
 	Tacplus    string        `yaml:"tacplus,omitempty"`
 	Services   []ServiceSpec `yaml:"services"`
+	// Launcher is the launcher release line the gateway's image runs under
+	// (gateway.go): required when the fleet runs a gateway.
+	Launcher *ServiceSpec `yaml:"launcher,omitempty"`
 }
 
 // ServiceSpec is one fleet service: its registry name, the release line it
@@ -83,6 +87,9 @@ type Lock struct {
 	Registries []LockedSource  `yaml:"registries"`
 	Services   []LockedService `yaml:"services"`
 	Libraries  []LockedLibrary `yaml:"libraries,omitempty"` // contract-only vservices pulled in by reference
+	Launcher   *LockedLauncher `yaml:"launcher,omitempty"`
+	// Gateway is what tacplus fleet gateway built (gateway.go).
+	Gateway *LockedGateway `yaml:"gateway,omitempty"`
 }
 
 // LockedSource is a resolved repo: where it came from and the exact commit.
@@ -150,20 +157,37 @@ func ReadManifest(dir string) (*Manifest, error) {
 		if s.Repo == "" {
 			return nil, fmt.Errorf("fleet: %s: service %q names no repo; every service states the implementation it runs, there is no default", ManifestFile, s.Name)
 		}
-		switch {
-		case s.Version == "":
-			return nil, fmt.Errorf("fleet: %s: service %q names no version; state its release line, MAJOR.MINOR (its highest released patch runs), there is no default", ManifestFile, s.Name)
-		case lineRe.MatchString(s.Version), preReleaseRe.MatchString(s.Version):
-		case releaseVersionRe.MatchString(s.Version):
-			return nil, fmt.Errorf("fleet: %s: service %q version %q: state the line, %s (its highest patch runs and %s records which); never a patch pin", ManifestFile, s.Name, s.Version, lineOf(s.Version), LockFile)
-		default:
-			return nil, fmt.Errorf("fleet: %s: service %q version %q must be MAJOR.MINOR (a release line), or MAJOR.MINOR.PATCH-pre to run a pre-release", ManifestFile, s.Name, s.Version)
+		if err := checkStatedVersion("service "+strconv.Quote(s.Name), s.Version); err != nil {
+			return nil, err
+		}
+	}
+	if l := m.Launcher; l != nil {
+		if l.Repo == "" {
+			return nil, fmt.Errorf("fleet: %s: the launcher names no repo", ManifestFile)
+		}
+		if err := checkStatedVersion("the launcher", l.Version); err != nil {
+			return nil, err
 		}
 	}
 	if err := tacplusyaml.CheckFloor(m.Tacplus, buildinfo.Version); err != nil {
 		return nil, fmt.Errorf("fleet: %w", err)
 	}
 	return &m, nil
+}
+
+// checkStatedVersion checks a version as fleet.yaml states it: a release
+// line, or a named pre-release.
+func checkStatedVersion(what, v string) error {
+	switch {
+	case v == "":
+		return fmt.Errorf("fleet: %s: %s names no version; state its release line, MAJOR.MINOR (its highest released patch runs), there is no default", ManifestFile, what)
+	case lineRe.MatchString(v), preReleaseRe.MatchString(v):
+		return nil
+	case releaseVersionRe.MatchString(v):
+		return fmt.Errorf("fleet: %s: %s version %q: state the line, %s (its highest patch runs and %s records which); never a patch pin", ManifestFile, what, v, lineOf(v), LockFile)
+	default:
+		return fmt.Errorf("fleet: %s: %s version %q must be MAJOR.MINOR (a release line), or MAJOR.MINOR.PATCH-pre to run a pre-release", ManifestFile, what, v)
+	}
 }
 
 // Result is what Build produced.
@@ -238,9 +262,13 @@ func Build(manifestDir, outDir string) (*Result, error) {
 		if err != nil {
 			return nil, fmt.Errorf("fleet: service %q: %s: %w", spec.Name, spec.Repo, err)
 		}
-		image, err := releaseImage(spec.Repo, tag)
-		if err != nil {
-			return nil, fmt.Errorf("fleet: service %q: release v%s: %w", spec.Name, tag, err)
+		// The gateway's image is the one the fleet builds (tacplus fleet
+		// gateway), never its release's.
+		var image string
+		if spec.Name != GatewayService {
+			if image, err = releaseImage(spec.Repo, tag); err != nil {
+				return nil, fmt.Errorf("fleet: service %q: release v%s: %w", spec.Name, tag, err)
+			}
 		}
 
 		implDir, _, implCleanup, err := resolveImplementation(spec.Repo, tag)
@@ -260,6 +288,9 @@ func Build(manifestDir, outDir string) (*Result, error) {
 			whole = cfg.WholeFleet()
 			if contribution, err = lockContribution(spec.Name, implDir, cfg.Contribute); err != nil {
 				return nil, err
+			}
+			if spec.Name == GatewayService && contribution != nil && contribution.Webapp != nil {
+				return nil, fmt.Errorf("fleet: service %q contributes a webapp module, but the gateway's own webapp is the base at /, not a contribution", spec.Name)
 			}
 		}
 
@@ -310,6 +341,28 @@ func Build(manifestDir, outDir string) (*Result, error) {
 			Commit: commitOf(implDir), Image: image, Contract: contract, ContractCommit: commitOf(contractRepoDir), Depends: depends,
 			Contribute: contribution,
 		})
+	}
+
+	// 2a. The launcher the gateway's image runs under, which the fleet builds
+	// into it: resolved like a service's line.
+	if _, runsGateway := byName[GatewayService]; runsGateway && m.Launcher == nil {
+		return nil, fmt.Errorf("fleet: the fleet runs a gateway, whose image it builds: pin the launcher that image runs under in %s, launcher: {version: \"0.1\", repo: https://github.com/tacplus-dev/launcher.git}", ManifestFile)
+	}
+	if l := m.Launcher; l != nil {
+		tags, err := serviceTags(l.Repo)
+		if err != nil {
+			return nil, fmt.Errorf("fleet: the launcher: %w", err)
+		}
+		tag, err := resolveVersion(tags, l.Version)
+		if err != nil {
+			return nil, fmt.Errorf("fleet: the launcher: %s: %w", l.Repo, err)
+		}
+		dir, _, cleanup, err := resolveImplementation(l.Repo, tag)
+		if err != nil {
+			return nil, fmt.Errorf("fleet: the launcher: %s: %w", l.Repo, err)
+		}
+		cleanups = append(cleanups, cleanup)
+		lock.Launcher = &LockedLauncher{Version: tag, Repo: l.Repo, Commit: commitOf(dir)}
 	}
 
 	// 2b. Contract-only references. A listed service's contract may name a
@@ -421,7 +474,17 @@ func Build(manifestDir, outDir string) (*Result, error) {
 	}
 
 	// 6. The lock, beside the manifest and in the merged tree (the compiler
-	// reads each service's depends from it when it scopes a generation).
+	// reads each service's depends from it when it scopes a generation). A
+	// re-lock that moves nothing keeps what tacplus fleet gateway built.
+	if old, err := ReadLock(manifestDir); err == nil && old.Gateway != nil {
+		was := *old
+		was.Gateway = nil
+		a, errA := yaml.Marshal(&was)
+		b, errB := yaml.Marshal(lock)
+		if errA == nil && errB == nil && bytes.Equal(a, b) {
+			lock.Gateway = old.Gateway
+		}
+	}
 	for _, p := range []string{filepath.Join(manifestDir, LockFile), filepath.Join(mergedDir, LockFile)} {
 		if err := writeLock(lock, p); err != nil {
 			return nil, err

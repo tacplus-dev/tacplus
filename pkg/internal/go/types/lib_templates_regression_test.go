@@ -640,3 +640,38 @@ func TestGoC2SServiceManagerScopesTokensPerTargetService(t *testing.T) {
 		}
 	}
 }
+
+
+// #958 pin: grpc-go's default, dynamic HTTP/2 windows PING a client each time
+// its data arrives with no BDP PING outstanding, and swift-nio-http2 closes a
+// connection past 200 inbound PINGs in 30 s, so a Swift client streaming to a
+// generated Go server lost the connection. Both generated servers serve with
+// static windows, and the generated chassis test streaming to each of them
+// counting PINGs is written with them.
+func TestGoServersUseStaticHTTP2Windows(t *testing.T) {
+	for _, file := range []string{"grpcserver.go.tmpl", "c2d.go.tmpl"} {
+		src, err := templates.FS.ReadFile("go/chassis/grpcserver/" + file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		if !strings.Contains(string(src), "staticWindowOptions()...") {
+			t.Fatalf("%s must serve with static HTTP/2 windows (staticWindowOptions): dynamic ones "+
+				"BDP-PING a streaming client until swift-nio-http2 drops the connection (#958)", file)
+		}
+	}
+
+	out := t.TempDir()
+	cfg := &tactype.Config{OutputDir: out, ModuleBasePath: "example.com/consumer/tacplus"}
+	if err := writeLibTemplates(cfg, []string{cfg.ServiceLabel()}, nil); err != nil {
+		t.Fatalf("writeLibTemplates: %v", err)
+	}
+	test, err := os.ReadFile(filepath.Join(out, "chassis", "grpcserver", "flow_control_test.go"))
+	if err != nil {
+		t.Fatalf("expected the grpcserver flow-control test to be written: %v", err)
+	}
+	for _, want := range []string{"func TestStreamingClientDrawsNoBDPPings(", "func TestC2DStreamingClientDrawsNoBDPPings("} {
+		if !strings.Contains(string(test), want) {
+			t.Fatalf("the generated flow-control test lacks %q", want)
+		}
+	}
+}

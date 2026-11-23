@@ -1,0 +1,146 @@
+= init
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/955; /usr/local/bin/repo-looper --repo tacplus --issue-text 955 | tail -n +1 | head -100; gh issue view 955 --repo tacplus-dev/tacplus --json labels,author,state; git tag --sort=-v:refname | head; git branch -r
+< <<issue-text nonce=[redacted] author=tacplus-looper[bot] association=NONE role=data>> # Release v2.7.0: consumers need #327's field 200 on the sys contract (stratum#29)  Parent: tacplus-dev/stratum#29  ## What  Cut tacplus **v2.7.0** (and its `build:2.7.0` image) from main, now...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/955; gh api repos/tacplus-dev/tacplus/issues/955/events --jq '.[] | [.event, .actor.login, .label.name, .created_at] | @tsv'; cat docs/VERSIONING.md; ls; cat ROADMAP.md | head -150
+< labeled	tacplus-looper[bot]	bug	2026-11-23T06:10:39Z labeled	tacplus-looper[bot]	approved	2026-11-23T06:10:40Z referenced	tacplus-looper[bot]		2026-11-23T06:10:59Z labeled	tacplus-looper[bot]	looper:in-progress	2026-11-23T06:14:04Z # Versioning and release policy  Decided 2026-10-15. This binds rele...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/955; grep -n -i -B2 -A20 'releas' CONTRIBUTING.md | head -150; grep -n -i 'release' justfile | head -30; ls .github/workflows 2>/dev/null; ls .gitlab-ci.yml 2>/dev/null
+< Exit code 2 29-(the format is tacplus-dev/looper's README, "Gates scaled to the diff"). A change 30-to Markdown or `docs/` only runs `just docs`; anything the map does not name, a 31:change to `gates.yaml` itself, the nightly gates and every release run 32-`just gates`. 33- 34-`docs/DEVELOPMENT.md` ...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/955; git log --oneline -1 v2.6.0; git log --oneline -15 v2.6.0; git log --format='%h %s' --grep='2.6.0' | head -20; git log --format='%h %s' --grep='release/2.6' | head
+< 87adda9e VERSIONING, CONTRIBUTING: supported lines through 2.6, ahead of v2.6.0 (#213) 87adda9e VERSIONING, CONTRIBUTING: supported lines through 2.6, ahead of v2.6.0 (#213) da62d5ff Formal verification leaves the gates: just verify and just verify-changed (#275) 0eacec05 Redact for any type: (spec....
+> Bash cd /builds/looper/tacplus/issues/955; git show 87adda9e --stat; git show 87adda9e | head -80; /usr/local/bin/repo-looper --repo tacplus --issue-text 213 | head -60
+< commit 87adda9e0da072766a4a521ec3ab38027047df31 Author: jodydadescott <jody@thescottsweb.com> Date:   Wed Nov 4 22:16:53 2026 +0000      VERSIONING, CONTRIBUTING: supported lines through 2.6, ahead of v2.6.0 (#213)          v2.6.0 is cut from main next, with release/2.6 at its tag; the docs the tag ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Checking whether cutting v2.7.0 is settled: reading stratum#29 (the parent), STATE.md and what's on main since 2.6.
+> Bash cd /builds/looper/tacplus/issues/955; /usr/local/bin/repo-looper --repo tacplus --issue-text stratum#29 | head -80; gh api repos/tacplus-dev/stratum/issues/29/events --jq '.[] | select(.event=="labeled") | [.actor.login, .label.name] | @tsv'
+< <<issue-text nonce=[redacted] author=jodydadescott association=MEMBER role=direction>> # Record writes drop the inbound trace_id on their redo Append (RedoAppend has no field 200), and no test asserts propagation  Found by the nightly scan (2026-11-03), trace propagation (tacpl...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/955; head -80 STATE.md; grep -n '2\.7' STATE.md PROPOSALS.md docs/*.md CONTRIBUTING.md README.src.md | head -60
+< # State: tacplus  Overwritten to stay current (loopers and agents). Last updated: 2026-11-21 by looper (#327).  - **Version / line:** v2.6.13 (latest release, 2026-11-15, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the comp...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/955; grep -rn '2\.6' .github scripts images justfile gates.yaml build.lock 2>/dev/null | grep -v '2\.6\.[0-9]*[0-9]' | head -40; echo ---; grep -rn 'release/2\.[0-9]' .github scripts images justfile | head -20
+< scripts/images_workflow_test.go:105:		{"dispatch on a line", "workflow_dispatch", "branch", "build", "release/2.6"}, images/tacplus_test.sh:100:    TACPLUS_CACHE="$W/cache" TACPLUS_LINE=2.6 \ images/tacplus_test.sh:152:printf 'tacplus: "2.6"\n' >"$W/fleet.yaml.tmp" images/tacplus_test.sh:159:expect ...
+> Bash cd /builds/looper/tacplus/issues/955; sed -n 1,80p .github/workflows/release.yml; grep -n 'supported\|release/' .github/workflows/images.yml | head -30
+< name: Release  # On a version tag (v1.2.3): build the tacplus binary for every supported # platform, write checksums.txt, and publish a GitHub release. `tacplus upgrade` # reads exactly this layout.  on:   push:     tags: ["v*"]  permissions:   contents: write   packages: read  jobs:   # The build i...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/955; gh run list --repo tacplus-dev/tacplus --workflow release.yml --limit 5; gh run list --repo tacplus-dev/tacplus --workflow images.yml --limit 5; git log -1 --format='%h %ad %an' v2.6.14; git tag --contains c32be09a | head; gh api repos/tacplus-dev/tacplus --jq ....
+< completed	success	Merge pull request #952 from tacplus-dev/backport/950-release-2.6	Release	v2.6.14	push	45089983168	4m16s	2026-11-23T00:38:47Z completed	success	Rust cross-test fixtures keep the listener they bind (#531) (#538)	Release	v2.6.13	push	43712164054	4m44s	2026-11-15T12:06:36Z completed	s...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/955; /usr/local/bin/repo-looper --help 2>&1 | head -80; git remote -v
+< repo-looper: the looper of one tacplus-dev repository. It runs in the looper container, as jobs of the GitLab looper pipeline, and only while the repository has work: a job per issue, its report, and a manager per repository, which alone merges to its main (looper#70).    repo-looper --repo NAME --i...
+= thinking_tokens
+= thinking_tokens
+Preparing the release-prep commit (supported lines through 2.7); checking other docs that name the supported lines.
+> Bash cd /builds/looper/tacplus/issues/955; grep -rn 'through `\?release/2\.6\|line is 2\.6\|2\.0 through 2\.6\|through 2\.6' --include=*.md . | grep -v HISTORY.md | grep -v ROADMAP | head -20; grep -rn 'current line\|newest line\|latest line' docs/*.md README.src.md site 2>/dev/null | head
+< ./STATE.md:40:  names none every call on those routes ends at exp; backported to release/2.0 through release/2.6 without the ./STATE.md:77:  (`cross-test/trace-carry`, in `just gates`; on main for 2.7, and backported to release/2.0 through release/2.6 by pull requests #330-#336, each line's next pat...
+> Bash cd /builds/looper/tacplus/issues/955; sed -i 's/^Supported today: `release\/2.0` through `release\/2.6`, one per minor (2.0 was$/Supported today: `release\/2.0` through `release\/2.7`, one per minor (2.0 was/' docs/VERSIONING.md; sed -i 's/^The current line is 2.6: each/The current line is 2.7: each...
+<  CONTRIBUTING.md    | 2 +-  docs/VERSIONING.md | 2 +-  2 files changed, 2 insertions(+), 2 deletions(-)
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/955; grep -rn '2\.6' README.src.md docs/snippets docs/INSTALL.md docs/USER.md | head
+< docs/snippets/install-container.md:4:  ghcr.io/tacplus-dev/tacplus/build:2.6 tacplus pin docs/INSTALL.md:116:| `2.6.1` | the image of that release, immutable | docs/INSTALL.md:117:| `2.6` | the newest `2.6.x` image (a convenience for people; builds use a digest) | docs/INSTALL.md:131:tacplus: 2.6.1 ...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/955; git log --format='%h %ad %s' --date=short -5 -- docs/snippets/install-container.md; cat docs/snippets/install-container.md; sed -n 170,200p docs/INSTALL.md
+< 6039b6ca 2026-10-29 No tacplus image: repos pin tacplus + build image; build:X.Y runs the pin (#193) 4d2a62c1 2026-10-22 README generated from README.src.md; shared pieces single-sourced with the site ```bash # Once, and whenever you move to a newer release: pin it, and commit the pin. docker run --...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/955; git commit -qam "VERSIONING, CONTRIBUTING: supported lines through 2.7, ahead of v2.7.0 (#955)  v2.7.0 is cut from main next, with release/2.7 at its tag, so stratum can pin a release whose sys contract carries #327's field 200 (stratum#29). The docs the tag shi...
+< 806d9319 VERSIONING, CONTRIBUTING: supported lines through 2.7, ahead of v2.7.0 (#955) [2026-11-23T06:15:51Z] checkpoint of #955 (a step) pushed to looper/tacplus-955:  4 files changed, 236 insertions(+), 2 deletions(-)
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/955; nohup /usr/local/bin/repo-looper --repo tacplus --issue 955 --build > /tmp/build955.log 2>&1 & echo $!
+< 1382
+Build job started (PID 1382); meanwhile checking open issues that might be 2.7 release blockers.
+> Bash cd /builds/looper/tacplus/issues/955; gh issue list --repo tacplus-dev/tacplus --state open --search '2.7 in:title,body' --limit 30 --json number,title,labels --jq '.[] | "\(.number) \(.title) [\(.labels|map(.name)|join(","))]"'
+< 954 Release tacplus v2.7.0 (trace_id traced helper forms, #327) [bug,needs-decision,approved] 955 Release v2.7.0: consumers need #327's field 200 on the sys contract (stratum#29) [bug,approved,looper:in-progress] 328 trace_id in 3.0: drop untraced helper forms; a message without field 200 is a gener...
+There's a duplicate, #954, marked needs-decision. Reading it.
+> Bash cd /builds/looper/tacplus/issues/955; /usr/local/bin/repo-looper --repo tacplus --issue-text 954; gh api repos/tacplus-dev/tacplus/issues/954/events --jq '.[] | [.event, .actor.login, .label.name, .created_at] | @tsv'
+< <<issue-text nonce=[redacted] author=tacplus-looper[bot] association=NONE role=data>> # Release tacplus v2.7.0 (trace_id traced helper forms, #327)  Parent: tacplus-dev/mailbox#12  ## What Cut **v2.7.0** from main, the way #213 cut 2.6.0. That means: tag it, cut `release/2.7`, ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/955; kill 1382; sleep 1; tail -5 /tmp/build955.log; gh api 'repos/tacplus-dev/tacplus/collaborators/tacplus-looper%5Bbot%5D/permission' --jq .permission 2>&1 | head -2
+> Bash cd /builds/looper/tacplus/issues/955; gh issue view 323 --repo tacplus-dev/tacplus --json state,title --jq '"\(.state) \(.title)"'
+< [2026-11-23T06:15:58Z] checkpoint of #955 (a build) pushed to looper/tacplus-955:  4 files changed, 241 insertions(+), 2 deletions(-) [2026-11-23T06:15:58Z] build requested: tacplus 806d931, the gates docs (all 2 changed paths map to docs) the build job https://gitlab.com/tacplus-dev/build/-/pipelin...
+< OPEN Make-before-break stream rotation for the client-only targets (TypeScript, Python, Swift, C#, W2S/SSE) and C2S through the gateway
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/955; cat > /tmp/c955.md <<'EOF' **Needs a decision: the same one as #954. May the looper cut v2.7.0 from main?**  Nothing has landed. #954 asks for the same release on behalf of mailbox#12, and its run stopped on this question as well. I agree with that run, for the ...
+< https://github.com/tacplus-dev/tacplus/issues/955#issuecomment-7093178167 https://github.com/tacplus-dev/tacplus/issues/955
+> Bash cd /builds/looper/tacplus/issues/955; /usr/local/bin/repo-looper --repo tacplus --issue 955 --checkpoint "needs-decision (same question as #954): no member asked for v2.7.0; nothing landed. Release-prep commit 806d9319 (VERSIONING/CONTRIBUTING through 2.7) sits on this branch, unbuilt (build stopped...
+< [2026-11-23T06:16:37Z] checkpoint of #955 (a step) pushed to looper/tacplus-955:  4 files changed, 277 insertions(+), 2 deletions(-)
+I didn't cut v2.7.0. I stopped and asked for a member's decision: the issue is now labelled `needs-decision`, and my question and recommendation are on the issue ([comment](https://github.com/tacplus-dev/tacplus/issues/955#issuecomment-7093178167)). Nothing has landed on main.
+
+Why I stopped:
+- **Nobody with write access asked for it.** `tacplus-looper[bot]` opened this issue and added `approved` itself, and its permission on the repository is `none`. Every earlier minor was asked for by Jody in an issue of his own (#161, #198, #213).
+- **It can't be undone.** The `build:2.7.0` image can't be replaced once pushed, `release/2.7` would be cut, and 2.7 would take GitHub's Latest and the `2` and `latest` image tags.
+- **#954 already asks the same question.** It requests the same release on behalf of mailbox#12, and its run stopped on the same grounds. It also points out that #323 (make-before-break for the client-only targets) is still open in the same roadmap section.
+
+My recommendation is to cut v2.7.0 now from the head of main, the way #213 cut 2.6.0, and let #323 go to 2.8. One decision on #954 covers both issues, and this one can then be closed as its duplicate.
+
+If it's approved, the next run starts from what's already on `looper/tacplus-955`. Commit 806d9319 updates the supported lines to `release/2.0` through `release/2.7` in `docs/VERSIONING.md` and makes 2.7 the current line in `CONTRIBUTING.md`, as 87adda9e did ahead of 2.6.0. I started its build job and then stopped it, so it has no verdict yet. The rest of the steps are:
+1. Land that commit with the full gates.
+2. Tag `v2.7.0` at it and cut `release/2.7` there.
+3. Check that the Release and Images workflows are green and that `build:2.7.0` is published.
+4. Record its digest in STATE.md.
+
+No service handlers were touched, so the trace propagation check didn't apply.
+= success: I didn't cut v2.7.0. I stopped and asked for a member's decision: the issue is now labelled `needs-decision`, and my question and recommendation are on the issue ([comment](https://github.com/tacplus-dev/tacplus/issues/955#issuecomment-7093178167)). Nothing has landed on main.
+
+Why I stopped:
+- **Nobody with write access asked for it.** `tacplus-looper[bot]` opened this issue and added `approved` itself, and its permission on the repository is `none`. Every earlier minor was asked for by Jody in an issue of his own (#161, #198, #213).
+- **It can't be undone.** The `build:2.7.0` image can't be replaced once pushed, `release/2.7` would be cut, and 2.7 would take GitHub's Latest and the `2` and `latest` image tags.
+- **#954 already asks the same question.** It requests the same release on behalf of mailbox#12, and its run stopped on the same grounds. It also points out that #323 (make-before-break for the client-only targets) is still open in the same roadmap section.
+
+My recommendation is to cut v2.7.0 now from the head of main, the way #213 cut 2.6.0, and let #323 go to 2.8. One decision on #954 covers both issues, and this one can then be closed as its duplicate.
+
+If it's approved, the next run starts from what's already on `looper/tacplus-955`. Commit 806d9319 updates the supported lines to `release/2.0` through `release/2.7` in `docs/VERSIONING.md` and makes 2.7 the current line in `CONTRIBUTING.md`, as 87adda9e did ahead of 2.6.0. I started its build job and then stopped it, so it has no verdict yet. The rest of the steps are:
+1. Land that commit with the full gates.
+2. Tag `v2.7.0` at it and cut `release/2.7` there.
+3. Check that the Release and Images workflows are green and that `build:2.7.0` is published.
+4. Record its digest in STATE.md.
+
+No service handlers were touched, so the trace propagation check didn't apply.
+= usage: {"claude-opus-5-5":{"inputTokens":46,"outputTokens":9933,"cacheReadInputTokens":1358002,"cacheCreationInputTokens":64599,"webSearchRequests":0,"costUSD":0.9872364000000002,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":3729,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}

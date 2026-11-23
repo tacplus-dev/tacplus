@@ -919,6 +919,17 @@ the looper then marks it `promoted` or `declined` here with the date.
   change, and each `build:X.Y` only by the weekly line rebuild or a patch tag. The Images workflow could record
   the digest of each floating `FROM` it copies a binary from (`docker:29-cli`, `golang:1.27-trixie`) and rebuild
   `build` when one moves. Another option: the nightly sweep dispatches a rebuild when a finding is `fixed` upstream.
+- **TypeScript W2S: `W2SError.message` carries the error body's message** (2026-11-23, #953): `requestJson` in
+  `w2sm.ts.tmpl` reads the failed response's body for the gRPC code (`w2sResponseCode`) and then throws
+  `gRPC-over-REST error: <status> <statusText>`, dropping the body's `error` text. The Go, Python, Rust and Java W2S
+  clients already use that text as the message. So kernel's refusals (the `DeleteAccount` confirm-to-proceed warning that
+  gateway#2's console shows, `DeleteIdentityLink`'s and the step-up's) reach a web app as an HTTP status line.
+  Proposed: a `w2sResponseMessage` helper beside `w2sResponseCode` uses `error`, then `message`, when either is a
+  non-empty string, and today's text otherwise. It does no percent-decoding, because the gateway already decodes. The
+  change is the unary path only, is small, and is a 2.6 patch candidate. The questions for Jody are on the issue:
+  replace the message or add a field; whether the SSE paths are in scope; a node behaviour test or the template pin test
+  only; the 2.6 backport; and whether the other clients' opposite gap (they ignore `grpc-status` and the body's `code`)
+  gets its own proposal.
 
 ## Promoted / declined
 - **A floor check over every version tacplus emits, and template manifests that take versions from one place**

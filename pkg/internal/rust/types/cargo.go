@@ -204,6 +204,7 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 	// Special handling for crates that need features
 	specDeps := map[string]string{
 		"serde":              `{ version = "%s", features = ["derive"] }`,
+		"serde-saphyr":       `{ version = "%s", default-features = false, features = ["serialize", "deserialize"] }`,
 		"tonic":              `{ version = "%s", features = ["transport"] }`,
 		"tokio":              `{ version = "%s", features = ["full"] }`,
 		"tower-http":         `{ version = "%s", features = ["cors", "trace"] }`,

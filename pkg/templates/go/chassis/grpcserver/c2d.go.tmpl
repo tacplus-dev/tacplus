@@ -78,7 +78,9 @@ func (s *C2DServer) Serve(ctx context.Context) error {
 		return fmt.Errorf("c2d: failed to set owner-only (0600) permissions on socket %s: %w; refusing to serve without the socket's access boundary", s.socketPath, err)
 	}
 
-	grpcServer := grpc.NewServer()
+	// Static windows, as the TLS server's: a Swift client streaming over the
+	// socket is dropped by the BDP PINGs of dynamic ones (staticWindowOptions).
+	grpcServer := grpc.NewServer(staticWindowOptions()...)
 	if err := s.impl.RegisterServices(grpcServer); err != nil {
 		return fmt.Errorf("c2d: failed to register services: %w", err)
 	}

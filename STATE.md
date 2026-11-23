@@ -186,6 +186,16 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-21 by lo
   read; `tacplus fleet build` checks each recipe's inputs at the locked commit and records the contribution under
   the service in `fleet.lock` (paths under `/-/apps/<service>/` and `/-/clients/<service>/`, targets, the webapp
   dir's tree). Contract and trust rule in docs/USER.md.
+  Gateway contributions, parts 2 and 3 (#195): `tacplus fleet gateway` builds the fleet's gateway image from
+  `fleet.lock` alone (the gateway, never a release image, is the one image a fleet builds): the locked gateway
+  generated against the merged protos, its own webapp at `/`, each contributed module at `/-/apps/<service>/` and
+  the `/-/apps.json` index, the clients by their fixed recipes, the launcher (`fleet.yaml`'s new `launcher:` line),
+  then the image by `tacplus-image-build` at the gateway commit's time into an OCI layout. The lock's `gateway:`
+  section records the build and base images by digest, each part's sha256 and the image digest; `--check` rebuilds
+  and fails on any that differs. darwin/arm64 `rust:` and `swift:` clients come from the macos runner
+  (`--clients-only` there, `--prebuilt` here). A gateway `webapp` contribution is refused. The build image carries
+  cargo-zigbuild, zig and the three Rust cross targets for the `rust:` recipe. Gap: no gateway release yet serves
+  `/-/` (gateway#21 is on main, after v0.2.0), so the end-to-end build of tenantecho's page waits on one.
   Redact for any type (#274): `(spec.sensitive)` on string/bytes/message fields, `(spec.sensitive_message)` (a
   message secret by construction) and `(spec.not_sensitive)`; Go, Java and Rust generate a deterministic
   `Redact<T>` (a set sensitive value becomes `REDACTED`, `<field>_redacted` set, recursion through nested, repeated

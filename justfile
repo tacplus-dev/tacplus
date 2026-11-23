@@ -188,7 +188,7 @@ gates:
     echo "=== OVERALL fail=1 (protoc preflight) ==="
     exit 1
   fi
-  for g in soundness test current-generation determinism cert-stream stream-expiry claims-provenance w2s-validate c2d-server trace-carry; do
+  for g in soundness test current-generation determinism cert-stream stream-expiry claims-provenance w2s-validate c2d-server trace-carry server-runtime; do
     echo "=== $g ==="
     just "$g"
     rc=$?
@@ -283,6 +283,14 @@ external-token-java:
 
 external-token-rust:
   {{lock}} bash cross-test/external-token/run.sh --language rust
+
+# Cross-language runtime evidence for java and rust (LED-2): the generated java
+# and rust ContractApi servers driven over the wire by the generated go C2S
+# client, then the generated java client against the rust host and the generated
+# rust client against the java host. In `gates` since #455, where it was found
+# not building on main: no gate ran it. One leg at a time: cross-test/justfile.
+server-runtime:
+  {{lock}} bash cross-test/server-runtime/run.sh
 
 # trace_id across projections and stores (#313): a projection carries its
 # source's trace_id; the record dispatch and the service_store disk helpers

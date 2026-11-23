@@ -21,7 +21,9 @@
 #
 # The swift leg is the client side (issue #494): the generated Swift lite
 # package's C2DClient(), with no argument, dials the generated Go daemon served
-# on its declared socket_path, a unary call and a server stream.
+# on its declared socket_path, a unary call and a server stream, then 300 unary
+# calls on one connection: a server PINGing per request has swift-nio-http2
+# drop the connection past 200 (issue #958).
 #
 # Usage: run.sh [--language go|java|rust|swift]   (default: all four)
 set -euo pipefail

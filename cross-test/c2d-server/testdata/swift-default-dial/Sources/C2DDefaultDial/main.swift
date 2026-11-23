@@ -5,6 +5,12 @@
 // argument, a unary call and a server stream: the default socket must be the
 // socket_path the daemon binds (issue #494). The old default,
 // ~/.<package>/daemon.sock, reached no daemon.
+//
+// Then one client makes `sameConnectionCalls` unary calls on its one
+// connection (issue #958). A Go server with grpc-go's dynamic HTTP/2 windows
+// sent a BDP PING for each call's request, and swift-nio-http2 closes a
+// connection past 200 inbound PINGs in 30 s: call 199 failed UNAVAILABLE
+// "Stream unexpectedly closed.", as a stream of more than 200 messages did.
 
 import C2dserverModel
 import Foundation
@@ -45,4 +51,22 @@ do {
 } catch {
     fail("call over the default socket: \(error)")
 }
-print("swift default C2D dial passed")
+
+let sameConnectionCalls = 300
+do {
+    try await client.withLocalDaemon { daemon in
+        for call in 1...sameConnectionCalls {
+            do {
+                let response = try await daemon.getLocal(request)
+                guard response.resultID == "result-swift-default" else {
+                    fail("call \(call) on one connection: result_id = \(response.resultID), want result-swift-default")
+                }
+            } catch {
+                fail("call \(call) of \(sameConnectionCalls) on one connection: \(error)")
+            }
+        }
+    }
+} catch {
+    fail("\(sameConnectionCalls) calls on one connection: \(error)")
+}
+print("swift default C2D dial passed (\(sameConnectionCalls) calls on one connection)")

@@ -184,3 +184,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-22 looper issue semgrep dockerfile.security.missing-user (HIGH) at Dockerfile:26: the root Dockerfile, of the deprecated tacplus image, runs as root (#580)
 - 2026-11-23 looper release v2.6.14 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.6.14)
 - 2026-11-23 looper issue The security floor reads the versions tacplus hands its consumers: every generated manifest's floor checked against OSV, and resolved locks for the generated Python, C# and Swift trees (#949)
+- 2026-11-23 looper issue trace_id in 2.7: field 200 on every sys wire message, additive traced helper forms (from #313) (#327)

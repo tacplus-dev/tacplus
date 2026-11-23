@@ -89,6 +89,7 @@ const (
 	AnnotationTypeFloat
 	AnnotationTypeHost
 	AnnotationTypeIdentityResource
+	AnnotationTypeIntSlice
 )
 
 // NumericConstraint represents constraints for numeric fields
@@ -243,6 +244,7 @@ type AnnotationValue struct {
 	FloatConstraint        *FloatConstraint
 	IdentitySpiffeResource *IdentitySpiffeResourceValue // For identity_spiffe_resource annotations
 	StringSliceValue       []string                     // For repeated string annotations (e.g., view_sources)
+	IntSliceValue          []int32                      // For repeated int32 annotations (assert_enum_not_in)
 	HostValue              *HostValue                   // For default_host annotations on host.Host fields
 	SubscriptionEntries    []SubscriptionEntry          // For subscribe annotations on service_state messages
 	EventPublishEntries    []EventBusBindingEntry       // For event_publish annotations

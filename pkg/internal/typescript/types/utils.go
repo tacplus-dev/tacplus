@@ -15,7 +15,8 @@ import (
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 )
 
-// generateTypeScriptUtils generates the utils/ directory with utils.ts and validation.ts
+// generateTypeScriptUtils generates the utils/ directory with utils.ts, validation.ts
+// and publicsuffix.ts
 // for parity with Go's utils/utils.go and utils/validation.go.
 func generateTypeScriptUtils(config *tactype.Config) error {
 	utilsDir := filepath.Join(config.OutputDir, "utils")
@@ -341,9 +342,16 @@ export function validateAssertSemver(version: string): void {
 		return fmt.Errorf("failed to write validation.ts: %w", err)
 	}
 
+	// Generate publicsuffix.ts: the assert_registrable_domain /
+	// assert_not_address validators and the Public Suffix List (tacplus#224)
+	if err := os.WriteFile(filepath.Join(utilsDir, "publicsuffix.ts"), []byte(PublicSuffixTs()), 0644); err != nil {
+		return fmt.Errorf("failed to write publicsuffix.ts: %w", err)
+	}
+
 	// Generate index.ts for the utils package
 	indexContent := header.SimpleHeader(consts.LangTypeScript) + `export * from './utils.js';
 export * from './validation.js';
+export * from './publicsuffix.js';
 `
 	if err := os.WriteFile(filepath.Join(utilsDir, "index.ts"), []byte(indexContent), 0644); err != nil {
 		return fmt.Errorf("failed to write index.ts: %w", err)

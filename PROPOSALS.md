@@ -274,6 +274,34 @@ the looper then marks it `promoted` or `declined` here with the date.
   stay full); `cmd/sitegen/**` and `site/**` to `just docs` plus `just site`; `.github/workflows/**` to a workflow
   lint. Also for `just docs`: it checks relative links but not their anchors (GitHub's heading slugs) nor external
   URLs, and does not build the site (`site/docs/*.md` link to site paths; `just site` checks them, needing a venv).
+- **The single-account mode of the sign-in config** (2026-11-07, #224): `signin.ACCOUNT_MODEL_SINGLE` is declared
+  (one account type, no personal links, no link prompt) but its exact shape is still to be designed (tacplus-dev/roadmap
+  `decisions/login-flow-panel-2026-10-29/SYNTHESIS.md`, last note): which `Tenant` fields it ignores or refuses (a
+  people tenant, `merge_redirect_seconds`, `registration_grace_seconds`) is a cross-field rule tacplus can generate once
+  it is decided.
+- **Refresh the embedded Public Suffix List** (2026-11-07, #224): `assert_registrable_domain` matches the snapshot in
+  `pkg/internal/common/publicsuffix/public_suffix_list.dat` (VERSION 2026-11-06). The list changes weekly; a stale
+  snapshot accepts a suffix added since. A scheduled job (the nightly scan) could download it and open a pull request
+  when it moved, so a release always carries a recent one.
+- **One copy of the public suffix table per generated module in Python and Rust** (2026-11-07, #224): Go, Java and
+  TypeScript emit the ~10k-rule table once, in their utils; the Python emitter appends it to the `helpers.py` of each
+  proto file that uses `assert_registrable_domain` (the shared `validation.py` template's helpers raise `ValueError`,
+  not the generated error type), and the Rust emitter writes it into each `.rs` module that does. Today only
+  `sys/signin` uses it; a shared module in each would keep one copy as consumers adopt the annotation.
+- **Field asserts on a oneof member are dropped** (2026-11-07, #224): the Go and TypeScript validation emitters (and,
+  by the shape of their code, the others) honour only `assert_max_size` on a field inside a oneof and skip every other
+  `assert_*` without an error, so such a field is generated unvalidated. Either validate them or refuse them at
+  generation; a silent drop fails open.
+- **The enum refusal text of `assert_enum_not_in`** (2026-11-07, #224): Go and Java name the refused value
+  (`must not be IDP_PROTOCOL_SAML`); Rust and Python name it when the enum is declared in the same file, else its
+  number; TypeScript gives the number. The model carrying enum value names to every emitter would make them one.
+- **Kernel holds `signin.Tenant` and `signin.Deployment`** (2026-11-07, #224): tacplus declares the types and their
+  validation only; kernel's tenant config slice holding them, the domain lookup, the binding ceremony and the
+  per-tenant pairwise identifiers (SYNTHESIS.md A) are tacplus-dev/kernel's to build.
+- **Kitchensink members for the sign-in asserts** (2026-11-21, #224): `assert_registrable_domain`,
+  `assert_not_address` and `assert_enum_not_in` landed before #196's kitchensink was on main, so no member uses them
+  and a service build's coverage check reports them uncovered. A kitchensink member carrying each (Go, Java, Rust,
+  Python, TypeScript) and `just kitchensink-manifest` would cover them.
 - **Release-line Python floors that need no interpreter drop** (2026-11-08, #264): release/2.0–2.5 keep Python 3.8,
   so their cryptography/requests/urllib3 floors stop at the newest 3.8 releases (47.0.0, 2.32.4, 2.2.3) and 13
   advisories stay accepted in their USER.md. A floor keyed by `python_version` marker (`"urllib3>=2.8.0;

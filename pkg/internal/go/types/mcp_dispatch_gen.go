@@ -492,7 +492,7 @@ func (es *egressSanitizer) mcpRequiredScalarArgs(fullType, servicePackage string
 		}
 		switch mcpScalarJSONType(f.Type) {
 		case "string":
-			v := "mcp-test-" + f.Name
+			v := parser.McpTestString(*f)
 			out = append(out, goMcpScalarArg{Field: f.Name, JSON: strconv.Quote(v), Match: v})
 		case "integer":
 			out = append(out, goMcpScalarArg{Field: f.Name, JSON: "1", Match: "1"})
@@ -509,7 +509,7 @@ func (es *egressSanitizer) mcpRequiredScalarArgs(fullType, servicePackage string
 
 // mcpDefinedEnumName returns the wire name of the first declared non-zero value
 // of an enum field's type: the value an assert_enum_defined field must carry to
-// pass validation. Empty when the enum declares no such value.
+// pass validation, skipping a value its assert_enum_not_in refuses. Empty when the enum declares no such value.
 func (es *egressSanitizer) mcpDefinedEnumName(f *model.Field, msgPkg string) string {
 	pkg := f.TypePackage
 	if pkg == "" {
@@ -520,7 +520,7 @@ func (es *egressSanitizer) mcpDefinedEnumName(f *model.Field, msgPkg string) str
 		return ""
 	}
 	for _, v := range en.Values {
-		if v.Number != 0 {
+		if v.Number != 0 && !parser.EnumNotInRefuses(*f, int32(v.Number)) {
 			return v.Name
 		}
 	}

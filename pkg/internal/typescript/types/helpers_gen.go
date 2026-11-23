@@ -318,6 +318,9 @@ func writeCombinedImports(b *strings.Builder, pf model.ProtoFile, protoFilename 
 	if len(pf.Enums) > 0 || len(pf.Messages) > 0 {
 		fmt.Fprintf(b, "import { newErrMissingInvalidData } from '%s';\n", errorsPath)
 	}
+	if names := signInStringAssertImports(pf); len(names) > 0 {
+		fmt.Fprintf(b, "import { %s } from '%s';\n", strings.Join(names, ", "), typeScriptRelativeImport(helpersDir, publicSuffixTsFile))
+	}
 
 	// Import @bufbuild/protobuf helpers (serialization + create for fromMap)
 	var protobufImports []string

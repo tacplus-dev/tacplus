@@ -137,6 +137,9 @@ func writeValidation(b *strings.Builder, pf model.ProtoFile) error {
 	}
 
 	b.Write(result)
+	if pyFileUsesPublicSuffix(pf) {
+		b.WriteString(pyPublicSuffixHelpers())
+	}
 	return nil
 }
 
@@ -437,6 +440,11 @@ func buildValidationBlocks(msg model.Message, enums []model.Enum) ([]pyValidatio
 			case "assert_invariant":
 				if annotationValue.Type == model.AnnotationTypeString && annotationValue.StringValue != "" {
 					pyLinef(&code, 1, "# Formal invariant for %s (assert_invariant): %s", pyFieldName, annotationValue.StringValue)
+				}
+
+			case "assert_registrable_domain", "assert_not_address", "assert_enum_not_in":
+				if err := buildPySignInAssert(&code, msg, field, enums, pyFieldName, annotationName, annotationValue); err != nil {
+					return nil, err
 				}
 
 			case "assert_enum_defined":

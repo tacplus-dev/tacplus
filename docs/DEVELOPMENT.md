@@ -693,6 +693,17 @@ generation). `(spec.redact)` drives egress data entitlement. The moving parts:
   primitives (`tacplusPseudonymize` / `tacplusPseudonymizeBytes`) share one
   cross-language wire vector (pinned by the pseudonymize helper tests).
 
+### Registrable domains (spec.assert_registrable_domain)
+
+`pkg/internal/common/publicsuffix` is the one source (tacplus#224): the Public
+Suffix List snapshot (`public_suffix_list.dat`, unmodified, MPL-2.0; download
+it over the file to move it), its rules in ASCII (`Rules()`, IDN labels in
+their `xn--` form), the reference check (`CheckRegistrable`) and the vectors
+(`Vectors`, `AddressVectors`) every emitter's executable test runs through its
+toolchain. Every language embeds exactly `Rules()` and refuses with the same
+texts ("not a domain name", "a public suffix"). The generation-time shape
+check of the three sign-in asserts is `parser.CheckSignInAssert`.
+
 ### SPIFFE Identity Invariants
 
 Build-time invariants the generator and gates must hold (contract in

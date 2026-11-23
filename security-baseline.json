@@ -55,6 +55,8 @@
   {"tool":"bandit","id":"B110","file":"generated/base/python/tacplus/model/proto_model/types/sys/trace/helpers.py","count":3},
   {"tool":"bandit","id":"B110","file":"generated/base/python/tacplus/model/proto_model/types/sys/x509/helpers.py","count":3},
   {"tool":"bandit","id":"B110","file":"generated/base/python/tacplus/model/proto_model/utils/utils.py","count":4},
+  {"tool":"bandit","id":"B404","file":"cross-test/lib/rust_selftest_hash.py","count":1},
+  {"tool":"bandit","id":"B603","file":"cross-test/lib/rust_selftest_hash.py","count":1},
   {"tool":"cargo-deny","id":"RUSTSEC-2026-0543","file":"chrono@0.4.45 (generated/accounting-sink/rust/tacplus/model/Cargo.lock)","count":1},
   {"tool":"cargo-deny","id":"RUSTSEC-2026-0543","file":"chrono@0.4.45 (generated/base/rust/tacplus/model/Cargo.lock)","count":1},
   {"tool":"cargo-deny","id":"RUSTSEC-2026-0543","file":"chrono@0.4.45 (generated/epochload/rust/tacplus/model/Cargo.lock)","count":1},

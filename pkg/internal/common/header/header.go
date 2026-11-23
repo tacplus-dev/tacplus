@@ -51,6 +51,22 @@ func Author() string {
 	return copyright[0]
 }
 
+// spdxTag introduces the license expression on a header line.
+const spdxTag = "SPDX-License-Identifier:"
+
+// License returns the SPDX license expression of the configured header's
+// SPDX-License-Identifier line, used for the license field of generated Cargo
+// manifests (tacplus#368: cargo-deny refuses an unlicensed crate). "" when the
+// header is unset or names no license.
+func License() string {
+	for _, line := range copyright {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), spdxTag); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return ""
+}
+
 // Funcs returns the template functions shared by the generated-code templates:
 // {{copyright "go"}} expands to Copyright("go"). Every template.New(...).Parse
 // of a pkg/templates/*/types template must register it.

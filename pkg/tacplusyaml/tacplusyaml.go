@@ -47,7 +47,7 @@ type Config struct {
 	Clients    ClientsConfig `yaml:"clients,omitempty"`     // generated C2S/W2S/C2D client transport surfaces
 	OutputDir  string        `yaml:"output-dir"`            // output subdirectory relative to project dir (required)
 	OutputName string        `yaml:"output-name,omitempty"` // generated package/dir segment name; default "model" (compiler stays "tacplus")
-	Header     string        `yaml:"header,omitempty"`      // free-form text stamped as a comment at the top of every generated file (e.g. a copyright line and an SPDX identifier); its first line is also the author of generated package manifests. Unset: generated code carries no copyright line
+	Header     string        `yaml:"header,omitempty"`      // free-form text stamped as a comment at the top of every generated file (e.g. a copyright line and an SPDX identifier); its first line is also the author of generated package manifests, and its SPDX-License-Identifier the license of generated Cargo manifests. Unset: generated code carries no copyright line
 }
 
 // Exists returns true if tacplus.yaml exists in dir.

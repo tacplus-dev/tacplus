@@ -116,6 +116,7 @@ Only `language` and `output-dir` are required. `pkg` is commonly set explicitly,
 | `language` | string | Yes | Full-service targets: `go`, `rust`, `java`. Full-client targets: `python`, `typescript`. Lite client targets: `swift`, `csharp`. |
 | `output-dir` | string | Yes | Output subdirectory relative to project dir |
 | `pkg` | string | No | Canonical package name (Java-style reverse DNS, e.g. `com.example.myservice`). Each segment must be a valid identifier (letters, digits, underscores — no hyphens). Converted to native format per language (see table below). |
+| `header` | string | No | Free-form text stamped as a comment at the top of every generated file, e.g. a copyright line and an `SPDX-License-Identifier:` line. Its first line is the author of generated package manifests; its SPDX expression is the `license` of every generated Rust crate, which also declares `publish = false`, so `cargo-deny check licenses` passes them. Unset: no copyright line, and the Rust crates declare no license. |
 
 #### Package Name Conversion
 

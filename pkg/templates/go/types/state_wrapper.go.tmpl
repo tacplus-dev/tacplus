@@ -16,11 +16,22 @@ package {{.PackageName}}
 {{- $hasViews := .Views}}
 {{- $hasStateImports := .StateImports}}
 {{- $hasBoundaries := or $hasSingletons $hasCollections $hasTopics $hasQueues $hasPriorityQueues $hasCommands $hasViews}}
+{{- /* A topic calls only the RPCs its state service declares (#454). */}}
+{{- $hasTopicPublish := false}}
+{{- $hasTopicSubscribe := false}}
+{{- range .Topics}}
+{{- if and .HasPublish (not $.ReadOnly)}}{{$hasTopicPublish = true}}{{end}}
+{{- if .HasSubscribe}}{{$hasTopicSubscribe = true}}{{end}}
+{{- end}}
+{{- $hasTopicRPCs := or $hasTopicPublish $hasTopicSubscribe}}
 
 import (
 	"context"
-{{- if $hasSingletons}}
+{{- if or $hasSingletons $hasTopicPublish}}
 	"fmt"
+{{- end}}
+{{- if $hasTopicRPCs}}
+	"io"
 {{- end}}
 {{- if or $hasSingletons $hasCollections $hasStateImports}}
 	"math/rand"
@@ -41,10 +52,13 @@ import (
 {{- range .CrossImports}}
 	{{.Alias}} "{{.Path}}"
 {{- end}}
+{{- if $hasTopicRPCs}}
+	eventbus_support_pb "{{.EventBusSupportPath}}"
+{{- end}}
 {{- if or $hasSingletons $hasCollections}}
 	"google.golang.org/protobuf/proto"
 {{- end}}
-{{- if or $hasSingletons $hasCollections $hasTopics $hasQueues $hasPriorityQueues $hasViews $hasStateImports}}
+{{- if or $hasSingletons $hasCollections $hasQueues $hasPriorityQueues $hasViews $hasStateImports}}
 	trace_pb "{{.TraceTypesPath}}"
 {{- end}}
 )
@@ -848,17 +862,58 @@ type {{$t.FieldName}}Wrapper struct {
 func (c *{{$.ClientTypeName}}) {{$t.FieldName}}() *{{$t.FieldName}}Wrapper {
 	return c.wrapper{{$t.FieldName}}
 }
-{{if not $.ReadOnly}}
-// Publish publishes a {{$t.TypeName}} message to the {{$t.FieldName}} topic.
-func (w *{{$t.FieldName}}Wrapper) Publish(ctx context.Context, msg *{{TypeRef $t.GoType $t.IsCrossPackage}}) (*types.TopicPublishReceipt, error) {
-	return w.parent.stateStub.PublishTo{{$t.FieldName}}(ctx, msg)
+{{if and $t.HasPublish (not $.ReadOnly)}}
+// Publish publishes one {{$t.TypeName}} to the {{$t.FieldName}} topic and returns
+// the broker's ack. PublishTo{{$t.FieldName}} is a bidi stream, not a unary call:
+// Publish opens it, sends msg, half-closes and waits for the first
+// PublishResponse, then ends the call.
+func (w *{{$t.FieldName}}Wrapper) Publish(ctx context.Context, msg *{{TypeRef $t.GoType $t.IsCrossPackage}}) (*eventbus_support_pb.PublishResponse, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stream, err := w.parent.stateStub.PublishTo{{$t.FieldName}}(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// io.EOF from Send means the server ended the call; Recv returns its status.
+	if err := stream.Send(msg); err != nil && err != io.EOF {
+		return nil, err
+	}
+	if err := stream.CloseSend(); err != nil {
+		return nil, err
+	}
+	ack, err := stream.Recv()
+	if err == io.EOF {
+		return nil, fmt.Errorf("{{$t.FieldName}} publish stream closed before an ack: %w", io.ErrUnexpectedEOF)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return ack, nil
 }
 {{end}}
-// Subscribe opens a server-streaming subscription to the {{$t.FieldName}} topic.
-func (w *{{$t.FieldName}}Wrapper) Subscribe(ctx context.Context) (types.{{$.StateServiceName}}_SubscribeTo{{$t.FieldName}}Client, error) {
-	return w.parent.stateStub.SubscribeTo{{$t.FieldName}}(ctx, &trace_pb.TraceRequest{})
+{{- if $t.HasSubscribe}}
+// Subscribe opens a subscription to the {{$t.FieldName}} topic.
+// SubscribeTo{{$t.FieldName}} is a bidi stream: Subscribe sends req (nil subscribes
+// with the defaults) and returns the stream. Recv yields each record, its
+// EventBus metadata and payload; Send carries later flow control (pause,
+// speed). Cancel ctx to end the subscription: that, not CloseSend, closes the
+// broker's consumer session.
+func (w *{{$t.FieldName}}Wrapper) Subscribe(ctx context.Context, req *eventbus_support_pb.SubscribeRequest) (types.{{$.StateServiceName}}_SubscribeTo{{$t.FieldName}}Client, error) {
+	if req == nil {
+		req = &eventbus_support_pb.SubscribeRequest{}
+	}
+	stream, err := w.parent.stateStub.SubscribeTo{{$t.FieldName}}(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// io.EOF from Send means the server ended the call; Recv returns its status.
+	if err := stream.Send(req); err != nil && err != io.EOF {
+		return nil, err
+	}
+	return stream, nil
 }
 {{end}}
+{{- end}}
 // ============================================================================
 // Queues
 // ============================================================================

@@ -193,6 +193,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		KeepaliveTimeoutSecs        int
 		KeepalivePermitMinTimeSecs  int
 		Author                      string // first line of the configured header; manifests omit authors when empty
+		License                     string // SPDX id of the configured header; manifests omit license when empty
 	}{
 		CrateBasePath:                  config.CrateBasePath,
 		CrateBasePathUnderscore:        strings.ReplaceAll(config.CrateBasePath, "-", "_"),
@@ -220,6 +221,7 @@ func writeLibTemplates(config *tactype.Config, svcRPCs []proto.ServiceRPCEntry, 
 		KeepaliveTimeoutSecs:           keepaliveconst.TimeoutSecs,
 		KeepalivePermitMinTimeSecs:     keepaliveconst.PermitMinTimeSecs,
 		Author:                         header.Author(),
+		License:                        header.License(),
 	}
 
 	langFS, err := fs.Sub(templates.FS, "rust/chassis")

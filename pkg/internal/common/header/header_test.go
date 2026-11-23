@@ -320,6 +320,21 @@ func TestCopyright_Set(t *testing.T) {
 	}
 }
 
+func TestLicense(t *testing.T) {
+	t.Cleanup(func() { SetCopyright("") })
+	for _, tc := range []struct{ header, want string }{
+		{"", ""},
+		{"Copyright (c) 2026 Example Inc", ""},
+		{testCopyright, "Apache-2.0"},
+		{"Copyright (c) 2026 Example Inc\n  SPDX-License-Identifier:   MIT OR Apache-2.0  \nmore", "MIT OR Apache-2.0"},
+	} {
+		SetCopyright(tc.header)
+		if got := License(); got != tc.want {
+			t.Errorf("License() with header %q = %q, want %q", tc.header, got, tc.want)
+		}
+	}
+}
+
 func TestCopyright_TrailingNewlineIgnored(t *testing.T) {
 	SetCopyright("Copyright (c) 2026 Example Inc\n\n")
 	t.Cleanup(func() { SetCopyright("") })

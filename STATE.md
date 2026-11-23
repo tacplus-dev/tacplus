@@ -258,6 +258,6 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-21 by lo
   namespace is `/tenants/<tid>`; kernel#23's `/tenants/<name>` namespaces need #202 first (PROPOSALS.md).
   The record write surface stamps no `(spec.identity_spiffe_subject)` (PROPOSALS.md). A fleet's service images must be on ghcr.io from a
   github.com repo (PROPOSALS.md).
-- **Blocked on:** #195's gateway build (`tacplus fleet gateway`: the merged webapp, the clients, the image and the
-  lock's `gateway:` section) waits on tacplus-dev/gateway#6 (its first release) and tacplus-dev/gateway#21 (serving
-  `/-/`). The example module is done (tenantecho v0.2.0).
+- **Blocked on:** #195's end-to-end gateway build (`tacplus fleet gateway`: the merged webapp, the clients, the image
+  and the lock's `gateway:` section) waits on a gateway release after v0.2.0: serving `/-/` (04d76ad4) is on gateway
+  main, unreleased (v0.2.0, the latest, predates it). The example module is done (tenantecho v0.2.0).

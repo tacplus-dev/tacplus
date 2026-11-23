@@ -106,9 +106,10 @@ Deliberately deferred:
 
 ## Notes
 
-- Local/manual, like `w2s-validate`. It is **not** part of `just test` and not
-  wired into CI or `nightly-matrix.sh`: it needs the go, maven and cargo
-  toolchains concurrently, and `just test` must stay fast.
+- Part of `just gates` (`just server-runtime`), like `w2s-validate`, since
+  #455: no gate ran it, and it stopped building on main unnoticed. It is
+  **not** part of `just test`: it needs the go, maven and cargo toolchains
+  concurrently, and `just test` must stay fast.
 - Generated outputs go to a temporary work directory. Use `--keep` plus
   `--workdir` to preserve them.
 - `--server LANG` and `--client LANG` each narrow the run to that half; with

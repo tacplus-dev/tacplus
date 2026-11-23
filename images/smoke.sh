@@ -123,7 +123,7 @@ go version; java -version 2>&1 | head -1; cargo --version; swift --version 2>&1 
 jbmc --version; just --version; cargo kani --version; cargo +"$RUST_NIGHTLY" fuzz --version
 # The fleet builder's rust: client recipe (#195): cargo-zigbuild, zig, and the
 # three cross targets it builds from Linux.
-zig version; cargo zigbuild --version
+zig version; cargo-zigbuild --version
 for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-gnu; do
   rustup target list --installed | grep -qx "$target" || { echo "missing Rust target: $target" >&2; exit 1; }
 done

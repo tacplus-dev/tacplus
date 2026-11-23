@@ -213,3 +213,22 @@ func TestSmokeIdmapCheck(t *testing.T) {
 		})
 	}
 }
+
+// TestZigbuildVersionCheck (#830, #195): the image build and the smoke test
+// ask cargo-zigbuild for its version as the program itself. `cargo zigbuild
+// --version` passes the flag to the zigbuild subcommand, which refuses it
+// (unexpected argument '--version'), so every build of the image failed.
+func TestZigbuildVersionCheck(t *testing.T) {
+	for _, path := range []string{"../images/build.Dockerfile", "../images/smoke.sh"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "cargo zigbuild --version") {
+			t.Errorf("%s runs `cargo zigbuild --version`, which cargo-zigbuild refuses; run `cargo-zigbuild --version`", path)
+		}
+		if !strings.Contains(string(data), "cargo-zigbuild --version") {
+			t.Errorf("%s does not check `cargo-zigbuild --version`", path)
+		}
+	}
+}

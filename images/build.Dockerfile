@@ -333,7 +333,7 @@ RUN cargo kani setup \
 # The rust: client recipe's cross targets (cargo zigbuild, #195).
 RUN ln -s /opt/zig/zig /usr/local/bin/zig \
     && rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-gnu \
-    && zig version && cargo zigbuild --version
+    && zig version && cargo-zigbuild --version
 RUN ln -s ../lib/node_modules/@bufbuild/protoc-gen-es/bin/protoc-gen-es /usr/local/bin/protoc-gen-es
 # Python codegen runs `python -m grpc_tools.protoc`; black/twine/build are
 # what the Python client gates use. One venv, first on PATH. The floors

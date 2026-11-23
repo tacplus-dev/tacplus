@@ -183,3 +183,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-22 looper issue c2d-server Java self-test: the standalone host must bind and chmod its socket within a fixed 10s, fails on a loaded runner (gates red) (#778)
 - 2026-11-22 looper issue semgrep dockerfile.security.missing-user (HIGH) at Dockerfile:26: the root Dockerfile, of the deprecated tacplus image, runs as root (#580)
 - 2026-11-23 looper release v2.6.14 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.6.14)
+- 2026-11-23 looper issue The security floor reads the versions tacplus hands its consumers: every generated manifest's floor checked against OSV, and resolved locks for the generated Python, C# and Swift trees (#949)

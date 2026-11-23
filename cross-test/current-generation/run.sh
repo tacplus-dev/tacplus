@@ -934,6 +934,11 @@ for name, ver in re.findall(r'\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"
         bad.append(f"rsa {ver} (RUSTSEC-2023-0071)")
     elif name == "crypto-bigint" and version(ver) < (0, 7, 6):
         bad.append(f"crypto-bigint {ver} (RUSTSEC-2026-0387)")
+    # Issue #308: rustls's old PEM-file crate is unmaintained with no fix; the
+    # chassis parses PEM with rustls-pki-types. Its name is split so a grep of
+    # the tree for it finds nothing.
+    elif name == "rustls" "-pemfile":
+        bad.append(f"{name} {ver} (unmaintained, RUSTSEC-2025-0134)")
     elif name == "elliptic-curve" and version(ver) < (0, 14, 0):
         bad.append(f"elliptic-curve {ver} (crypto-bigint 0.5, RUSTSEC-2026-0387)")
     elif name == "block-buffer" and version(ver) < (0, 12, 1):

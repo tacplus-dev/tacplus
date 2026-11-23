@@ -22,7 +22,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use key::keys;
 use memberport::{ChunkCodec, JwkLookup, MemberChunk, MemberPort, ServingCert, TokenSource};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::sign::CertifiedKey;
 use tokio::sync::mpsc;
 use tonic::codegen::{http, Body, BoxFuture, StdError};
@@ -116,9 +117,7 @@ impl Fleet {
     /// A serving certificate naming `spiffe://example.org<namespace>/services/<service>`.
     pub fn leaf(&self, namespace: &str, service: &str, ed25519: bool) -> Arc<CertifiedKey> {
         let (chain, key_pem) = self.leaf_parts(namespace, service, ed25519);
-        let private = rustls_pemfile::private_key(&mut key_pem.as_bytes())
-            .expect("leaf key PEM")
-            .expect("a leaf private key");
+        let private = PrivateKeyDer::from_pem_slice(key_pem.as_bytes()).expect("a leaf private key");
         Arc::new(CertifiedKey::from_der(chain, private, &provider()).expect("certified leaf"))
     }
 
@@ -192,7 +191,7 @@ fn pem_text(label: &str, der: &[u8]) -> String {
 
 fn der_of(cert: &x509::ImmutableCert) -> CertificateDer<'static> {
     let pem = cert.to_pem().expect("cert PEM");
-    let der = rustls_pemfile::certs(&mut pem.as_bytes())
+    let der = CertificateDer::pem_slice_iter(pem.as_bytes())
         .next()
         .expect("one certificate")
         .expect("certificate DER");

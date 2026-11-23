@@ -27,6 +27,7 @@ use std::sync::Arc;
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::client::WebPkiServerVerifier;
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, Error, SignatureScheme};
 use x509_parser::extensions::{GeneralName, ParsedExtension};
@@ -192,9 +193,8 @@ fn other_cert_error(msg: String) -> Error {
 /// the count of certs that were successfully added.
 pub fn build_root_store(pem_bundle: &str) -> (rustls::RootCertStore, usize) {
     let mut roots = rustls::RootCertStore::empty();
-    let mut reader = pem_bundle.as_bytes();
     let mut added = 0usize;
-    for cert in rustls_pemfile::certs(&mut reader) {
+    for cert in CertificateDer::pem_slice_iter(pem_bundle.as_bytes()) {
         if let Ok(c) = cert {
             if roots.add(c).is_ok() {
                 added += 1;

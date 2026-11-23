@@ -331,12 +331,19 @@ func TestGoStreamEndsAtTokenExp(t *testing.T) {
 // test above measures expiry, not some other way the server ends streams.
 func TestGoStreamOutlivesWindowWithLongToken(t *testing.T) {
 	client, key := startServer(t)
+	bound := tokenLifetime + 2*time.Second
 	ctx, cancel := context.WithTimeout(bearer(context.Background(), serviceToken(t, key, time.Now().Add(time.Hour))),
-		tokenLifetime+2*time.Second)
+		bound)
 	defer cancel()
+	opened := time.Now()
 	err := streamShapes[2].run(ctx, client)
-	if ctx.Err() == nil {
-		t.Fatalf("bidi stream with an hour-long token ended before the client's bound: %v", err)
+	// The server learns the client's deadline (grpc-timeout) and may end the
+	// stream with DEADLINE_EXCEEDED a moment before the client's own context
+	// does; on a loaded runner it often wins (#627). That is the same bound.
+	serverDeadline := status.Code(err) == codes.DeadlineExceeded && time.Since(opened) >= bound-500*time.Millisecond
+	if ctx.Err() == nil && !serverDeadline {
+		t.Fatalf("bidi stream with an hour-long token ended %s after open, before the client's bound (%s): %v",
+			time.Since(opened).Round(time.Millisecond), bound, err)
 	}
 	if got := status.Code(err); got != codes.DeadlineExceeded && !errors.Is(err, io.EOF) && got != codes.Canceled {
 		t.Fatalf("bidi stream with an hour-long token ended with %v (%v), want the client's own deadline", got, err)

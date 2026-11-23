@@ -5,11 +5,14 @@
 name = "httpclient"
 version = "1.0.0"
 edition = "2021"
+{{- if .License}}
+license = "{{.License}}"
+{{- end}}
+publish = false
 {{- if .Author}}
 authors = [{{printf "%q" .Author}}]
 {{- end}}
 description = "Typed HTTP client with retry logic, TLS/mTLS support, and proto error handling"
-license = "Proprietary"
 
 [dependencies]
 # HTTP client

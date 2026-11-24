@@ -1,0 +1,159 @@
+= init
+> Bash cd /builds/looper/tacplus/issues/195; git diff; git log --oneline -3 origin/main; /usr/local/bin/repo-looper --repo tacplus --issue-text 195 | tail -30; /usr/local/bin/repo-looper --repo tacplus --issue-text gateway#61 | tail -40
+< diff --git a/STATE.md b/STATE.md index 2edde7c4..8e3f47b0 100644 --- a/STATE.md +++ b/STATE.md @@ -258,6 +258,6 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-21 by lo    namespace is `/tenants/<tid>`; kernel#23's `/tenants/<name>` namespaces need #202 first (PROPOSALS.md...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/195; ls; cat gates.yaml; grep -n "gateway" justfile | head -40; ls pkg/fleet; grep -rln "fleet gateway" --include=* . 2>/dev/null | grep -v node_modules | head -30
+< AGENTS.md CODE_OF_CONDUCT.md CONTRIBUTING.md HISTORY.md LICENSE PROPOSALS.md README.md README.src.md ROADMAP.md SECURITY.md STATE.md build.lock cmd cross-test docs example gates.yaml go.mod go.sum images justfile main.go pkg roadmap scripts security-baseline.json security-exceptions.yaml site # The ...
+> Bash cd /builds/looper/tacplus/issues/195; grep -n -i "fleet gateway\|e2e\|acceptance\|tenantecho" STATE.md PROPOSALS.md docs/USER.md | head -40; grep -n "^[a-z-]*:" justfile | head -60; ls example cross-test | head -50
+< STATE.md:190:  Gateway contributions, parts 2 and 3 (#195): `tacplus fleet gateway` builds the fleet's gateway image from STATE.md:199:  `/-/` (gateway#21 is on main, after v0.2.0), so the end-to-end build of tenantecho's page waits on one. STATE.md:261:- **Blocked on:** #195's end-to-end acceptance...
+> Bash cd /builds/looper/tacplus/issues/195; sed -n 180,205p STATE.md; sed -n 2530,2730p docs/USER.md
+<   Fleets pin services by release line (#180): `fleet.yaml` names a `version: "MAJOR.MINOR"` for every service (or   an explicit `MAJOR.MINOR.PATCH-pre`), and `tacplus fleet build` resolves it to the line's highest released tag,   pre-releases excluded, and to that release's image on ghcr.io by diges...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/195; ls -la .looper; grep -o "e2e[^\"]\{0,300\}" .looper/claude.log | sort -u | head -40
+< total 20 drwxr-xr-x  2 looper-195 looper-195 4096 Nov 24 01:26 . drwxr-x--- 14 looper-195 looper-195 4096 Nov 24 01:26 .. -rw-r--r--  1 looper-195 looper-195 8982 Nov 24 01:26 claude.log
+The gateway v0.3.0 release this was blocked on is now out. I'm checking how to run the end-to-end acceptance check in a build job.
+> Bash cd /builds/looper/tacplus/issues/195; tail -c 3000 .looper/claude.log; grep -rln "fleet" cross-test/*/justfile cross-test/justfile justfile 2>/dev/null; ls cross-test | grep -i -E "fleet|gateway"
+<  `Parent: tacplus-dev/tacplus#195`. It asks for gateway v0.3.0 to be cut from main so the tag includes #21. - **Corrected STATE.md:** its "Blocked on" line still named the two closed gateway issues; it now names gateway#61. That commit, `6ed55271`, is queued with the manager and has no verdict yet. ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/195; ls example; find . -name "fleet.yaml" -not -path "*/node_modules/*" | head; grep -n "^func Test" pkg/fleet/gateway_test.go | head -50; wc -l pkg/fleet/gateway.go pkg/fleet/gateway_test.go
+< README.md client proto run.sh server 149:func TestGatewayBuildsTheMergedWebappClientsAndImage(t *testing.T) { 253:func TestGatewayCheckRebuildsAndComparesEveryDigest(t *testing.T) { 277:func TestGatewayDarwinClientsComeFromTheMacRunner(t *testing.T) { 325:func TestGatewayRefuses(t *testing.T) { 364:...
+= thinking_tokens
+= thinking_tokens
+> Bash gh repo list tacplus-dev --limit 100 --json name,description -q '.[] | "\(.name)\t\(.description)"'
+< fleetbox	A whole tacplus fleet in one container: every service's release binary and a real kernel, run by a small supervisor looper	Each tacplus-dev repository works on itself: issue-driven loopers, one container per repository gateway	gateway: a tacplus platform service (ported from schematic 2026-...
+= thinking_tokens
+= thinking_tokens
+> Bash for f in fleet.yaml; do gh api repos/tacplus-dev/fleet-dev/contents/$f -H 'Accept: application/vnd.github.raw'; done; gh api repos/tacplus-dev/fleet-dev/contents/ -q '.[].name'; gh api repos/tacplus-dev/fleet-dev/contents/fleet.lock -H 'Accept: application/vnd.github.raw' | grep -n -A20 "^gateway:\|...
+< # The dev fleet for the new design: doppelganger as the proving ground. # Jody, 2026-10-23: a deployment repo per fleet; every service states the # implementation it runs; the registries decide names and ids and say where # each contract (proto) lives. Every implementation here is a tacplus-dev repo...
+> Bash gh api repos/tacplus-dev/fleet-seatrials/contents/fleet.yaml -H 'Accept: application/vnd.github.raw'; gh api repos/tacplus-dev/fleet-seatrials/contents/ -q '.[].name'
+< # Sea trials: the proof fleet. It exists to show one thing — doppelganger runs # as an ordinary tacplus service on a fleet built from the registry, reached # through the gateway, answering through llmproxy — on a small cluster that is # created and destroyed as needed (Jody, 2026-10-23). Everything ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/195; git tag -l 'v2.*' --sort=-v:refname | head -5; gh api repos/tacplus-dev/fleet-seatrials/contents/build.lock -H 'Accept: application/vnd.github.raw' | head -20; gh api repos/tacplus-dev/fleet-seatrials/contents/fleet.lock -H 'Accept: application/vnd.github.raw' |...
+< v2.6.14 v2.6.13 v2.6.12 v2.6.11 v2.6.10 # The build image of tacplus-dev/fleet-seatrials, by digest (#42; looper#71): the deploy pipeline's CI image, # ghcr.io/tacplus-dev/tacplus/build:20261123-ef62327 (#64; 2.6.12 before it, #43, #45, #50), tacplus's 2.6 build # image rebuilt on current Debian, wh...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+Gateway v0.3.0 is released. The real fleet with tenantecho is fleet-seatrials, which still pins gateway "0.2". Next I'm checking whether a tacplus release already ships `fleet gateway`.
+> Bash cd /builds/looper/tacplus/issues/195; git fetch -q origin --tags; for t in v2.6.12 v2.6.13 v2.6.14; do git merge-base --is-ancestor 00c0136b $t && echo "$t has it" || echo "$t lacks"; done; git log -1 --format=%ci v2.6.14; gh api repos/tacplus-dev/fleet-seatrials/contents/fleet.lock -H 'Accept: appl...
+< v2.6.12 lacks v2.6.13 lacks v2.6.14 lacks 2026-11-22 16:48:49 -0700 2:tacplus: "2.6" v0.2.3 v0.2.2 v0.2.1
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/195; grep -n "image-build\|buildx\|exec.Command\|func " pkg/fleet/gateway.go | head -60; ls scripts images; grep -rn "network\|GITHUB" cross-test/README.md | head
+< 33:// its fixed recipe at its locked commit, the image with tacplus-image-build 106:func execStep(s Step) error { 115:	cmd := exec.Command(name, s.Args[1:]...) 152:func Gateway(manifestDir, outDir string, opts GatewayOptions) (*LockedGateway, error) { 248:func (b *gatewayBuild) image(gw *LockedServi...
+> Bash cd /builds/looper/tacplus/issues/195; sed -n 1,60p images/image-build.sh; sed -n 248,345p pkg/fleet/gateway.go
+< #!/usr/bin/env bash # Shipped in the build image as /usr/local/bin/tacplus-image-build (#315): # builds a container image inside the build container with rootless BuildKit, # with no host Docker socket and no daemon on the host # (tacplus-dev/roadmap: decisions/builds-in-containers-2026-11-03.md). #...
+= thinking_tokens
+= thinking_tokens
+> Bash gh api "repos/tacplus-dev/tenantecho/contents/tacplus.yaml?ref=v0.2.3" -H 'Accept: application/vnd.github.raw' | sed -n '/contribute/,$p'; gh api "repos/tacplus-dev/gateway/contents/Dockerfile?ref=v0.3.0" -H 'Accept: application/vnd.github.raw' | grep -n FROM; gh api repos/tacplus-dev/fleet-seatrial...
+< # The ping page this service contributes to its fleet's gateway, served at /-/apps/tenantecho/ (tacplus # docs/USER.md, "Contributing to the gateway"; README, The ping page). contribute:   webapp: {dir: web, title: "Echo"} header: |   Copyright (c) 2026 Jody Scott   SPDX-License-Identifier: Apache-2...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue list --repo tacplus-dev/tacplus --state open --search "release in:title" --limit 20; gh issue list --repo tacplus-dev/tacplus --state all --search "2.7 in:title" --limit 10
+< 954	OPEN	Release tacplus v2.7.0 (trace_id traced helper forms, #327)	bug, needs-decision, approved	2026-11-23T06:16:49Z 955	OPEN	Release v2.7.0: consumers need #327's field 200 on the sys contract (stratum#29)	bug, needs-decision, approved	2026-11-23T06:16:48Z 196	OPEN	Kitchensink: verify and fuzz t...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash gh issue list --repo tacplus-dev/fleet-seatrials --state open --search "gateway" --limit 20; gh label list --repo tacplus-dev/fleet-seatrials --limit 50 | cut -f1 | tr '\n' ' '
+< 35	OPEN	The pipeline owns the certificate: check, obtain once by DNS-01 when due, reference the secret version in the uni-config; retire the in-cluster letsencrypt	approved, feature, priority:high	2026-11-22T17:17:56Z 56	OPEN	images/tacplus-build.Dockerfile: the build image runs as root (trivy DS-00...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cat > /tmp/st-body.md <<'EOF' Parent: tacplus-dev/tacplus#195  The acceptance of tacplus#195 (the fleet builds its own gateway with a merged webapp) is checked on a real fleet, and this is the fleet that runs tenantecho. Its last step is this fleet's half:  1. **Pin gateway `"0.3"`** in `fleet.yaml`...
+< https://github.com/tacplus-dev/fleet-seatrials/issues/73
+> Bash cd /builds/looper/tacplus/issues/195; grep -n -i "launcher" pkg/fleet/fleet.go | head -15; gh api repos/tacplus-dev/fleet-seatrials/contents/fleet.lock -H 'Accept: application/vnd.github.raw' | grep -n launcher
+< 70:	// Launcher is the launcher release line the gateway's image runs under 72:	Launcher *ServiceSpec `yaml:"launcher,omitempty"` 90:	Launcher   *LockedLauncher `yaml:"launcher,omitempty"` 164:	if l := m.Launcher; l != nil { 166:			return nil, fmt.Errorf("fleet: %s: the launcher names no repo", Mani...
+Issue filed: fleet-seatrials#73. Now updating STATE.md and landing it.
+> Bash cd /builds/looper/tacplus/issues/195; python3 - <<'EOF' p='STATE.md'; s=open(p).read() old1="""Gap: no gateway release yet serves   `/-/` (gateway#21 is on main, after v0.2.0), so the end-to-end build of tenantecho's page waits on one.""" new1="""gateway v0.3.0 serves `/-/`   (gateway#21); the end-t...
+<  STATE.md | 11 ++++++-----  1 file changed, 6 insertions(+), 5 deletions(-)   and fails on any that differs. darwin/arm64 `rust:` and `swift:` clients come from the macos runner   (`--clients-only` there, `--prebuilt` here). A gateway `webapp` contribution is refused. The build image carries   cargo...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/195; git add STATE.md && git commit -q -F - <<'EOF' STATE.md: #195's end-to-end acceptance waits on fleet-seatrials#73  gateway v0.3.0 (gateway#61) now serves /-/, so the blocker named in STATE.md is gone. The last step is the real fleet's: seatrials pins gateway 0.3...
+= task_started
+= task_notification
+< 5be88b1b STATE.md: #195's end-to-end acceptance waits on fleet-seatrials#73 f5d1d479 HISTORY.md: #327 (looper) [2026-11-24T01:28:35Z] checkpoint of #195 (land queued) pushed to looper/tacplus-195:  4 files changed, 577 insertions(+), 5 deletions(-) [2026-11-24T01:28:37Z] queued: the manager of tacpl...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /builds/looper/tacplus/issues/195; /usr/local/bin/repo-looper --repo tacplus --issue 195 --checkpoint "gateway#61 closed (v0.3.0 serves /-/). E2E acceptance needs a real fleet on a tacplus release with fleet gateway (none yet: v2.6.14 predates 00c0136b; 2.7 is #954/#955): filed tacplus-dev/fleet-...
+< [2026-11-24T01:28:49Z] checkpoint of #195 (a step) pushed to looper/tacplus-195:  4 files changed, 584 insertions(+), 5 deletions(-) Blocked-by: tacplus-dev/fleet-seatrials#73
+#195 is still open. The gateway v0.3.0 release it was waiting on is out, but the last acceptance check still can't run.
+
+**What's in the way:** the check is `tacplus fleet gateway --check` run twice on a real fleet with the same image digest, plus tenantecho's page served at `/-/apps/tenantecho/`. Two things are missing:
+- **No tacplus release has the step yet.** `tacplus fleet gateway` landed on main in `00c0136b`, after v2.6.14. The next minor, v2.7.0, is #954/#955, both still `needs-decision`.
+- **The fleet is on the old gateway.** fleet-seatrials is the fleet that runs tenantecho, and it pins gateway "0.2". tenantecho contributes only its webapp, so no macOS runner is needed.
+
+I can't run the check here: agents don't build, and a gate in this repo that clones and builds a whole fleet would need a design decision.
+
+**This run:**
+- **Filed tacplus-dev/fleet-seatrials#73**, labelled `approved` and `feature`, with first line `Parent: tacplus-dev/tacplus#195`. It asks seatrials to:
+  - pin gateway "0.3" and move to tacplus 2.7 once it's released;
+  - add the `launcher:` line, which 2.7's fleet build requires;
+  - run `tacplus fleet gateway` and commit the lock's `gateway:` section;
+  - gate on `--check` run twice, and confirm tenantecho's page and `/-/apps.json` are served;
+  - post the results on #195.
+- **Committed `5be88b1b`**, touching STATE.md alone: the gap and "Blocked on" lines now name fleet-seatrials#73 instead of the gateway release. Its land is queued with the manager, with no verdict yet.
+- **Wrote `Blocked-by: tacplus-dev/fleet-seatrials#73`** to the outcome file and checkpointed.
+
+I haven't yet posted the report on the parts 2–3 merge (commits `00c0136b`, `5ac61b58`, `76f35808`; batch of 11, 321b93d..76f3580, full gates, pipeline 3102621806, green). The land tool says not to comment while a land is queued.
+
+**Left for the next run**, after the manager's verdict and fleet-seatrials#73: post that report along with seatrials' digests and served page, then close #195.
+= success: #195 is still open. The gateway v0.3.0 release it was waiting on is out, but the last acceptance check still can't run.
+
+**What's in the way:** the check is `tacplus fleet gateway --check` run twice on a real fleet with the same image digest, plus tenantecho's page served at `/-/apps/tenantecho/`. Two things are missing:
+- **No tacplus release has the step yet.** `tacplus fleet gateway` landed on main in `00c0136b`, after v2.6.14. The next minor, v2.7.0, is #954/#955, both still `needs-decision`.
+- **The fleet is on the old gateway.** fleet-seatrials is the fleet that runs tenantecho, and it pins gateway "0.2". tenantecho contributes only its webapp, so no macOS runner is needed.
+
+I can't run the check here: agents don't build, and a gate in this repo that clones and builds a whole fleet would need a design decision.
+
+**This run:**
+- **Filed tacplus-dev/fleet-seatrials#73**, labelled `approved` and `feature`, with first line `Parent: tacplus-dev/tacplus#195`. It asks seatrials to:
+  - pin gateway "0.3" and move to tacplus 2.7 once it's released;
+  - add the `launcher:` line, which 2.7's fleet build requires;
+  - run `tacplus fleet gateway` and commit the lock's `gateway:` section;
+  - gate on `--check` run twice, and confirm tenantecho's page and `/-/apps.json` are served;
+  - post the results on #195.
+- **Committed `5be88b1b`**, touching STATE.md alone: the gap and "Blocked on" lines now name fleet-seatrials#73 instead of the gateway release. Its land is queued with the manager, with no verdict yet.
+- **Wrote `Blocked-by: tacplus-dev/fleet-seatrials#73`** to the outcome file and checkpointed.
+
+I haven't yet posted the report on the parts 2–3 merge (commits `00c0136b`, `5ac61b58`, `76f35808`; batch of 11, 321b93d..76f3580, full gates, pipeline 3102621806, green). The land tool says not to comment while a land is queued.
+
+**Left for the next run**, after the manager's verdict and fleet-seatrials#73: post that report along with seatrials' digests and served page, then close #195.
+= usage: {"claude-opus-5-5":{"inputTokens":46,"outputTokens":11383,"cacheReadInputTokens":1417819,"cacheCreationInputTokens":69000,"webSearchRequests":0,"costUSD":1.0634078000000002,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":4230,"canonicalModel":"claude-opus-5-5","provider":"firstParty","costBasis":"list"}}

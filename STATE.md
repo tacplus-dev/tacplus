@@ -67,7 +67,7 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-23 by lo
   skipped. For Java it runs OpenJML ESC (no longer JBMC, #257) over the JML specs on each generated validator, in
   the Maven module that compiles them; the build image's OpenJML runs on amd64 only (PROPOSALS.md).
   This repository, the compiler and no tacplus project, pins its own gates' build image by digest in
-  `build.lock` (#340: `build:2.6.13`, what `build:latest` resolves to), which the build pipeline (tacplus-dev/build)
+  `build.lock` (#340, relocked by #956: `build:2.6.14`, the 2.6 line's newest patch), which the build pipeline (tacplus-dev/build)
   plans from, so every land runs the gates and the security checks there; `security-exceptions.yaml` accepts the
   first pinned build's 122 HIGH findings rule-wide until 2026-12-31 (Jody, #340), each under its bug issue
   (#565–#584, #753–#756, #813), and the build fails from 2027-01-01 on whatever is left.

@@ -20,7 +20,9 @@
 # The verdict does not depend on the cap or the order the jobs ran in: each
 # gate's output prints whole, in the order named, as soon as it and every gate
 # before it finished, under the `=== GATE ===` and `=== GATE rc=N ===` lines,
-# and the last line is `=== OVERALL fail=N ===` (scripts/gates_test.go runs it
+# and the last line is `=== OVERALL fail=N ===`, giving the first failing
+# leg's reason and naming the failing legs after a failure
+# (`=== OVERALL fail=1 (LEG: REASON; failed: LEG...) ===`; scripts/gates_test.go runs it
 # with two caps and compares). Before that last line a table gives each gate's
 # wall time and the total.
 #
@@ -231,9 +233,28 @@ for ((g = 0; g < ${#gate_names[@]}; g++)); do
   fi
   printf '  %-22s %6ss  %s\n' "${gate_names[$g]}" "${gate_secs[$g]}" "$verdict"
 done
+# The failing legs, named on the last line: a build's verdict quotes it, and
+# whoever reads only the verdict (a looper run cannot read the build job's
+# log) learns which gate failed, not only that one did. The verdict quotes
+# its first 200 or so characters, so the first failing leg's reason leads:
+# its log's last `FAILED: ` line (a run.sh's die; `just` prints its own
+# error after it), from after `FAILED: `, else its last line, cut to 100
+# characters.
+failed=""
+reason=""
+for ((j = 0; j < ${#JOBS_NAMES[@]}; j++)); do
+  [[ "${JOBS_RC[$j]:-0}" -ne 0 ]] || continue
+  failed+=" ${JOBS_NAMES[$j]}"
+  if [[ -z "$reason" ]]; then
+    reason="$(grep 'FAILED: ' "$JOBS_DIR/$j.log" | tail -n 1)"
+    [[ -n "$reason" ]] || reason="$(grep -v '^[[:space:]]*$' "$JOBS_DIR/$j.log" | tail -n 1)"
+    reason="${reason#*FAILED: }"
+    reason="${JOBS_NAMES[$j]}: ${reason:0:100}; "
+  fi
+done
 printf '  %-22s %6ss\n' total "$(( $(date +%s) - started ))"
 # Each slot's cargo directory holds a dependency build; a failing run keeps
 # them, with the jobs' trees, for diagnosis.
 [[ $fail -eq 0 ]] && rm -rf "$WORKDIR"/cargo-slot*
-echo "=== OVERALL fail=$fail ==="
+echo "=== OVERALL fail=$fail${failed:+ (${reason}failed:$failed)} ==="
 exit $fail

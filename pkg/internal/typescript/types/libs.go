@@ -239,6 +239,7 @@ func typeScriptClientOnlyLibTemplate(path string) bool {
 		"key/package.json.tmpl",
 		"key/tsconfig.json.tmpl",
 		"servicemanager/EndpointConn.ts.tmpl",
+		"servicemanager/Rotation.ts.tmpl",
 		"servicemanager/ServiceConnection.ts.tmpl",
 		"servicemanager/index.ts.tmpl",
 		"servicemanager/package.json.tmpl",

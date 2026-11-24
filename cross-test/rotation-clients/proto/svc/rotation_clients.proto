@@ -1,0 +1,34 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// Rotation fixture for the client-only targets (tacplus#323): a C2S service
+// with one rpc of each streaming shape, which external clients reach through
+// the gateway, and a declared C2S client of it. The generated Go server serves
+// the <Svc>Rotating sibling; the generated TypeScript, Python, Swift and C#
+// clients carry their streams across token lifetimes on it. Nothing here
+// mentions rotation.
+
+syntax = "proto3";
+
+package rotationclients;
+
+import "sys/spec.proto";
+
+option (spec.grpc_c2s_client) = {service: "rotationclients.ViewerService"};
+
+message Tick {
+  int64 seq = 1;
+  string m = 2;
+}
+
+service ViewerService {
+  option (spec.service_c2s) = {auth_entitled_users: true};
+  rpc SendTicks(stream Tick) returns (Tick) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
+  }
+  rpc GenerateTicks(Tick) returns (stream Tick) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
+  }
+  rpc AssistTicks(stream Tick) returns (stream Tick) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_USER, exposure: RPC_EXPOSURE_EXTERNAL, flags: [RPC_FLAG_AUTH_ANY_USER]};
+  }
+}

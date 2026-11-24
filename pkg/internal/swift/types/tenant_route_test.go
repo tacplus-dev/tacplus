@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -496,8 +497,21 @@ func TestGenerateTenantRoutedSwiftClient(t *testing.T) {
 			t.Errorf("C2SClient.swift missing %q\n%s", want, c2s)
 		}
 	}
-	if strings.Contains(string(c2s), "harbor.HarborService/") {
+	if regexp.MustCompile(`"harbor\.HarborService/[^"]*": C2SRouteField`).MatchString(string(c2s)) {
 		t.Errorf("C2SClient.swift route table holds a platform rpc\n%s", c2s)
+	}
+	// The streams rotate (tacplus#323), routed or not; unary rpcs and a WATCH
+	// collection (a cursor of its own) do not.
+	if !strings.Contains(string(c2s), `"crew.CrewService/SendMessages",`) {
+		t.Errorf("C2SClient.swift does not rotate SendMessages\n%s", c2s)
+	}
+	for _, unwanted := range []string{`"crew.CrewService/GetSkipper",`, `"crew.CrewService/WatchCrew",`} {
+		if strings.Contains(string(c2s), unwanted) {
+			t.Errorf("C2SClient.swift rotates %s\n%s", unwanted, c2s)
+		}
+	}
+	if rotation, err := os.ReadFile(filepath.Join(sources, "Rotation.swift")); err != nil || !strings.Contains(string(rotation), "struct C2SRotationInterceptor: ClientInterceptor") {
+		t.Errorf("Rotation.swift missing or not the rotation interceptor (%v)", err)
 	}
 
 	w2s, err := os.ReadFile(filepath.Join(sources, "W2SClient.swift"))

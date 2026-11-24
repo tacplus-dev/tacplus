@@ -12,11 +12,14 @@ import (
 
 // goServesRotatingSibling reports whether a generated Go server wrapper also
 // serves the service's <Svc>Rotating sibling (tacplus#322): every
-// service-to-service service with a streaming rpc whose calls carry tokens.
-// A c2d service has no tokens (its socket is the boundary), and an
-// auth-disabled service has none to expire, so neither needs rotation.
+// service-to-service or client-to-server service with a streaming rpc whose
+// calls carry tokens. A C2S service's external clients reach it through the
+// gateway, which routes a rotation by its session id to the instance that
+// issued it (tacplus#323, tacplus-dev/gateway#26). A c2d service has no
+// tokens (its socket is the boundary), and an auth-disabled service has none
+// to expire, so neither needs rotation.
 func goServesRotatingSibling(service *parser.ServiceInfo) bool {
-	if !service.IsS2S || service.IsC2D || service.AuthDisabled {
+	if !(service.IsS2S || service.IsC2S) || service.IsC2D || service.AuthDisabled {
 		return false
 	}
 	for _, m := range service.Methods {

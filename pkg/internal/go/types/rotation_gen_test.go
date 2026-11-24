@@ -30,7 +30,8 @@ func TestGoServesRotatingSibling(t *testing.T) {
 	}{
 		{"s2s streaming", commonparser.ServiceInfo{IsS2S: true, Methods: []*commonparser.MethodInfo{unary, bidi}}, true},
 		{"s2s unary only", commonparser.ServiceInfo{IsS2S: true, Methods: []*commonparser.MethodInfo{unary}}, false},
-		{"c2s only", commonparser.ServiceInfo{IsC2S: true, Methods: []*commonparser.MethodInfo{bidi}}, false},
+		{"c2s only (through the gateway, tacplus#323)", commonparser.ServiceInfo{IsC2S: true, Methods: []*commonparser.MethodInfo{bidi}}, true},
+		{"c2s unary only", commonparser.ServiceInfo{IsC2S: true, Methods: []*commonparser.MethodInfo{unary}}, false},
 		{"c2d", commonparser.ServiceInfo{IsS2S: true, IsC2D: true, Methods: []*commonparser.MethodInfo{bidi}}, false},
 		{"auth disabled", commonparser.ServiceInfo{IsS2S: true, AuthDisabled: true, Methods: []*commonparser.MethodInfo{bidi}}, false},
 	}

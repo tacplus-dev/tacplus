@@ -2,8 +2,10 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Grpc.Core;
-{{- if .TenantRouted}}
+{{- if or .TenantRouted .RotatingMethods}}
 using Grpc.Core.Interceptors;
+{{- end}}
+{{- if .TenantRouted}}
 using Google.Protobuf;
 {{- end}}
 using Grpc.Net.Client;
@@ -26,6 +28,26 @@ public sealed class C2SClient : IDisposable
     public string Address { get; }
 
     private readonly GrpcChannel _channel;
+{{- if .RotatingMethods}}
+
+    // The streams of these methods outlive their tokens (tacplus#323): they
+    // rotate on the <Svc>Rotating sibling (Rotation.cs), make-before-break,
+    // and fall back to the plain method on a server without it.
+    private static readonly string[] RotatingMethods =
+    {
+{{- range .RotatingMethods}}
+        "{{.}}",
+{{- end}}
+    };
+
+    // The rotating legs' channel: each leg carries its own token, so it has no
+    // call credentials. Null without a token provider: nothing to rotate onto.
+    private readonly GrpcChannel? _legChannel;
+
+    // Typed clients call through this invoker: the rotation interceptor over
+    // the channel.
+    private readonly CallInvoker _invoker;
+{{- end}}
 {{- if .TenantRouted}}
 
     // Typed clients of tenant-routed services call through this invoker: the
@@ -95,8 +117,20 @@ public sealed class C2SClient : IDisposable
         }
 
         _channel = GrpcChannel.ForAddress($"{scheme}://{Address}", options);
+{{- if .RotatingMethods}}
+        CallInvoker invoker = _channel.CreateCallInvoker();
+        if (tokenProvider != null)
+        {
+            _legChannel = GrpcChannel.ForAddress($"{scheme}://{Address}", new GrpcChannelOptions
+            {
+                Credentials = useTls ? ChannelCredentials.SecureSsl : ChannelCredentials.Insecure,
+            });
+            invoker = invoker.Intercept(new RotationInterceptor(_legChannel.CreateCallInvoker(), tokenProvider, RotatingMethods));
+        }
+        _invoker = invoker;
+{{- end}}
 {{- if .TenantRouted}}
-        _routedInvoker = _channel.Intercept(new TenantRouteInterceptor());
+        _routedInvoker = {{if .RotatingMethods}}_invoker{{else}}_channel{{end}}.Intercept(new TenantRouteInterceptor());
 {{- end}}
     }
 
@@ -110,10 +144,18 @@ public sealed class C2SClient : IDisposable
         || host == "::1";
 {{range .Services}}
     /// <summary>Typed gRPC client for the {{.ClientType}} service.</summary>
-    public {{.ClientType}} {{.MethodName}}() => new {{.ClientType}}({{if .TenantRouted}}_routedInvoker{{else}}_channel{{end}});
+    public {{.ClientType}} {{.MethodName}}() => new {{.ClientType}}({{if .TenantRouted}}_routedInvoker{{else if $.RotatingMethods}}_invoker{{else}}_channel{{end}});
 {{end}}
     /// <summary>Disposes the underlying gRPC channel.</summary>
+{{- if .RotatingMethods}}
+    public void Dispose()
+    {
+        _channel.Dispose();
+        _legChannel?.Dispose();
+    }
+{{- else}}
     public void Dispose() => _channel.Dispose();
+{{- end}}
 }
 {{- if .TenantRouted}}
 

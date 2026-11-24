@@ -149,6 +149,7 @@ service DaemonApi {
 func TestTypeScriptClientOnlyLibraryTemplateFilterSkipsServiceRuntime(t *testing.T) {
 	for _, path := range []string{
 		"servicemanager/EndpointConn.ts.tmpl",
+		"servicemanager/Rotation.ts.tmpl",
 		"servicemanager/ServiceConnection.ts.tmpl",
 		"servicemanager/index.ts.tmpl",
 		"servicemanager/package.json.tmpl",

@@ -65,12 +65,34 @@
                 let stream: grpc.ClientDuplexStream<{{.InputType}}, {{.OutputType}}>;
                 try {
                     const client = channelProvider.channel();
+{{- if .Rotates}}
+                    // The stream outlives its token (tacplus#323): it rotates
+                    // on the {{.ServiceName}}Rotating sibling, or opens the
+                    // plain method on a server without it.
+                    const rotating = await openRotatingStream<{{.InputType}}, {{.OutputType}}>({
+                        client,
+                        path: '{{.FullPath}}',
+                        serialize: {{.Serialize}},
+                        deserialize: {{.Deserialize}},
+                        metadata,
+                        tokens: tokenProvider,
+                    });
+                    stream = rotating
+                        ? rotating as unknown as grpc.ClientDuplexStream<{{.InputType}}, {{.OutputType}}>
+                        : client.makeBidiStreamRequest<{{.InputType}}, {{.OutputType}}>(
+                            '{{.FullPath}}',
+                            {{.Serialize}},
+                            {{.Deserialize}},
+                            metadata,
+                        );
+{{- else}}
                     stream = client.makeBidiStreamRequest<{{.InputType}}, {{.OutputType}}>(
                         '{{.FullPath}}',
                         {{.Serialize}},
                         {{.Deserialize}},
                         metadata,
                     );
+{{- end}}
                 } catch (err) {
                     errors++;
                     console.error(`{{.MethodName}}: stream open failed (errors=${errors}), retrying in ${backoff}ms`, err);

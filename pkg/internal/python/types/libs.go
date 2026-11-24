@@ -179,6 +179,7 @@ func pythonClientOnlyLibTemplate(path string) bool {
 	case "servicemanager/__init__.py.tmpl",
 		"servicemanager/connection.py.tmpl",
 		"servicemanager/endpoint.py.tmpl",
+		"servicemanager/rotation.py.tmpl",
 		"tags/__init__.py.tmpl",
 		// client_im: client identity manager for CLI tools/daemons that
 		// authenticate as users (OAuth) or via credential pairs. Mints via the

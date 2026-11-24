@@ -311,7 +311,9 @@ cert-stream-rust:
 # Rust server and client carry each stream shape across several 3 s token lifetimes with no
 # loss, duplication or reordering, and fail closed (mint failure, revocation,
 # another subject, a leg cut without `last`, fallback to the plain method).
-rotation: rotation-go rotation-java rotation-rust
+# The gate runs the client-only targets' legs too (rotation-clients below,
+# tacplus#323), each a leg of its own: gates.sh splits a gate one level deep.
+rotation: rotation-go rotation-java rotation-rust rotation-clients-typescript rotation-clients-python rotation-clients-csharp rotation-clients-swift
 
 rotation-go:
   {{lock}} bash cross-test/rotation/run.sh --language go
@@ -321,6 +323,25 @@ rotation-java:
 
 rotation-rust:
   {{lock}} bash cross-test/rotation/run.sh --language rust
+
+# Make-before-break stream rotation for the client-only targets (tacplus#323):
+# the generated TypeScript, Python, C# and Swift C2S clients carry each stream shape across several
+# 3 s token lifetimes on the generated Go server's <Svc>Rotating sibling, with
+# no loss, duplication or reordering, and fail closed (another subject,
+# revocation, fallback to the plain method).
+rotation-clients: rotation-clients-typescript rotation-clients-python rotation-clients-csharp rotation-clients-swift
+
+rotation-clients-typescript:
+  {{lock}} bash cross-test/rotation-clients/run.sh --language typescript
+
+rotation-clients-python:
+  {{lock}} bash cross-test/rotation-clients/run.sh --language python
+
+rotation-clients-csharp:
+  {{lock}} bash cross-test/rotation-clients/run.sh --language csharp
+
+rotation-clients-swift:
+  {{lock}} bash cross-test/rotation-clients/run.sh --language swift
 
 # Server-side stream credential expiry (issue #260): a client-streaming, a
 # server-streaming and a bidi stream opened with a short-lived token that is

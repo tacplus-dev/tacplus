@@ -52,7 +52,8 @@ func TestPythonGrpcClientRefusesBadRouteTenantBeforeSend(t *testing.T) {
 	}
 
 	server := generatePyGrpcClientMethod(svc, pyRoutedMethod(false, true), "crew")
-	if strings.Index(server, check) < 0 || strings.Index(server, check) > strings.Index(server, "self._stub.Send(") {
+	// The stream opens on the rotating sibling first (tacplus#323).
+	if strings.Index(server, check) < 0 || strings.Index(server, check) > strings.Index(server, "open_rotating_stream(") {
 		t.Fatalf("routed server-streaming client must check the route field before opening the stream:\n%s", server)
 	}
 

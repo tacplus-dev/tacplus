@@ -28,7 +28,8 @@ func TestRustServesRotatingSibling(t *testing.T) {
 		{"s2s streaming", parser.ServiceInfo{IsS2S: true, Methods: []*parser.MethodInfo{unary, bidi}}, true},
 		{"s2s unary only", parser.ServiceInfo{IsS2S: true, Methods: []*parser.MethodInfo{unary}}, false},
 		{"s2s mcp tool only", parser.ServiceInfo{IsS2S: true, Methods: []*parser.MethodInfo{mcp}}, false},
-		{"c2s only", parser.ServiceInfo{IsC2S: true, Methods: []*parser.MethodInfo{bidi}}, false},
+		{"c2s only (through the gateway, tacplus#323)", parser.ServiceInfo{IsC2S: true, Methods: []*parser.MethodInfo{bidi}}, true},
+		{"c2s unary only", parser.ServiceInfo{IsC2S: true, Methods: []*parser.MethodInfo{unary}}, false},
 		{"c2d", parser.ServiceInfo{IsS2S: true, IsC2D: true, Methods: []*parser.MethodInfo{bidi}}, false},
 		{"auth disabled", parser.ServiceInfo{IsS2S: true, AuthDisabled: true, Methods: []*parser.MethodInfo{bidi}}, false},
 	}
@@ -38,7 +39,7 @@ func TestRustServesRotatingSibling(t *testing.T) {
 		}
 		// The descriptor-level predicate the ServiceManager and the crate
 		// gate use must agree with the wrapper's.
-		d := parser.ServiceDescriptor{Name: c.svc.Name, IsS2S: c.svc.IsS2S, IsC2D: c.svc.IsC2D, AuthDisabled: c.svc.AuthDisabled}
+		d := parser.ServiceDescriptor{Name: c.svc.Name, IsS2S: c.svc.IsS2S, IsC2S: c.svc.IsC2S, IsC2D: c.svc.IsC2D, AuthDisabled: c.svc.AuthDisabled}
 		for _, m := range c.svc.Methods {
 			d.Methods = append(d.Methods, parser.MethodDescriptor{Name: m.Name, ClientStreaming: m.ClientStreaming, ServerStreaming: m.ServerStreaming, IsMcp: m.IsMcp})
 		}

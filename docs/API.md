@@ -422,13 +422,19 @@ shape:
   EventBus subscribers) obtain a fresh token per reconnect attempt.
 
 A stream outlives its token by **re-open before teardown** (make-before-break
-rotation, tacplus#322; generated in Go, Java and Rust). For
-every service-to-service service with streaming rpcs, the generated server also
-serves the sibling `<pkg>.<Svc>Rotating`, same method names, every method bidi
-of `sys/rotation.proto`'s `Envelope{payload, last, session_id, cursor, fin}`;
-the original method is unchanged on the wire. The generated S2S client opens the
-sibling (and falls back to the original method on `UNIMPLEMENTED`, where the
-stream ends at its token's `exp` as below). At about 75% of the token's lifetime
+rotation, tacplus#322, #323). For every service-to-service or client-to-server
+service with streaming rpcs whose calls carry tokens, the generated Go, Java and
+Rust server also serves the sibling `<pkg>.<Svc>Rotating`, same method names,
+every method bidi of `sys/rotation.proto`'s
+`Envelope{payload, last, session_id, cursor, fin}`; the original method is
+unchanged on the wire. The generated S2S client (Go, Java, Rust) and the
+generated C2S client of the client-only targets (TypeScript, Python, C#, Swift) open
+the sibling, and fall back to the original method on `UNIMPLEMENTED`, where the
+stream ends at its token's `exp` as below; a C2S client whose token has no
+readable `exp` (an opaque one) opens the original method. A C2S stream reaches
+its backend through the gateway, which routes a rotation by its session id to
+the instance that issued it and admits it only when the new token names the
+same subject (tacplus-dev/gateway#26). At about 75% of the token's lifetime
 it acquires a new token, opens a new leg on the same connection presenting the
 session id, sends `last` on the old leg once the new one is attached, and the
 server answers with its own `last` and moves its sends; each side reads the old
@@ -454,7 +460,11 @@ whole life, and the caller one stream: no user code mentions rotation.
 - A leg that ends without `last` ends the logical stream (the handler's context
   is cancelled, the caller gets the status); it is never spliced onto another.
 - Streams with a cursor of their own (state `Watch` revisions, EventBus
-  subscriptions) keep their reconnect paths on the original method.
+  subscriptions, and in the client-only targets' C2S clients the WATCH and
+  SNAPSHOT collections) keep their reconnect paths on the original method.
+- Not yet rotated (KNOWN_TEST_GAPS RT-2): the Go, Java and Rust C2S clients
+  (`c2sm`), and W2S streams (SSE and WebSocket): these end at their token's
+  `exp`.
 
 Servers terminate streams carrying expired credentials. The generated Go,
 Java and Rust servers end every streaming RPC (client-, server- or

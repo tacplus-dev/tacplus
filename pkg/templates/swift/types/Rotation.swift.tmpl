@@ -1,0 +1,573 @@
+import Foundation
+import GRPCCore
+import GRPCNIOTransportHTTP2
+import SwiftProtobuf
+import Synchronization
+
+// Make-before-break stream rotation, the client end (tacplus#322, #323;
+// sys/rotation.proto): the Swift twin of Go's chassis/rotation client.
+//
+// A stream carries one token, the one it opened with, and the server ends it
+// at that token's exp. So a logical stream is carried by a sequence of legs:
+// streams of the service's <pkg>.<Svc>Rotating sibling, bidi streams of
+// Envelope{payload, last, session_id, cursor, fin}, each opened with a token.
+// At about 75% of a leg's token lifetime the client acquires a new token,
+// opens a new leg presenting the session id, and cuts over: last on the old
+// leg each way, each side reading the old leg to its last before anything of
+// the new one. Through the gateway, a rotation goes to the instance that
+// issued the session, admitted only for the same subject
+// (tacplus-dev/gateway#26).
+//
+// The C2S client's typed clients call through C2SRotationInterceptor; the
+// caller sees one stream and never rotation. A server without the sibling
+// answers UNIMPLEMENTED and the call falls back to the plain method, where
+// the stream ends at its token's exp.
+//
+// It fails closed. A leg that ends without its last ends the logical stream
+// with that leg's status, never spliced onto another. A client that cannot
+// get a newer token keeps its leg and retries every second until the server
+// ends the leg at its exp. UNAUTHENTICATED on an open or a rotation is retried
+// once with a fresh token; PERMISSION_DENIED never. A refused rotation is the
+// last: the stream ends with its current leg, at the handler's end if that
+// comes first, else at the leg's exp with the refusal's code. Tokens are never
+// logged.
+
+enum C2SRotation {
+    static let suffix = "Rotating"
+    // The fraction of a leg's token lifetime after which the client rotates.
+    static let rotateAt = 0.75
+    static let openTimeout: Duration = .seconds(10)
+    static let rotateMin: Duration = .milliseconds(250)
+    static let rotateRetry: Duration = .seconds(1)
+    // How long past its token's exp a leg may live: the server ends it at exp
+    // (UNAUTHENTICATED); this only bounds a server that does not.
+    static let expiryGrace: Duration = .seconds(2)
+
+    // sys/rotation.proto's Envelope, on the wire. Field numbers are frozen.
+    struct Envelope: Sendable {
+        var payload: [UInt8] = []
+        var last = false
+        var sessionID = ""
+        var fin = false
+
+        // An envelope with none of last, fin, session_id set carries exactly
+        // one message, even an empty one.
+        var isMessage: Bool { !last && !fin && sessionID.isEmpty }
+        var malformed: Bool { !isMessage && !payload.isEmpty }
+    }
+
+    struct MalformedEnvelope: Error {}
+
+    private static func varint(_ value: Int, into out: inout [UInt8]) {
+        var v = UInt64(value)
+        while v > 0x7F {
+            out.append(UInt8(v & 0x7F) | 0x80)
+            v >>= 7
+        }
+        out.append(UInt8(v))
+    }
+
+    private static func bytes(_ tag: UInt8, _ b: [UInt8], into out: inout [UInt8]) {
+        guard !b.isEmpty else { return }
+        out.append(tag)
+        varint(b.count, into: &out)
+        out.append(contentsOf: b)
+    }
+
+    static func encode(payload: [UInt8] = [], last: Bool = false, sessionID: String = "", fin: Bool = false) -> [UInt8] {
+        var out: [UInt8] = []
+        bytes(0x0A, payload, into: &out)
+        if last { out.append(contentsOf: [0x10, 1]) }
+        bytes(0x1A, Array(sessionID.utf8), into: &out)
+        if fin { out.append(contentsOf: [0x28, 1]) }
+        return out
+    }
+
+    static func decode(_ buf: [UInt8]) throws -> Envelope {
+        var e = Envelope()
+        var pos = 0
+        func varint() throws -> UInt64 {
+            var result: UInt64 = 0
+            var shift: UInt64 = 0
+            while shift < 64 {
+                guard pos < buf.count else { throw MalformedEnvelope() }
+                let b = buf[pos]
+                pos += 1
+                result |= UInt64(b & 0x7F) << shift
+                if b & 0x80 == 0 { return result }
+                shift += 7
+            }
+            throw MalformedEnvelope()
+        }
+        func take(_ n: Int) throws -> [UInt8] {
+            guard n >= 0, pos + n <= buf.count else { throw MalformedEnvelope() }
+            defer { pos += n }
+            return Array(buf[pos..<(pos + n)])
+        }
+        while pos < buf.count {
+            let tag = try varint()
+            let field = tag >> 3
+            switch tag & 7 {
+            case 0:
+                let v = try varint()
+                if field == 2 { e.last = v != 0 }
+                if field == 5 { e.fin = v != 0 }
+            case 1:
+                _ = try take(8)
+            case 2:
+                let n = try varint()
+                guard n <= UInt64(buf.count) else { throw MalformedEnvelope() }
+                let chunk = try take(Int(n))
+                if field == 1 { e.payload = chunk }
+                if field == 3 { e.sessionID = String(decoding: chunk, as: UTF8.self) }
+            case 5:
+                _ = try take(4)
+            default:
+                throw MalformedEnvelope()
+            }
+        }
+        return e
+    }
+
+    /// A JWT's exp, or nil when it has none readable (an opaque token).
+    static func tokenExpiry(_ token: String) -> ContinuousClock.Instant? {
+        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return nil }
+        var b64 = parts[1].replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while b64.count % 4 != 0 { b64 += "=" }
+        guard let data = Data(base64Encoded: b64),
+              let claims = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        let exp: Double?
+        if let n = claims["exp"] as? NSNumber {
+            exp = n.doubleValue
+        } else if let s = claims["exp"] as? String {
+            exp = Double(s)
+        } else {
+            exp = nil
+        }
+        guard let exp, exp > 0 else { return nil }
+        let left = exp - Date().timeIntervalSince1970
+        return ContinuousClock.now.advanced(by: .milliseconds(Int64(left * 1000)))
+    }
+
+    struct Raw: MessageSerializer, MessageDeserializer {
+        func serialize<Bytes: GRPCContiguousBytes>(_ message: [UInt8]) throws -> Bytes {
+            Bytes(message)
+        }
+
+        func deserialize<Bytes: GRPCContiguousBytes>(_ serializedMessageBytes: Bytes) throws -> [UInt8] {
+            serializedMessageBytes.withUnsafeBytes { Array($0) }
+        }
+    }
+}
+
+/// Holds the GRPCClient the rotating legs go on, set once the client exists.
+final class C2SRotationClientBox: Sendable {
+    private let client = Mutex<GRPCClient<HTTP2ClientTransport.Posix>?>(nil)
+
+    func set(_ c: GRPCClient<HTTP2ClientTransport.Posix>) {
+        self.client.withLock { $0 = c }
+    }
+
+    func get() -> GRPCClient<HTTP2ClientTransport.Posix>? {
+        self.client.withLock { $0 }
+    }
+}
+
+/// A `ClientInterceptor` that carries the streams of `rotating` methods
+/// across token lifetimes on their `<Svc>Rotating` sibling.
+struct C2SRotationInterceptor: ClientInterceptor {
+    /// Keyed by `MethodDescriptor.fullyQualifiedMethod`.
+    let rotating: Set<String>
+    let tokenProvider: C2STokenProvider
+    let box: C2SRotationClientBox
+
+    func intercept<Input: Sendable, Output: Sendable>(
+        request: StreamingClientRequest<Input>,
+        context: ClientContext,
+        next: (
+            _ request: StreamingClientRequest<Input>,
+            _ context: ClientContext
+        ) async throws -> StreamingClientResponse<Output>
+    ) async throws -> StreamingClientResponse<Output> {
+        guard self.rotating.contains(context.descriptor.fullyQualifiedMethod),
+              let client = self.box.get(),
+              Input.self is any SwiftProtobuf.Message.Type,
+              Output.self is any SwiftProtobuf.Message.Type
+        else {
+            return try await next(request, context)
+        }
+        let session = C2SRotationSession<Input, Output>(
+            client: client,
+            sibling: MethodDescriptor(
+                fullyQualifiedService: context.descriptor.service.fullyQualifiedService + C2SRotation.suffix,
+                method: context.descriptor.method
+            ),
+            metadata: request.metadata,
+            tokenProvider: self.tokenProvider
+        )
+        guard let response = try await session.open() else {
+            // An opaque token, or a server without the sibling: the plain method.
+            return try await next(request, context)
+        }
+        let producer = request.producer
+        Task {
+            do {
+                try await producer(RPCWriter(wrapping: C2SRotationWriter(session: session)))
+                await session.finishSending()
+            } catch {
+                await session.cancel()
+            }
+        }
+        return response
+    }
+}
+
+struct C2SRotationWriter<Input: Sendable, Output: Sendable>: RPCWriterProtocol {
+    let session: C2SRotationSession<Input, Output>
+
+    func write(_ element: Input) async throws {
+        try await self.session.send(element)
+    }
+
+    func write(contentsOf elements: some Sequence<Input>) async throws {
+        for element in elements {
+            try await self.write(element)
+        }
+    }
+}
+
+/// One leg: a bidi call of the sibling, its sends and its received envelopes.
+final class C2SRotationLeg: Sendable {
+    let outbound: AsyncStream<[UInt8]>.Continuation
+    let inbound: AsyncThrowingStream<[UInt8], any Error>
+    let exp: ContinuousClock.Instant
+    let task: Task<Void, Never>
+
+    init(
+        outbound: AsyncStream<[UInt8]>.Continuation,
+        inbound: AsyncThrowingStream<[UInt8], any Error>,
+        exp: ContinuousClock.Instant,
+        task: Task<Void, Never>
+    ) {
+        self.outbound = outbound
+        self.inbound = inbound
+        self.exp = exp
+        self.task = task
+    }
+
+    func cancel() {
+        self.outbound.finish()
+        self.task.cancel()
+    }
+}
+
+/// One logical stream over a sequence of legs.
+actor C2SRotationSession<Input: Sendable, Output: Sendable> {
+    typealias BodyPart = StreamingClientResponse<Output>.Contents.BodyPart
+
+    private let client: GRPCClient<HTTP2ClientTransport.Posix>
+    private let sibling: MethodDescriptor
+    private let metadata: Metadata
+    private let tokenProvider: C2STokenProvider
+    private var sessionID = ""
+    private var sendLeg: C2SRotationLeg?
+    // The leg after the read leg, set before the cutover.
+    private var nextLeg: C2SRotationLeg?
+    private var legs: [C2SRotationLeg] = []
+    private var finSent = false
+    private var finished = false
+    private var rotatingNow = false
+    // The code a rotation was refused with: the stream rotates no more and
+    // ends with its current leg (tacplus#877).
+    private var refused: RPCError.Code?
+    private var timer: Task<Void, Never>?
+    private var body: AsyncThrowingStream<BodyPart, any Error>.Continuation?
+
+    init(client: GRPCClient<HTTP2ClientTransport.Posix>, sibling: MethodDescriptor, metadata: Metadata, tokenProvider: @escaping C2STokenProvider) {
+        self.client = client
+        self.sibling = sibling
+        var md = metadata
+        md.removeAllValues(forKey: "authorization")
+        self.metadata = md
+        self.tokenProvider = tokenProvider
+    }
+
+    // MARK: Open
+
+    /// Opens the first leg and returns the logical response; nil when the
+    /// stream does not rotate (an opaque token, or no sibling: UNIMPLEMENTED).
+    func open() async throws -> StreamingClientResponse<Output>? {
+        let token = try await self.tokenProvider()
+        guard C2SRotation.tokenExpiry(token) != nil else { return nil }
+        let first: C2SRotationLeg
+        do {
+            first = try await self.openLeg(token: token, joining: "")
+        } catch let error as RPCError where error.code == .unimplemented {
+            return nil
+        } catch let error as RPCError where error.code == .unauthenticated {
+            let fresh = try await self.tokenProvider()
+            guard !fresh.isEmpty else { throw error }
+            do {
+                first = try await self.openLeg(token: fresh, joining: "")
+            } catch let retry as RPCError where retry.code == .unimplemented {
+                return nil
+            }
+        }
+        self.sendLeg = first
+        let (stream, continuation) = AsyncThrowingStream<BodyPart, any Error>.makeStream()
+        self.body = continuation
+        continuation.onTermination = { [weak self] termination in
+            if case .cancelled = termination {
+                Task { await self?.cancel() }
+            }
+        }
+        Task { await self.pump(first) }
+        self.schedule(first)
+        return StreamingClientResponse(of: Output.self, metadata: [:], bodyParts: RPCAsyncSequence(wrapping: stream))
+    }
+
+    // openLeg opens one leg with token: its first envelope names the session
+    // it joins ("" for a new one), and it is attached once the server's first
+    // envelope names the session.
+    private func openLeg(token: String, joining: String) async throws -> C2SRotationLeg {
+        guard let exp = C2SRotation.tokenExpiry(token) else {
+            throw RPCError(code: .unauthenticated, message: "rotation: the token does not parse")
+        }
+        var md = self.metadata
+        md.replaceOrAddString("Bearer \(token)", forKey: "authorization")
+        var options = CallOptions.defaults
+        options.timeout = ContinuousClock.now.duration(to: exp) + C2SRotation.expiryGrace
+        let (outStream, outbound) = AsyncStream<[UInt8]>.makeStream()
+        let (inbound, inContinuation) = AsyncThrowingStream<[UInt8], any Error>.makeStream()
+        let (attached, attachedContinuation) = AsyncThrowingStream<[UInt8], any Error>.makeStream()
+        let client = self.client
+        let sibling = self.sibling
+        let task = Task {
+            do {
+                try await client.bidirectionalStreaming(
+                    request: StreamingClientRequest(of: [UInt8].self, metadata: md) { writer in
+                        for await envelope in outStream {
+                            try await writer.write(envelope)
+                        }
+                    },
+                    descriptor: sibling,
+                    serializer: C2SRotation.Raw(),
+                    deserializer: C2SRotation.Raw(),
+                    options: options
+                ) { response in
+                    var it = response.messages.makeAsyncIterator()
+                    guard let first = try await it.next() else {
+                        attachedContinuation.finish(throwing: RPCError(code: .permissionDenied, message: "rotation: the server did not attach the leg"))
+                        inContinuation.finish()
+                        return
+                    }
+                    attachedContinuation.yield(first)
+                    attachedContinuation.finish()
+                    while let message = try await it.next() {
+                        inContinuation.yield(message)
+                    }
+                    inContinuation.finish()
+                }
+            } catch {
+                attachedContinuation.finish(throwing: error)
+                inContinuation.finish(throwing: error)
+            }
+        }
+        let leg = C2SRotationLeg(outbound: outbound, inbound: inbound, exp: exp, task: task)
+        self.legs.append(leg)
+        outbound.yield(C2SRotation.encode(sessionID: joining))
+        let first: [UInt8]?
+        do {
+            first = try await withThrowingTaskGroup(of: [UInt8]?.self) { group in
+                group.addTask {
+                    var it = attached.makeAsyncIterator()
+                    return try await it.next()
+                }
+                group.addTask {
+                    try await Task.sleep(for: C2SRotation.openTimeout)
+                    throw RPCError(code: .deadlineExceeded, message: "rotation: the server did not attach the leg in time")
+                }
+                defer { group.cancelAll() }
+                return try await group.next() ?? nil
+            }
+        } catch {
+            leg.cancel()
+            throw error
+        }
+        guard let first, let e = try? C2SRotation.decode(first),
+              !e.sessionID.isEmpty, joining.isEmpty || e.sessionID == joining,
+              e.payload.isEmpty, !e.last, !e.fin
+        else {
+            leg.cancel()
+            throw RPCError(code: .permissionDenied, message: "rotation: the server did not attach the leg")
+        }
+        self.sessionID = e.sessionID
+        return leg
+    }
+
+    // MARK: Reading
+
+    // pump moves the read leg's envelopes to the caller, leg by leg.
+    private func pump(_ first: C2SRotationLeg) async {
+        var leg = first
+        while !self.finished {
+            var cutTo: C2SRotationLeg?
+            do {
+                for try await raw in leg.inbound {
+                    guard let e = try? C2SRotation.decode(raw), !e.malformed else {
+                        self.finish(RPCError(code: .internalError, message: "rotation: malformed envelope"))
+                        return
+                    }
+                    if e.isMessage {
+                        guard let type = Output.self as? any SwiftProtobuf.Message.Type,
+                              let message = try? type.init(serializedBytes: e.payload) as? Output
+                        else {
+                            self.finish(RPCError(code: .internalError, message: "rotation: unmarshal failed"))
+                            return
+                        }
+                        self.body?.yield(.message(message))
+                    }
+                    if e.last {
+                        guard let next = self.nextLeg else {
+                            self.finish(RPCError(code: .internalError, message: "rotation: last with no leg to cut over to"))
+                            return
+                        }
+                        self.nextLeg = nil
+                        cutTo = next
+                        break
+                    }
+                }
+            } catch {
+                // A leg that ends without last ends the logical stream with
+                // its status: the handler's own end, or a fault. Never
+                // spliced. After a refused rotation, the server's end of the
+                // leg at its exp is the refusal's.
+                var rpcError = (error as? RPCError) ?? RPCError(code: .unknown, message: "\(error)")
+                if let refused = self.refused, rpcError.code == .unauthenticated {
+                    rpcError = RPCError(code: refused, message: "")
+                }
+                self.finish(rpcError)
+                return
+            }
+            guard let next = cutTo else {
+                // The leg ended OK without last: the handler's own end.
+                self.finish(nil)
+                return
+            }
+            // The old leg ends OK after its last; its call task ends with it.
+            leg = next
+        }
+    }
+
+    private func finish(_ error: RPCError?) {
+        guard !self.finished else { return }
+        self.finished = true
+        self.timer?.cancel()
+        if let error {
+            for leg in self.legs { leg.cancel() }
+            self.body?.finish(throwing: error)
+        } else {
+            self.nextLeg?.cancel()
+            self.body?.yield(.trailingMetadata([:]))
+            self.body?.finish()
+        }
+    }
+
+    func cancel() {
+        self.finish(RPCError(code: .cancelled, message: "the logical stream was cancelled"))
+    }
+
+    // MARK: Sending
+
+    func send(_ message: Input) throws {
+        if self.finSent {
+            throw RPCError(code: .internalError, message: "rotation: write after the request stream finished")
+        }
+        guard !self.finished, let leg = self.sendLeg else { return }
+        guard let m = message as? any SwiftProtobuf.Message else {
+            throw RPCError(code: .internalError, message: "rotation: the request is not a protobuf message")
+        }
+        let payload: [UInt8] = try m.serializedBytes()
+        leg.outbound.yield(C2SRotation.encode(payload: payload))
+    }
+
+    // The client's half-close of the logical stream: fin; the leg stays open
+    // to carry last.
+    func finishSending() {
+        guard !self.finished, !self.finSent, let leg = self.sendLeg else { return }
+        self.finSent = true
+        leg.outbound.yield(C2SRotation.encode(fin: true))
+    }
+
+    // MARK: Rotation
+
+    private func schedule(_ leg: C2SRotationLeg) {
+        let left = ContinuousClock.now.duration(to: leg.exp)
+        let delay = left * C2SRotation.rotateAt
+        self.later(delay < C2SRotation.rotateMin ? C2SRotation.rotateMin : delay)
+    }
+
+    private func later(_ delay: Duration) {
+        guard !self.finished else { return }
+        self.timer?.cancel()
+        self.timer = Task {
+            try? await Task.sleep(for: delay)
+            if !Task.isCancelled {
+                await self.rotate()
+            }
+        }
+    }
+
+    // rotate is make-before-break: a new token, a new leg joining this
+    // session, then the cutover. A mint that fails or gives no newer token is
+    // retried every second; the current leg ends at its token's exp regardless.
+    private func rotate() async {
+        guard !self.finished, !self.rotatingNow, self.refused == nil, let current = self.sendLeg else { return }
+        self.rotatingNow = true
+        defer { self.rotatingNow = false }
+        let token = (try? await self.tokenProvider()) ?? ""
+        guard let exp = C2SRotation.tokenExpiry(token), exp > current.exp else {
+            // No newer token yet: the token source renews it ahead of expiry.
+            self.later(C2SRotation.rotateRetry)
+            return
+        }
+        var next: C2SRotationLeg?
+        var failure: RPCError?
+        do {
+            next = try await self.openLeg(token: token, joining: self.sessionID)
+        } catch {
+            failure = (error as? RPCError) ?? RPCError(code: .unknown, message: "\(error)")
+            if failure?.code == .unauthenticated, let fresh = try? await self.tokenProvider(), !fresh.isEmpty {
+                do {
+                    next = try await self.openLeg(token: fresh, joining: self.sessionID)
+                    failure = nil
+                } catch {
+                    failure = (error as? RPCError) ?? RPCError(code: .unknown, message: "\(error)")
+                }
+            }
+        }
+        guard let next, failure == nil else {
+            if self.finished { return }
+            if let code = failure?.code, code == .unauthenticated || code == .permissionDenied {
+                // A refused rotation is the last: the stream ends with its
+                // current leg.
+                self.refused = code
+                return
+            }
+            self.later(C2SRotation.rotateRetry)
+            return
+        }
+        if self.finished {
+            next.cancel()
+            return
+        }
+        self.nextLeg = next
+        // The cutover: last on the old leg, then its half-close.
+        current.outbound.yield(C2SRotation.encode(last: true))
+        current.outbound.finish()
+        self.sendLeg = next
+        self.schedule(next)
+    }
+}

@@ -466,7 +466,18 @@ grep -rn '"\^[0-9]\+\.[0-9]\+' pkg/internal/ --include='*.go'
   `StreamRotation.channel`, its legs pinned to one channel). Rust's is the
   `chassis/rotation` crate (the wrapper's `rotating_sibling`, served by the
   ServiceManager with `ROTATING_RPC_PATHS` under the expiry layer; the client's
-  `RotatingChannel` on the endpoint the stream resolved at open). Every language
+  `RotatingChannel` on the endpoint the stream resolved at open). The sibling
+  is served for a token-carrying C2S service as for an S2S one (tacplus#323),
+  and the client-only targets' C2S clients rotate: TypeScript's is the
+  servicemanager chassis' `Rotation.ts` (`openRotatingStream`, used by the
+  generated client methods, `tsStreamRotates`), Python's its `rotation.py`
+  (`open_rotating_stream`, `pyStreamRotates`), C#'s the `RotationInterceptor`
+  in `Rotation.cs` (installed by `C2SClient` over a leg channel without call
+  credentials, `csharpStreamRotates`), Swift's the `C2SRotationInterceptor` in
+  `Rotation.swift` (its legs raw-bytes bidi calls on the `C2SClient`'s own
+  `GRPCClient`, whose bearer interceptor leaves a leg's token in place,
+  `swiftStreamRotates`); each encodes the Envelope by hand, so it
+  needs no generated `sys/rotation.proto` binding. Every language
   must follow the same wire (`sys/rotation.proto`) and its message
   rule: an envelope with none of `last`, `fin`, `session_id` set is exactly one
   message, even an empty one. Per-message

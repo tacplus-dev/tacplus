@@ -51,7 +51,7 @@ case "$leg" in
 esac
 echo "leg $leg ends"
 rmdir "$dir.in-use"
-case "$leg" in broken|multi-b) exit 3 ;; esac
+case "$leg" in broken|multi-b) echo "$leg check FAILED: $leg broke"; echo "error: Recipe $leg failed"; exit 3 ;; esac
 exit 0
 `
 
@@ -106,7 +106,7 @@ func TestGatesVerdictDoesNotDependOnTheCap(t *testing.T) {
 	for _, want := range []string{
 		"=== protoc-check rc=0 ===",
 		"=== alpha ===\nleg alpha starts\nleg alpha ends\n=== alpha rc=0 ===",
-		"=== multi ===\n--- multi-a ---\nleg multi-a starts\nleg multi-a ends\n--- multi-a rc=0 ---\n--- multi-b ---\nleg multi-b starts\nleg multi-b ends\n--- multi-b rc=3 ---\n=== multi rc=3 ===",
+		"=== multi ===\n--- multi-a ---\nleg multi-a starts\nleg multi-a ends\n--- multi-a rc=0 ---\n--- multi-b ---\nleg multi-b starts\nleg multi-b ends\nmulti-b check FAILED: multi-b broke\nerror: Recipe multi-b failed\n--- multi-b rc=3 ---\n=== multi rc=3 ===",
 		"=== slow rc=0 ===",
 		"=== broken rc=3 ===",
 		"=== omega rc=0 ===",
@@ -123,8 +123,9 @@ func TestGatesVerdictDoesNotDependOnTheCap(t *testing.T) {
 	if got := strings.Join(names, " "); got != "protoc-check alpha multi slow broken omega" {
 		t.Errorf("gates printed in the order %q, not the order named", got)
 	}
-	if !strings.HasSuffix(serial, "=== OVERALL fail=1 ===\n") || serialRC != 1 {
-		t.Errorf("a failing gate must end with OVERALL fail=1 and exit 1; exit %d:\n%s", serialRC, serial)
+	// The last line names the failing legs: a build's verdict quotes it.
+	if !strings.HasSuffix(serial, "=== OVERALL fail=1 (multi-b: multi-b broke; failed: multi-b broken) ===\n") || serialRC != 1 {
+		t.Errorf("a failing gate must end with OVERALL fail=1 giving its first failing leg's reason, naming the failing legs, and exit 1; exit %d:\n%s", serialRC, serial)
 	}
 	if !regexp.MustCompile(`(?m)^  alpha +\d+s  pass$`).MatchString(serial) ||
 		!regexp.MustCompile(`(?m)^  broken +\d+s  FAIL$`).MatchString(serial) ||
@@ -158,8 +159,8 @@ func TestGatesVerdictDoesNotDependOnTheCap(t *testing.T) {
 func TestGatesReportEachGateAsItEndsAndStopAHungOne(t *testing.T) {
 	dir := t.TempDir()
 	out, rc, took := runGatesOf(t, dir, "2", []string{"GATES_TIMEOUT=3"}, "hang", "alpha")
-	if rc != 1 || !strings.HasSuffix(out, "=== OVERALL fail=1 ===\n") {
-		t.Errorf("a hung gate must fail the gates; exit %d:\n%s", rc, out)
+	if rc != 1 || !strings.HasSuffix(out, "=== OVERALL fail=1 (hang: gates: hang timed out after 3s (GATES_TIMEOUT): stopped; failed: hang) ===\n") {
+		t.Errorf("a hung gate must fail the gates, named; exit %d:\n%s", rc, out)
 	}
 	if took > 20*time.Second {
 		t.Errorf("the gates took %s: the hung gate was not stopped at GATES_TIMEOUT=3", took)

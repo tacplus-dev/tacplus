@@ -31,6 +31,12 @@ struct C2SBearerTokenInterceptor: ClientInterceptor {
             _ context: ClientContext
         ) async throws -> StreamingClientResponse<Output>
     ) async throws -> StreamingClientResponse<Output> {
+{{- if .RotatingMethods}}
+        // A rotating leg carries its own token (C2SRotationInterceptor).
+        if request.metadata[stringValues: "authorization"].contains(where: { _ in true }) {
+            return try await next(request, context)
+        }
+{{- end}}
         let token = try await self.tokenProvider()
         var request = request
         if !token.isEmpty {
@@ -212,12 +218,28 @@ public struct C2SClient: Sendable {
         host.lowercased() == "localhost" || host == "127.0.0.1" || host == "::1"
     }
 
-    private func interceptors() -> [any ClientInterceptor] {
+{{- if .RotatingMethods}}
+
+    /// The streams of these methods outlive their tokens (tacplus#323): they
+    /// rotate on the `<Svc>Rotating` sibling (Rotation.swift),
+    /// make-before-break, and fall back to the plain method on a server
+    /// without it. Keyed by `MethodDescriptor.fullyQualifiedMethod`.
+    static let rotatingMethods: Set<String> = [
+{{- range .RotatingMethods}}
+        "{{.}}",
+{{- end}}
+    ]
+{{- end}}
+
+    private func interceptors({{if .RotatingMethods}}rotation: C2SRotationClientBox{{end}}) -> [any ClientInterceptor] {
 {{- if .RouteMethods}}
         // The tenant route check runs first, so a refused call never even
         // fetches a token.
         var interceptors: [any ClientInterceptor] = [C2STenantRouteInterceptor()]
         if let tokenProvider = self.tokenProvider {
+{{- if .RotatingMethods}}
+            interceptors.append(C2SRotationInterceptor(rotating: C2SClient.rotatingMethods, tokenProvider: tokenProvider, box: rotation))
+{{- end}}
             interceptors.append(C2SBearerTokenInterceptor(tokenProvider: tokenProvider))
         }
         return interceptors
@@ -225,7 +247,14 @@ public struct C2SClient: Sendable {
         guard let tokenProvider = self.tokenProvider else {
             return []
         }
+{{- if .RotatingMethods}}
+        return [
+            C2SRotationInterceptor(rotating: C2SClient.rotatingMethods, tokenProvider: tokenProvider, box: rotation),
+            C2SBearerTokenInterceptor(tokenProvider: tokenProvider),
+        ]
+{{- else}}
         return [C2SBearerTokenInterceptor(tokenProvider: tokenProvider)]
+{{- end}}
 {{- end}}
     }
 
@@ -253,13 +282,20 @@ public struct C2SClient: Sendable {
     private func withClient<Result: Sendable>(
         _ body: (GRPCClient<HTTP2ClientTransport.Posix>) async throws -> Result
     ) async throws -> Result {
+{{- if .RotatingMethods}}
+        // The rotating legs go on this same client.
+        let rotation = C2SRotationClientBox()
+{{- end}}
         let client = GRPCClient(
             transport: try .http2NIOPosix(
                 target: .dns(host: self.host, port: self.port),
                 transportSecurity: self.transportSecurity()
             ),
-            interceptors: self.interceptors()
+            interceptors: self.interceptors({{if .RotatingMethods}}rotation: rotation{{end}})
         )
+{{- if .RotatingMethods}}
+        rotation.set(client)
+{{- end}}
         return try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask { try await client.runConnections() }
             let result = try await body(client)

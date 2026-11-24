@@ -62,6 +62,26 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   ends the logical stream (caller gets the status, handler cancelled), never
   spliced; against a server without the sibling the client falls back to the
   plain method, which ends at `exp`.
+- `rotation-clients` (`cross-test/rotation-clients/run.sh`, `just
+  rotation-clients`, in `just gates` as legs of the `rotation` gate, and the
+  nightly matrix): make-before-break
+  stream rotation for the client-only targets and C2S (tacplus#323). A C2S
+  service's generated Go server serves the `<Svc>Rotating` sibling (plaintext,
+  the generated wrapper and Authorizer over real signed user tokens, #260's
+  expiry interceptor), and the Go fixture `TestRotationClients` runs a
+  client-only target's generated C2S client against it (`--language
+  typescript`: the generated `c2sm` over grpc-js, the servicemanager chassis'
+  `Rotation.ts`; `--language python`: the generated `c2sm` over grpc.aio, the
+  servicemanager chassis' `rotation.py`; `--language csharp`: the generated
+  `C2SClient` over Grpc.Net, its `RotationInterceptor` in `Rotation.cs`;
+  `--language swift`: the generated `C2SClient` over grpc-swift 2, its
+  `C2SRotationInterceptor` in `Rotation.swift`), with 3 s tokens: a bidi (both ways at once), a
+  server-streaming and a client-streaming stream each run across several token
+  lifetimes with no loss, duplication or reordering, one handler call and one
+  context, by caller code that never mentions rotation; a rotation with another
+  subject's token and the valid session id ends the stream `PERMISSION_DENIED`;
+  a revoked caller is cut off within one lifetime; against a server without
+  the sibling the client falls back to the plain method, which ends at `exp`.
 - `memberport` (`cross-test/memberport/run.sh`, `just memberport`, in `just gates`):
   the generated `(spec.member_port)` member port (tacplus#212, on gRPC since
   #321). Java runs the `memberport-peer` fixture (seeded streams checked byte for

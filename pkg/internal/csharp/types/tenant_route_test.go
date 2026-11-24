@@ -364,9 +364,11 @@ func TestGenerateTenantRoutedCSharpClients(t *testing.T) {
 
 	c2s := readGenerated(t, out, "C2SClient.cs")
 	for _, want := range []string{
-		"_routedInvoker = _channel.Intercept(new TenantRouteInterceptor());",
+		// CrewService's streams rotate (tacplus#323): the tenant check wraps the
+		// rotation interceptor, and every typed client calls through it.
+		"_routedInvoker = _invoker.Intercept(new TenantRouteInterceptor());",
 		"public Crew.CrewService.CrewServiceClient WithCrewService() => new Crew.CrewService.CrewServiceClient(_routedInvoker);",
-		"public Pier.PierService.PierServiceClient WithPierService() => new Pier.PierService.PierServiceClient(_channel);",
+		"public Pier.PierService.PierServiceClient WithPierService() => new Pier.PierService.PierServiceClient(_invoker);",
 		`["/crew.CrewService/GetSkipper"] = (1, "tenant"),`,
 		`["/crew.CrewService/SendMessage"] = (2, "target_tenant"),`,
 		`["/crew.CrewService/GenerateRoster"] = (1, "tenant"),`,
@@ -377,8 +379,27 @@ func TestGenerateTenantRoutedCSharpClients(t *testing.T) {
 			t.Errorf("C2SClient.cs missing %q\n%s", want, c2s)
 		}
 	}
-	if strings.Contains(c2s, "/pier.PierService/") {
+	if strings.Contains(c2s, `["/pier.PierService/`) {
 		t.Errorf("C2SClient.cs routes a platform rpc\n%s", c2s)
+	}
+	// The three streaming rpcs rotate; the unary ones do not.
+	for _, want := range []string{
+		`"/crew.CrewService/ExecuteBatch",`,
+		`"/crew.CrewService/GenerateRoster",`,
+		`"/crew.CrewService/SendChat",`,
+		"invoker = invoker.Intercept(new RotationInterceptor(_legChannel.CreateCallInvoker(), tokenProvider, RotatingMethods));",
+	} {
+		if !strings.Contains(c2s, want) {
+			t.Errorf("C2SClient.cs missing %q\n%s", want, c2s)
+		}
+	}
+	for _, unary := range []string{`"/crew.CrewService/GetSkipper",`, `"/crew.CrewService/SendMessage",`, `"/pier.PierService/GetPier",`} {
+		if strings.Contains(c2s, unary) {
+			t.Errorf("C2SClient.cs rotates the unary %s\n%s", unary, c2s)
+		}
+	}
+	if rotation := readGenerated(t, out, "Rotation.cs"); !strings.Contains(rotation, "namespace DockClient;") || !strings.Contains(rotation, "internal sealed class RotationInterceptor : Interceptor") {
+		t.Errorf("Rotation.cs is not the package's rotation interceptor\n%s", rotation)
 	}
 
 	w2s := readGenerated(t, out, "W2SClient.cs")

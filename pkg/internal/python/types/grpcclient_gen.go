@@ -302,9 +302,13 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 
 	// Build method implementations
 	var methods strings.Builder
+	rotationImport := ""
 	for _, method := range targetService.Methods {
 		methods.WriteString(generatePyGrpcClientMethod(targetService, method, info.Package))
 		methods.WriteString("\n")
+		if pyStreamRotates(targetService, method) {
+			rotationImport = "from " + dots + "chassis.servicemanager.rotation import open_rotating_stream\n"
+		}
 	}
 
 	clientName := svc.ServiceName + "GrpcClient"
@@ -316,6 +320,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		ExceptionsImportFrom string
 		CrossPackageImports  string
 		RouteHelpers         string
+		RotationImport       string
 		ServiceName          string
 		ClientName           string
 		Methods              string
@@ -326,6 +331,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		ExceptionsImportFrom: pyExceptionsImportFrom(dots),
 		CrossPackageImports:  crossPkgImports.String(),
 		RouteHelpers:         pyRouteHelpers(targetService, pyExceptionsImportFrom(dots)),
+		RotationImport:       rotationImport,
 		ServiceName:          svc.ServiceName,
 		ClientName:           clientName,
 		Methods:              methods.String(),
@@ -376,6 +382,38 @@ func grpcClientAuthRequired(svc *parser.ServiceInfo, method *parser.MethodInfo) 
 	return !(svc.AuthDisabled || svc.IsC2D || method.AuthDisabled)
 }
 
+// pyStreamRotates reports whether the generated client carries method's
+// stream across token lifetimes on the <Svc>Rotating sibling (tacplus#323):
+// a streaming rpc of a token-carrying S2S or C2S service, the sibling's
+// generated servers serve. A stream with a cursor of its own (a WATCH or
+// SNAPSHOT collection) keeps its own path. Parity with tsStreamRotates.
+func pyStreamRotates(svc *parser.ServiceInfo, method *parser.MethodInfo) bool {
+	if !(svc.IsS2S || svc.IsC2S) || !grpcClientAuthRequired(svc, method) || method.IsMcp {
+		return false
+	}
+	if !(method.ClientStreaming || method.ServerStreaming) {
+		return false
+	}
+	return !method.IsWatchCollection() && !method.IsTier3SnapshotCollection() && !method.IsTier2SnapshotCollection()
+}
+
+// pyRotatingOpen renders, inside a method's try block, the open of a rotating
+// logical stream on the channel the plain stub would use: rotating is None
+// when the server has no sibling, and the method falls back to the plain one
+// on the same channel.
+func pyRotatingOpen(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePackage, pyInput, pyOutput string) string {
+	return fmt.Sprintf(`            channel = self._channel_provider.channel()
+            rotating = await open_rotating_stream(
+                channel,
+                '/%s.%s/%s',
+                %s.SerializeToString,
+                %s.FromString,
+                metadata,
+                self._token_provider,
+            )
+`, servicePackage, svc.Name, method.Name, pyInput, pyOutput)
+}
+
 func pyAuthSnippet(authRequired bool) string {
 	return fmt.Sprintf(`metadata = await self._metadata(auth_required=%s)`, pyBool(authRequired))
 }
@@ -423,6 +461,35 @@ func generatePyGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 		streamRequests = fmt.Sprintf("_route_pinned_requests(%s, %q)", streamRequests, method.RouteField.Field)
 	}
 
+	// A token-carrying stream rotates (tacplus#323): it opens on the
+	// <Svc>Rotating sibling and falls back to the plain method, on the same
+	// channel, when the server has none.
+	stub := "self._stub"
+	rotatingBidi, rotatingServer, rotatingClient := "", "", ""
+	if pyStreamRotates(svc, method) {
+		stub = fmt.Sprintf("pb_grpc.%sStub(channel)", svc.Name)
+		open := pyRotatingOpen(svc, method, servicePackage, pyInput, pyOutput)
+		rotatingBidi = open + fmt.Sprintf(`            if rotating is not None:
+                rotating.send_from(requests)
+                return self._validating_response_iterator(rotating, %s)
+`, outputValidatorArg)
+		rotatingServer = open + fmt.Sprintf(`            if rotating is not None:
+                await rotating.write(request)
+                await rotating.done_writing()
+                return self._validating_response_iterator(rotating, %s)
+`, outputValidatorArg)
+		// The response validation, one level deeper: inside the if.
+		clientValidation := ""
+		if outputValidation != "" {
+			clientValidation = "    " + outputValidation
+		}
+		rotatingClient = open + fmt.Sprintf(`            if rotating is not None:
+                rotating.send_from(requests)
+                response = await rotating.single_response()
+%s                return response
+`, clientValidation)
+	}
+
 	if method.ClientStreaming && method.ServerStreaming {
 		// Bidirectional streaming
 		return fmt.Sprintf(`    async def %s(self, request_iterator):
@@ -430,11 +497,12 @@ func generatePyGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
         %s
         try:
             requests = %s
-            responses = self._stub.%s(requests, metadata=metadata)
+%s            responses = %s.%s(requests, metadata=metadata)
             return self._validating_response_iterator(responses, %s)
         except grpc.RpcError as e:
             raise e
-`, methodSnake, svc.Name, method.Name, auth, streamRequests, method.Name, outputValidatorArg)
+`, methodSnake, svc.Name, method.Name, auth, streamRequests,
+			rotatingBidi, stub, method.Name, outputValidatorArg)
 	}
 
 	if method.ServerStreaming && method.IsTier2SnapshotCollection() {
@@ -477,11 +545,12 @@ func generatePyGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 %s
         %s
         try:
-            responses = self._stub.%s(request, metadata=metadata)
+%s            responses = %s.%s(request, metadata=metadata)
             return self._validating_response_iterator(responses, %s)
         except grpc.RpcError as e:
             raise e
-`, methodSnake, pyInput, svc.Name, method.Name, inputValidation, auth, method.Name, outputValidatorArg)
+`, methodSnake, pyInput, svc.Name, method.Name, inputValidation, auth,
+			rotatingServer, stub, method.Name, outputValidatorArg)
 	}
 
 	if method.ClientStreaming {
@@ -491,12 +560,13 @@ func generatePyGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
         %s
         try:
             requests = %s
-            response = await self._stub.%s(requests, metadata=metadata)
+%s            response = await %s.%s(requests, metadata=metadata)
 %s
             return response
         except grpc.RpcError as e:
             raise e
-`, methodSnake, svc.Name, method.Name, auth, streamRequests, method.Name, outputValidation)
+`, methodSnake, svc.Name, method.Name, auth, streamRequests,
+			rotatingClient, stub, method.Name, outputValidation)
 	}
 
 	if method.IsPageCollection() {

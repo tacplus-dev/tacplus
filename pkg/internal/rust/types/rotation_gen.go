@@ -14,12 +14,13 @@ import (
 
 // rustServesRotatingSibling reports whether a generated Rust server wrapper
 // also serves the service's <Svc>Rotating sibling, and a generated S2S client
-// of it rotates its streams (tacplus#322): every service-to-service service
-// with a streaming rpc whose calls carry tokens. A c2d service has no tokens
+// of it rotates its streams (tacplus#322): every service-to-service or
+// client-to-server (tacplus#323) service with a streaming rpc whose calls
+// carry tokens. A c2d service has no tokens
 // (its socket is the boundary), and an auth-disabled service has none to
 // expire, so neither needs rotation. Parity with goServesRotatingSibling.
 func rustServesRotatingSibling(service *parser.ServiceInfo) bool {
-	if service == nil || !service.IsS2S || service.IsC2D || service.AuthDisabled {
+	if service == nil || !(service.IsS2S || service.IsC2S) || service.IsC2D || service.AuthDisabled {
 		return false
 	}
 	for _, m := range service.Methods {
@@ -39,7 +40,7 @@ func rustRotatingMethod(m *parser.MethodInfo) bool {
 // rustDescriptorRotates is rustServesRotatingSibling over a descriptor
 // parser's service, as the project-level scans see it.
 func rustDescriptorRotates(svc *parser.ServiceDescriptor) bool {
-	if svc == nil || !svc.IsS2S || svc.IsC2D || svc.AuthDisabled {
+	if svc == nil || !(svc.IsS2S || svc.IsC2S) || svc.IsC2D || svc.AuthDisabled {
 		return false
 	}
 	for i := range svc.Methods {

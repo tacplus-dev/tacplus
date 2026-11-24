@@ -73,6 +73,7 @@ func renderTSBidiMethodForTest(t *testing.T, authRequired bool) string {
 		Serialize          string
 		Deserialize        string
 		AuthRequired       bool
+		Rotates            bool
 		RequestValidation  string
 		ResponseValidation string
 		RouteOpen          string
@@ -87,6 +88,7 @@ func renderTSBidiMethodForTest(t *testing.T, authRequired bool) string {
 		Serialize:    "(msg: DemoRequest) => Buffer.from(toBinary(DemoRequestSchema, msg))",
 		Deserialize:  "(buf: Buffer) => fromBinary(DemoResponseSchema, new Uint8Array(buf))",
 		AuthRequired: authRequired,
+		Rotates:      authRequired,
 	}
 	var out strings.Builder
 	if err := tmpl.Execute(&out, data); err != nil {

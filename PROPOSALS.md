@@ -4,6 +4,26 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **W2S stream rotation needs a gateway contract** (2026-11-22, #323): #259's design rotates an SSE (W2S) stream
+  by "a new request presenting the session id and the new token, the old one drained to its `last` event", but the
+  gateway, which turns a W2S request into the backend stream, has no such contract: how a W2S request names a
+  session (a header, a query parameter), how `last` is framed as an SSE event, and the WebSocket equivalent for
+  client-streaming and bidi. A gateway issue to settle it, then the TypeScript, Python and Swift W2S clients on it.
+  Until then W2S streams end at their token's `exp` (KNOWN_TEST_GAPS RT-2).
+- **The gateway's rotation leg with a generated backend and client** (2026-11-22, #323, tacplus-dev/gateway#26):
+  the gateway's `e2e_rotation` proves routing by session id and the same-subject refusal against a stand-in
+  backend. A leg with a generated C2S server (it now serves `<Svc>Rotating`) and a generated client
+  (`cross-test/rotation-clients`' fixture) through the gateway would close #323's "through the gateway"
+  acceptance end to end; it belongs in the gateway repo, which builds the gateway.
+- **The Go, Java and Rust C2S clients rotate as their S2S clients do** (2026-11-22, #323): the generated `c2sm`
+  clients of the full-service targets still open the plain method, though the server now serves the sibling for
+  C2S services. Their S2S clients' machinery (`rotation.NewConn`, `StreamRotation.channel`, `RotatingChannel`)
+  takes a token source; the `c2sm` token provider is one.
+- **The Python rotating stream's end must not wait on a full buffer** (2026-11-23, #323): `RotatingStream._finish`
+  (`chassis/servicemanager/rotation.py`) ends the caller's iteration with `await self._items.put(_END)` on a
+  64-message queue. A caller that stops reading with the buffer full leaves that task waiting for good, and
+  `_pump`, which turns a cancelled read into `_finish`, can then hold `asyncio.run`'s shutdown. Putting the end
+  without waiting (`put_nowait`, and `__anext__` ending once the queue is empty and the stream finished) closes it.
 - **chrono out of the generated Rust graph, the breaking half** (2026-11-18, #855, #862): 2.6.2 drops the unused
   `pbjson-types` and the logger chassis's unused `chrono`. chrono 0.4 (RUSTSEC-2026-0543) still reaches every
   generated Rust service through `prost-wkt-types` (the sys protos' WKT fields) and the `token` chassis's public

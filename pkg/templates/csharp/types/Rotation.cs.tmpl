@@ -1,0 +1,956 @@
+using System;
+using System.Buffers;
+using System.Collections.Generic;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Channels;
+using System.Threading.Tasks;
+using Grpc.Core;
+using Grpc.Core.Interceptors;
+
+namespace {{.PackageName}};
+
+/// <summary>
+/// Make-before-break stream rotation, the client end (tacplus#322, #323;
+/// sys/rotation.proto): the C# twin of Go's chassis/rotation client.
+/// </summary>
+/// <remarks>
+/// A stream carries one token, the one it opened with, and the server ends it
+/// at that token's exp. So a logical stream is carried by a sequence of legs:
+/// streams of the service's &lt;pkg&gt;.&lt;Svc&gt;Rotating sibling, bidi
+/// streams of Envelope{payload, last, session_id, cursor, fin}, each opened
+/// with a token. At about 75% of a leg's token lifetime the client acquires a
+/// new token, opens a new leg presenting the session id, and cuts over: last
+/// on the old leg each way, each side reading the old leg to its last before
+/// anything of the new one. Through the gateway, a rotation goes to the
+/// instance that issued the session, admitted only for the same subject
+/// (tacplus-dev/gateway#26).
+///
+/// The C2S client's typed clients call through this interceptor; the caller
+/// sees one stream and never rotation. A server without the sibling answers
+/// UNIMPLEMENTED and the call falls back to the plain method, where the stream
+/// ends at its token's exp.
+///
+/// It fails closed. A leg that ends without its last ends the logical stream
+/// with that leg's status, never spliced onto another. A client that cannot get
+/// a newer token keeps its leg and retries every second until the server ends
+/// the leg at its exp. UNAUTHENTICATED on an open or a rotation is retried once
+/// with a fresh token; PERMISSION_DENIED never. A refused rotation is the last:
+/// the stream ends with its current leg, at the handler's end if that comes
+/// first, else at the leg's exp with the refusal's code. Tokens are never
+/// logged.
+/// </remarks>
+internal sealed class RotationInterceptor : Interceptor
+{
+    internal const string Suffix = "Rotating";
+    // The fraction of a leg's token lifetime after which the client rotates.
+    internal const double RotateAt = 0.75;
+    internal static readonly TimeSpan OpenTimeout = TimeSpan.FromSeconds(10);
+    internal static readonly TimeSpan RotateMin = TimeSpan.FromMilliseconds(250);
+    internal static readonly TimeSpan RotateRetry = TimeSpan.FromSeconds(1);
+    // How long past its token's exp a leg may live: the server ends it at exp
+    // (UNAUTHENTICATED); this only bounds a server that does not.
+    internal static readonly TimeSpan ExpiryGrace = TimeSpan.FromSeconds(2);
+
+    private readonly CallInvoker _legs;
+    private readonly Func<CancellationToken, Task<string>> _tokens;
+    private readonly HashSet<string> _rotating;
+
+    /// <param name="legs">Carries the legs: a channel with no call credentials, since each leg carries its own token.</param>
+    /// <param name="tokens">The caller's token provider, asked for every leg.</param>
+    /// <param name="rotating">The full method names ("/pkg.Svc/Method") whose streams rotate.</param>
+    internal RotationInterceptor(CallInvoker legs, Func<CancellationToken, Task<string>> tokens, IEnumerable<string> rotating)
+    {
+        _legs = legs;
+        _tokens = tokens;
+        _rotating = new HashSet<string>(rotating, StringComparer.Ordinal);
+    }
+
+    public override AsyncServerStreamingCall<TResponse> AsyncServerStreamingCall<TRequest, TResponse>(
+        TRequest request,
+        ClientInterceptorContext<TRequest, TResponse> context,
+        AsyncServerStreamingCallContinuation<TRequest, TResponse> continuation)
+    {
+        if (!_rotating.Contains(context.Method.FullName))
+        {
+            return continuation(request, context);
+        }
+        var call = new RotatingCall<TRequest, TResponse>(this, context, () =>
+        {
+            var plain = continuation(request, context);
+            return new PlainParts<TRequest, TResponse>(plain.ResponseStream, null, plain.ResponseHeadersAsync, plain.GetStatus, plain.GetTrailers, plain.Dispose);
+        });
+        call.Start(request);
+        return new AsyncServerStreamingCall<TResponse>(call, call.ResponseHeadersAsync, call.GetStatus, call.GetTrailers, call.Dispose);
+    }
+
+    public override AsyncClientStreamingCall<TRequest, TResponse> AsyncClientStreamingCall<TRequest, TResponse>(
+        ClientInterceptorContext<TRequest, TResponse> context,
+        AsyncClientStreamingCallContinuation<TRequest, TResponse> continuation)
+    {
+        if (!_rotating.Contains(context.Method.FullName))
+        {
+            return continuation(context);
+        }
+        var call = new RotatingCall<TRequest, TResponse>(this, context, () =>
+        {
+            var plain = continuation(context);
+            return new PlainParts<TRequest, TResponse>(new SingleResponseReader<TResponse>(plain.ResponseAsync), plain.RequestStream, plain.ResponseHeadersAsync, plain.GetStatus, plain.GetTrailers, plain.Dispose);
+        });
+        call.Start(null);
+        return new AsyncClientStreamingCall<TRequest, TResponse>(call, call.SingleResponseAsync(), call.ResponseHeadersAsync, call.GetStatus, call.GetTrailers, call.Dispose);
+    }
+
+    public override AsyncDuplexStreamingCall<TRequest, TResponse> AsyncDuplexStreamingCall<TRequest, TResponse>(
+        ClientInterceptorContext<TRequest, TResponse> context,
+        AsyncDuplexStreamingCallContinuation<TRequest, TResponse> continuation)
+    {
+        if (!_rotating.Contains(context.Method.FullName))
+        {
+            return continuation(context);
+        }
+        var call = new RotatingCall<TRequest, TResponse>(this, context, () =>
+        {
+            var plain = continuation(context);
+            return new PlainParts<TRequest, TResponse>(plain.ResponseStream, plain.RequestStream, plain.ResponseHeadersAsync, plain.GetStatus, plain.GetTrailers, plain.Dispose);
+        });
+        call.Start(null);
+        return new AsyncDuplexStreamingCall<TRequest, TResponse>(call, call, call.ResponseHeadersAsync, call.GetStatus, call.GetTrailers, call.Dispose);
+    }
+
+    internal CallInvoker Legs => _legs;
+
+    internal async Task<string> TokenAsync(CancellationToken ct) => await _tokens(ct).ConfigureAwait(false) ?? "";
+
+    // ------------------------------------------------------------------
+    // sys/rotation.proto's Envelope, on the wire. Field numbers are frozen.
+    // ------------------------------------------------------------------
+
+    internal sealed class Envelope
+    {
+        public byte[] Payload = Array.Empty<byte>();
+        public bool Last;
+        public string SessionId = "";
+        public bool Fin;
+
+        // An envelope with none of last, fin, session_id set carries exactly
+        // one message, even an empty one.
+        public bool IsMessage => !Last && !Fin && SessionId.Length == 0;
+
+        public bool Malformed => !IsMessage && Payload.Length > 0;
+    }
+
+    private static void WriteVarint(List<byte> output, ulong value)
+    {
+        while (value > 0x7F)
+        {
+            output.Add((byte)((value & 0x7F) | 0x80));
+            value >>= 7;
+        }
+        output.Add((byte)value);
+    }
+
+    private static void WriteBytes(List<byte> output, byte tag, byte[] bytes)
+    {
+        if (bytes.Length == 0)
+        {
+            return;
+        }
+        output.Add(tag);
+        WriteVarint(output, (ulong)bytes.Length);
+        output.AddRange(bytes);
+    }
+
+    internal static byte[] Encode(byte[]? payload = null, bool last = false, string sessionId = "", bool fin = false)
+    {
+        var output = new List<byte>();
+        WriteBytes(output, 0x0a, payload ?? Array.Empty<byte>());
+        if (last)
+        {
+            output.Add(0x10);
+            output.Add(1);
+        }
+        WriteBytes(output, 0x1a, Encoding.UTF8.GetBytes(sessionId));
+        if (fin)
+        {
+            output.Add(0x28);
+            output.Add(1);
+        }
+        return output.ToArray();
+    }
+
+    internal static Envelope Decode(byte[] buf)
+    {
+        var e = new Envelope();
+        var pos = 0;
+        ulong Varint()
+        {
+            ulong result = 0;
+            for (var shift = 0; shift < 64; shift += 7)
+            {
+                if (pos >= buf.Length)
+                {
+                    throw new FormatException("rotation: truncated envelope");
+                }
+                var b = buf[pos++];
+                result |= (ulong)(b & 0x7F) << shift;
+                if ((b & 0x80) == 0)
+                {
+                    return result;
+                }
+            }
+            throw new FormatException("rotation: malformed varint");
+        }
+        byte[] Take(int n)
+        {
+            if (n < 0 || pos + n > buf.Length)
+            {
+                throw new FormatException("rotation: truncated envelope");
+            }
+            var chunk = new byte[n];
+            Array.Copy(buf, pos, chunk, 0, n);
+            pos += n;
+            return chunk;
+        }
+        while (pos < buf.Length)
+        {
+            var tag = Varint();
+            var field = tag >> 3;
+            switch (tag & 7)
+            {
+                case 0:
+                    var v = Varint();
+                    if (field == 2) e.Last = v != 0;
+                    if (field == 5) e.Fin = v != 0;
+                    break;
+                case 1:
+                    Take(8);
+                    break;
+                case 2:
+                    var chunk = Take(checked((int)Varint()));
+                    if (field == 1) e.Payload = chunk;
+                    if (field == 3) e.SessionId = Encoding.UTF8.GetString(chunk);
+                    break;
+                case 5:
+                    Take(4);
+                    break;
+                default:
+                    throw new FormatException("rotation: malformed envelope");
+            }
+        }
+        return e;
+    }
+
+    /// <summary>A JWT's exp, or null when it has none readable (an opaque token).</summary>
+    internal static DateTime? TokenExpiry(string token)
+    {
+        var parts = token.Split('.');
+        if (parts.Length != 3)
+        {
+            return null;
+        }
+        try
+        {
+            var b64 = parts[1].Replace('-', '+').Replace('_', '/');
+            b64 = b64.PadRight(b64.Length + (4 - b64.Length % 4) % 4, '=');
+            using var doc = JsonDocument.Parse(Convert.FromBase64String(b64));
+            if (!doc.RootElement.TryGetProperty("exp", out var exp))
+            {
+                return null;
+            }
+            double seconds = exp.ValueKind == JsonValueKind.Number ? exp.GetDouble() : double.Parse(exp.GetString() ?? "", System.Globalization.CultureInfo.InvariantCulture);
+            return seconds > 0 ? DateTime.UnixEpoch.AddSeconds(seconds) : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+}
+
+/// <summary>
+/// A message's bytes through a marshaller: the generated protobuf marshallers
+/// are contextual, their plain Serializer/Deserializer unimplemented.
+/// </summary>
+internal static class RotationMarshalling
+{
+    private sealed class Writer : SerializationContext
+    {
+        private readonly ArrayBufferWriter<byte> _buffer = new();
+        private byte[]? _payload;
+
+        public byte[] Payload => _payload ?? _buffer.WrittenSpan.ToArray();
+
+        public override void Complete(byte[] payload) => _payload = payload;
+
+        public override IBufferWriter<byte> GetBufferWriter() => _buffer;
+
+        public override void SetPayloadLength(int payloadLength)
+        {
+        }
+
+        public override void Complete()
+        {
+        }
+    }
+
+    private sealed class Reader : DeserializationContext
+    {
+        private readonly byte[] _payload;
+
+        public Reader(byte[] payload) => _payload = payload;
+
+        public override int PayloadLength => _payload.Length;
+
+        public override byte[] PayloadAsNewBuffer() => (byte[])_payload.Clone();
+
+        public override ReadOnlySequence<byte> PayloadAsReadOnlySequence() => new(_payload);
+    }
+
+    internal static byte[] Serialize<T>(Marshaller<T> marshaller, T message)
+    {
+        var writer = new Writer();
+        marshaller.ContextualSerializer(message, writer);
+        return writer.Payload;
+    }
+
+    internal static T Deserialize<T>(Marshaller<T> marshaller, byte[] payload) =>
+        marshaller.ContextualDeserializer(new Reader(payload));
+}
+
+/// <summary>A plain call's parts, for the fallback to the plain method.</summary>
+internal sealed record PlainParts<TRequest, TResponse>(
+    IAsyncStreamReader<TResponse> Reader,
+    IClientStreamWriter<TRequest>? Writer,
+    Task<Metadata> Headers,
+    Func<Status> Status,
+    Func<Metadata> Trailers,
+    Action Dispose);
+
+/// <summary>A client-streaming call's one response, read as a stream of one.</summary>
+internal sealed class SingleResponseReader<TResponse> : IAsyncStreamReader<TResponse>
+{
+    private readonly Task<TResponse> _response;
+    private bool _read;
+
+    internal SingleResponseReader(Task<TResponse> response) => _response = response;
+
+    public TResponse Current { get; private set; } = default!;
+
+    public async Task<bool> MoveNext(CancellationToken cancellationToken)
+    {
+        if (_read)
+        {
+            return false;
+        }
+        _read = true;
+        Current = await _response.ConfigureAwait(false);
+        return true;
+    }
+}
+
+/// <summary>One logical stream over a sequence of legs, or the plain call it fell back to.</summary>
+internal sealed class RotatingCall<TRequest, TResponse> : IAsyncStreamReader<TResponse>, IClientStreamWriter<TRequest>
+    where TRequest : class
+    where TResponse : class
+{
+    private static readonly Marshaller<byte[]> Bytes = Marshallers.Create(b => b, b => b);
+
+    private sealed class Leg
+    {
+        public required AsyncDuplexStreamingCall<byte[], byte[]> Call;
+        public required DateTime Exp;
+        public required CancellationTokenSource Cancel;
+    }
+
+    private readonly RotationInterceptor _owner;
+    private readonly ClientInterceptorContext<TRequest, TResponse> _context;
+    private readonly Func<PlainParts<TRequest, TResponse>> _fallback;
+    private readonly Method<byte[], byte[]> _sibling;
+    private readonly CancellationTokenSource _cancel;
+    private readonly Channel<TResponse> _items = Channel.CreateBounded<TResponse>(64);
+    private readonly SemaphoreSlim _sendLock = new(1, 1);
+    private readonly TaskCompletionSource<PlainParts<TRequest, TResponse>?> _opened = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<Metadata> _headers = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly object _gate = new();
+
+    private PlainParts<TRequest, TResponse>? _plain;
+    private string _sessionId = "";
+    private Leg? _sendLeg;
+    private Leg? _readLeg;
+    // The leg after the read leg, set before the cutover.
+    private Leg? _nextLeg;
+    private bool _finSent;
+    private bool _finished;
+    private Status _status;
+    private bool _rotating;
+    // The code a rotation was refused with: the stream rotates no more and
+    // ends with its current leg (tacplus#877).
+    private StatusCode? _refused;
+
+    internal RotatingCall(RotationInterceptor owner, ClientInterceptorContext<TRequest, TResponse> context, Func<PlainParts<TRequest, TResponse>> fallback)
+    {
+        _owner = owner;
+        _context = context;
+        _fallback = fallback;
+        _sibling = new Method<byte[], byte[]>(MethodType.DuplexStreaming, context.Method.ServiceName + RotationInterceptor.Suffix, context.Method.Name, Bytes, Bytes);
+        _cancel = CancellationTokenSource.CreateLinkedTokenSource(context.Options.CancellationToken);
+    }
+
+    // ------------------------------------------------------------------
+    // Open
+    // ------------------------------------------------------------------
+
+    /// <summary>Opens the first leg, or falls back; a server stream's one request is sent, then fin.</summary>
+    internal void Start(TRequest? request)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var first = await OpenFirstAsync().ConfigureAwait(false);
+                if (first == null)
+                {
+                    _plain = _fallback();
+                    _opened.TrySetResult(_plain);
+                    _ = _plain.Headers.ContinueWith(t => { if (t.IsCompletedSuccessfully) _headers.TrySetResult(t.Result); else _headers.TrySetResult(new Metadata()); }, TaskScheduler.Default);
+                    return;
+                }
+                _sendLeg = first;
+                _readLeg = first;
+                _opened.TrySetResult(null);
+                _ = first.Call.ResponseHeadersAsync.ContinueWith(t => _headers.TrySetResult(t.IsCompletedSuccessfully ? t.Result : new Metadata()), TaskScheduler.Default);
+                _ = Task.Run(PumpAsync);
+                Schedule(first);
+                if (request != null)
+                {
+                    await WriteAsync(request).ConfigureAwait(false);
+                    await CompleteAsync().ConfigureAwait(false);
+                }
+            }
+            catch (RpcException err)
+            {
+                _opened.TrySetResult(null);
+                Finish(err.Status);
+            }
+            catch (Exception err)
+            {
+                _opened.TrySetResult(null);
+                Finish(new Status(StatusCode.Internal, $"rotation: {err.Message}"));
+            }
+        });
+    }
+
+    // OpenFirstAsync opens the first leg: null when the stream does not rotate
+    // (an opaque token with no exp, or a server without the sibling).
+    private async Task<Leg?> OpenFirstAsync()
+    {
+        var token = await _owner.TokenAsync(_cancel.Token).ConfigureAwait(false);
+        if (token.Length == 0 || RotationInterceptor.TokenExpiry(token) == null)
+        {
+            return null;
+        }
+        try
+        {
+            return await OpenLegAsync(token, "").ConfigureAwait(false);
+        }
+        catch (RpcException err) when (err.StatusCode == StatusCode.Unimplemented)
+        {
+            return null;
+        }
+        catch (RpcException err) when (err.StatusCode == StatusCode.Unauthenticated)
+        {
+            var fresh = await _owner.TokenAsync(_cancel.Token).ConfigureAwait(false);
+            if (fresh.Length == 0)
+            {
+                throw;
+            }
+            try
+            {
+                return await OpenLegAsync(fresh, "").ConfigureAwait(false);
+            }
+            catch (RpcException retry) when (retry.StatusCode == StatusCode.Unimplemented)
+            {
+                return null;
+            }
+        }
+    }
+
+    // OpenLegAsync opens one leg with token: its first envelope names the
+    // session it joins ("" for a new one), and it is attached once the
+    // server's first envelope names the session.
+    private async Task<Leg> OpenLegAsync(string token, string joining)
+    {
+        var exp = RotationInterceptor.TokenExpiry(token)
+            ?? throw new RpcException(new Status(StatusCode.Unauthenticated, "rotation: the token does not parse"));
+        var headers = new Metadata();
+        if (_context.Options.Headers != null)
+        {
+            foreach (var entry in _context.Options.Headers)
+            {
+                if (!string.Equals(entry.Key, "authorization", StringComparison.OrdinalIgnoreCase))
+                {
+                    headers.Add(entry);
+                }
+            }
+        }
+        headers.Add("authorization", $"Bearer {token}");
+        var deadline = exp + RotationInterceptor.ExpiryGrace;
+        if (_context.Options.Deadline is DateTime logical && logical.ToUniversalTime() < deadline)
+        {
+            deadline = logical.ToUniversalTime();
+        }
+        var cancel = CancellationTokenSource.CreateLinkedTokenSource(_cancel.Token);
+        var call = _owner.Legs.AsyncDuplexStreamingCall(_sibling, _context.Host, new CallOptions(headers, deadline, cancel.Token));
+        var leg = new Leg { Call = call, Exp = exp, Cancel = cancel };
+        try
+        {
+            await call.RequestStream.WriteAsync(RotationInterceptor.Encode(sessionId: joining)).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // A refused leg fails the write; its status comes from the read.
+        }
+        var read = call.ResponseStream.MoveNext(CancellationToken.None);
+        if (await Task.WhenAny(read, Task.Delay(RotationInterceptor.OpenTimeout)).ConfigureAwait(false) != read)
+        {
+            cancel.Cancel();
+            throw new RpcException(new Status(StatusCode.DeadlineExceeded, "rotation: the server did not attach the leg in time"));
+        }
+        if (!await read.ConfigureAwait(false))
+        {
+            cancel.Cancel();
+            throw new RpcException(new Status(StatusCode.PermissionDenied, "rotation: the server did not attach the leg"));
+        }
+        var e = RotationInterceptor.Decode(call.ResponseStream.Current);
+        if (e.SessionId.Length == 0 || (joining.Length > 0 && e.SessionId != joining) || e.Payload.Length > 0 || e.Last || e.Fin)
+        {
+            cancel.Cancel();
+            throw new RpcException(new Status(StatusCode.PermissionDenied, "rotation: the server did not attach the leg"));
+        }
+        _sessionId = e.SessionId;
+        return leg;
+    }
+
+    // ------------------------------------------------------------------
+    // Reading
+    // ------------------------------------------------------------------
+
+    // PumpAsync moves the read leg's envelopes to the caller, leg by leg.
+    private async Task PumpAsync()
+    {
+        while (!_finished)
+        {
+            var leg = _readLeg!;
+            bool more;
+            try
+            {
+                more = await leg.Call.ResponseStream.MoveNext(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (RpcException err)
+            {
+                // A leg that ends without last ends the logical stream with its
+                // status: the handler's own end, or a fault. Never spliced.
+                // After a refused rotation, the server's end of the leg at its
+                // exp is the refusal's.
+                if (_refused is StatusCode refused && err.StatusCode == StatusCode.Unauthenticated)
+                {
+                    Finish(new Status(refused, ""));
+                }
+                else
+                {
+                    Finish(err.Status);
+                }
+                return;
+            }
+            catch (Exception err)
+            {
+                Finish(new Status(StatusCode.Cancelled, err.Message));
+                return;
+            }
+            if (!more)
+            {
+                // The leg ended OK without last: the handler's own end.
+                Finish(Status.DefaultSuccess);
+                return;
+            }
+            RotationInterceptor.Envelope e;
+            try
+            {
+                e = RotationInterceptor.Decode(leg.Call.ResponseStream.Current);
+            }
+            catch (FormatException)
+            {
+                Fault("rotation: malformed envelope");
+                return;
+            }
+            if (e.Malformed)
+            {
+                Fault("rotation: malformed envelope");
+                return;
+            }
+            if (e.IsMessage)
+            {
+                TResponse message;
+                try
+                {
+                    message = RotationMarshalling.Deserialize(_context.Method.ResponseMarshaller, e.Payload);
+                }
+                catch (Exception)
+                {
+                    Fault("rotation: unmarshal failed");
+                    return;
+                }
+                try
+                {
+                    await _items.Writer.WriteAsync(message, _cancel.Token).ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    return;
+                }
+            }
+            if (e.Last)
+            {
+                var next = _nextLeg;
+                if (next == null)
+                {
+                    Fault("rotation: last with no leg to cut over to");
+                    return;
+                }
+                _readLeg = next;
+                _nextLeg = null;
+                // The old leg ends OK after its last; read that end so it is freed.
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        while (await leg.Call.ResponseStream.MoveNext(CancellationToken.None).ConfigureAwait(false))
+                        {
+                        }
+                    }
+                    catch (Exception)
+                    {
+                    }
+                    leg.Call.Dispose();
+                });
+            }
+        }
+    }
+
+    private void Finish(Status status)
+    {
+        Leg?[] legs;
+        lock (_gate)
+        {
+            if (_finished)
+            {
+                return;
+            }
+            _finished = true;
+            _status = status;
+            legs = new[] { _sendLeg, _readLeg, _nextLeg };
+        }
+        foreach (var leg in legs)
+        {
+            if (leg != null && (status.StatusCode != StatusCode.OK || leg == _nextLeg))
+            {
+                leg.Cancel.Cancel();
+            }
+        }
+        _headers.TrySetResult(new Metadata());
+        if (status.StatusCode == StatusCode.OK)
+        {
+            _items.Writer.TryComplete();
+        }
+        else
+        {
+            _items.Writer.TryComplete(new RpcException(status));
+        }
+    }
+
+    private void Fault(string reason)
+    {
+        Finish(new Status(StatusCode.Internal, reason));
+    }
+
+    // ------------------------------------------------------------------
+    // Rotation
+    // ------------------------------------------------------------------
+
+    private void Schedule(Leg leg)
+    {
+        var delay = TimeSpan.FromTicks((long)((leg.Exp - DateTime.UtcNow).Ticks * RotationInterceptor.RotateAt));
+        Later(delay < RotationInterceptor.RotateMin ? RotationInterceptor.RotateMin : delay);
+    }
+
+    private void Later(TimeSpan delay)
+    {
+        if (_finished)
+        {
+            return;
+        }
+        _ = Task.Delay(delay, _cancel.Token).ContinueWith(t =>
+        {
+            if (!t.IsCanceled)
+            {
+                _ = RotateAsync();
+            }
+        }, TaskScheduler.Default);
+    }
+
+    // RotateAsync is make-before-break: a new token, a new leg joining this
+    // session, then the cutover. A mint that fails or gives no newer token is
+    // retried every second; the current leg ends at its token's exp regardless.
+    private async Task RotateAsync()
+    {
+        if (_finished || _rotating || _refused != null)
+        {
+            return;
+        }
+        _rotating = true;
+        try
+        {
+            var current = _sendLeg!;
+            var token = "";
+            try
+            {
+                token = await _owner.TokenAsync(_cancel.Token).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // The token source failed: retried below, the leg kept.
+            }
+            var exp = token.Length > 0 ? RotationInterceptor.TokenExpiry(token) : null;
+            if (exp == null || exp <= current.Exp)
+            {
+                // No newer token yet: the token source renews it ahead of expiry.
+                Later(RotationInterceptor.RotateRetry);
+                return;
+            }
+            Leg? next = null;
+            RpcException? failure = null;
+            try
+            {
+                next = await OpenLegAsync(token, _sessionId).ConfigureAwait(false);
+            }
+            catch (RpcException err)
+            {
+                failure = err;
+                if (err.StatusCode == StatusCode.Unauthenticated)
+                {
+                    var fresh = "";
+                    try
+                    {
+                        fresh = await _owner.TokenAsync(_cancel.Token).ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                        // The refusal stands.
+                    }
+                    if (fresh.Length > 0)
+                    {
+                        try
+                        {
+                            next = await OpenLegAsync(fresh, _sessionId).ConfigureAwait(false);
+                            failure = null;
+                        }
+                        catch (RpcException retry)
+                        {
+                            failure = retry;
+                        }
+                    }
+                }
+            }
+            if (failure != null || next == null)
+            {
+                if (_finished)
+                {
+                    return;
+                }
+                var code = failure?.StatusCode ?? StatusCode.Unknown;
+                if (code == StatusCode.Unauthenticated || code == StatusCode.PermissionDenied)
+                {
+                    // A refused rotation is the last: the stream ends with its
+                    // current leg.
+                    _refused = code;
+                    return;
+                }
+                Later(RotationInterceptor.RotateRetry);
+                return;
+            }
+            if (_finished)
+            {
+                next.Cancel.Cancel();
+                return;
+            }
+            _nextLeg = next;
+            // The cutover: last on the old leg, then its half-close.
+            await _sendLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                try
+                {
+                    await current.Call.RequestStream.WriteAsync(RotationInterceptor.Encode(last: true)).ConfigureAwait(false);
+                    await current.Call.RequestStream.CompleteAsync().ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // A failed leg ends the stream through its read.
+                }
+                _sendLeg = next;
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
+            Schedule(next);
+        }
+        finally
+        {
+            _rotating = false;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // The logical call
+    // ------------------------------------------------------------------
+
+    public TResponse Current { get; private set; } = default!;
+
+    public async Task<bool> MoveNext(CancellationToken cancellationToken)
+    {
+        var plain = await _opened.Task.ConfigureAwait(false);
+        if (plain != null)
+        {
+            var more = await plain.Reader.MoveNext(cancellationToken).ConfigureAwait(false);
+            if (more)
+            {
+                Current = plain.Reader.Current;
+            }
+            return more;
+        }
+        if (!await _items.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+        if (_items.Reader.TryRead(out var item))
+        {
+            Current = item;
+            return true;
+        }
+        return await MoveNext(cancellationToken).ConfigureAwait(false);
+    }
+
+    public WriteOptions? WriteOptions { get; set; }
+
+    public async Task WriteAsync(TRequest message)
+    {
+        var plain = await _opened.Task.ConfigureAwait(false);
+        if (plain != null)
+        {
+            await plain.Writer!.WriteAsync(message).ConfigureAwait(false);
+            return;
+        }
+        var payload = RotationMarshalling.Serialize(_context.Method.RequestMarshaller, message);
+        await _sendLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_finSent)
+            {
+                throw new InvalidOperationException("rotation: write after the request stream completed");
+            }
+            if (_finished)
+            {
+                if (_status.StatusCode == StatusCode.OK)
+                {
+                    return;
+                }
+                throw new RpcException(_status);
+            }
+            try
+            {
+                await _sendLeg!.Call.RequestStream.WriteAsync(RotationInterceptor.Encode(payload: payload)).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // As gRPC's own: the reads say how the stream ended.
+            }
+        }
+        finally
+        {
+            _sendLock.Release();
+        }
+    }
+
+    /// <summary>The client's half-close of the logical stream: fin; the leg stays open to carry last.</summary>
+    public async Task CompleteAsync()
+    {
+        var plain = await _opened.Task.ConfigureAwait(false);
+        if (plain != null)
+        {
+            await plain.Writer!.CompleteAsync().ConfigureAwait(false);
+            return;
+        }
+        await _sendLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_finished || _finSent)
+            {
+                return;
+            }
+            _finSent = true;
+            try
+            {
+                await _sendLeg!.Call.RequestStream.WriteAsync(RotationInterceptor.Encode(fin: true)).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // The reads say how the stream ended.
+            }
+        }
+        finally
+        {
+            _sendLock.Release();
+        }
+    }
+
+    internal async Task<TResponse> SingleResponseAsync()
+    {
+        TResponse? response = null;
+        while (await MoveNext(CancellationToken.None).ConfigureAwait(false))
+        {
+            response ??= Current;
+        }
+        return response ?? throw new RpcException(new Status(StatusCode.Unimplemented, "No message received"));
+    }
+
+    internal Task<Metadata> ResponseHeadersAsync => _headers.Task;
+
+    internal Status GetStatus()
+    {
+        if (_plain != null)
+        {
+            return _plain.Status();
+        }
+        if (!_finished)
+        {
+            throw new InvalidOperationException("Unable to get the status because the call is not complete.");
+        }
+        return _status;
+    }
+
+    internal Metadata GetTrailers() => _plain != null ? _plain.Trailers() : new Metadata();
+
+    internal void Dispose()
+    {
+        if (_plain != null)
+        {
+            _plain.Dispose();
+            return;
+        }
+        Finish(new Status(StatusCode.Cancelled, "Call disposed."));
+        _cancel.Cancel();
+    }
+}

@@ -337,7 +337,11 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, fileDesc *parse
 	var extraTypes strings.Builder
 	hasBidi := false
 	hasClientStreaming := false
+	rotates := false
 	for _, method := range targetService.Methods {
+		if tsStreamRotates(targetService, method) {
+			rotates = true
+		}
 		result, err := generateTsGrpcClientMethod(targetService, method, info.Package)
 		if err != nil {
 			return fmt.Errorf("failed to generate TypeScript gRPC client method %s.%s: %w", targetService.Name, method.Name, err)
@@ -375,6 +379,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, fileDesc *parse
 		Methods              string
 		ExtraTypes           string
 		HasGoogleEmpty       bool
+		Rotates              bool
 	}{
 		Header:               header.GeneratedHeader(consts.LangTypeScript, svc.ProtoFile),
 		TypesImport:          typesImportRel + "/index.js",
@@ -385,6 +390,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, fileDesc *parse
 		Methods:              methods.String(),
 		ExtraTypes:           extraTypes.String(),
 		HasGoogleEmpty:       hasGoogleEmpty,
+		Rotates:              rotates,
 	}
 
 	tmplContent, err := loadTemplate("grpcclient.ts.tmpl")
@@ -495,6 +501,41 @@ func grpcClientAuthRequired(svc *parser.ServiceInfo, method *parser.MethodInfo) 
 	return !(svc.AuthDisabled || svc.IsC2D || method.AuthDisabled)
 }
 
+// tsStreamRotates reports whether the generated client carries method's
+// stream across token lifetimes on the <Svc>Rotating sibling (tacplus#323):
+// a streaming rpc of a token-carrying S2S or C2S service, the sibling's
+// generated servers serve (goServesRotatingSibling). A stream with a cursor of
+// its own (a WATCH or SNAPSHOT collection) keeps its own path, as the state
+// Watch and EventBus subscriptions do (docs/API.md, Client Send Contract).
+func tsStreamRotates(svc *parser.ServiceInfo, method *parser.MethodInfo) bool {
+	if !(svc.IsS2S || svc.IsC2S) || !grpcClientAuthRequired(svc, method) || method.IsMcp {
+		return false
+	}
+	if !(method.ClientStreaming || method.ServerStreaming) {
+		return false
+	}
+	return !method.IsWatchCollection() && !method.IsTier3SnapshotCollection() && !method.IsTier2SnapshotCollection()
+}
+
+// tsRotatingOpen renders the open of a rotating logical stream: rotating is
+// undefined when the server has no sibling, and the method falls back to the
+// plain one on the same client.
+func tsRotatingOpen(indent, inputType, outputType, fullPath, serialize, deserialize, options, tokens string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%sconst rotating = await openRotatingStream<%s, %s>({\n", indent, inputType, outputType)
+	fmt.Fprintf(&b, "%s    client,\n", indent)
+	fmt.Fprintf(&b, "%s    path: '%s',\n", indent, fullPath)
+	fmt.Fprintf(&b, "%s    serialize: %s,\n", indent, serialize)
+	fmt.Fprintf(&b, "%s    deserialize: %s,\n", indent, deserialize)
+	fmt.Fprintf(&b, "%s    metadata,\n", indent)
+	if options != "" {
+		fmt.Fprintf(&b, "%s    options: %s,\n", indent, options)
+	}
+	fmt.Fprintf(&b, "%s    tokens: %s,\n", indent, tokens)
+	fmt.Fprintf(&b, "%s});\n", indent)
+	return b.String()
+}
+
 func tsGrpcMetadataSnippet(authRequired bool) string {
 	if !authRequired {
 		return "        const metadata = await this.metadata(false);"
@@ -562,6 +603,30 @@ func generateTsGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 	serialize := fmt.Sprintf("(msg: %s) => Buffer.from(toBinary(%s, msg))", inputType, inputSchema)
 	deserialize := fmt.Sprintf("(buf: Buffer) => fromBinary(%s, new Uint8Array(buf))", outputSchema)
 
+	// A token-carrying stream rotates (tacplus#323): it opens on the
+	// <Svc>Rotating sibling and falls back to the plain method, on the same
+	// client, when the server has none.
+	rotates := tsStreamRotates(svc, method)
+	streamClient := "this.client"
+	clientStreamOpen := ""
+	serverStreamRotation := func(string) string { return "" }
+	clientStreamRotated := func(string, string) string { return "" }
+	if rotates {
+		streamClient = "client"
+		clientStreamOpen = "        const client = this.client;\n" +
+			tsRotatingOpen("        ", inputType, outputType, fullPath, serialize, deserialize, "this.callOptions()", "this.tokenProvider")
+		serverStreamRotation = func(request string) string {
+			return clientStreamOpen + fmt.Sprintf(`        if (rotating) {
+            rotating.end(%s);
+            return rotating as unknown as grpc.ClientReadableStream<%s>;
+        }
+`, request, outputType)
+		}
+		clientStreamRotated = func(input, callback string) string {
+			return fmt.Sprintf("rotating\n                ? clientStreamCall(rotating, %s) as unknown as grpc.ClientWritableStream<%s>\n                : ", callback, input)
+		}
+	}
+
 	if method.ClientStreaming && method.ServerStreaming {
 		// Bidirectional streaming — managed lifecycle with reconnection.
 		// Uses a separate .tmpl file to avoid Go backtick escaping issues.
@@ -589,6 +654,7 @@ func generateTsGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 			Serialize          string
 			Deserialize        string
 			AuthRequired       bool
+			Rotates            bool
 			RequestValidation  string
 			ResponseValidation string
 			RouteOpen          string
@@ -603,6 +669,7 @@ func generateTsGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 			Serialize:          serialize,
 			Deserialize:        deserialize,
 			AuthRequired:       authRequired,
+			Rotates:            rotates,
 			RequestValidation:  tsGrpcValidationStatement("msg", method.FullInputType, method.InputType, servicePackage, "                    ") + tsRoutePinCheck(method, "msg", "                    "),
 			ResponseValidation: tsGrpcValidationStatement("msg", method.FullOutputType, method.OutputType, servicePackage, "                            "),
 			// The pin outlives reconnects: the handle's stream stays one tenant's.
@@ -730,7 +797,7 @@ func generateTsGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
      */
     async %s(): Promise<grpc.ClientReadableStream<%s>> {
 %s
-        return this.client.makeServerStreamRequest<%s, %s>(
+%s        return %s.makeServerStreamRequest<%s, %s>(
             '%s',
             %s,
             %s,
@@ -740,6 +807,7 @@ func generateTsGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 	        );
     }`, method.Name, svc.Name, method.Name,
 				methodLower, outputType, authMetadata,
+				serverStreamRotation("{} as Empty"), streamClient,
 				inputType, outputType,
 				fullPath, serialize, deserialize)}, nil
 		}
@@ -749,7 +817,7 @@ func generateTsGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
     async %s(request: %s): Promise<grpc.ClientReadableStream<%s>> {
 %s
 %s
-        return this.client.makeServerStreamRequest<%s, %s>(
+%s        return %s.makeServerStreamRequest<%s, %s>(
             '%s',
             %s,
             %s,
@@ -759,6 +827,7 @@ func generateTsGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
 	        );
     }`, method.Name, svc.Name, method.Name,
 			methodLower, inputType, outputType, authMetadata, requestValidation,
+			serverStreamRotation("request"), streamClient,
 			inputType, outputType,
 			fullPath, serialize, deserialize)}, nil
 	}
@@ -770,8 +839,8 @@ func generateTsGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
      */
     async %s(requests: AsyncIterable<%s> | Iterable<%s>): Promise<void> {
 %s
-        await new Promise<void>((resolve, reject) => {
-            const stream = this.client.makeClientStreamRequest<%s, %s>(
+%s        await new Promise<void>((resolve, reject) => {
+            const stream = %s%s.makeClientStreamRequest<%s, %s>(
                 '%s',
                 %s,
                 %s,
@@ -795,6 +864,7 @@ func generateTsGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
         });
     }`, method.Name, svc.Name, method.Name,
 				methodLower, inputType, inputType, streamAuthMetadata,
+				clientStreamOpen, clientStreamRotated(inputType, "(err) => err ? reject(err) : resolve()"), streamClient,
 				inputType, outputType,
 				fullPath, serialize, deserialize,
 				streamRequestValidation)}, nil
@@ -804,8 +874,8 @@ func generateTsGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
      */
     async %s(requests: AsyncIterable<%s> | Iterable<%s>): Promise<%s> {
 %s
-        const response = await new Promise<%s>((resolve, reject) => {
-            const stream = this.client.makeClientStreamRequest<%s, %s>(
+%s        const response = await new Promise<%s>((resolve, reject) => {
+            const stream = %s%s.makeClientStreamRequest<%s, %s>(
                 '%s',
                 %s,
                 %s,
@@ -831,7 +901,8 @@ func generateTsGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodIn
         return response;
     }`, method.Name, svc.Name, method.Name,
 			methodLower, inputType, inputType, outputType, streamAuthMetadata,
-			outputType,
+			clientStreamOpen, outputType,
+			clientStreamRotated(inputType, "(err, resp) => err ? reject(err) : resolve(resp!)"), streamClient,
 			inputType, outputType,
 			fullPath, serialize, deserialize,
 			streamRequestValidation, responseValidation)}, nil

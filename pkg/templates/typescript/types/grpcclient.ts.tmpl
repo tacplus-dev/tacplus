@@ -6,7 +6,11 @@ import { toBinary, fromBinary } from '@bufbuild/protobuf';
 import { type Empty, EmptySchema } from '@bufbuild/protobuf/wkt';
 {{- end}}
 import * as types from '{{.TypesImport}}';
+{{- if .Rotates}}
+import { type ChannelProvider, openRotatingStream, clientStreamCall } from '{{.ServiceManagerImport}}';
+{{- else}}
 import { type ChannelProvider } from '{{.ServiceManagerImport}}';
+{{- end}}
 {{.CrossPackageImports}}
 
 /**

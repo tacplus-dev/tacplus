@@ -13,12 +13,13 @@ import (
 // javaServesRotatingSibling reports whether a generated Java server wrapper
 // also serves the service's <Svc>Rotating sibling (tacplus#322), and whether
 // a generated Java S2S client of it rotates its streams: every
-// service-to-service service with a streaming rpc whose calls carry tokens.
+// service-to-service or client-to-server (tacplus#323) service with a
+// streaming rpc whose calls carry tokens.
 // The same rule as Go's goServesRotatingSibling: a c2d service has no tokens
 // (its socket is the boundary), and an auth-disabled service has none to
 // expire, so neither needs rotation.
 func javaServesRotatingSibling(service *parser.ServiceInfo) bool {
-	if service == nil || !service.IsS2S || service.IsC2D || service.AuthDisabled {
+	if service == nil || !(service.IsS2S || service.IsC2S) || service.IsC2D || service.AuthDisabled {
 		return false
 	}
 	for _, m := range service.Methods {

@@ -383,11 +383,38 @@ them), a slow consumer stalling a cutover until `exp` (inherent to draining in
 order, as in the member port), rotation under clock skew, a rotation that
 reaches another instance after a rebalance (the client pins every leg to the
 connection the stream opened on; a refusal there ends the stream, fail-closed,
-but no test moves an endpoint), and C2S or auth-disabled streams (they have no
-sibling by design).
+but no test moves an endpoint), and auth-disabled streams (they have no
+sibling by design). C2S streams: RT-2.
 
 To close it: the Java and Rust ports with their legs of `cross-test/rotation`,
 a Go↔Java and Go↔Rust leg, and the member port moved onto the shared chassis.
+
+## RT-2 — stream rotation in the client-only targets and C2S: what remains
+
+**Status:** open (tacplus#323).
+
+`cross-test/rotation-clients` drives the generated Go server of a C2S service
+(its `<Svc>Rotating` sibling) with the generated TypeScript, Python, C# and
+Swift C2S clients: each stream shape across several token lifetimes with no loss,
+duplication or reordering on one handler call, another subject's rotation
+refused, a revoked caller cut off, the fallback to the plain method. Not yet:
+
+- **The Go, Java and Rust C2S clients** (`c2sm`) do not rotate; their S2S
+  clients do (RT-1).
+- **W2S (SSE, WebSocket).** No W2S stream rotates. The design's SSE rotation (a
+  new request presenting the session id and the new token, the old one drained
+  to its `last` event) needs a gateway contract the gateway does not have yet:
+  how a W2S request names a session and how `last` is framed as an event.
+- **Through the gateway.** No tacplus gate runs the gateway: the gateway's own
+  `e2e_rotation` covers routing by session id and the same-subject refusal
+  against a stand-in backend (tacplus-dev/gateway#26); a leg with a generated
+  backend and a generated client through it belongs there.
+- **Servers.** The C2S sibling is exercised on the Go server only; Java and
+  Rust serve it by the same predicate as for S2S (`cross-test/rotation` covers
+  their sibling), with no C2S leg of their own.
+- **Clients.** The client-only targets' legs run against one server instance,
+  plaintext, with the Go leg's 3 s tokens; a slow consumer, clock skew and a
+  rotation refused for an unknown session are not covered there.
 
 ---
 

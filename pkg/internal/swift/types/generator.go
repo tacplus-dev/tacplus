@@ -62,6 +62,10 @@ type c2sClientTemplateData struct {
 	// empty or malformed route field before the request is written; empty, the
 	// template renders exactly as for a platform-only build.
 	RouteMethods []c2sRouteMethodTemplateData
+	// RotatingMethods are the fullyQualifiedMethods whose streams outlive
+	// their tokens on the <Svc>Rotating sibling (tacplus#323,
+	// Rotation.swift); empty, the template renders as before rotation.
+	RotatingMethods []string
 }
 
 // c2sRouteMethodTemplateData is one tenant-routed rpc in the C2S route table.
@@ -235,10 +239,15 @@ func Generate(config *tactype.Config) error {
 	// The C2S tenant route table reads (spec.rpc).route_field, so it too is
 	// resolved before the strip.
 	var c2sRoutes []c2sRouteMethodTemplateData
+	var c2sRotating []string
 	if len(c2sServices) > 0 {
 		c2sRoutes, err = c2sRouteMethods(protoSrcDir, c2sServices)
 		if err != nil {
 			return fmt.Errorf("failed to resolve Swift C2S tenant routes: %w", err)
+		}
+		c2sRotating, err = c2sRotatingMethods(protoSrcDir, c2sServices)
+		if err != nil {
+			return fmt.Errorf("failed to resolve Swift C2S rotating streams: %w", err)
 		}
 	}
 	hasRoutedMethods := len(c2sRoutes) > 0 || w2sHasRoutedMethods(w2sData)
@@ -262,7 +271,7 @@ func Generate(config *tactype.Config) error {
 		}
 	}
 	if len(c2sServices) > 0 {
-		if err := renderC2SClient(config, c2sServices, c2sRoutes); err != nil {
+		if err := renderC2SClient(config, c2sServices, c2sRoutes, c2sRotating); err != nil {
 			return err
 		}
 	}
@@ -334,11 +343,12 @@ func renderC2DClient(config *tactype.Config, servicesInfo []service.ServiceInfo)
 	return nil
 }
 
-func renderC2SClient(config *tactype.Config, servicesInfo []service.ServiceInfo, routes []c2sRouteMethodTemplateData) error {
+func renderC2SClient(config *tactype.Config, servicesInfo []service.ServiceInfo, routes []c2sRouteMethodTemplateData, rotating []string) error {
 	data := c2sClientTemplateData{
-		PackageName:  config.SwiftPackageBase,
-		Services:     c2dServicesTemplateData(servicesInfo),
-		RouteMethods: routes,
+		PackageName:     config.SwiftPackageBase,
+		Services:        c2dServicesTemplateData(servicesInfo),
+		RouteMethods:    routes,
+		RotatingMethods: rotating,
 	}
 
 	out, err := executeSwiftTemplate("C2SClient.swift.tmpl", data)
@@ -351,6 +361,16 @@ func renderC2SClient(config *tactype.Config, servicesInfo []service.ServiceInfo,
 	}
 	if err := os.WriteFile(outPath, out, 0644); err != nil {
 		return fmt.Errorf("failed to write C2SClient.swift: %w", err)
+	}
+	if len(rotating) == 0 {
+		return nil
+	}
+	rotation, err := executeSwiftTemplate("Rotation.swift.tmpl", data)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(outPath), "Rotation.swift"), rotation, 0644); err != nil {
+		return fmt.Errorf("failed to write Rotation.swift: %w", err)
 	}
 	return nil
 }
@@ -654,6 +674,55 @@ func c2sRouteMethods(protoDir string, servicesInfo []service.ServiceInfo) ([]c2s
 		deduped = append(deduped, r)
 	}
 	return deduped, nil
+}
+
+// swiftStreamRotates reports whether the C2S client carries method's stream
+// across token lifetimes on the <Svc>Rotating sibling (tacplus#323): a
+// streaming rpc of a token-carrying S2S or C2S service, the sibling's
+// generated servers serve. A stream with a cursor of its own (a collection)
+// keeps its own path. Parity with the TypeScript, Python and C# clients.
+func swiftStreamRotates(svc *parser.ServiceDescriptor, method *parser.MethodDescriptor) bool {
+	if !(svc.IsS2S || svc.IsC2S) || svc.IsC2D || svc.AuthDisabled || method.AuthDisabled || method.IsMcp {
+		return false
+	}
+	return (method.ClientStreaming || method.ServerStreaming) && method.Collection == nil
+}
+
+// c2sRotatingMethods resolves the fullyQualifiedMethods whose streams rotate,
+// sorted and deduplicated.
+func c2sRotatingMethods(protoDir string, servicesInfo []service.ServiceInfo) ([]string, error) {
+	dp, err := parser.NewDescriptorParser(protoDir)
+	if err != nil {
+		return nil, err
+	}
+	allFiles := dp.GetAllFiles()
+	seen := map[string]bool{}
+	var result []string
+	for _, svc := range servicesInfo {
+		fd, ok := allFiles[filepath.ToSlash(svc.ProtoFile)]
+		if !ok {
+			return nil, fmt.Errorf("descriptor not found for C2S service %q proto %q", svc.ServiceName, svc.ProtoFile)
+		}
+		for i := range fd.Services {
+			target := &fd.Services[i]
+			if target.Name != svc.ServiceName {
+				continue
+			}
+			fullService := target.Name
+			if fd.Package != "" {
+				fullService = fd.Package + "." + target.Name
+			}
+			for j := range target.Methods {
+				full := fullService + "/" + target.Methods[j].Name
+				if swiftStreamRotates(target, &target.Methods[j]) && !seen[full] {
+					seen[full] = true
+					result = append(result, full)
+				}
+			}
+		}
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 // c2sRouteMethodsForService returns the routed rpcs of serviceName in fd,

@@ -238,6 +238,7 @@ func TestPythonClientOnlyLibraryTemplateFilterSkipsServiceRuntime(t *testing.T) 
 		"servicemanager/__init__.py.tmpl",
 		"servicemanager/connection.py.tmpl",
 		"servicemanager/endpoint.py.tmpl",
+		"servicemanager/rotation.py.tmpl",
 		"tags/__init__.py.tmpl",
 		"client_im/__init__.py.tmpl",
 		"client_im/manager.py.tmpl",

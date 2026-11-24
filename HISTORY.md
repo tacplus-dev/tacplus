@@ -187,3 +187,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-23 looper issue trace_id in 2.7: field 200 on every sys wire message, additive traced helper forms (from #313) (#327)
 - 2026-11-23 looper issue Java: a service_state queue or priority_queue boundary generates a state client that does not compile (#456)
 - 2026-11-23 looper issue stream-expiry Java self-test streamsAreEndedAtTheOpeningTokensExpiry fails on a loaded runner: handler Context cancellation must land within a fixed 3s (#627)
+- 2026-11-23 looper issue Generated Rust pulls chrono 0.4.45 (RUSTSEC-2026-0543, unmaintained) through pbjson-types and prost-wkt-types (#855)

@@ -193,3 +193,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-23 looper issue Sign-in config in proto: providers, a tenant's OIDC IdP and domains, join mode, durations (#224)
 - 2026-11-23 looper issue Security checks: the generated tree's first scan has 8827 new MEDIUM and LOW findings (gosec, semgrep, spotbugs, bandit, chrono RUSTSEC-2026-0543), none failing the policy, and no baseline for generated/ (#854)
 - 2026-11-23 looper issue Java DiskStore self-test testAppendsDoNotWaitForUploads fails on a loaded runner: 100 fsync'd appends must finish within 20s (current-generation red on main) (#539)
+- 2026-11-23 looper issue gosec G703 (HIGH, CWE-22) at cmd/sitegen/main.go:101: os.WriteFile on a path joined from repository content, not confined to the repository (#576)

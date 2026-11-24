@@ -297,15 +297,9 @@ func Generate(config *tactype.Config) error {
 			"--prost_out=" + prostTempDir,
 			"--prost-serde_out=" + prostTempDir,
 			"--tonic_out=" + prostTempDir,
-			// Well-known type extern paths (use prost-wkt-types for serde support)
-			"--prost_opt=extern_path=.google.protobuf.Any=::prost_wkt_types::Any",
-			"--prost_opt=extern_path=.google.protobuf.Timestamp=::prost_wkt_types::Timestamp",
-			"--prost_opt=extern_path=.google.protobuf.Duration=::prost_wkt_types::Duration",
-			"--prost_opt=extern_path=.google.protobuf.Struct=::prost_wkt_types::Struct",
-			"--prost_opt=extern_path=.google.protobuf.Value=::prost_wkt_types::Value",
-			"--prost_opt=extern_path=.google.protobuf.ListValue=::prost_wkt_types::ListValue",
-			"--proto_path=" + absProtoSrcDir,
 		}
+		args = append(args, wellKnownTypeExternPaths()...)
+		args = append(args, "--proto_path="+absProtoSrcDir)
 		args = append(args, protoFiles...)
 
 		cmd := exec.Command(config.ProtocPath, args...)
@@ -746,6 +740,18 @@ func Generate(config *tactype.Config) error {
 
 // detectServicesForWrapper scans proto files to find service definitions that need wrapper generation.
 // Includes annotated gRPC services and state services (service_state on messages).
+// wellKnownTypeExternPaths maps the google.protobuf well-known types the
+// generated messages carry to the wkt chassis crate, which gives them their
+// proto3 JSON form with serde. prost-wkt-types did this until 2.7, and it
+// depends on chrono 0.4, unmaintained (RUSTSEC-2026-0543; tacplus#862).
+func wellKnownTypeExternPaths() []string {
+	var args []string
+	for _, name := range []string{"Any", "Timestamp", "Duration", "Struct", "Value", "ListValue"} {
+		args = append(args, "--prost_opt=extern_path=.google.protobuf."+name+"=::wkt::"+name)
+	}
+	return args
+}
+
 func detectServicesForWrapper(config *tactype.Config, inputDir string) ([]ServiceInfo, error) {
 	descriptorParser, err := parser.NewDescriptorParser(inputDir)
 	if err != nil {

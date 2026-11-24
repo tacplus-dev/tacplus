@@ -7,7 +7,7 @@
 //! AWS SigV4 signing and cloud identity proof generation.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Sha256, Digest};
 use {{.CrateBasePathUnderscore}}_types::sys::cloudvendor::cloudvendor::CloudVendor;
@@ -29,7 +29,7 @@ pub async fn build_aws_cloud_proof() -> Result<CloudIdentityProof, Box<dyn std::
 
     let sts_url = format!("https://sts.{}.amazonaws.com/", region);
     let body = "Action=GetCallerIdentity&Version=2011-06-15";
-    let now = chrono::Utc::now();
+    let now = SystemTime::now();
 
     let signed_headers = aws_sign_v4(
         "POST", &sts_url, body,
@@ -112,11 +112,10 @@ async fn aws_eks_credentials() -> Result<(String, String, String), Box<dyn std::
 fn aws_sign_v4(
     method: &str, url_str: &str, body: &str,
     access_key: &str, secret_key: &str, session_token: &str,
-    region: &str, service: &str, now: chrono::DateTime<chrono::Utc>,
+    region: &str, service: &str, now: SystemTime,
 ) -> Result<std::collections::HashMap<String, String>, Box<dyn std::error::Error>> {
     let parsed_url = url::Url::parse(url_str)?;
-    let datestamp = now.format("%Y%m%d").to_string();
-    let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+    let (datestamp, amz_date) = amz_dates(now);
     let payload_hash = sha256_hex(body);
 
     let mut headers = BTreeMap::new();
@@ -207,4 +206,48 @@ fn extract_xml(xml: &str, key: &str) -> Option<String> {
     let rest = &xml[idx + start.len()..];
     let end_idx = rest.find(&end)?;
     Some(rest[..end_idx].to_string())
+}
+
+/// The SigV4 date stamp (`YYYYMMDD`) and request date (`YYYYMMDDTHHMMSSZ`) of
+/// `now`, in UTC.
+fn amz_dates(now: SystemTime) -> (String, String) {
+    let secs = now.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let (year, month, day) = civil_from_days((secs / 86_400) as i64);
+    let rem = secs % 86_400;
+    let datestamp = format!("{:04}{:02}{:02}", year, month, day);
+    let amz_date = format!("{}T{:02}{:02}{:02}Z", datestamp, rem / 3600, rem % 3600 / 60, rem % 60);
+    (datestamp, amz_date)
+}
+
+/// The proleptic Gregorian (year, month, day) of a count of days since
+/// 1970-01-01 (Howard Hinnant's civil_from_days).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
+    (year, month, day)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn amz_dates_are_the_utc_civil_date_and_time() {
+        // AWS's SigV4 example request time, 2015-08-30T12:36:00Z.
+        let at = UNIX_EPOCH + Duration::from_secs(1_440_938_160);
+        assert_eq!(amz_dates(at), ("20150830".to_string(), "20150830T123600Z".to_string()));
+        assert_eq!(amz_dates(UNIX_EPOCH), ("19700101".to_string(), "19700101T000000Z".to_string()));
+        // A leap day, and the last second of a leap year.
+        let leap = UNIX_EPOCH + Duration::from_secs(1_709_164_800);
+        assert_eq!(amz_dates(leap).1, "20240229T000000Z");
+        let end = UNIX_EPOCH + Duration::from_secs(1_735_689_599);
+        assert_eq!(amz_dates(end).1, "20241231T235959Z");
+    }
 }

@@ -299,6 +299,10 @@ exceptions:
     reason: "a crate tacplus generates, which declares no license yet (#368)"
     decided_by: looper, tacplus#376 (triage; #368 is the fix)
     expires: 2027-01-15
+  - id: cargo-deny:unlicensed:wkt@0.1.0
+    reason: "a crate tacplus generates, which declares no license yet (#368)"
+    decided_by: looper, tacplus#376 (triage; #368 is the fix)
+    expires: 2027-01-15
   - id: cargo-deny:unlicensed:x509@0.1.0
     reason: "a crate tacplus generates, which declares no license yet (#368)"
     decided_by: looper, tacplus#376 (triage; #368 is the fix)

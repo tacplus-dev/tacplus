@@ -14,7 +14,6 @@ prost = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 reqwest = { workspace = true, features = ["rustls-tls"] }
 base64 = { workspace = true }
-chrono = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = "0.11"
@@ -27,4 +26,3 @@ tracing = { workspace = true }
 # 2.5.9: RUSTSEC-2026-0592 below it (`just floors`, tacplus#949).
 url = "2.5.9"
 urlencoding = "2"
-prost-wkt-types = { workspace = true }

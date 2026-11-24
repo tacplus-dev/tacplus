@@ -49,6 +49,19 @@ server wrappers, ServiceManager runtime, EventBus runtime, health runtime, SMB
 runtime, service state, and service stores loudly, instead of silently producing
 partial service code.
 
+### Rust Well-Known Types
+
+Since 2.7, a generated Rust message's `google.protobuf.Any`, `Timestamp`,
+`Duration`, `Struct`, `Value` and `ListValue` fields are the generated `wkt`
+chassis crate's types (`wkt::Timestamp`, ...), with prost's fields and serde
+in their proto3 JSON form; no generated crate depends on chrono (#862), though
+rmcp, the MCP SDK of a service with MCP tools, still does. An
+`Any` is written `{"@type": <type_url>, "value": [bytes]}` and read from that
+form or with `value` in base64; one carrying any other field is refused, since
+the generated code has no type registry. `token::Token::expires_in()` is an
+`Option<std::time::Duration>`, zero once the token has expired. The migration
+from prost-wkt-types is in [USER.md](USER.md#generated-libraries).
+
 ## ServiceManager
 
 The ServiceManager (`sm`) is the top-level reachable surface for generated

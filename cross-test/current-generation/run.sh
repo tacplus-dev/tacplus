@@ -917,8 +917,12 @@ run_java_generated_self_tests() {
 # release) at all, nor the elliptic-curve 0.13 line, whose crypto-bigint 0.5 is
 # RUSTSEC-2026-0387 (fixed in 0.7.6). Issue #215: nor block-buffer below
 # 0.12.1 (GHSA-qwgh-2vcv-g2f7, the digest 0.10 line; a GitHub advisory with no
-# RUSTSEC id, so cargo-audit would not report it). Checked on the lockfile, so
-# it needs neither cargo-audit nor the advisory database.
+# RUSTSEC id, so cargo-audit would not report it). Issue #862: nor chrono 0.4
+# (unmaintained, RUSTSEC-2026-0543), which prost-wkt-types and the token
+# chassis brought, other than through rmcp, the MCP SDK of a service with MCP
+# tools, which requires it (to its latest, 3.11) and names it in its API.
+# Checked on the lockfile, so it needs neither cargo-audit nor the advisory
+# database.
 assert_rust_lock_advisory_free() {
   local lock="$1"
   [[ -f "$lock" ]] || die "missing generated Rust Cargo.lock: $lock"
@@ -928,9 +932,24 @@ import re, sys
 def version(v):
     return tuple(int(p) for p in re.match(r"(\d+)\.(\d+)\.(\d+)", v).groups())
 
+lock = open(sys.argv[1]).read()
+# The packages whose dependencies name chrono.
+chrono_dependents = set()
+for block in lock.split("[[package]]"):
+    pkg = re.search(r'^name = "([^"]+)"', block, re.M)
+    deps = re.search(r'^dependencies = \[(.*?)\]', block, re.M | re.S)
+    if pkg and deps and re.search(r'"chrono[ "]', deps.group(1)):
+        chrono_dependents.add(pkg.group(1))
+# rmcp requires chrono, and enables schemars' chrono04.
+chrono_via = chrono_dependents - {"rmcp", "schemars"}
+
 bad = []
-for name, ver in re.findall(r'\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"', open(sys.argv[1]).read()):
-    if name == "rsa":
+for name, ver in re.findall(r'\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"', lock):
+    if name == "chrono":
+        if chrono_via or "rmcp" not in chrono_dependents:
+            via = ", ".join(sorted(chrono_via or chrono_dependents)) or "nothing"
+            bad.append(f"chrono {ver} through {via} (unmaintained, RUSTSEC-2026-0543)")
+    elif name == "rsa":
         bad.append(f"rsa {ver} (RUSTSEC-2023-0071)")
     elif name == "crypto-bigint" and version(ver) < (0, 7, 6):
         bad.append(f"crypto-bigint {ver} (RUSTSEC-2026-0387)")
@@ -965,6 +984,8 @@ PY
 #   key, jwk, token  #186: every key family generated, signed, verified, converted
 #   spiffe           the shared SPIFFE vectors (SPIFFE_VECTOR_FIXTURE)
 #   httpclient       #36: GET retries, Retry-After against a live local server
+#   wkt              #862: the well-known types' proto3 JSON, without chrono
+#   service_im       #862: the SigV4 civil date, without chrono; auth recovery
 #   x509             SEC-1: verify_service_name, the SPIFFE identity pin
 #   servicemanager   SEC-1: SpiffeServerCertVerifier fail-loud, build_root_store
 #   grpcconfig       SEC-2: load_config installs the logger; config defaults
@@ -981,6 +1002,11 @@ rust_self_test_packages() {
   for crate in key jwk token spiffe httpclient x509 servicemanager grpcconfig grpcserver collection approval diskstore logger; do
     [[ -f "$output/chassis/$crate/Cargo.toml" ]] || die "missing generated Rust $crate crate"
     echo "-p $crate"
+  done
+  # wkt and service_im, where generated: the types crate depends on wkt by
+  # path, so a workspace that builds has it.
+  for crate in wkt service_im; do
+    [[ ! -f "$output/chassis/$crate/Cargo.toml" ]] || echo "-p $crate"
   done
   [[ ! -f "$output/chassis/am/tests/accounting_sink_spool.rs" ]] || echo "-p am"
 }

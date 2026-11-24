@@ -11,7 +11,9 @@ path = "mod.rs"
 [dependencies]
 prost = { workspace = true }
 prost-types = { workspace = true }
-prost-wkt-types = { workspace = true }
+# The google.protobuf well-known types of the generated messages, with their
+# proto3 JSON form, without chrono (tacplus#862).
+wkt = { path = "../chassis/wkt" }
 pbjson = { workspace = true }
 bytes = { workspace = true }
 serde = { workspace = true }

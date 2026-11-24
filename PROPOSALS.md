@@ -912,6 +912,24 @@ the looper then marks it `promoted` or `declined` here with the date.
   every time without the lock. Java's `AppendLogTest.testConcurrentAppendsStayWholeAndComplete`
   (`pkg/templates/java/chassis/diskstore/AppendLogTest.java.tmpl`) does 4x200, twice Go's old count, with no
   timeout to hit but the same minutes spent on a loaded `current-generation` run.
+- **Proto3 JSON for a Rust `Any`** (2026-11-18, #862): the `wkt` chassis crate writes a `google.protobuf.Any` as
+  `{"@type", "value": [bytes]}` (prost-wkt-types' fallback, kept) because the generated Rust has no registry of
+  message types; Go's protojson and Java's JsonFormat embed the packed message's fields. A generated registry (every
+  message's type URL to its decoder and serde) would let `wkt::Any` write and read the proto3 form, so a
+  `sys/errors.proto` `Error.details` reads the same in every language.
+- **The other well-known types in Rust** (2026-11-18, #862): only `Any`, `Timestamp`, `Duration`, `Struct`, `Value`
+  and `ListValue` map to `wkt::`; a user field of `google.protobuf.FieldMask`, `Empty` or a wrapper (`StringValue`,
+  ...) falls to prost-types, which has no serde. Unverified whether the generated serde then compiles; if not, add
+  them to `wkt` (wrappers are their inner value in JSON, `FieldMask` a comma-joined string).
+- **chrono through rmcp** (2026-11-18, #862): with prost-wkt-types and the token chassis gone, a generated Rust
+  service still locks chrono 0.4 (RUSTSEC-2026-0543) if it has MCP tools, i.e. any user-facing c2s rpc: rmcp,
+  the MCP SDK the generated MCP dispatch is written against, requires chrono (to its latest, 3.11.0) and names
+  `chrono::DateTime<Utc>` in its model, and enables schemars' `chrono04`. Nothing tacplus generates can drop it;
+  rmcp would have to make chrono optional upstream (modelcontextprotocol/rust-sdk), or tacplus would carry its
+  own MCP termination. Until then those services accept the advisory for that path; current-generation refuses
+  chrono through anything else.
+- **`expires_in` across languages** (2026-11-18, #862): Rust's `Token::expires_in()` and Python's `expires_in()` are
+  zero once a token has expired; Go's `ExpiresIn()` and Java's `expiresIn()` go negative. One rule for all four.
 - **The member port's refused rotation can overtake its session's clean end** (2026-11-18, #877): #877 found the
   generated stream rotation's clients (Go, Java, Rust) faulting a stream PERMISSION_DENIED when a rotation reached the
   server just after the handler returned (the session forgotten: "no such live session"), over the handler's own

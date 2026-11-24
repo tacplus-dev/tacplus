@@ -190,3 +190,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-23 looper issue Generated Rust pulls chrono 0.4.45 (RUSTSEC-2026-0543, unmaintained) through pbjson-types and prost-wkt-types (#855)
 - 2026-11-23 looper issue gosec G703 (HIGH, CWE-22) at cmd/sitegen/docs.go:52: os.Stat on a path joined from repository content, not confined to the repository (#574)
 - 2026-11-23 looper issue gates.yaml names no pre-land set: lands older than a repo-wide check still reach a batch untested on current main (looper#196) (#892)
+- 2026-11-23 looper issue Sign-in config in proto: providers, a tenant's OIDC IdP and domains, join mode, durations (#224)

@@ -56,8 +56,20 @@ func (r *repo) tag(name string) {
 	r.git("tag", name)
 }
 
+// rev resolves a revision of the fixture history to its commit hash.
+func (r *repo) rev(name string) string {
+	r.t.Helper()
+	cmd := exec.Command("git", "rev-parse", name)
+	cmd.Dir = r.dir
+	out, err := cmd.Output()
+	if err != nil {
+		r.t.Fatalf("git rev-parse %s: %v", name, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // plan runs images-plan.sh in the fixture repo and returns its "<base> <build>" output.
-func plan(t *testing.T, dir, event, refType, refName, rebuild string) string {
+func plan(t *testing.T, dir, event, refType, refName, rebuild, before string) string {
 	t.Helper()
 	script, err := filepath.Abs("images-plan.sh")
 	if err != nil {
@@ -65,6 +77,16 @@ func plan(t *testing.T, dir, event, refType, refName, rebuild string) string {
 	}
 	cmd := exec.Command("bash", script, event, refType, rebuild, refName)
 	cmd.Dir = dir
+	// The event payload Actions hands the step; a push's carries before.
+	payload := filepath.Join(t.TempDir(), "event.json")
+	body := "{}"
+	if before != "" {
+		body = `{"before": "` + before + `"}`
+	}
+	if err := os.WriteFile(payload, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Env = append(os.Environ(), "GITHUB_EVENT_PATH="+payload)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("images-plan.sh %s %s %s: %v\n%s", event, refType, rebuild, err, out)
@@ -80,7 +102,10 @@ func TestImagesPlan(t *testing.T) {
 		ref     string
 		refName string // the branch or tag name; main when empty
 		rebuild string
-		want    string
+		// before is the push's previous head (the event's before): a revision
+		// of the fixture history, or a literal hash when it starts with "=".
+		before string
+		want   string
 	}{
 		{
 			name: "main push, build.Dockerfile changed in the pushed commit",
@@ -131,6 +156,57 @@ func TestImagesPlan(t *testing.T) {
 				r.commit("docs", "README")
 			},
 			event: "push", ref: "branch", want: "false false",
+		},
+		{
+			// The bug in #901: the merge train fast-forwards main by a batch of
+			// commits in one push, and the build.Dockerfile change was not the
+			// last of them. The push's previous head shows it; HEAD~1 does not.
+			name: "main push of several commits, build.Dockerfile changed before the last",
+			history: func(r *repo) {
+				r.commit("init", "README")
+				r.commit("edit build", "images/build.Dockerfile")
+				r.commit("proposals", "PROPOSALS.md")
+			},
+			event: "push", ref: "branch", before: "HEAD~2", want: "false true",
+		},
+		{
+			name: "main push of several commits, base.Dockerfile changed before the last",
+			history: func(r *repo) {
+				r.commit("init", "README")
+				r.commit("edit base", "images/base.Dockerfile")
+				r.commit("state", "STATE.md")
+				r.commit("proposals", "PROPOSALS.md")
+			},
+			event: "push", ref: "branch", before: "HEAD~3", want: "true true",
+		},
+		{
+			name: "main push of several commits, none under images/",
+			history: func(r *repo) {
+				r.commit("init", "images/build.Dockerfile")
+				r.commit("state", "STATE.md")
+				r.commit("proposals", "PROPOSALS.md")
+			},
+			event: "push", ref: "branch", before: "HEAD~2", want: "false false",
+		},
+		{
+			// A push that creates the branch has no previous head (all zeros):
+			// the parent commit is all there is to diff against.
+			name: "main push with no previous head",
+			history: func(r *repo) {
+				r.commit("init", "README")
+				r.commit("edit build", "images/build.Dockerfile")
+			},
+			event: "push", ref: "branch", before: "=0000000000000000000000000000000000000000", want: "false true",
+		},
+		{
+			// A previous head the clone does not hold (a force push dropped it)
+			// falls back to the parent commit too.
+			name: "main push whose previous head is not in the history",
+			history: func(r *repo) {
+				r.commit("init", "README")
+				r.commit("edit build", "images/build.Dockerfile")
+			},
+			event: "push", ref: "branch", before: "=1111111111111111111111111111111111111111", want: "false true",
 		},
 		{
 			// The bug in #22: a backport changed build.Dockerfile on the release
@@ -219,7 +295,13 @@ func TestImagesPlan(t *testing.T) {
 			if refName == "" {
 				refName = "main"
 			}
-			if got := plan(t, r.dir, c.event, c.ref, refName, c.rebuild); got != c.want {
+			before := c.before
+			if strings.HasPrefix(before, "=") {
+				before = before[1:]
+			} else if before != "" {
+				before = r.rev(before)
+			}
+			if got := plan(t, r.dir, c.event, c.ref, refName, c.rebuild, before); got != c.want {
 				t.Errorf("plan = %q, want %q", got, c.want)
 			}
 		})

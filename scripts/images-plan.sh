@@ -6,6 +6,9 @@
 # Run from the repository checkout. Prints "<base> <build>" (true or false).
 # A run on a release/X.Y branch is a line rebuild (#283): base and build, from
 # that branch, so the line's images take every OS security fix.
+# A branch push diffs against its previous head, the event's before, read from
+# GITHUB_EVENT_PATH (the event payload Actions hands every step): the merge
+# train pushes a batch of commits at once (#901).
 # The first-publish rule (no build:latest on the registry yet) needs docker and
 # stays in the workflow.
 set -euo pipefail
@@ -14,6 +17,10 @@ event="$1"
 ref_type="$2"
 rebuild="$3"
 ref_name="${4:-}"
+before=""
+if [[ -n "${GITHUB_EVENT_PATH:-}" && -r "$GITHUB_EVENT_PATH" ]]; then
+  before="$(jq -r '.before // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
+fi
 
 base=false; build=false
 case "$event" in
@@ -25,7 +32,15 @@ case "$event" in
     # A release tag diffs against the previous release tag on its line, not its
     # parent commit: a backport can land on the release branch before the tag is
     # cut, and the tag's own commit would not show it.
+    # A branch push diffs against its previous head, so a push of several
+    # commits sees an image change in any of them (#901). With none (the
+    # branch's first push) or one the clone does not hold (a force push), its
+    # parent commit.
     from=HEAD~1
+    if [[ "$ref_type" == branch && -n "$before" && ! "$before" =~ ^0+$ ]] &&
+      git cat-file -e "$before^{commit}" 2>/dev/null; then
+      from="$before"
+    fi
     if [[ "$ref_type" == tag ]]; then
       # build:X.Y is rebuilt on every patch of its line, so each release has its
       # own immutable build:X.Y.Z with the line's tacplus launcher (#193).

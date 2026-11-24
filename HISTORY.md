@@ -188,3 +188,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-23 looper issue Java: a service_state queue or priority_queue boundary generates a state client that does not compile (#456)
 - 2026-11-23 looper issue stream-expiry Java self-test streamsAreEndedAtTheOpeningTokensExpiry fails on a loaded runner: handler Context cancellation must land within a fixed 3s (#627)
 - 2026-11-23 looper issue Generated Rust pulls chrono 0.4.45 (RUSTSEC-2026-0543, unmaintained) through pbjson-types and prost-wkt-types (#855)
+- 2026-11-23 looper issue gosec G703 (HIGH, CWE-22) at cmd/sitegen/docs.go:52: os.Stat on a path joined from repository content, not confined to the repository (#574)

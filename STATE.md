@@ -181,6 +181,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-23 by lo
   Hazelcast 5.7 members through each language's ports; `just stream-expiry` runs each language's expiry leg. Make-before-break rotation of every
   generated S2S stream (#322, `sys/rotation.proto`, the `<Svc>Rotating` sibling): Go, Java and Rust server and
   client (`chassis/rotation`, `just rotation`); a client falls back to the plain method on a server without the sibling.
+  The sibling is served for token-carrying C2S services too, and the TypeScript, Python, C# and Swift C2S clients
+  rotate each server-, client-streaming and bidi call on it, the tacplus-dev/gateway#26 path (#323,
+  `cross-test/rotation-clients`, `just rotation-clients`: each client against the generated Go server).
   Fleets pin services by release line (#180): `fleet.yaml` names a `version: "MAJOR.MINOR"` for every service (or
   an explicit `MAJOR.MINOR.PATCH-pre`), and `tacplus fleet build` resolves it to the line's highest released tag,
   pre-releases excluded, and to that release's image on ghcr.io by digest; `fleet.lock` records version, commit and
@@ -252,7 +255,8 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-23 by lo
   (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.
 - **Known gaps:** The member port needs kernel to mint `member:<svc>` (tacplus-dev/kernel#30) before Stratum adopts
   it (stratum#17); its ServiceManager wiring is compiled, not run (KNOWN_TEST_GAPS MP-1); no cross-language rotation
-  leg yet, and the member ports keep their own rotation code (KNOWN_TEST_GAPS RT-1). The redo service and the per-tenant Stratum that implement the redo contract are their repos'
+  leg yet, and the member ports keep their own rotation code (KNOWN_TEST_GAPS RT-1); the Go, Java and Rust C2S clients and W2S (SSE, WebSocket) streams do not
+  rotate, and no gate here runs the gateway (KNOWN_TEST_GAPS RT-2). The redo service and the per-tenant Stratum that implement the redo contract are their repos'
   (tacplus-dev/redo#1, tacplus-dev/stratum#2). The gateway does not yet route by the route field nor stamp `McpRequest.tenant`
   (tacplus-dev/gateway#3 and its MCP follow-up). MCP on a tenant-owned service is same-tenant only (PROPOSALS.md).
   No C2S record writes (by decision, 2.5). The Rust wrapper renders no (spec.store_namespace) predicate pin on the

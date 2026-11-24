@@ -186,3 +186,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-23 looper issue The security floor reads the versions tacplus hands its consumers: every generated manifest's floor checked against OSV, and resolved locks for the generated Python, C# and Swift trees (#949)
 - 2026-11-23 looper issue trace_id in 2.7: field 200 on every sys wire message, additive traced helper forms (from #313) (#327)
 - 2026-11-23 looper issue Java: a service_state queue or priority_queue boundary generates a state client that does not compile (#456)
+- 2026-11-23 looper issue stream-expiry Java self-test streamsAreEndedAtTheOpeningTokensExpiry fails on a loaded runner: handler Context cancellation must land within a fixed 3s (#627)

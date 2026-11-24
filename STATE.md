@@ -195,8 +195,8 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-21 by lo
   section records the build and base images by digest, each part's sha256 and the image digest; `--check` rebuilds
   and fails on any that differs. darwin/arm64 `rust:` and `swift:` clients come from the macos runner
   (`--clients-only` there, `--prebuilt` here). A gateway `webapp` contribution is refused. The build image carries
-  cargo-zigbuild, zig and the three Rust cross targets for the `rust:` recipe. Gap: no gateway release yet serves
-  `/-/` (gateway#21 is on main, after v0.2.0), so the end-to-end build of tenantecho's page waits on one.
+  cargo-zigbuild, zig and the three Rust cross targets for the `rust:` recipe. gateway v0.3.0 serves `/-/`
+  (gateway#21); the end-to-end build on a real fleet waits on a tacplus release that has `fleet gateway` (2.7).
   Redact for any type (#274): `(spec.sensitive)` on string/bytes/message fields, `(spec.sensitive_message)` (a
   message secret by construction) and `(spec.not_sensitive)`; Go, Java and Rust generate a deterministic
   `Redact<T>` (a set sensitive value becomes `REDACTED`, `<field>_redacted` set, recursion through nested, repeated
@@ -258,6 +258,7 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-21 by lo
   namespace is `/tenants/<tid>`; kernel#23's `/tenants/<name>` namespaces need #202 first (PROPOSALS.md).
   The record write surface stamps no `(spec.identity_spiffe_subject)` (PROPOSALS.md). A fleet's service images must be on ghcr.io from a
   github.com repo (PROPOSALS.md).
-- **Blocked on:** #195's gateway build (`tacplus fleet gateway`: the merged webapp, the clients, the image and the
-  lock's `gateway:` section) waits on tacplus-dev/gateway#6 (its first release) and tacplus-dev/gateway#21 (serving
-  `/-/`). The example module is done (tenantecho v0.2.0).
+- **Blocked on:** #195's end-to-end acceptance (`tacplus fleet gateway --check` twice on a real fleet, tenantecho's
+  page served) is tacplus-dev/fleet-seatrials#73: gateway 0.3 (v0.3.0 serves `/-/`) on tacplus 2.7, the first
+  release with `tacplus fleet gateway` (#954, #955). `tacplus fleet gateway` itself is landed; the example module is
+  done (tenantecho v0.2.0).

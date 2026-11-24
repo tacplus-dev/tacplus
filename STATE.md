@@ -187,6 +187,21 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-23 by lo
   read; `tacplus fleet build` checks each recipe's inputs at the locked commit and records the contribution under
   the service in `fleet.lock` (paths under `/-/apps/<service>/` and `/-/clients/<service>/`, targets, the webapp
   dir's tree). Contract and trust rule in docs/USER.md.
+  flock state (#206, the merge half; ships in 2.7): a `(spec.service_state)` root labelled `flock` (a well-known
+  label, like `kernel`) holds fleet-wide convergent tables. Every entry field merges by its `(spec.merge)` rule
+  (IMMUTABLE, MIN, MAX, LAST_WRITE, SET_ADD_WINS, SET_REMOVE_WINS; a nested message field by field; LAST_WRITE on a
+  boundary replaces the whole entry), set elements by `(spec.identity)`, and generation refuses a flock root with a
+  field that has no rule. The entry's `(spec.store_epoch)` is a hybrid clock (`flock.Hlc`) and its
+  `(spec.deleted_flag)` a `flock.DeletionMark` (MERGED/USER/EXPIRED, `merged_into`); `sys/flock.proto` holds the
+  types and tacplus adds `flock.Meta flock_meta` (stamps, causal set ops, conflicts) to each entry. Go, Rust and
+  Java generate two-argument merge, merge_entries (the older entry survives and absorbs the other, removals
+  included), the writers, the unique check (a local conflict refused, the partition race merged, any other overlap
+  quarantined), the marks (deterministic order, purged once every copy acknowledged, a copy away 30 days rebuilt),
+  the clock (a far-future time held) and a canonical digest. Merge rules are pinned in the source's
+  `registry.yaml`: a released rule cannot change. `cross-test/flock` (`just flock`; not yet in `just gates`, PROPOSALS.md) runs property
+  tests, a multi-copy simulation (convergence, no resurrection, no redirect cycles) and a cross-language digest
+  vector in all three. Gaps: no flock service yet (copies, gossip over #204, membership, catch-up), no compaction of
+  set ops, and the `scope: FLEET` spelling the design note later chose (PROPOSALS.md).
   Gateway contributions, parts 2 and 3 (#195): `tacplus fleet gateway` builds the fleet's gateway image from
   `fleet.lock` alone (the gateway, never a release image, is the one image a fleet builds): the locked gateway
   generated against the merged protos, its own webapp at `/`, each contributed module at `/-/apps/<service>/` and

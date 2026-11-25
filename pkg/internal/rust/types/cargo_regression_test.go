@@ -332,7 +332,6 @@ func TestGeneratedCratesDoNotDependOnPbjsonTypes(t *testing.T) {
     regex: 1.12.3
     reqwest: 0.12.18
     rustls: 0.23.35
-    rustls-pemfile: 2.2.0
     serde: 1.0.228
     serde-saphyr: 2.1.1
     serde_json: 1.0.149

@@ -610,10 +610,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   on build.lock's digest (as fleet-seatrials' ci/security.sh does for its CI image), and looper-scan files a
   build_image finding on tacplus-dev/tacplus (approved, priority:high when a fixed release exists) with a
   `Blocked-by` in each consumer that finds it (looper#129's rule).
-- **Drop the from-source gh once a gh release carries golang.org/x/net >= 0.62.0** (2026-11-07, #350): the build
-  image builds gh v2.103.2 from source with x/net 0.62.0 (CVE-2026-78661), because gh's releases through 2.103.3
-  build with 0.60.0. When one does, set `GH_VERSION` to it and download its release tarball in the `fetch` stage
-  again, dropping the `gh` stage; `tacplus-smoke` keeps the floor.
+- **Drop the gh websocket override once a gh release requires the fixed github.com/gorilla/websocket**
+  (2026-11-07, #350; 2026-11-25, #969): the build image builds gh v2.105.0 from its module, in a module made in
+  its stage, with `GH_WEBSOCKET_VERSION` (v1.5.4-0.20240701034025-d67f41855da4, GO-2026-6278), because every gh
+  release through 2.105.0 requires websocket v1.5.3. 2.105.0 already requires x/net 0.62.0 (CVE-2026-78661) and
+  otel v1.47.0 (GO-2026-6974). When a release requires the fix, set `GH_VERSION` to it and drop the override;
+  `tacplus-smoke` keeps the floors.
   A nightly check that the image's Go binaries carry no module under a known fix (what Trivy found here) before the
   sweep fails would make the next one a patch rather than a red run.
 - **Drop the replaced Maven guava once a Maven release bundles 33.7.2 or later** (2026-11-02, #222): Maven 3.9.16

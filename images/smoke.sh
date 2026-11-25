@@ -9,21 +9,26 @@ set -euo pipefail
 # advisories their releases have not taken yet (build.Dockerfile, the buildx
 # and gh stages): each must carry every bumped module at least at its floor,
 # and buildx the modules its release moved past an advisory (containerd, #930).
+# A floor may be a pseudo-version (an untagged fix): it compares as Go orders
+# it, below the release it precedes (v1.5.4-0.2024... < v1.5.4).
 # scripts/images_smoke_test.go sources this file for these two functions.
 go_floors() {
   local bin=$1 floor mod min have; shift
   for floor in "$@"; do
     mod=${floor%@*} min=${floor#*@}
     have=$(go version -m "$bin" | awk -v m="$mod" '$1 == "dep" && $2 == m { print $3 }')
-    [[ -n "$have" && "$(printf '%s\n%s\n' "$min" "$have" | sort -V | head -n 1)" == "$min" ]] \
+    [[ -n "$have" && "$(printf '%s\n%s\n' "${min//-/\~}" "${have//-/\~}" | sort -V | head -n 1)" == "${min//-/\~}" ]] \
       || { echo "${bin##*/} carries $mod ${have:-none}, below $min" >&2; return 1; }
   done
 }
 go_floors_check() {
   go_floors "${TACPLUS_SMOKE_BUILDX:-/usr/local/libexec/docker/cli-plugins/docker-buildx}" \
     github.com/containerd/containerd/v2@v2.4.2 github.com/moby/go-archive@v0.3.0 golang.org/x/net@v0.62.0 || return 1
-  # CVE-2026-78661 (#350): gh's releases (through 2.103.3) build with x/net 0.60.0.
-  go_floors "$(command -v gh)" golang.org/x/net@v0.62.0
+  # gh (#969): its releases through 2.103.x build with otel v1.44.0 (GO-2026-6974)
+  # and every release through 2.105.0 with websocket v1.5.3 (GO-2026-6278, fixed
+  # only in an untagged commit); through 2.103.3 with x/net 0.60.0 (CVE-2026-78661, #350).
+  go_floors "$(command -v gh)" github.com/gorilla/websocket@v1.5.4-0.20240701034025-d67f41855da4 \
+    go.opentelemetry.io/otel@v1.47.0 go.opentelemetry.io/otel/trace@v1.47.0 golang.org/x/net@v0.62.0
 }
 # A Go program copied from upstream must be built with at least the fixed
 # release of its own Go line (floors oldest line first): a line older than
@@ -45,7 +50,9 @@ go_stdlib_floor() {
 go_stdlib_check() {
   # CVE-2026-97054 (#901): the docker CLI comes from docker:DOCKER_VERSION-cli
   # (build.Dockerfile), built with whatever Go upstream used; 29.9.3's was go1.26.10.
-  go_stdlib_floor "${TACPLUS_SMOKE_DOCKER:-$(command -v docker)}" go1.26.11 go1.27.4
+  go_stdlib_floor "${TACPLUS_SMOKE_DOCKER:-$(command -v docker)}" go1.26.11 go1.27.4 || return 1
+  # GO-2026-6859 (#969): gh, built from its module, with go1.27.4 or later.
+  go_stdlib_floor "${TACPLUS_SMOKE_GH:-$(command -v gh)}" go1.27.4
 }
 # RootlessKit maps build's subordinate IDs with newuidmap and newgidmap, which
 # carry file capabilities, not Debian's setuid bit (build.Dockerfile, #830):
@@ -97,7 +104,7 @@ done
 docker buildx version
 gh --version
 go_floors_check
-# The docker CLI, copied from upstream's image, is built with a fixed Go.
+# The docker CLI, copied from upstream's image, and gh are built with a fixed Go.
 go_stdlib_check
 # So do BuildKit, its runc and RootlessKit (build.Dockerfile, buildkit and
 # runc stages, #315), for each bumped module they carry.

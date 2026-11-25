@@ -15,7 +15,7 @@
 # protoc is pinned at the ceiling the justfile allows (protoc-check); the
 # Java runtime the generated models pin (protobuf-java 4.36.0) must be at
 # least the protoc gencode version.
-ARG BASE_IMAGE=ghcr.io/tacplus-dev/tacplus/base:latest
+ARG BASE_IMAGE=ghcr.io/tacplus-dev/tacplus/base:latest@sha256:aa993f927c4d1e4ae11687d4189b5fed98d7e191b7cf3e4a759cc130795a17ff
 # Which line each SDK follows (#255): Go the newest release, Node the newest
 # LTS, Swift the newest release (a full x.y.z: swift.org has no line alias).
 # The nightly scan flags a pin that falls behind its line. Go, Node and Swift
@@ -94,7 +94,7 @@ ARG RUST_NIGHTLY=nightly-2026-10-15
 # another line. Empty for a build of main: no line check.
 ARG TACPLUS_LINE=
 
-FROM debian:trixie-slim AS fetch
+FROM debian:trixie-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0 AS fetch
 ARG TARGETARCH
 ARG PROTOC_VERSION
 ARG GRPC_JAVA_VERSION

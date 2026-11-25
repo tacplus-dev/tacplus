@@ -196,3 +196,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-23 looper issue gosec G703 (HIGH, CWE-22) at cmd/sitegen/main.go:101: os.WriteFile on a path joined from repository content, not confined to the repository (#576)
 - 2026-11-25 looper issue Security checks: bandit B404 and B603 (LOW) in cross-test/lib/rust_selftest_hash.py, new with #843 and not in security-baseline.json (#917)
 - 2026-11-25 looper issue Generated Rust chassis and model depend on deprecated serde_yaml 0.9, which locks unmaintained unsafe-libyaml (RUSTSEC-2024-0449, no fix) (#320)
+- 2026-11-25 looper issue Security checks: 1331 other new findings (MEDIUM and LOW: gosec, semgrep, bandit), none failing the policy (#585)

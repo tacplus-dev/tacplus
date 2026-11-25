@@ -6,6 +6,14 @@
 // through EventBus to consumers (short-term store, long-term accounting, LLM
 // troubleshooting, alerting, suppression).
 //
+// Accounting never carries data (tacplus#273): who called what, the outcome,
+// the gRPC status, a typed reason and typed metrics, never a request or
+// response value, an error text or a stack trace. Every string or bytes field
+// reachable from Event (and from a declared accountingrecord.AccountingRecord)
+// is an identifier or an enum-like code, and says so with
+// (spec.accounting_safe); generation fails on one that does not. Stack traces
+// and error texts go to the debug console only.
+//
 // Event levels:
 //   ERROR — our bugs/failures, not user errors
 //   WARN  — user-caused issues (expired token, bad input)
@@ -24,24 +32,7 @@ syntax = "proto3";
 package accounting;
 
 import "generated/accounting_method.proto";
-
-// =============================================================================
-// Common Types
-// =============================================================================
-
-// ErrorContext captures the origin of an error or diagnostic event.
-// "caller" and "function" are cheap (Go runtime.Caller, Rust std::panic::Location,
-// Java StackWalker). "stack_trace" is only populated on actual errors.
-message ErrorContext {
-  // caller is the file and line where the event originated (e.g., "auth.go:142").
-  string caller = 1;
-
-  // function is the fully qualified function name (e.g., "(*Authorizer).Authorize").
-  string function = 2;
-
-  // stack_trace is the full call stack, only populated on ERROR-level events.
-  string stack_trace = 3;
-}
+import "sys/spec.proto";
 
 // =============================================================================
 // Event Level
@@ -73,17 +64,18 @@ message Event {
   // source_id identifies the emitting process.
   // Format: "{service_id}-{instance_id}" for services (e.g., "identity-a1b2c3")
   // or "{tool}-{user}" for clients (e.g., "mycli-alice").
-  string source_id = 2;
+  string source_id = 2 [(spec.accounting_safe) = true];
 
   // request_id is the x-request-id that traces a request across gateway,
   // backend services, and client tools. Set by gateway, forwarded as gRPC
   // metadata, extracted by generated wrappers.
-  string request_id = 3;
+  string request_id = 3 [(spec.accounting_safe) = true];
 
   // identity is the caller's identity — the claims from the verified token.
   // Enables identity-scoped event access — users query only their own events.
-  // Keys are claim names (sub, aud, iss, etc.), values are claim values.
-  map<string, string> identity = 4;
+  // Keys are claim names (sub, aud, iss, azp, act), values are claim values:
+  // identifiers, never request data.
+  map<string, string> identity = 4 [(spec.accounting_safe) = true];
 
   // level is the event level, derived from the event type.
   // Included on the envelope for filtering without inspecting the payload.
@@ -91,69 +83,105 @@ message Event {
 
   // event is the typed payload.
   oneof event {
-    // RPC lifecycle
+    // RPC lifecycle: one RpcCompleted per call, whatever its outcome.
     RpcCompleted rpc_completed = 10;
-    RpcError rpc_error = 11;
-    TokenRejected token_rejected = 12;
     SessionSummary session_summary = 13;
     // Auth
     TokenExchanged token_exchanged = 20;
     // Infrastructure
     EndpointHealthChanged endpoint_health_changed = 30;
     StateUpdated state_updated = 31;
-    // Client operations
-    CommandExecuted command_executed = 40;
-    // Agent telemetry
-    ToolUsed tool_used = 50;
-    SubagentStarted subagent_started = 51;
-    FileModified file_modified = 52;
-    // Escape hatch
-    Diagnostic diagnostic = 100;
   }
+
+  // Removed by tacplus#273: RpcError and TokenRejected (an RPC's outcome is
+  // RpcCompleted.outcome), and the free-text CommandExecuted, ToolUsed,
+  // SubagentStarted, FileModified and Diagnostic (accounting carries no data).
+  reserved 11, 12, 40, 50, 51, 52, 100;
+  reserved "rpc_error", "token_rejected", "command_executed", "tool_used",
+    "subagent_started", "file_modified", "diagnostic";
 }
 
 // =============================================================================
 // RPC Lifecycle — emitted automatically by generated wrappers
 // =============================================================================
 
-// RpcCompleted records a successful RPC invocation. [INFO]
-// This is the primary accounting event — one per completed request.
+// RpcOutcome is what became of a call. It is derived from the call's gRPC
+// status code alone, the same in every language:
+//   OK                                              -> PERMITTED
+//   UNAUTHENTICATED                                 -> DENIED_AUTHN
+//   PERMISSION_DENIED                               -> DENIED_AUTHZ
+//   INVALID_ARGUMENT, NOT_FOUND, ALREADY_EXISTS,
+//   FAILED_PRECONDITION, OUT_OF_RANGE               -> INVALID
+//   any other code                                  -> FAILED
+enum RpcOutcome {
+  RPC_OUTCOME_UNDEFINED = 0;
+  // The call was authorized and served.
+  RPC_OUTCOME_PERMITTED = 1;
+  // The caller could not be authenticated.
+  RPC_OUTCOME_DENIED_AUTHN = 2;
+  // The caller was authenticated and refused.
+  RPC_OUTCOME_DENIED_AUTHZ = 3;
+  // The request could not be served as asked (the caller's input).
+  RPC_OUTCOME_INVALID = 4;
+  // The call failed on our side.
+  RPC_OUTCOME_FAILED = 5;
+}
+
+// RpcReason is the typed reason of an outcome other than PERMITTED: where in
+// the generated call path the call stopped. It replaces the free-text error
+// message (tacplus#273). UNDEFINED on a permitted call.
+enum RpcReason {
+  RPC_REASON_UNDEFINED = 0;
+  // Authentication failed: no token, or a token that did not verify.
+  RPC_REASON_TOKEN_REJECTED = 1;
+  // The method's declared auth check refused the authenticated caller.
+  RPC_REASON_NOT_ENTITLED = 2;
+  // A declared guard refused the call (namespace, owner, tenant, device,
+  // egress policy).
+  RPC_REASON_POLICY_DENIED = 3;
+  // The request failed validation.
+  RPC_REASON_REQUEST_INVALID = 4;
+  // The handler returned the error.
+  RPC_REASON_HANDLER_ERROR = 5;
+  // The handler's response failed validation.
+  RPC_REASON_RESPONSE_INVALID = 6;
+  // The generated call path failed before the handler.
+  RPC_REASON_INTERNAL = 7;
+}
+
+// RpcMetrics are the typed numbers a handler may attach to its call's record.
+// Numbers only, so they cannot carry data. Zero means not reported.
+message RpcMetrics {
+  // records_returned is how many records the call returned (a query's rows).
+  int64 records_returned = 1;
+
+  // bytes is how many payload bytes the call moved, as the handler counts them.
+  int64 bytes = 2;
+}
+
+// RpcCompleted is the RPC record: one per call, whatever its outcome. [INFO for
+// PERMITTED, WARN for DENIED_* and INVALID, ERROR for FAILED]
+// This is the primary accounting event. A call refused before its handler
+// (authentication, authorization, validation, a declared guard) is recorded
+// too, with its outcome and reason.
 message RpcCompleted {
   // method is the RPC that was invoked (generated per-service type).
   accounting_method.AccountingMethod method = 1;
 
   // duration_ms is the server-side processing time in milliseconds.
   int64 duration_ms = 2;
-}
 
-// RpcError records a failed RPC invocation. [ERROR]
-// Only emitted for internal failures — our bugs, not user input errors.
-message RpcError {
-  // method is the RPC that was invoked.
-  accounting_method.AccountingMethod method = 1;
+  // outcome is what became of the call (see RpcOutcome).
+  RpcOutcome outcome = 3;
 
-  // code is the gRPC status code (numeric).
-  int32 code = 2;
+  // code is the call's gRPC status code (numeric), 0 when it succeeded.
+  int32 code = 4;
 
-  // message is the error description.
-  string message = 3;
+  // reason is the typed reason of an outcome other than PERMITTED.
+  RpcReason reason = 5;
 
-  // duration_ms is how long the request ran before failing.
-  int64 duration_ms = 4;
-
-  // error_context captures caller, function, and stack trace.
-  ErrorContext error_context = 5;
-}
-
-// TokenRejected records a failed authentication attempt. [WARN]
-// User-caused — expired token, invalid signature, wrong audience.
-// Not an ERROR because it's not our bug.
-message TokenRejected {
-  // reason describes why the token was rejected.
-  string reason = 1;
-
-  // method is the RPC where the token was rejected.
-  accounting_method.AccountingMethod method = 2;
+  // metrics are the typed numbers the handler attached, if any.
+  RpcMetrics metrics = 6;
 }
 
 // =============================================================================
@@ -173,7 +201,7 @@ message RpcSummary {
 // into a single record. The aggregation window is bounded by the
 // token's expiration time, so it has a known finite period.
 message SessionSummary {
-  map<string, string> identity = 1;
+  map<string, string> identity = 1 [(spec.accounting_safe) = true];
   int64 start_ms = 2;
   int64 end_ms = 3;
   repeated RpcSummary rpcs = 4;
@@ -189,13 +217,13 @@ message SessionSummary {
 // Accounting event — tracks token issuance for usage/billing.
 message TokenExchanged {
   // audience is the target audience of the minted token.
-  string audience = 1;
+  string audience = 1 [(spec.accounting_safe) = true];
 
   // grant_type is the OAuth grant type used (e.g., "urn:ietf:params:oauth:grant-type:token-exchange").
-  string grant_type = 2;
+  string grant_type = 2 [(spec.accounting_safe) = true];
 
   // token_type distinguishes JWT vs X509 mints.
-  string token_type = 3;
+  string token_type = 3 [(spec.accounting_safe) = true];
 }
 
 // =============================================================================
@@ -206,7 +234,7 @@ message TokenExchanged {
 // Emitted by ServiceManager when an endpoint transitions healthy↔unhealthy.
 message EndpointHealthChanged {
   // endpoint is the "host:port" of the affected endpoint.
-  string endpoint = 1;
+  string endpoint = 1 [(spec.accounting_safe) = true];
 
   // healthy is the new health status.
   bool healthy = 2;
@@ -220,10 +248,10 @@ message EndpointHealthChanged {
 // Provides a coarse audit trail — "what changed" without the full payload.
 message StateUpdated {
   // entity_type is the proto message type that changed (e.g., "DetectionRule", "Topic").
-  string entity_type = 1;
+  string entity_type = 1 [(spec.accounting_safe) = true];
 
   // entity_id is the identifier of the changed entity.
-  string entity_id = 2;
+  string entity_id = 2 [(spec.accounting_safe) = true];
 
   // action is what happened.
   StateAction action = 3;
@@ -235,79 +263,6 @@ enum StateAction {
   STATE_ACTION_CREATED = 1;
   STATE_ACTION_UPDATED = 2;
   STATE_ACTION_DELETED = 3;
-}
-
-// =============================================================================
-// Client Operations
-// =============================================================================
-
-// CommandExecuted records a CLI command invocation. [INFO]
-// Emitted by client tools (CLIs) via the daemon.
-message CommandExecuted {
-  // tool is the CLI tool name (e.g., "mycli").
-  string tool = 1;
-
-  // command is the subcommand (e.g., "api", "bootstrap", "claude").
-  string command = 2;
-
-  // duration_ms is the command execution time.
-  int64 duration_ms = 3;
-
-  // success indicates whether the command completed successfully.
-  bool success = 4;
-
-  // error_message is set when success is false.
-  string error_message = 5;
-}
-
-// =============================================================================
-// Agent Telemetry — subsumes the earlier SensorEvent
-// =============================================================================
-
-// ToolUsed records an AI agent's use of a tool. [INFO]
-message ToolUsed {
-  string tool_name = 1;
-  int64 duration_ms = 2;
-  string session_id = 3;
-  string project_path = 4;
-}
-
-// SubagentStarted records when an AI agent spawns a sub-agent. [INFO]
-message SubagentStarted {
-  string agent_type = 1;
-  string session_id = 2;
-  string description = 3;
-}
-
-// FileModified records a file modification by an AI agent. [INFO]
-message FileModified {
-  string path = 1;
-  FileAction action = 2;
-  string session_id = 3;
-}
-
-// FileAction describes what happened to a file.
-enum FileAction {
-  FILE_ACTION_UNDEFINED = 0;
-  FILE_ACTION_CREATED = 1;
-  FILE_ACTION_MODIFIED = 2;
-  FILE_ACTION_DELETED = 3;
-}
-
-// =============================================================================
-// Escape Hatch
-// =============================================================================
-
-// Diagnostic is the freeform escape hatch for cases where no typed event
-// exists yet. [ERROR]
-//
-// Use this sparingly. When a Diagnostic pattern emerges (same context, same
-// kind of message), promote it to a typed event. Diagnostics are a migration
-// path, not a permanent solution.
-message Diagnostic {
-  string message = 1;
-  string context = 2;
-  ErrorContext error_context = 3;
 }
 
 // =============================================================================

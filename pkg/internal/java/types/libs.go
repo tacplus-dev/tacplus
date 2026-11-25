@@ -14,6 +14,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/accountingpolicy"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/keepaliveconst"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	commonspiffe "github.com/tacplus-dev/tacplus/pkg/internal/common/spiffe"
@@ -195,6 +196,9 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		AccountingRecordTypeImport     string // e.g. "com.example.types.vservices.accountingrecord.Accountingrecord"
 		AccountingRecordJavaType       string // e.g. "Accountingrecord.AccountingRecord"
 		ServiceRPCs                    []javaAmServiceRPC
+		// Acct is the shared accounting classification (tacplus#273) the am
+		// renders: stages, code -> outcome, stage x outcome -> reason, levels.
+		Acct accountingpolicy.Context
 	}{
 		PackageBase:                    packageBase,
 		InterfacesBase:                 config.Lang.Java.JavaImportBase(),
@@ -220,6 +224,7 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		AccountingRecordTypeImport:     accountingRecordTypeImport,
 		AccountingRecordJavaType:       accountingRecordJavaType,
 		ServiceRPCs:                    serviceRPCs,
+		Acct:                           accountingpolicy.TemplateContext(),
 	}
 
 	langFS, err := fs.Sub(templates.FS, "java/chassis")

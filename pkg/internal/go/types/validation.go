@@ -1224,6 +1224,8 @@ func Validate%[1]s%[3]sWithDepth(m *%[1]s, depth int) error {
 				"query_field", "redact",
 				// sensitive is validated by writeGoSensitiveChecks (redact_gen.go).
 				"sensitive", "not_sensitive",
+				// accounting_safe is checked by parser.ValidateAccountingSafe.
+				"accounting_safe",
 				"timeseries_column", "timeseries_order_key",
 				"timeseries_partition_key", "timeseries_cardinality_hint",
 				"json_key", "json_aliases",

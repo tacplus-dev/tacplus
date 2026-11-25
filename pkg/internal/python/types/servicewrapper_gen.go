@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/accountingpolicy"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
@@ -535,15 +536,29 @@ func generatePyHandlerMethodSignature(method *parser.MethodInfo, servicePackage 
 	}
 }
 
-func pyAuthBlock(authCall string) string {
-	if strings.TrimSpace(authCall) == "" {
+// pyGuardBlock renders a pre-handler check: call, and abort with the abort
+// helper when it raises. On an accounted method (tacplus#273) the call that
+// stops here still emits its one record, with the guard's stage, once the
+// abort has set the status code.
+func pyGuardBlock(call, abort, methodExpr, stage string) string {
+	if strings.TrimSpace(call) == "" {
 		return ""
+	}
+	if methodExpr == "" {
+		return fmt.Sprintf(`        try:
+            %s
+        except Exception as e:
+            %s(context, e)
+`, call, abort)
 	}
 	return fmt.Sprintf(`        try:
             %s
         except Exception as e:
-            self._abort_handler_error(context, e)
-`, authCall)
+            try:
+                %s(context, e)
+            finally:
+                %s
+`, call, abort, pyAccountingEmit(methodExpr, pyAccountingStageName(stage), "e"))
 }
 
 func pyIndentBlock(block string, spaces int) string {
@@ -598,13 +613,64 @@ func pyAccountingMethodExpression(grpcName, methodName string, accountingMap map
 	return fmt.Sprintf("accounting_method_pb2.AccountingMethod(%s=%d)", grpcName, ordinal)
 }
 
+// pyAccountingStageName is the am constant of an accountingpolicy stage.
+func pyAccountingStageName(stage string) string {
+	return "STAGE_" + stage
+}
+
+// pyAccountingEmit is the call that emits an accounted call's one record.
+func pyAccountingEmit(methodExpr, stageExpr, errExpr string) string {
+	return fmt.Sprintf("self._emit_accounting(%s, %s, __tacplus_accounting_start, %s, context, __tacplus_accounting_metrics, __tacplus_accounting_token)",
+		methodExpr, stageExpr, errExpr)
+}
+
+// pyAccountingPreamble opens an accounted call: its start time, the error it
+// ends with, and its metrics scope.
 func pyAccountingPreamble(methodExpr string) string {
 	if methodExpr == "" {
 		return ""
 	}
 	return `        __tacplus_accounting_start = time.time()
         __tacplus_accounting_error = None
+        __tacplus_accounting_metrics, __tacplus_accounting_token = begin_metrics()
 `
+}
+
+// pyPreHandler renders what runs before an accounted method's try: the
+// accounting preamble, the auth and request guards (each emitting the record
+// of a call it stops), and the step to the HANDLER stage.
+func pyPreHandler(methodExpr string, guards ...string) string {
+	return pyPreHandlerAt(methodExpr, accountingpolicy.StageHandler, guards...)
+}
+
+// pyPreHandlerAt is pyPreHandler stepping to stage instead, for a try that
+// still checks the request before it calls the handler.
+func pyPreHandlerAt(methodExpr, stage string, guards ...string) string {
+	var b strings.Builder
+	b.WriteString(pyAccountingPreamble(methodExpr))
+	for _, g := range guards {
+		b.WriteString(g)
+	}
+	b.WriteString(pyAccountingStageLine(methodExpr, stage, 8))
+	return b.String()
+}
+
+// pyAccountingStageLine is the line that advances an accounted call to stage.
+func pyAccountingStageLine(methodExpr, stage string, indent int) string {
+	if methodExpr == "" {
+		return ""
+	}
+	return strings.Repeat(" ", indent) + "__tacplus_accounting_stage = " + pyAccountingStageName(stage) + "\n"
+}
+
+// pyAccountingStageLeadLine is pyAccountingStageLine for a block whose lines
+// each start with their newline.
+func pyAccountingStageLeadLine(methodExpr, stage string, indent int) string {
+	line := pyAccountingStageLine(methodExpr, stage, indent)
+	if line == "" {
+		return ""
+	}
+	return "\n" + strings.TrimSuffix(line, "\n")
 }
 
 func pyAccountingCatchMark(methodExpr string) string {
@@ -619,8 +685,8 @@ func pyAccountingFinally(methodExpr string) string {
 		return ""
 	}
 	return fmt.Sprintf(`        finally:
-            self._emit_accounting(%s, __tacplus_accounting_start, __tacplus_accounting_error, context)
-`, methodExpr)
+            %s
+`, pyAccountingEmit(methodExpr, "__tacplus_accounting_stage", "__tacplus_accounting_error"))
 }
 
 // generatePyGRPCWrapperMethod generates a single gRPC method handler for the wrapper class.
@@ -637,6 +703,7 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 	validateOutput := pyValidateRef(method.FullOutputType, method.OutputType, servicePackage)
 	outputType := pyWrapperTypeRef(method.FullOutputType, method.OutputType, servicePackage)
 	accountingMethodExpr := pyAccountingMethodExpression(grpcName, method.Name, accountingMap)
+	accountingFinally := pyAccountingFinally(accountingMethodExpr)
 	traceMethodArg := ""
 	if accountingMethodExpr != "" {
 		traceMethodArg = fmt.Sprintf(", method=%s", accountingMethodExpr)
@@ -669,8 +736,11 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 			authCallWithReq = fmt.Sprintf("self._authorize(context, '%s', request)", fullMethodPath)
 		}
 	}
-	authNoReqBlock := pyAuthBlock(authCallNoReq)
-	authWithReqBlock := pyAuthBlock(authCallWithReq)
+	authGuard := func(call string) string {
+		return pyGuardBlock(call, "self._abort_handler_error", accountingMethodExpr, accountingpolicy.StageAuth)
+	}
+	authNoReqBlock := authGuard(authCallNoReq)
+	authWithReqBlock := authGuard(authCallWithReq)
 	streamMessageAuthorize := "None"
 	if method.ClientStreaming && method.TargetNamespaceField != "" && !authDisabled && !authAnyUser {
 		streamMessageAuthorize = fmt.Sprintf("lambda request: self._authorize(context, '%s', request)", fullMethodPath)
@@ -679,29 +749,28 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 	if streamMessageAuthorize != "None" {
 		// An RPC_FLAG_ANY_TENANT method names itself so the opened door holds.
 		if method.AnyTenant {
-			streamOpenAuthBlock = pyAuthBlock(fmt.Sprintf("self._authenticate(context, None, '%s')", fullMethodPath))
+			streamOpenAuthBlock = authGuard(fmt.Sprintf("self._authenticate(context, None, '%s')", fullMethodPath))
 		} else {
-			streamOpenAuthBlock = pyAuthBlock("self._authenticate(context)")
+			streamOpenAuthBlock = authGuard("self._authenticate(context)")
 		}
 	}
 
 	requestValidation := ""
 	if validateInput != "" && !emptyInput {
-		requestValidation = fmt.Sprintf(`        try:
-            %s(request)
-        except Exception as e:
-            self._abort_request_validation(context, e)
-
-`, validateInput)
+		requestValidation = pyGuardBlock(validateInput+"(request)", "self._abort_request_validation", accountingMethodExpr, accountingpolicy.StageRequest)
 	}
 
+	// A streamed response is validated between two steps of the handler, so
+	// an accounted stream steps to RESPONSE for the check and back after.
 	responseValidation := ""
 	if validateOutput != "" && !emptyOutput {
-		responseValidation = fmt.Sprintf(`            try:
+		responseValidation = pyAccountingStageLine(accountingMethodExpr, accountingpolicy.StageResponse, 12) +
+			fmt.Sprintf(`            try:
                 %s(response)
             except Exception as e:
                 self._abort_response_validation(context, e)
-`, validateOutput)
+`, validateOutput) +
+			pyAccountingStageLine(accountingMethodExpr, accountingpolicy.StageHandler, 12)
 	}
 
 	streamRequestIterator := "request_iterator"
@@ -718,7 +787,7 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 		streamResponseValidation := pyIndentBlock(responseValidation, 4)
 		return fmt.Sprintf(`    def _handle_%s(self, request_iterator, context):
         """Handles %s (bidirectional streaming)."""
-%s%s        try:
+%s        try:
             responses = self.handler.%s(%s, context)
             for response in responses:
 %s                yield response
@@ -726,7 +795,7 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 %s            self._abort_handler_error(context, e)
 %s
 
-`, methodName, method.Name, streamOpenAuthBlock, pyAccountingPreamble(accountingMethodExpr), methodName, streamRequestIterator, streamResponseValidation, pyAccountingCatchMark(accountingMethodExpr), pyAccountingFinally(accountingMethodExpr))
+`, methodName, method.Name, pyPreHandler(accountingMethodExpr, streamOpenAuthBlock), methodName, streamRequestIterator, streamResponseValidation, pyAccountingCatchMark(accountingMethodExpr), accountingFinally)
 	}
 
 	if method.IsWatchCollection() {
@@ -738,8 +807,7 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 		watchResponseValidation := pyIndentBlock(responseValidation, 4)
 		return fmt.Sprintf(`    def _handle_%s(self, request, context):
         """Handles %s (WATCH collection)."""
-%s
-%s%s        try:
+%s        try:
             source = %s
             from_revision = getattr(request, "from_revision", 0)
             resume_revision = from_revision
@@ -758,10 +826,10 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
             self._abort_handler_error(context, e)
 %s
 
-`, methodName, method.Name, authWithReqBlock, requestValidation, pyAccountingPreamble(accountingMethodExpr),
+`, methodName, method.Name, pyPreHandler(accountingMethodExpr, authWithReqBlock, requestValidation),
 			handlerCall, method.OutputType, snapshotResponseValidation,
 			method.OutputType, watchResponseValidation,
-			methodName, method.OutputType, watchResponseValidation, pyAccountingCatchMark(accountingMethodExpr), pyAccountingFinally(accountingMethodExpr))
+			methodName, method.OutputType, watchResponseValidation, pyAccountingCatchMark(accountingMethodExpr), accountingFinally)
 	}
 
 	if method.ServerStreaming {
@@ -772,8 +840,7 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 		streamResponseValidation := pyIndentBlock(responseValidation, 4)
 		return fmt.Sprintf(`    def _handle_%s(self, request, context):
         """Handles %s (server streaming)."""
-%s
-%s%s        try:
+%s        try:
             responses = %s
             for response in responses:
 %s                yield response
@@ -781,13 +848,13 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 %s            self._abort_handler_error(context, e)
 %s
 
-`, methodName, method.Name, authWithReqBlock, requestValidation, pyAccountingPreamble(accountingMethodExpr), handlerCall, streamResponseValidation, pyAccountingCatchMark(accountingMethodExpr), pyAccountingFinally(accountingMethodExpr))
+`, methodName, method.Name, pyPreHandler(accountingMethodExpr, authWithReqBlock, requestValidation), handlerCall, streamResponseValidation, pyAccountingCatchMark(accountingMethodExpr), accountingFinally)
 	}
 
 	if method.ClientStreaming {
 		clientStreamResponseValidation := ""
 		if validateOutput != "" && !emptyOutput {
-			clientStreamResponseValidation = fmt.Sprintf(`            try:
+			clientStreamResponseValidation = pyAccountingStageLine(accountingMethodExpr, accountingpolicy.StageResponse, 12) + fmt.Sprintf(`            try:
                 %s(resp)
             except Exception as e:
                 self._abort_response_validation(context, e)
@@ -796,7 +863,7 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 		if emptyOutput {
 			return fmt.Sprintf(`    def _handle_%s(self, request_iterator, context):
         """Handles %s (client streaming)."""
-%s%s        try:
+%s        try:
             self.handler.%s(%s, context)
         except Exception as e:
 %s
@@ -804,11 +871,11 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 %s
         return empty_pb2.Empty()
 
-`, methodName, method.Name, streamOpenAuthBlock, pyAccountingPreamble(accountingMethodExpr), methodName, streamRequestIterator, pyAccountingCatchMark(accountingMethodExpr), pyAccountingFinally(accountingMethodExpr))
+`, methodName, method.Name, pyPreHandler(accountingMethodExpr, streamOpenAuthBlock), methodName, streamRequestIterator, pyAccountingCatchMark(accountingMethodExpr), accountingFinally)
 		}
 		return fmt.Sprintf(`    def _handle_%s(self, request_iterator, context):
         """Handles %s (client streaming)."""
-%s%s        try:
+%s        try:
             resp = self.handler.%s(%s, context)
 %s
             return resp
@@ -817,7 +884,7 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
             self._abort_handler_error(context, e)
 %s
 
-`, methodName, method.Name, streamOpenAuthBlock, pyAccountingPreamble(accountingMethodExpr), methodName, streamRequestIterator, clientStreamResponseValidation, pyAccountingCatchMark(accountingMethodExpr), pyAccountingFinally(accountingMethodExpr))
+`, methodName, method.Name, pyPreHandler(accountingMethodExpr, streamOpenAuthBlock), methodName, streamRequestIterator, clientStreamResponseValidation, pyAccountingCatchMark(accountingMethodExpr), accountingFinally)
 	}
 
 	if method.IsPageCollection() {
@@ -826,14 +893,6 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 		// Page. A malformed page_token raises BadPageToken -> INVALID_ARGUMENT via
 		// _abort_handler_error (never a silent reset to page 1).
 		itemsField := method.Resolved.PageItemsField
-		pageInputValidation := ""
-		if validateInput != "" && !emptyInput {
-			pageInputValidation = fmt.Sprintf(`
-        try:
-            %s(request)
-        except Exception as e:
-            self._abort_request_validation(context, e)`, validateInput)
-		}
 		handlerCall := fmt.Sprintf("self.handler.%s(request, PageParams(limit=limit, after=after), context)", methodName)
 		if emptyInput {
 			handlerCall = fmt.Sprintf("self.handler.%s(PageParams(limit=limit, after=after), context)", methodName)
@@ -848,7 +907,7 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 		}
 		pageOutputValidation := ""
 		if validateOutput != "" {
-			pageOutputValidation = fmt.Sprintf(`
+			pageOutputValidation = pyAccountingStageLeadLine(accountingMethodExpr, accountingpolicy.StageResponse, 12) + fmt.Sprintf(`
             try:
                 %s(resp)
             except Exception as e:
@@ -856,11 +915,10 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 		}
 		return fmt.Sprintf(`    def _handle_%s(self, request, context):
         """Handles %s (PAGE collection - keyset pagination)."""
-%s%s
 %s        try:
             after = decode_page_token(getattr(request, "page_token", ""))
             limit = effective_page_size(getattr(request, "page_size", 0), %d, %d)
-            page = %s
+%s            page = %s
             resp = %s()
             resp.%s.extend(page.items)
             resp.next_page_token = encode_page_token(page.next_after)%s%s
@@ -869,23 +927,16 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 %s            self._abort_handler_error(context, e)
 %s
 
-`, methodName, method.Name, authWithReqBlock, pageInputValidation, pyAccountingPreamble(accountingMethodExpr),
-			method.Resolved.DefaultPageSize, method.Resolved.MaxPageSize, handlerCall,
+`, methodName, method.Name, pyPreHandlerAt(accountingMethodExpr, accountingpolicy.StageRequest, authWithReqBlock, requestValidation),
+			method.Resolved.DefaultPageSize, method.Resolved.MaxPageSize, pyAccountingStageLine(accountingMethodExpr, accountingpolicy.StageHandler, 12), handlerCall,
 			outputType, itemsField, totalBlock, pageOutputValidation,
-			pyAccountingCatchMark(accountingMethodExpr), pyAccountingFinally(accountingMethodExpr))
+			pyAccountingCatchMark(accountingMethodExpr), accountingFinally)
 	}
 
 	// Unary method
-	var inputValidationBlock, outputValidationBlock string
-	if validateInput != "" && !emptyInput {
-		inputValidationBlock = fmt.Sprintf(`
-        try:
-            %s(request)
-        except Exception as e:
-            self._abort_request_validation(context, e)`, validateInput)
-	}
+	var outputValidationBlock string
 	if validateOutput != "" && !emptyOutput {
-		outputValidationBlock = fmt.Sprintf(`
+		outputValidationBlock = pyAccountingStageLeadLine(accountingMethodExpr, accountingpolicy.StageResponse, 8) + fmt.Sprintf(`
         try:
             %s(resp)
         except Exception as e:
@@ -900,7 +951,6 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
 	if emptyOutput {
 		return fmt.Sprintf(`    def _handle_%s(self, request, context):
         """Handles %s with authorization and validation."""
-%s%s
 %s        trace_id = ""
         try:
             trace_id = self._trace_id_from_request(request)
@@ -919,12 +969,11 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
             self._abort_handler_error(context, e)
 %s
 
-`, methodName, method.Name, authWithReqBlock, inputValidationBlock, pyAccountingPreamble(accountingMethodExpr), traceMethodArg, handlerCall, traceMethodArg, pyAccountingCatchMark(accountingMethodExpr), traceMethodArg, pyAccountingFinally(accountingMethodExpr))
+`, methodName, method.Name, pyPreHandler(accountingMethodExpr, authWithReqBlock, requestValidation), traceMethodArg, handlerCall, traceMethodArg, pyAccountingCatchMark(accountingMethodExpr), traceMethodArg, accountingFinally)
 	}
 
 	return fmt.Sprintf(`    def _handle_%s(self, request, context):
         """Handles %s with authorization and validation."""
-%s%s
 %s        trace_id = ""
         try:
             trace_id = self._trace_id_from_request(request)
@@ -944,7 +993,7 @@ func generatePyGRPCWrapperMethod(svc *parser.ServiceInfo, method *parser.MethodI
             self._abort_handler_error(context, e)
 %s
 
-`, methodName, method.Name, authWithReqBlock, inputValidationBlock, pyAccountingPreamble(accountingMethodExpr), traceMethodArg, outputType, handlerCall, pyIndentBlock(outputValidationBlock, 4), traceMethodArg, pyAccountingCatchMark(accountingMethodExpr), traceMethodArg, pyAccountingFinally(accountingMethodExpr))
+`, methodName, method.Name, pyPreHandler(accountingMethodExpr, authWithReqBlock, requestValidation), traceMethodArg, outputType, handlerCall, pyIndentBlock(outputValidationBlock, 4), traceMethodArg, pyAccountingCatchMark(accountingMethodExpr), traceMethodArg, accountingFinally)
 }
 
 // generatePyServiceRegistration generates the register_services method body.

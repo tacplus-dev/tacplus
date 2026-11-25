@@ -828,7 +828,9 @@ export function %s(m: %s | undefined, depth = 0): void {
 				"record", "record_key", "record_owner",
 				"subscribe",
 				"identity_namespace", "identity_subject",
-				"identity_spiffe_subject", "identity_spiffe_resource":
+				"identity_spiffe_subject", "identity_spiffe_resource",
+				// accounting_safe is checked by parser.ValidateAccountingSafe.
+				"accounting_safe":
 				// Non-validation annotations - handled by other generators or informational only.
 
 			default:

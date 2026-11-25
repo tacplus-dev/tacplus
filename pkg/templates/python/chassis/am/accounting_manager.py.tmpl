@@ -14,12 +14,12 @@ is battle-tested, swap to EventBusSink with no other code changes.
 
 from __future__ import annotations
 
-import inspect
+import contextvars
 import itertools
 import logging
 import time
-import traceback
-from typing import Any, Dict, Optional, Protocol
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Protocol, Tuple
 
 import grpc
 {{- if .HasAccountingRecord}}
@@ -31,6 +31,172 @@ from {{.ServicesImportFrom}} import {{.ServicesPbModule}} as services_pb
 {{- end}}
 
 logger = logging.getLogger("accounting")
+
+
+# ---------------------------------------------------------------------------
+# Classification (tacplus#273) — rendered from accountingpolicy, the one
+# definition Go, Java, Rust, TypeScript and Python share.
+# ---------------------------------------------------------------------------
+
+# Stages of the generated call path, in order: how far a call got.
+{{- range .Acct.Stages}}
+STAGE_{{.}} = "{{.}}"
+{{- end}}
+
+# RpcOutcome name (RPC_OUTCOME_<name>) of every gRPC status code whose
+# outcome is not the default.
+_CODE_OUTCOMES: Dict[int, str] = {
+{{- range .Acct.CodeOutcomes}}
+    {{.Code}}: "{{.Outcome}}",  # {{.Name}}
+{{- end}}
+}
+_DEFAULT_OUTCOME = "{{.Acct.DefaultOutcome}}"
+
+# RpcReason name (RPC_REASON_<name>) of a call that stopped at a stage with
+# an outcome other than PERMITTED.
+_STAGE_REASONS: Dict[Tuple[str, str], str] = {
+{{- range .Acct.StageReasons}}
+    ("{{.Stage}}", "{{.Outcome}}"): "{{.Reason}}",
+{{- end}}
+}
+
+# EventLevel name (EVENT_LEVEL_<name>) of an RpcCompleted with the outcome.
+_OUTCOME_LEVELS: Dict[str, str] = {
+{{- range .Acct.OutcomeLevels}}
+    "{{.Outcome}}": "{{.Level}}",
+{{- end}}
+}
+
+# accounting.EventLevel numbers.
+_EVENT_LEVEL_NUMBERS: Dict[str, int] = {"DEBUG": 1, "INFO": 2, "WARN": 3, "ERROR": 4}
+
+# The accounting_internal marker: the metadata key of a call made to store
+# accounting. An S2S wrapper does not account an authenticated call carrying it.
+ACCOUNTING_INTERNAL_HEADER = "{{.Acct.InternalHeader}}"
+
+
+def outcome_for_code(code: int) -> str:
+    """Returns the RpcOutcome name of a call that ended with the gRPC code."""
+    return _CODE_OUTCOMES.get(code, _DEFAULT_OUTCOME)
+
+
+def reason_for(stage: str, outcome: str) -> str:
+    """Returns the RpcReason name of a call that stopped at stage with outcome."""
+    if outcome == "PERMITTED":
+        return "UNDEFINED"
+    return _STAGE_REASONS.get((stage, outcome), "INTERNAL")
+
+
+def level_for(outcome: str) -> str:
+    """Returns the EventLevel name of an RpcCompleted with the outcome."""
+    return _OUTCOME_LEVELS.get(outcome, "ERROR")
+
+
+def grpc_code_from_error(err: BaseException | None) -> int:
+    """Returns the numeric gRPC status code a generated wrapper sends for err:
+    OK for no error, the code a gRPC error carries, UNAUTHENTICATED for a
+    PermissionError, INTERNAL otherwise."""
+    if err is None:
+        return 0
+    code = getattr(err, "grpc_code", None)
+    if code is None and hasattr(err, "code") and callable(err.code):
+        try:
+            code = err.code()
+        except Exception:
+            code = None
+    if code is None:
+        code = getattr(getattr(err, "error", None), "code", None)
+    if code is not None:
+        return _code_number(code)
+    if isinstance(err, PermissionError):
+        return _code_number(grpc.StatusCode.UNAUTHENTICATED)
+    return _code_number(grpc.StatusCode.INTERNAL)
+
+
+def _code_number(code: Any) -> int:
+    value = getattr(code, "value", code)
+    if isinstance(value, tuple) and value:
+        value = value[0]
+    try:
+        return int(value)
+    except Exception:
+        return 13  # INTERNAL
+
+
+# ---------------------------------------------------------------------------
+# Metrics a handler attaches to its call's record
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RpcMetrics:
+    """The typed numbers of one call's RpcCompleted.metrics."""
+
+    records_returned: int = 0
+    bytes: int = 0
+
+
+@dataclass
+class _CallScope:
+    """The accounted call in scope: its metrics and its verified caller."""
+
+    metrics: RpcMetrics
+    caller_sub_type: str = ""
+
+
+_current_call: contextvars.ContextVar[Optional[_CallScope]] = contextvars.ContextVar(
+    "tacplus_accounting_call", default=None
+)
+
+
+def begin_metrics() -> Tuple[RpcMetrics, contextvars.Token]:
+    """Opens the scope of the accounted call the generated wrapper is
+    running, with a fresh RpcMetrics; end_metrics closes it again."""
+    scope = _CallScope(metrics=RpcMetrics())
+    return scope.metrics, _current_call.set(scope)
+
+
+def end_metrics(token: contextvars.Token) -> None:
+    """Ends the scope begin_metrics opened."""
+    try:
+        _current_call.reset(token)
+    except ValueError:
+        # A generator wrapper finishing in another context: nothing to undo.
+        pass
+
+
+def set_records_returned(n: int) -> None:
+    """Sets how many records the current call returned. No-op outside an
+    accounted call."""
+    scope = _current_call.get()
+    if scope is not None:
+        scope.metrics.records_returned = int(n)
+
+
+def add_bytes(n: int) -> None:
+    """Adds n payload bytes to the current call. No-op outside an accounted
+    call."""
+    scope = _current_call.get()
+    if scope is not None:
+        scope.metrics.bytes += int(n)
+
+
+def set_verified_caller(sub_type: Optional[str]) -> None:
+    """Records the sub_type of the current call's verified token; the
+    generated wrapper calls it once authentication succeeds. No-op outside an
+    accounted call."""
+    scope = _current_call.get()
+    if scope is not None:
+        scope.caller_sub_type = sub_type if isinstance(sub_type, str) else ""
+
+
+def is_accounting_internal(has_marker: bool) -> bool:
+    """Reports whether the current call stores accounting and so is not
+    itself accounted: its verified caller is a service principal (sub_type
+    exactly "service") and it carries the accounting_internal marker. A user
+    or workload caller with the marker is still recorded."""
+    scope = _current_call.get()
+    return bool(has_marker) and scope is not None and scope.caller_sub_type == "service"
 
 
 # ---------------------------------------------------------------------------
@@ -70,49 +236,44 @@ class Emitter:
             "level": level,
         }
 
-    def rpc_completed(
+    def rpc(
         self,
         method: Any,
+        stage: str,
+        err: BaseException | None,
         duration_ms: int,
+        metrics: Optional[RpcMetrics] = None,
         identity: Optional[Dict[str, str]] = None,
         request_id: str = "",
+        code: Optional[int] = None,
     ) -> None:
-        """Emits an INFO RpcCompleted event."""
-        ev = self._new_event(2, identity, request_id)  # EVENT_LEVEL_INFO
-        ev["rpc_completed"] = {"method": method, "duration_ms": duration_ms}
-        self._sink.emit(ev)
-
-    def rpc_error(
-        self,
-        method: Any,
-        code: int,
-        message: str,
-        duration_ms: int,
-        error_context: Optional[Dict[str, Any]] = None,
-        identity: Optional[Dict[str, str]] = None,
-        request_id: str = "",
-    ) -> None:
-        """Emits an ERROR RpcError event."""
-        ev = self._new_event(4, identity, request_id)  # EVENT_LEVEL_ERROR
-        ev["rpc_error"] = {
+        """Emits the call's one RpcCompleted: its outcome from the gRPC code
+        (code, else derived from err), its reason from the stage it stopped
+        at, and the handler's metrics. The error text and stack never reach
+        the sink; a FAILED call logs them at DEBUG."""
+        if code is None:
+            code = grpc_code_from_error(err)
+        outcome = outcome_for_code(code)
+        reason = reason_for(stage, outcome)
+        if outcome == "FAILED" and err is not None:
+            logger.debug(
+                "accounting rpc failed request_id=%s stage=%s code=%d",
+                request_id, stage, code, exc_info=err,
+            )
+        ev = self._new_event(_EVENT_LEVEL_NUMBERS[level_for(outcome)], identity, request_id)
+        payload: Dict[str, Any] = {
             "method": method,
-            "code": code,
-            "message": message,
             "duration_ms": duration_ms,
-            "error_context": error_context,
+            "outcome": "RPC_OUTCOME_" + outcome,
+            "code": code,
+            "reason": "RPC_REASON_" + reason,
         }
-        self._sink.emit(ev)
-
-    def token_rejected(
-        self,
-        reason: str,
-        method: Any,
-        identity: Optional[Dict[str, str]] = None,
-        request_id: str = "",
-    ) -> None:
-        """Emits a WARN TokenRejected event."""
-        ev = self._new_event(3, identity, request_id)  # EVENT_LEVEL_WARN
-        ev["token_rejected"] = {"reason": reason, "method": method}
+        if metrics is not None and (metrics.records_returned or metrics.bytes):
+            payload["metrics"] = {
+                "records_returned": metrics.records_returned,
+                "bytes": metrics.bytes,
+            }
+        ev["rpc_completed"] = payload
         self._sink.emit(ev)
 
     def endpoint_health_changed(
@@ -122,7 +283,7 @@ class Emitter:
         latency_ms: int,
     ) -> None:
         """Emits a WARN EndpointHealthChanged event."""
-        ev = self._new_event(3)  # EVENT_LEVEL_WARN
+        ev = self._new_event(_EVENT_LEVEL_NUMBERS["WARN"])
         ev["endpoint_health_changed"] = {
             "endpoint": endpoint,
             "healthy": healthy,
@@ -139,102 +300,13 @@ class Emitter:
         request_id: str = "",
     ) -> None:
         """Emits an INFO StateUpdated event."""
-        ev = self._new_event(2, identity, request_id)  # EVENT_LEVEL_INFO
+        ev = self._new_event(_EVENT_LEVEL_NUMBERS["INFO"], identity, request_id)
         ev["state_updated"] = {
             "entity_type": entity_type,
             "entity_id": entity_id,
             "action": action,
         }
         self._sink.emit(ev)
-
-    def diagnostic(
-        self,
-        message: str,
-        context: str,
-        error_context: Optional[Dict[str, Any]] = None,
-        identity: Optional[Dict[str, str]] = None,
-        request_id: str = "",
-    ) -> None:
-        """Emits an ERROR Diagnostic event (escape hatch)."""
-        ev = self._new_event(4, identity, request_id)  # EVENT_LEVEL_ERROR
-        ev["diagnostic"] = {
-            "message": message,
-            "context": context,
-            "error_context": error_context,
-        }
-        self._sink.emit(ev)
-
-
-# ---------------------------------------------------------------------------
-# ErrorContext capture
-# ---------------------------------------------------------------------------
-
-
-def capture_error_context(skip: int = 0, should_capture_stack: bool = False) -> Dict[str, str]:
-    """Builds an ErrorContext from the current call site.
-
-    Uses inspect.stack() to capture caller file:line and function name.
-    Full stack trace only when should_capture_stack is True.
-    """
-    ec: Dict[str, str] = {"caller": "", "function": "", "stack_trace": ""}
-
-    stack = inspect.stack()
-    frame_idx = skip + 1
-    if frame_idx < len(stack):
-        frame = stack[frame_idx]
-        ec["caller"] = f"{frame.filename}:{frame.lineno}"
-        ec["function"] = frame.function
-
-    if should_capture_stack:
-        ec["stack_trace"] = "".join(traceback.format_stack())
-
-    return ec
-
-
-def should_capture_stack(code: grpc.StatusCode) -> bool:
-    """Returns True for gRPC codes that indicate our bugs
-    (INTERNAL, UNKNOWN, DATA_LOSS). Returns False for user errors.
-    """
-    return code in (
-        grpc.StatusCode.INTERNAL,
-        grpc.StatusCode.UNKNOWN,
-        grpc.StatusCode.DATA_LOSS,
-    )
-
-
-def grpc_code_from_error(err: BaseException | None) -> grpc.StatusCode:
-    """Extracts the gRPC status code from an error.
-    Returns UNKNOWN if the error doesn't carry a gRPC status.
-    """
-    if err is None:
-        return grpc.StatusCode.OK
-    if hasattr(err, "code") and callable(err.code):
-        try:
-            return err.code()
-        except Exception:
-            pass
-    return grpc.StatusCode.UNKNOWN
-
-
-def error_context_from_error(
-    err: BaseException | None, should_stack: bool = False
-) -> Dict[str, str]:
-    """Builds ErrorContext from an error, capturing stack if appropriate."""
-    ec: Dict[str, str] = {"caller": "", "function": "", "stack_trace": ""}
-
-    if err is not None:
-        tb = err.__traceback__
-        if tb is not None:
-            # Walk to the last frame
-            while tb.tb_next is not None:
-                tb = tb.tb_next
-            ec["caller"] = f"{tb.tb_frame.f_code.co_filename}:{tb.tb_lineno}"
-            ec["function"] = tb.tb_frame.f_code.co_name
-
-        if should_stack:
-            ec["stack_trace"] = "".join(traceback.format_exception(type(err), err, err.__traceback__))
-
-    return ec
 
 
 # ---------------------------------------------------------------------------
@@ -252,16 +324,19 @@ class LoggerSink:
 
         if "rpc_completed" in event:
             p = event["rpc_completed"]
-            logger.info("accounting event=rpc_completed duration_ms=%d %s", p.get("duration_ms", 0), base)
-        elif "rpc_error" in event:
-            p = event["rpc_error"]
-            logger.error(
-                "accounting event=rpc_error code=%d error=%s duration_ms=%d %s",
-                p.get("code", 0), p.get("message", ""), p.get("duration_ms", 0), base,
+            m = p.get("metrics") or {}
+            level = event.get("level", 0)
+            log = logger.info
+            if level == _EVENT_LEVEL_NUMBERS["ERROR"]:
+                log = logger.error
+            elif level == _EVENT_LEVEL_NUMBERS["WARN"]:
+                log = logger.warning
+            log(
+                "accounting event=rpc_completed outcome=%s code=%d reason=%s duration_ms=%d "
+                "records_returned=%d bytes=%d %s",
+                p.get("outcome", ""), p.get("code", 0), p.get("reason", ""), p.get("duration_ms", 0),
+                m.get("records_returned", 0), m.get("bytes", 0), base,
             )
-        elif "token_rejected" in event:
-            p = event["token_rejected"]
-            logger.warning("accounting event=token_rejected reason=%s %s", p.get("reason", ""), base)
         elif "endpoint_health_changed" in event:
             p = event["endpoint_health_changed"]
             logger.warning(
@@ -273,12 +348,6 @@ class LoggerSink:
             logger.info(
                 "accounting event=state_updated entity_type=%s entity_id=%s action=%s %s",
                 p.get("entity_type", ""), p.get("entity_id", ""), p.get("action", ""), base,
-            )
-        elif "diagnostic" in event:
-            p = event["diagnostic"]
-            logger.error(
-                "accounting event=diagnostic message=%s context=%s %s",
-                p.get("message", ""), p.get("context", ""), base,
             )
         else:
             logger.info("accounting (unknown event type) %s", base)
@@ -316,10 +385,21 @@ def method_label(method: Any) -> str:
     return ""
 
 
+@dataclass(frozen=True)
+class SinkStats:
+    """EventBusSink's pipeline health."""
+
+    ingested: int
+    dropped: int
+    depth: int
+
+
 class EventBusSink:
     """EventBusSink is the durable accounting backend. It flattens the
     Emitter's typed event dict into the stored AccountingRecord and hands it
-    to the generated per-topic publisher's queue.
+    to the generated per-topic publisher's queue. The record carries the
+    call's typed outcome, reason, code and metrics, never an error text
+    (tacplus#273).
 
     SEND CONTRACT — NEVER HOLDS THE RPC (issue #34). Emit hands the record to
     the bounded queue, which is the spool: the publish stream drains it, in
@@ -333,6 +413,7 @@ class EventBusSink:
         self._queue = queue
         self._source_id = source_id
         self._seq = itertools.count(1)
+        self._ingested = 0
         self._dropped = 0
 
     def _next_accounting_id(self, timestamp_ms: int) -> str:
@@ -342,18 +423,21 @@ class EventBusSink:
         method = None
         code = 0
         duration_ms = 0
+        outcome: Any = 0
+        reason: Any = 0
+        records_returned = 0
+        bytes_moved = 0
         if "rpc_completed" in event:
             p = event["rpc_completed"]
-            method = p.get("method")
-            duration_ms = p.get("duration_ms", 0)
-        elif "rpc_error" in event:
-            p = event["rpc_error"]
+            m = p.get("metrics") or {}
             method = p.get("method")
             code = p.get("code", 0)
             duration_ms = p.get("duration_ms", 0)
-        elif "token_rejected" in event:
-            p = event["token_rejected"]
-            method = p.get("method")
+            # Enum names: the proto constructor takes them as values.
+            outcome = p.get("outcome", 0)
+            reason = p.get("reason", 0)
+            records_returned = m.get("records_returned", 0)
+            bytes_moved = m.get("bytes", 0)
 
         timestamp_ms = event.get("timestamp_ms", 0)
         identity = event.get("identity") or {}
@@ -370,12 +454,17 @@ class EventBusSink:
             # caller-supplied header. See item 9's identity ruling.
             principal_sub=identity.get("sub", ""),
             spiffe_id=identity.get("spiffe_id", ""),
+            outcome=outcome,
+            reason=reason,
+            records_returned=records_returned,
+            bytes=bytes_moved,
         )
 
     def emit(self, event: Dict[str, Any]) -> None:
         record = self._flatten(event)
         try:
             self._queue.put_nowait(record)
+            self._ingested += 1
         except asyncio.QueueFull:
             self._dropped += 1
             logger.error(
@@ -383,4 +472,9 @@ class EventBusSink:
                 record.accounting_id,
                 self._dropped,
             )
+
+    def stats(self) -> SinkStats:
+        """Returns the pipeline's health as counters, never as records: how
+        many records the spool accepted and dropped, and how many it holds."""
+        return SinkStats(ingested=self._ingested, dropped=self._dropped, depth=self._queue.qsize())
 {{- end}}

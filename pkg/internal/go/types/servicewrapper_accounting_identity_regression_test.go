@@ -50,17 +50,20 @@ func TestGoAccountingCarriesVerifiedCallerIdentity(t *testing.T) {
 		nil,
 	)
 
-	if !strings.Contains(authorized, "if caller != nil {") {
+	if !strings.Contains(authorized, "if __caller != nil {") {
 		t.Fatalf("authorized RPC accounting must gate identityMap on a verified caller:\n%s", authorized)
 	}
-	if !strings.Contains(authorized, "payload := caller.Token().Proto().Payload") {
+	if !strings.Contains(authorized, "__caller = caller") {
+		t.Fatalf("authorized RPC accounting must record the caller the auth check verified:\n%s", authorized)
+	}
+	if !strings.Contains(authorized, "payload := __caller.Token().Proto().Payload") {
 		t.Fatalf("authorized RPC identityMap must be sourced from the verified token's payload:\n%s", authorized)
 	}
 	if !strings.Contains(authorized, "servicemanager.NewCaller(authTok, requestID)") {
 		t.Fatalf("authorized RPC caller must derive from the token the auth check verified:\n%s", authorized)
 	}
 	for _, want := range []string{
-		"p.emitter.RpcCompleted(ctx, accountingMethod, durationMs, identityMap, requestID)",
+		"am.MetricsOrNil(__metrics), identityMap, servicemanager.RequestIDFromContext(ctx))",
 	} {
 		if !strings.Contains(authorized, want) {
 			t.Fatalf("authorized RPC accounting missing %q:\n%s", want, authorized)
@@ -91,7 +94,7 @@ func TestGoAccountingCarriesVerifiedCallerIdentity(t *testing.T) {
 	if !strings.Contains(noAuth, "var identityMap map[string]string") {
 		t.Fatalf("auth_disabled RPC accounting must still declare identityMap (nil unless a caller is verified):\n%s", noAuth)
 	}
-	if !strings.Contains(noAuth, "if caller != nil {") {
+	if !strings.Contains(noAuth, "if __caller != nil {") {
 		t.Fatalf("auth_disabled RPC accounting must not unconditionally populate identityMap:\n%s", noAuth)
 	}
 }

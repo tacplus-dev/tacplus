@@ -4,6 +4,8 @@
 package types
 
 import (
+	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -56,5 +58,37 @@ func TestTypeScriptNonValidationAnnotationIsNotFatal(t *testing.T) {
 	var b strings.Builder
 	if err := generateTypeScriptValidationFunction(&b, msg, nil); err != nil {
 		t.Fatalf("non-validation annotation must not fail generation: %v", err)
+	}
+}
+
+// accounting_safe (read by parser.ValidateAccountingSafe) produces no validation
+// code; it must be skipped without the unknown-annotation warning.
+func TestTypeScriptAccountingSafeIsSkippedSilently(t *testing.T) {
+	msg := model.Message{
+		Name: "TokenExchanged",
+		Fields: []model.Field{{
+			Name: "subject",
+			Type: "string",
+			Annotations: map[string]model.AnnotationValue{
+				"accounting_safe": {Type: model.AnnotationTypeBool, BoolValue: true},
+			},
+		}},
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr := os.Stderr
+	os.Stderr = w
+	var b strings.Builder
+	genErr := generateTypeScriptValidationFunction(&b, msg, nil)
+	os.Stderr = stderr
+	w.Close()
+	out, _ := io.ReadAll(r)
+	if genErr != nil {
+		t.Fatalf("generateTypeScriptValidationFunction: %v", genErr)
+	}
+	if strings.Contains(string(out), "accounting_safe") {
+		t.Fatalf("expected no warning for accounting_safe, got %q", out)
 	}
 }

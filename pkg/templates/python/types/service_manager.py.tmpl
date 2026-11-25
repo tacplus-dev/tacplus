@@ -27,7 +27,7 @@ from {{.PythonPackageBase}}.chassis.healthreporter import HealthReporter
 from {{.PythonPackageBase}}.types.sys.trace import trace_pb2 as trace_pb
 {{- end}}
 {{- if .HasAccountingPublisher}}
-from {{.PythonPackageBase}}.chassis.am import EventBusSink, Emitter
+from {{.PythonPackageBase}}.chassis.am import ACCOUNTING_INTERNAL_HEADER, EventBusSink, Emitter
 from {{.AccountingEventImportFrom}} import {{.AccountingEventPbModule}} as accountingrecord_pb
 {{- end}}
 
@@ -381,7 +381,9 @@ class ServiceManager:
 
     async def _accounting_publish_stream(self, eb_conn, queue: asyncio.Queue) -> None:
         token = await self._identity.get_token_for("{{.AccountingPublisherTarget}}")
-        metadata = [("authorization", f"******")]
+        # The accounting_internal marker (tacplus#273): the call that stores
+        # accounting is not itself accounted by the S2S service that takes it.
+        metadata = [("authorization", f"Bearer {token}"), (ACCOUNTING_INTERNAL_HEADER, "1")]
         call = eb_conn.stream_stream(
             "{{.AccountingPublishGrpcPath}}",
             request_serializer=accountingrecord_pb.{{.AccountingEventTypeName}}.SerializeToString,

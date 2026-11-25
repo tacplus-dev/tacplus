@@ -190,12 +190,13 @@ type accountingSink struct{ s *stats }
 func (a accountingSink) Emit(_ context.Context, event *accounting_pb.Event) error {
 	a.s.mu.Lock()
 	defer a.s.mu.Unlock()
+	// One RpcCompleted per call, whatever its outcome (tacplus#273).
 	if rpc := event.GetRpcCompleted(); rpc != nil {
-		a.s.AccountingCompleted[rpc.GetMethod().GetContractclient().String()]++
-		return nil
-	}
-	if rpc := event.GetRpcError(); rpc != nil {
-		a.s.AccountingErrors[rpc.GetMethod().GetContractclient().String()]++
+		if rpc.GetOutcome() == accounting_pb.RpcOutcome_RPC_OUTCOME_PERMITTED {
+			a.s.AccountingCompleted[rpc.GetMethod().GetContractclient().String()]++
+		} else {
+			a.s.AccountingErrors[rpc.GetMethod().GetContractclient().String()]++
+		}
 	}
 	return nil
 }

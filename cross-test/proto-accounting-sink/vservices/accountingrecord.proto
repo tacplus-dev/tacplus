@@ -22,15 +22,20 @@ message AccountingRecord {
     s2s: {auth_services: ["*"]}
   };
 
-  string accounting_id = 1 [(spec.assert_required) = true];
-  string spiffe_id = 2 [(spec.identity_spiffe_subject) = true];
-  string request_id = 3;
-  string source_id = 4;
+  string accounting_id = 1 [(spec.assert_required) = true, (spec.accounting_safe) = true];
+  string spiffe_id = 2 [(spec.identity_spiffe_subject) = true, (spec.accounting_safe) = true];
+  string request_id = 3 [(spec.accounting_safe) = true];
+  string source_id = 4 [(spec.accounting_safe) = true];
   int64 timestamp_ms = 5 [(spec.query_field) = {op: QUERY_OP_RANGE}];
   accounting.EventLevel level = 6;
-  string method = 7 [(spec.query_field) = {op: QUERY_OP_EQ}];
+  string method = 7 [(spec.query_field) = {op: QUERY_OP_EQ}, (spec.accounting_safe) = true];
   int32 code = 8;
   int64 duration_ms = 9;
-  string principal_sub = 10;
-  string namespace = 11 [(spec.store_namespace) = true];
+  string principal_sub = 10 [(spec.accounting_safe) = true];
+  string namespace = 11 [(spec.store_namespace) = true, (spec.accounting_safe) = true];
+  // The typed outcome, its reason and the handler's metrics (tacplus#273).
+  accounting.RpcOutcome outcome = 12;
+  accounting.RpcReason reason = 13;
+  int64 records_returned = 14;
+  int64 bytes = 15;
 }

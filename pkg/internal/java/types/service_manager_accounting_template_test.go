@@ -72,6 +72,15 @@ func TestJavaAccountingPublisherWiresEventBusSinkOnEveryWrapper(t *testing.T) {
 		}
 	}
 
+	// tacplus#273: the accounting publish stream carries the
+	// accounting_internal marker, so the store's S2S wrapper accounts nothing
+	// for the call that stores a record.
+	stream := strings.Index(rendered, "private void streamPublishStream(io.grpc.Channel ebConn, Accountingrecord.AccountingRecord event)")
+	marker := strings.Index(rendered, "io.grpc.ClientInterceptors.intercept(ebConn, AccountingManager.internalMarker()).newCall(method,")
+	if stream < 0 || marker < stream {
+		t.Fatalf("accounting publish stream must send the accounting_internal marker:\n%s", rendered)
+	}
+
 	// setEmitter must be wired in the same construction block as
 	// setTracePublisher would be — after the wrapper constructor loop and
 	// before the auth wiring / multiWrapper assembly.

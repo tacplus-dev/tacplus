@@ -118,6 +118,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-23 by lo
   The build image's gh is built from the v2.103.2 source with golang.org/x/net 0.62.0 (CVE-2026-78661: gh's
   releases, through 2.103.3, build with 0.60.0); `tacplus-smoke` checks the floor (#350; backported to release/2.1
   through release/2.6 as v2.1.14, v2.2.11, v2.3.13, v2.4.13, v2.5.14 and v2.6.3; release/2.0's image ships no gh).
+  It is now gh 2.105.0, built from its module in a module made in the stage with go1.27.4 or later, otel v1.47.0
+  (GO-2026-6974) and github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4 (GO-2026-6278: every gh
+  release through 2.105.0 requires v1.5.3); `tacplus-smoke` checks those floors and gh's Go (#969).
   The base image's Maven carries guava 33.7.2-jre in place of the 33.6.0-jre Maven 3.9.16 ships (CVE-2026-102554;
   checksum-pinned, `mvn` builds a project in the image build, `tacplus-smoke` checks the floor) (#222; backported
   with #190 on each release line's pull request).

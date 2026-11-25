@@ -619,7 +619,10 @@ the looper then marks it `promoted` or `declined` here with the date.
 - **Drop the replaced Maven guava once a Maven release bundles 33.7.2 or later** (2026-11-02, #222): Maven 3.9.16
   (the newest 3.9) ships guava 33.6.0-jre (CVE-2026-102554), so `images/base.Dockerfile` swaps in
   `MAVEN_GUAVA_VERSION` (checksum-pinned). When a Maven release ships a fixed guava, drop the swap;
-  `tacplus-smoke` keeps the floor.
+  `tacplus-smoke` keeps the floor. One does now (2026-11-25, nightly scan): Maven 3.10.2's
+  `org/apache/maven/maven/3.10.2/maven-3.10.2.pom` sets `<guavaVersion>33.8.0-jre</guavaVersion>`, while 3.9.16 is
+  still the newest 3.9. Moving `MAVEN_VERSION` to 3.10 (a Maven line move: see "Name the line every image pin
+  follows" below) would let the swap go.
 - **One crypto library in the generated Rust service** (2026-10-29, #186): the chassis keys (RSA, ECDSA) are
   aws-lc-rs's, because ring cannot generate RSA keys nor sign with one over 4096 bits, both of which the chassis
   offers in every language (`generate_rsa_8192_key`); TLS stays on rustls's ring provider. A service now compiles
@@ -795,7 +798,10 @@ the looper then marks it `promoted` or `declined` here with the date.
   dotnet releases-index.json), Maven 4.0.0-rc-7 (only an rc above 3.9) and Docker 29.9.3. #255 called JDK 25 and
   .NET 10.0 current, which reads as "newest LTS". Writing that down beside the pins (JDK and .NET the newest LTS,
   Maven the newest non-rc release, Docker the newest major, Rust stable via `1`) would let the scan file a missed
-  move as a `bug` instead of leaving it to judgment.
+  move as a `bug` instead of leaving it to judgment. On 2026-11-25 (nightly scan) Maven 3.10 is out (3.10.0, 3.10.1,
+  3.10.2 in Maven Central's `org/apache/maven/maven/maven-metadata.xml`; Docker Hub publishes
+  `maven:3.10-eclipse-temurin-25`), so `MAVEN_VERSION=3.9` is now a line behind; with no rule for Maven it is left
+  to judgment again, not filed. JDK 27 (`eclipse-temurin:27-jdk`) is still the newest feature release over LTS 25.
 - **Every write into a tree the compiler owns goes through `fsroot`, checked by a rule** (2026-11-15, #754): #754 moved
   the 43 writes gosec's G703 taint analysis reaches onto `os.Root` (`pkg/internal/common/fsroot`, or a root the
   function opens), but G703 only follows paths it sees as tainted: many writes into the same output and staged-proto

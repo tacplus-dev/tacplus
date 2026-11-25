@@ -20,8 +20,13 @@ ARG DOCKER_VERSION=29
 # (CVE-2026-78669, HIGH, fixed in 0.60.0; CVE-2026-78661 and CVE-2026-97045,
 # fixed in 0.62.0) (#190). Drop each bump, and then the stage, once a buildx
 # release carries it; images/smoke.sh checks the floors. gh is built from its
-# release's source the same way, with this X_NET_VERSION: its releases
-# (through 2.103.3) build with golang.org/x/net 0.60.0 (CVE-2026-78661) (#350).
+# module, in a module made in its stage, with at least go1.27.4 (GO-2026-6859):
+# 2.105.0 requires go.opentelemetry.io/otel v1.47.0 (2.103.x's v1.44.0 has
+# GO-2026-6974) and golang.org/x/net 0.62.0 (CVE-2026-78661, #350), but every
+# release through it github.com/gorilla/websocket v1.5.3 (GO-2026-6278, fixed
+# only in an untagged commit): GH_WEBSOCKET_VERSION, a version upstream did not
+# test (only gh codespace uses it) (#969). Drop the override once a gh release
+# requires the fixed websocket.
 ARG BUILDX_VERSION=0.38.1
 ARG GO_ARCHIVE_VERSION=0.3.3
 ARG X_NET_VERSION=0.62.0
@@ -38,8 +43,9 @@ ARG SWIFT_PROTOBUF_VERSION=1.38.0
 ARG GRPC_SWIFT_PROTOBUF_VERSION=2.4.0
 ARG GRPCIO_TOOLS_VERSION=1.76.0
 ARG JUST_VERSION=1.58.0
-ARG GH_VERSION=2.103.2
-# gh 2.103.2 needs Go 1.27; the gh stage builds with it while this line's
+ARG GH_VERSION=2.105.0
+ARG GH_WEBSOCKET_VERSION=1.5.4-0.20240701034025-d67f41855da4
+# gh 2.105.0 needs Go 1.27; the gh stage builds with it while this line's
 # Go (GO_VERSION) stays where it is (#350).
 ARG GH_GO_VERSION=1.27
 ARG GCLOUD_VERSION=549.0.0
@@ -102,13 +108,19 @@ RUN git clone --depth 1 --branch "v${BUILDX_VERSION}" https://github.com/docker/
 FROM --platform=$BUILDPLATFORM golang:${GH_GO_VERSION}-trixie AS gh
 ARG TARGETARCH
 ARG GH_VERSION
-ARG X_NET_VERSION
-RUN git clone --depth 1 --branch "v${GH_VERSION}" https://github.com/cli/cli /src/gh \
-    && cd /src/gh \
-    && go get "golang.org/x/net@v${X_NET_VERSION}" && go mod tidy \
+ARG GH_WEBSOCKET_VERSION
+# The golang image pins GOTOOLCHAIN=local; auto takes the module's toolchain
+# line, go1.27.4, when the stage's Go is older.
+WORKDIR /src/gh
+RUN c=github.com/cli/cli/v2 && export GOTOOLCHAIN=auto GOFLAGS=-mod=mod \
+    && go mod init tacplus.local/gh && go mod edit -toolchain go1.27.4 \
+    && go mod edit -require "$c@v${GH_VERSION}" -tool "$c/cmd/gh" \
+       -require "github.com/gorilla/websocket@v${GH_WEBSOCKET_VERSION}" \
+    && go mod tidy \
     && CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath \
-       -ldflags "-X github.com/cli/cli/v2/internal/build.Version=${GH_VERSION}" \
-       -o /out/gh ./cmd/gh
+       -ldflags "-w -X $c/internal/build.Version=${GH_VERSION}" \
+       -o /out/gh "$c/cmd/gh" \
+    && go version -m /out/gh | grep -q "^[[:space:]]*dep[[:space:]]*github.com/gorilla/websocket[[:space:]]*v${GH_WEBSOCKET_VERSION}[[:space:]]"
 
 FROM rust:${RUST_VERSION}-trixie AS rust-tools
 ARG PROTOC_GEN_PROST_VERSION

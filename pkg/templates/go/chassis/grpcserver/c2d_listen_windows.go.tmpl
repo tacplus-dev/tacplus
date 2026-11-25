@@ -1,0 +1,47 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build windows
+
+package grpcserver
+
+import (
+	"fmt"
+	"net"
+
+	"{{.ModuleBasePath}}/chassis/serviceconnection"
+	"github.com/Microsoft/go-winio"
+	"golang.org/x/sys/windows"
+)
+
+// listenC2D creates the c2d named pipe for socketPath. Its security
+// descriptor, the Windows counterpart of the socket's 0600, is owned by and
+// grants access to the current user only (a protected DACL: nothing is
+// inherited, so no other user, group or administrator gets an ACE). go-winio
+// creates every instance with PIPE_REJECT_REMOTE_CLIENTS, so a client on
+// another machine is refused, and creates the first one exclusively, so a
+// pipe of that name some other process already holds is an error, not a
+// shared endpoint.
+func listenC2D(socketPath string) (net.Listener, string, error) {
+	pipe := serviceconnection.C2DPipeName(socketPath)
+	sddl, err := c2dCurrentUserOnlySDDL()
+	if err != nil {
+		return nil, "", fmt.Errorf("c2d: %w; refusing to serve %s without the pipe's access boundary", err, pipe)
+	}
+	lis, err := winio.ListenPipe(pipe, &winio.PipeConfig{SecurityDescriptor: sddl})
+	if err != nil {
+		return nil, "", fmt.Errorf("c2d: listen on %s: %w", pipe, err)
+	}
+	return lis, pipe, nil
+}
+
+// c2dCurrentUserOnlySDDL is the security descriptor of the c2d pipe: owner
+// and sole grantee the user this process runs as.
+func c2dCurrentUserOnlySDDL() (string, error) {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return "", fmt.Errorf("read the current user's SID: %w", err)
+	}
+	sid := user.User.Sid.String()
+	return "O:" + sid + "D:P(A;;GA;;;" + sid + ")", nil
+}

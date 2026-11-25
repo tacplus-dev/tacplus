@@ -5,9 +5,24 @@ edition = "2024"
 
 [dependencies]
 tokio = { workspace = true, features = ["net", "rt", "macros", "sync"] }
-tonic = { workspace = true, features = ["tls-ring"] }
+tonic = { workspace = true }
 tower = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tracing = { workspace = true }
 tokio-stream = { workspace = true, features = ["net"] }
+
+# The Windows named-pipe transport: the pipe's current-user security
+# descriptor, the client's busy-pipe wait and the server's accept stream.
+[target.'cfg(windows)'.dependencies]
+tokio = { workspace = true, features = ["time"] }
+futures-util = "0.3.31"
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+]

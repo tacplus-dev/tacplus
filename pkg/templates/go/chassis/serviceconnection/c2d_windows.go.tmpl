@@ -1,0 +1,24 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build windows
+
+package serviceconnection
+
+import (
+	"context"
+	"net"
+
+	"github.com/Microsoft/go-winio"
+)
+
+func c2dEndpoint(socketPath string) string {
+	return C2DPipeName(socketPath)
+}
+
+// dialC2D opens the daemon's named pipe. go-winio dials at the anonymous
+// impersonation level, so the daemon cannot act as the caller, and waits
+// while every pipe instance is busy until ctx ends.
+func dialC2D(ctx context.Context, socketPath string) (net.Conn, error) {
+	return winio.DialPipeContext(ctx, C2DPipeName(socketPath))
+}

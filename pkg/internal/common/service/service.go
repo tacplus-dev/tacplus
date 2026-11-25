@@ -552,6 +552,29 @@ func HostedC2DSocketPath(sockets []C2DSocket) (string, error) {
 	return path, nil
 }
 
+// C2DPipePrefix is the Windows named pipe namespace and the tacplus c2d prefix
+// every C2D pipe name starts with.
+const C2DPipePrefix = `\\.\pipe\tacplus-c2d-`
+
+// C2DPipeName returns the Windows named pipe a c2d daemon serves on, and its
+// clients dial, for the service_c2d socket_path it declares (issue #314):
+// C2DPipePrefix + socket_path with every character outside [A-Za-z0-9._-]
+// mapped to '-'. Unix uses socket_path itself. The generated Go and Rust
+// chassis apply the same rule at run time; the C# client's default pipe is
+// this name.
+func C2DPipeName(socketPath string) string {
+	var b strings.Builder
+	b.WriteString(C2DPipePrefix)
+	for _, r := range socketPath {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
+}
+
 // C2DHostShape is the build shape the standalone c2d host decision reads. Each
 // language fills it from the flags its ServiceManager data already computes.
 type C2DHostShape struct {

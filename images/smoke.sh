@@ -7,13 +7,15 @@ set -euo pipefail
 # docker-buildx and gh are built from source with dependencies bumped past
 # advisories their releases have not taken yet (build.Dockerfile, the buildx
 # and gh stages): each must carry every bumped module at least at its floor.
+# A floor may be a pseudo-version (an untagged fix): it compares as Go orders
+# it, below the release it precedes (v1.5.4-0.2024... < v1.5.4).
 # scripts/images_smoke_test.go sources this file for these two functions.
 go_floors() {
   local bin=$1 floor mod min have; shift
   for floor in "$@"; do
     mod=${floor%@*} min=${floor#*@}
     have=$(go version -m "$bin" | awk -v m="$mod" '$1 == "dep" && $2 == m { print $3 }')
-    [[ -n "$have" && "$(printf '%s\n%s\n' "$min" "$have" | sort -V | head -n 1)" == "$min" ]] \
+    [[ -n "$have" && "$(printf '%s\n%s\n' "${min//-/\~}" "${have//-/\~}" | sort -V | head -n 1)" == "${min//-/\~}" ]] \
       || { echo "${bin##*/} carries $mod ${have:-none}, below $min" >&2; return 1; }
   done
 }
@@ -21,7 +23,11 @@ go_floors_check() {
   go_floors "${TACPLUS_SMOKE_BUILDX:-/usr/local/libexec/docker/cli-plugins/docker-buildx}" \
     github.com/moby/go-archive@v0.3.0 golang.org/x/net@v0.62.0 || return 1
   # CVE-2026-78661 (#350): gh's releases (through 2.103.3) build with x/net 0.60.0.
-  go_floors "$(command -v gh)" golang.org/x/net@v0.62.0
+  # gh (#969): its releases through 2.103.x build with otel v1.44.0 (GO-2026-6974)
+  # and every release through 2.105.0 with websocket v1.5.3 (GO-2026-6278, fixed
+  # only in an untagged commit).
+  go_floors "$(command -v gh)" github.com/gorilla/websocket@v1.5.4-0.20240701034025-d67f41855da4 \
+    go.opentelemetry.io/otel@v1.47.0 go.opentelemetry.io/otel/trace@v1.47.0 golang.org/x/net@v0.62.0
 }
 (return 0 2>/dev/null) && return 0
 gen=(protoc protoc-gen-go protoc-gen-go-grpc protoc-gen-grpc-java protoc-gen-es protoc-gen-prost protoc-gen-tonic protoc-gen-prost-serde protoc-gen-prost-crate protoc-gen-swift protoc-gen-grpc-swift-2 git node gofmt python3)

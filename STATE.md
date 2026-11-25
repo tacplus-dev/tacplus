@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-23 by looper (#320).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-25 by looper (#262).
 
 - **Version / line:** v2.6.13 (latest release, 2026-11-15, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -234,6 +234,13 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-23 by lo
   G115, G404, G703 or G704: each was fixed (enum parse bounded to int32, gRPC codes, IP packing via encoding/binary,
   JWK exponent, the AWS STS region validated) or annotated with its reason (wire two's complement, retry jitter,
   operator-named paths). Backported to release/2.0 through release/2.6 by pull request, each line's next patch.
+  The uni-config in the chassis (#262, on main for 2.7): the generated config loader reads the fixed
+  `BOOTSTRAP_CONFIG_PATH` (`/etc/tacplus/bootstrap.yaml`) unless `-c` names another, never a `BOOTSTRAP_CONFIG` env
+  var; the identity manager takes the projected token file from `grpcconfig.Config.k8s_token_file`, never
+  `KERNEL_K8S_TOKEN_FILE`; every message has a `<T>FromFile` reader (Go, Java, Rust), so a service reads its
+  `Secrets` from `SECRETS_PATH` (`/etc/tacplus/secrets.yaml`). `cross-test/uni-config` (in the gates) and
+  `uni_config_env_test.go`, which lists the environment reads left and fails on a new one. Gaps: the logger
+  overrides and pod-identity env reads, the kernel's audience, the operator's mounts (PROPOSALS.md).
   Sign-in config in proto (#224, main, for 2.7): `sys/signin.proto` (package `signin`) declares the deployment's
   account-model switch (`Deployment`), a tenant's providers offered, authorized OIDC IdP (issuer, client, the exact
   tenant id for a multi-tenant IdP, a declared non-reassignable subject claim), registered domains (subdomains by

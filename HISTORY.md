@@ -198,3 +198,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-25 looper issue Generated Rust chassis and model depend on deprecated serde_yaml 0.9, which locks unmaintained unsafe-libyaml (RUSTSEC-2024-0449, no fix) (#320)
 - 2026-11-25 looper issue Security checks: 1331 other new findings (MEDIUM and LOW: gosec, semgrep, bandit), none failing the policy (#585)
 - 2026-11-25 looper issue Images: rebuild each supported line's build image nightly from current packages, publishing an immutable dated tag (#966)
+- 2026-11-25 looper issue Published build images: the docker CLI (from docker:29-cli) is built with Go 1.26.10, CVE-2026-97054 HIGH on every build:* tag, failing the nightly sweep on main (#901)

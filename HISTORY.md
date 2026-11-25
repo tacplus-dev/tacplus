@@ -197,3 +197,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-25 looper issue Security checks: bandit B404 and B603 (LOW) in cross-test/lib/rust_selftest_hash.py, new with #843 and not in security-baseline.json (#917)
 - 2026-11-25 looper issue Generated Rust chassis and model depend on deprecated serde_yaml 0.9, which locks unmaintained unsafe-libyaml (RUSTSEC-2024-0449, no fix) (#320)
 - 2026-11-25 looper issue Security checks: 1331 other new findings (MEDIUM and LOW: gosec, semgrep, bandit), none failing the policy (#585)
+- 2026-11-25 looper issue Images: rebuild each supported line's build image nightly from current packages, publishing an immutable dated tag (#966)

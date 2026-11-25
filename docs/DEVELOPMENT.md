@@ -511,6 +511,11 @@ Current durable gates:
   outbound timeout, bounded outbound retry/backoff, client request validation,
   unary client response validation, unified readiness, and
   ServiceManager-owned task teardown.
+  It also refuses `filepath.Walk` and `filepath.WalkDir` in the compiler's
+  source under `pkg/` (tests aside): every tree the compiler walks goes through
+  `pkg/internal/common/fsroot.Walk`, whose callback reads and writes what it
+  finds only through the tree's `os.Root`, so a symlink in a fetched checkout
+  or a generated tree cannot lead it outside (#753).
 - `just floors` (`scripts/floors.sh`, `cmd/floors`, #949) checks every version
   floor tacplus hands a consumer against OSV, its database queried at run time
   (the time printed under "Checked against"): each `dependencies.yaml`

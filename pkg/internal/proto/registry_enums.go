@@ -5,6 +5,7 @@ package proto
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,24 +37,20 @@ func InjectRegistryEnums(protoDir string) error {
 	// are package-scoped, so duplicates cause compile errors.
 	typeIDInjected := map[string]bool{}
 
-	return filepath.Walk(protoDir, func(path string, info os.FileInfo, err error) error {
+	return fsroot.Walk(protoDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
 
-		relPath, err := filepath.Rel(protoDir, path)
-		if err != nil {
-			return fmt.Errorf("failed to compute relative path for %s: %w", path, err)
-		}
-		relPath = filepath.ToSlash(relPath)
+		relPath := filepath.ToSlash(rel)
 		if IsInfraProto(relPath) {
 			return nil
 		}
 
-		pf, err := dp.ConvertToProtoFile(path)
+		pf, err := dp.ConvertToProtoFile(filepath.Join(protoDir, rel))
 		if err != nil {
 			return fmt.Errorf("failed to parse proto file %s: %w", relPath, err)
 		}
@@ -86,7 +83,7 @@ func InjectRegistryEnums(protoDir string) error {
 			return nil
 		}
 
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(rel)
 		if err != nil {
 			return fmt.Errorf("failed to read proto file %s: %w", relPath, err)
 		}
@@ -160,7 +157,7 @@ func InjectRegistryEnums(protoDir string) error {
 		}
 		text += block.String()
 
-		if err := fsroot.WriteFile(protoDir, path, []byte(text), 0644); err != nil {
+		if err := r.WriteFile(rel, []byte(text), 0644); err != nil {
 			return fmt.Errorf("failed to write registry enums to %s: %w", relPath, err)
 		}
 

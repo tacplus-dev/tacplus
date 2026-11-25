@@ -9,6 +9,7 @@ import (
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/consts"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -122,11 +123,11 @@ func typescriptModuleDirForPackage(outputDir, packageName string) (string, bool)
 		}
 
 		var found string
-		err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || !strings.HasSuffix(path, "_pb.ts") {
+		err := fsroot.Walk(rootDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(rel, "_pb.ts") {
 				return err
 			}
-			content, readErr := os.ReadFile(path)
+			content, readErr := r.ReadFile(rel)
 			if readErr != nil {
 				return readErr
 			}
@@ -134,11 +135,7 @@ func typescriptModuleDirForPackage(outputDir, packageName string) (string, bool)
 			if len(match) < 2 || match[1] != packageName {
 				return nil
 			}
-			rel, relErr := filepath.Rel(outputDir, filepath.Dir(path))
-			if relErr != nil {
-				return relErr
-			}
-			found = filepath.ToSlash(rel)
+			found = filepath.ToSlash(filepath.Join(root, filepath.Dir(rel)))
 			return filepath.SkipAll
 		})
 		if err != nil && err != filepath.SkipAll {
@@ -806,18 +803,13 @@ func Generate(config *tactype.Config) error {
 func collectProtoFiles(inputDir string) ([]string, error) {
 	var protoFiles []string
 
-	err := filepath.Walk(inputDir, func(path string, info os.FileInfo, err error) error {
+	err := fsroot.Walk(inputDir, func(_ *os.Root, relPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(relPath, ".proto") {
 			return nil
-		}
-
-		relPath, err := filepath.Rel(inputDir, path)
-		if err != nil {
-			return err
 		}
 
 		// Do NOT skip services/{name}/services.proto — it may contain
@@ -942,13 +934,8 @@ func copyHelperFiles(builderTempDir, outputDir string) error {
 		return nil
 	}
 
-	return filepath.Walk(tsDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return err
-		}
-
-		relPath, err := filepath.Rel(tsDir, path)
-		if err != nil {
+	return fsroot.Walk(tsDir, func(r *os.Root, relPath string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
 			return err
 		}
 
@@ -979,7 +966,7 @@ func copyHelperFiles(builderTempDir, outputDir string) error {
 			return err
 		}
 
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(relPath)
 		if err != nil {
 			return err
 		}
@@ -1235,11 +1222,11 @@ func createPackageJson(config *tactype.Config, moduleDir, subdir, filename, pack
 
 // generateIndexFiles creates index.ts files for clean exports
 func generateIndexFiles(outputDir string) error {
-	return filepath.Walk(outputDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || !info.IsDir() {
+	return fsroot.Walk(outputDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
 			return err
 		}
-		return generateIndexForDir(path)
+		return generateIndexForDir(r, rel)
 	})
 }
 
@@ -1251,15 +1238,17 @@ var (
 // generateIndexForDir writes (or supplements) a single directory's index.ts,
 // re-exporting every non-test, non-bridge .ts sibling. An existing index.ts is
 // preserved and only supplemented with exports it does not already cover. A
-// directory with no exportable files is left untouched.
-func generateIndexForDir(path string) error {
+// directory with no exportable files is left untouched. The directory is rel
+// under r, the root of the walk that found it.
+func generateIndexForDir(r *os.Root, rel string) error {
 	{
 		exportRe := indexExportRe
+		path := filepath.Join(r.Name(), rel)
 		dirName := filepath.Base(path)
 
 		// Find all .ts files except index.ts
 		var fileNames []string
-		entries, err := os.ReadDir(path)
+		entries, err := fs.ReadDir(r.FS(), filepath.ToSlash(rel))
 		if err != nil {
 			return err
 		}
@@ -1301,8 +1290,7 @@ func generateIndexForDir(path string) error {
 		// Scan for exported names to detect conflicts across files
 		nameToFiles := make(map[string][]string) // exported name -> list of files
 		for _, baseName := range fileNames {
-			filePath := filepath.Join(path, baseName+".ts")
-			content, readErr := os.ReadFile(filePath)
+			content, readErr := r.ReadFile(filepath.Join(rel, baseName+".ts"))
 			if readErr != nil {
 				continue
 			}
@@ -1322,10 +1310,10 @@ func generateIndexForDir(path string) error {
 			}
 		}
 
-		indexPath := filepath.Join(path, "index.ts")
+		indexPath := filepath.Join(rel, "index.ts")
 		existingIndex := ""
 		referencedFiles := make(map[string]bool)
-		if existing, readErr := os.ReadFile(indexPath); readErr == nil {
+		if existing, readErr := r.ReadFile(indexPath); readErr == nil {
 			existingIndex = strings.TrimRight(string(existing), "\n")
 			for _, match := range indexRefRe.FindAllStringSubmatch(existingIndex, -1) {
 				referencedFiles[strings.TrimSuffix(match[1], ".js")] = true
@@ -1361,7 +1349,7 @@ func generateIndexForDir(path string) error {
 		if len(exports) > 0 {
 			content += "\n"
 		}
-		if err := fsroot.WriteFile(path, indexPath, []byte(content), 0644); err != nil {
+		if err := r.WriteFile(indexPath, []byte(content), 0644); err != nil {
 			return err
 		}
 		zap.L().Debug("Created index.ts", zap.String("dir", path))
@@ -1380,25 +1368,24 @@ func generateIndexForDir(path string) error {
 // packages (own a package.json), so loose aggregator dirs are left alone.
 func ensurePackageIndexes(config *tactype.Config) error {
 	outDir := config.OutputDir
-	rootPkg := filepath.Join(outDir, "package.json")
-	return filepath.Walk(outDir, func(path string, info os.FileInfo, err error) error {
+	return fsroot.Walk(outDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
-			if info.Name() == "node_modules" || info.Name() == "dist" {
+		if d.IsDir() {
+			if rel != "." && (d.Name() == "node_modules" || d.Name() == "dist") {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if info.Name() != "package.json" || path == rootPkg {
+		if d.Name() != "package.json" || rel == "package.json" {
 			return nil
 		}
-		dir := filepath.Dir(path)
-		if _, statErr := os.Stat(filepath.Join(dir, "index.ts")); statErr == nil {
+		dir := filepath.Dir(rel)
+		if _, statErr := r.Stat(filepath.Join(dir, "index.ts")); statErr == nil {
 			return nil // already has an index
 		}
-		return generateIndexForDir(dir)
+		return generateIndexForDir(r, dir)
 	})
 }
 
@@ -1549,34 +1536,30 @@ func generateWorkspacePackageJson(config *tactype.Config) error {
 // lib templates, rest-client packages).
 func repointPackageEntrypoints(config *tactype.Config) error {
 	outDir := config.OutputDir
-	rootPkg := filepath.Join(outDir, "package.json")
 
-	return filepath.Walk(outDir, func(path string, info os.FileInfo, err error) error {
+	return fsroot.Walk(outDir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
-			if info.Name() == "node_modules" || info.Name() == "dist" {
+		if d.IsDir() {
+			if rel != "." && (d.Name() == "node_modules" || d.Name() == "dist") {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if info.Name() != "package.json" || path == rootPkg {
+		if d.Name() != "package.json" || rel == "package.json" {
 			return nil
 		}
 
-		dir := filepath.Dir(path)
-		pkgRel, err := filepath.Rel(outDir, dir)
-		if err != nil {
-			return err
-		}
-		distRel, err := filepath.Rel(dir, filepath.Join(outDir, "dist", pkgRel))
+		path := filepath.Join(outDir, rel)
+		pkgRel := filepath.Dir(rel)
+		distRel, err := filepath.Rel(pkgRel, filepath.Join("dist", pkgRel))
 		if err != nil {
 			return err
 		}
 		distRelSlash := filepath.ToSlash(distRel)
 
-		raw, err := os.ReadFile(path)
+		raw, err := r.ReadFile(rel)
 		if err != nil {
 			return err
 		}
@@ -1600,7 +1583,7 @@ func repointPackageEntrypoints(config *tactype.Config) error {
 			return err
 		}
 		out = append(out, '\n')
-		return os.WriteFile(path, out, 0644)
+		return r.WriteFile(rel, out, 0644)
 	})
 }
 
@@ -1622,17 +1605,17 @@ func fixImportPaths(outputDir string, serviceStateFiles map[string]bool) error {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			continue
 		}
-		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		err := fsroot.Walk(dir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
 
 			// Only process TypeScript files
-			if info.IsDir() || !strings.HasSuffix(path, ".ts") {
+			if d.IsDir() || !strings.HasSuffix(rel, ".ts") {
 				return nil
 			}
 
-			content, err := os.ReadFile(path)
+			content, err := r.ReadFile(rel)
 			if err != nil {
 				return err
 			}
@@ -1640,11 +1623,7 @@ func fixImportPaths(outputDir string, serviceStateFiles map[string]bool) error {
 			original := string(content)
 
 			// Get the relative path from the output directory (not types/)
-			relPath, err := filepath.Rel(outputDir, path)
-			if err != nil {
-				return err
-			}
-			relPath = filepath.ToSlash(relPath)
+			relPath := filepath.ToSlash(filepath.Join(subDir, rel))
 
 			// Determine the file's directory relative to output root
 			// e.g., "types/services/baseball/services" or "sys/alpn"
@@ -1665,7 +1644,7 @@ func fixImportPaths(outputDir string, serviceStateFiles map[string]bool) error {
 
 			// Only write if content changed
 			if fixed != original {
-				if err := fsroot.WriteFile(outputDir, path, []byte(fixed), 0644); err != nil {
+				if err := r.WriteFile(rel, []byte(fixed), 0644); err != nil {
 					return err
 				}
 				zap.L().Debug("Fixed imports", zap.String("file", relPath))

@@ -160,9 +160,14 @@ webpki-roots = { workspace = true }
 			declared[name] = true
 		}
 	}
+	root, err := os.OpenRoot(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
 	referenced := map[string]bool{}
 	for _, member := range []string{".", "types", "chassis/logger"} {
-		refs, err := workspaceDependencyRefsInCargo(filepath.Join(out, member, "Cargo.toml"))
+		refs, err := workspaceDependencyRefsInCargo(root, filepath.Join(member, "Cargo.toml"))
 		if err != nil {
 			t.Fatal(err)
 		}

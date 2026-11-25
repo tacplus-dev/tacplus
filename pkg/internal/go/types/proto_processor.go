@@ -5,12 +5,14 @@ package types
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
@@ -35,14 +37,15 @@ func processProtoFiles(protocDir, outputDir string, config *tactype.Config) ([]m
 	var protoFiles []model.ProtoFile
 
 	// Walk through all proto files
-	err = filepath.Walk(protocDir, func(path string, info os.FileInfo, err error) error {
+	err = fsroot.Walk(protocDir, func(_ *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
 		}
+		path := filepath.Join(protocDir, rel)
 
 		// Parse proto file using descriptor parser
 		protoFile, err := parser.ConvertToProtoFile(path)

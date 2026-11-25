@@ -5,6 +5,7 @@ package proto
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -350,23 +351,19 @@ var rpcEmptyInput = regexp.MustCompile(`(rpc\s+\w+\s*)\(google\.protobuf\.Empty\
 // Must be called after InjectTraceFields (which adds the trace import to files with
 // messages). For files that only have RPCs (no messages), the trace import is added here.
 func SwapEmptyInputs(protoDir string) error {
-	return filepath.Walk(protoDir, func(path string, info os.FileInfo, err error) error {
+	return fsroot.Walk(protoDir, func(r *os.Root, relPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(relPath, ".proto") {
 			return nil
 		}
 
-		relPath, err := filepath.Rel(protoDir, path)
-		if err != nil {
-			return err
-		}
 		if IsInfraProto(relPath) {
 			return nil
 		}
 
-		content, err := os.ReadFile(path)
+		content, err := r.ReadFile(relPath)
 		if err != nil {
 			return err
 		}
@@ -390,7 +387,7 @@ func SwapEmptyInputs(protoDir string) error {
 		}
 
 		if newText != text {
-			if err := fsroot.WriteFile(protoDir, path, []byte(newText), 0644); err != nil {
+			if err := r.WriteFile(relPath, []byte(newText), 0644); err != nil {
 				return fmt.Errorf("failed to write %s: %w", relPath, err)
 			}
 			zap.L().Info("Swapped Empty inputs to TraceRequest", zap.String("file", relPath))

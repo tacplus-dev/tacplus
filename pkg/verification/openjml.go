@@ -6,6 +6,7 @@ package verification
 import (
 	"bufio"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	spec "github.com/tacplus-dev/tacplus/target/proto/spec/sys"
 )
 
@@ -149,25 +151,25 @@ func runOpenJml(outputDir string) (*spec.VerificationReport, error) {
 // findJmlSources walks dir for Java sources whose validators carry JML specs.
 func findJmlSources(dir string) ([]jmlSource, error) {
 	var sources []jmlSource
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	err := fsroot.Walk(dir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if info.IsDir() {
-			switch info.Name() {
+		if d.IsDir() {
+			switch d.Name() {
 			case "target", ".git", "node_modules":
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !strings.HasSuffix(path, ".java") {
+		if !strings.HasSuffix(rel, ".java") {
 			return nil
 		}
-		data, err := os.ReadFile(path)
+		data, err := r.ReadFile(rel)
 		if err != nil {
 			return err
 		}
-		if src, ok := parseJmlSource(path, string(data)); ok {
+		if src, ok := parseJmlSource(filepath.Join(dir, rel), string(data)); ok {
 			sources = append(sources, src)
 		}
 		return nil

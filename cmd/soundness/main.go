@@ -13,8 +13,12 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -1116,6 +1120,7 @@ func main() {
 	failures += renderLiteClientSoundness(*root)
 	failures += renderSpiffeSoundness(*root)
 	failures += renderStoreVendorSoundness(*root)
+	failures += renderConfinedWalkSoundness(*root)
 	failures += renderChassisManifestVersions(*root)
 
 	if failures > 0 {
@@ -2037,4 +2042,107 @@ func skipStoreVendorDir(rel string) bool {
 		}
 	}
 	return false
+}
+
+// confinedWalkHelper is the one file under pkg/ allowed to walk a tree itself:
+// pkg/internal/common/fsroot, which walks through an os.Root (tacplus#753).
+var confinedWalkHelper = filepath.ToSlash(filepath.Join("pkg", "internal", "common", "fsroot", "fsroot.go"))
+
+type confinedWalkViolation struct {
+	RelPath string
+	Line    int
+	Call    string
+}
+
+// renderConfinedWalkSoundness fails the build on a filepath.Walk or
+// filepath.WalkDir in the compiler's source under pkg/: a walk callback that
+// touches the walked path follows a symlink out of the tree (gosec G122,
+// CWE-367), so every walk goes through fsroot.Walk, whose callback touches
+// what it finds only through the tree's os.Root.
+func renderConfinedWalkSoundness(root string) int {
+	violations, err := confinedWalkViolations(root)
+	fmt.Println("\n## Confined-walk soundness probe (ENFORCED)")
+	fmt.Println("\nEvery tree the compiler walks is walked by fsroot.Walk, through an os.Root, so a")
+	fmt.Println("symlink cannot lead a walk out of it (tacplus#753). A filepath.Walk or WalkDir in")
+	fmt.Println("pkg/ (tests aside) is a build-failing regression.")
+	if err != nil {
+		fmt.Printf("- · scan failed: %v\n", err)
+		return 1
+	}
+	if len(violations) == 0 {
+		fmt.Println("- ✓ no filepath.Walk or filepath.WalkDir outside pkg/internal/common/fsroot")
+		return 0
+	}
+	for _, v := range violations {
+		fmt.Printf("- · %s:%d %s: walk with fsroot.Walk\n", v.RelPath, v.Line, v.Call)
+	}
+	return len(violations)
+}
+
+// confinedWalkViolations lists every reference to filepath.Walk or
+// filepath.WalkDir (under whatever name the file imports path/filepath) in the
+// non-test Go files under root/pkg, the helper and testdata aside.
+func confinedWalkViolations(root string) ([]confinedWalkViolation, error) {
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	if _, err := r.Stat("pkg"); errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	var out []confinedWalkViolation
+	fset := token.NewFileSet()
+	err = fs.WalkDir(r.FS(), "pkg", func(rel string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "testdata" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(rel, ".go") || strings.HasSuffix(rel, "_test.go") || rel == confinedWalkHelper {
+			return nil
+		}
+		src, err := fs.ReadFile(r.FS(), rel)
+		if err != nil {
+			return err
+		}
+		file, err := parser.ParseFile(fset, rel, src, parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		names := map[string]bool{}
+		for _, imp := range file.Imports {
+			if imp.Path.Value != `"path/filepath"` {
+				continue
+			}
+			name := "filepath"
+			if imp.Name != nil {
+				name = imp.Name.Name
+			}
+			names[name] = true
+		}
+		if len(names) == 0 {
+			return nil
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok || (sel.Sel.Name != "Walk" && sel.Sel.Name != "WalkDir") {
+				return true
+			}
+			if x, ok := sel.X.(*ast.Ident); ok && names[x.Name] {
+				out = append(out, confinedWalkViolation{
+					RelPath: rel,
+					Line:    fset.Position(sel.Pos()).Line,
+					Call:    "filepath." + sel.Sel.Name,
+				})
+			}
+			return true
+		})
+		return nil
+	})
+	return out, err
 }

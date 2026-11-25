@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
@@ -21,6 +22,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/protosrc"
 	"github.com/tacplus-dev/tacplus/pkg/tacplusyaml"
 )
@@ -704,25 +706,29 @@ func parseIndex(s string) (int, bool) {
 // contents, in path order: nothing else (no times, no owners).
 func treeDigest(dir string) (string, error) {
 	h := sha256.New()
-	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+	err := fsroot.Walk(dir, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		rel, _ := filepath.Rel(dir, p)
-		rel = filepath.ToSlash(rel)
-		fi, err := os.Lstat(p)
+		fi, err := r.Lstat(rel)
 		if err != nil {
 			return err
 		}
+		name := filepath.ToSlash(rel)
 		switch {
 		case fi.Mode()&os.ModeSymlink != 0:
-			target, err := os.Readlink(p)
+			target, err := r.Readlink(rel)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(h, "l %s %s\n", target, rel)
+			fmt.Fprintf(h, "l %s %s\n", target, name)
 		default:
-			sum, err := fileDigest(p)
+			f, err := r.Open(rel)
+			if err != nil {
+				return err
+			}
+			sum, err := readerDigest(f)
+			f.Close()
 			if err != nil {
 				return err
 			}
@@ -730,7 +736,7 @@ func treeDigest(dir string) (string, error) {
 			if fi.Mode()&0o111 != 0 {
 				kind = "x"
 			}
-			fmt.Fprintf(h, "%s %s %s\n", kind, sum, rel)
+			fmt.Fprintf(h, "%s %s %s\n", kind, sum, name)
 		}
 		return nil
 	})
@@ -744,8 +750,13 @@ func fileDigest(p string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
+	return readerDigest(f)
+}
+
+// readerDigest is the sha256 of what r reads.
+func readerDigest(r io.Reader) (string, error) {
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	if _, err := io.Copy(h, r); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
@@ -761,38 +772,51 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
+	return writeCopy(dst, data, fi.Mode())
+}
+
+// writeCopy writes a copied file's data to dst, executable when mode is.
+func writeCopy(dst string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	mode := os.FileMode(0o644)
-	if fi.Mode()&0o111 != 0 {
-		mode = 0o755
+	perm := os.FileMode(0o644)
+	if mode&0o111 != 0 {
+		perm = 0o755
 	}
-	if err := os.WriteFile(dst, data, mode); err != nil {
+	if err := os.WriteFile(dst, data, perm); err != nil {
 		return err
 	}
-	return os.Chmod(dst, mode)
+	return os.Chmod(dst, perm)
 }
 
-// copyTree copies a directory's files and symlinks into dst.
+// copyTree copies a directory's files and symlinks into dst, reading the
+// source through an os.Root so no symlink leads the copy out of it.
 func copyTree(src, dst string) error {
-	return filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
+	return fsroot.Walk(src, func(r *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, _ := filepath.Rel(src, p)
 		to := filepath.Join(dst, rel)
 		switch {
 		case d.IsDir():
 			return os.MkdirAll(to, 0o755)
 		case d.Type()&os.ModeSymlink != 0:
-			target, err := os.Readlink(p)
+			target, err := r.Readlink(rel)
 			if err != nil {
 				return err
 			}
 			return os.Symlink(target, to)
 		default:
-			return copyFile(p, to)
+			fi, err := r.Stat(rel)
+			if err != nil {
+				return err
+			}
+			data, err := r.ReadFile(rel)
+			if err != nil {
+				return err
+			}
+			return writeCopy(to, data, fi.Mode())
 		}
 	})
 }

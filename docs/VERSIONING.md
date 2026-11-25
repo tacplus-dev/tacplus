@@ -80,8 +80,8 @@ toolchains (tacplus-dev/roadmap: decisions/tacplus-images-2026-10-27.md).
 
 | image | contents | rebuilt when |
 |---|---|---|
-| `ghcr.io/tacplus-dev/tacplus/base` | OS and every SDK tacplus is built and tested with: Go, Java (JDK, Maven), Rust, Python, Node (TypeScript), Swift, .NET | weekly (`latest` from main, each supported line's `X.Y` from its release branch), or when an SDK pin changes |
-| `ghcr.io/tacplus-dev/tacplus/build` | `base` plus every tool: protoc and every plugin, grpcio-tools, Kani, JBMC and OpenJML, cargo-fuzz and its nightly Rust, cargo-zigbuild and zig (the fleet builder's `rust:` client recipe), just, the docker CLI, gcloud. Its `tacplus` is `images/tacplus.sh`, which runs the release the repository pins. What a repository's build runs in (generate, compile, test, fuzz, verify), and what tacplus's own gates run in: CI, the nightly gates, `just gates-container` | every release (one image per line, built fresh), weekly for each supported line from its release branch, and when a tool pin changes |
+| `ghcr.io/tacplus-dev/tacplus/base` | OS and every SDK tacplus is built and tested with: Go, Java (JDK, Maven), Rust, Python, Node (TypeScript), Swift, .NET | weekly from main (`latest`), nightly for each supported line from its release branch (`X.Y`) when it has something new, or when an SDK pin changes |
+| `ghcr.io/tacplus-dev/tacplus/build` | `base` plus every tool: protoc and every plugin, grpcio-tools, Kani, JBMC and OpenJML, cargo-fuzz and its nightly Rust, cargo-zigbuild and zig (the fleet builder's `rust:` client recipe), just, the docker CLI, gcloud. Its `tacplus` is `images/tacplus.sh`, which runs the release the repository pins. What a repository's build runs in (generate, compile, test, fuzz, verify), and what tacplus's own gates run in: CI, the nightly gates, `just gates-container` | every release (one image per line, built fresh), nightly for each supported line from its release branch when it has something new, and when a tool pin changes |
 
 `ghcr.io/tacplus-dev/tacplus/tacplus` is deprecated: its tags up to the 2.5
 line stay as they are, and it is never pushed again.
@@ -91,10 +91,10 @@ Tags on the `build` image:
 | tag | meaning |
 |---|---|
 | `2.1.3` | the image of that release, immutable: a second push of it is refused |
-| `2.1` | the newest 2.1.x image, rebuilt weekly from `release/2.1`, so it may move without a new 2.1.x; a convenience for people; a build uses the digest in its `tacplus.lock` |
+| `2.1` | the newest 2.1.x image, rebuilt nightly from `release/2.1`, so it may move without a new 2.1.x; a convenience for people, never a pin: a build uses the digest in its `tacplus.lock`, and a CI image is pinned by a dated or `X.Y.Z` tag |
 | `2` | the newest 2.x |
 | `latest` | the newest release, or main's image when main rebuilt it |
-| `<yyyymmdd>-<sha>` | every build of it |
+| `<yyyymmdd>-<sha>` | every build of it, immutable: a line's nightly rebuild publishes one only when it has something new |
 
 Releases are cut on several lines at once (a 2.0.x patch after 2.3.x), so a
 floating tag moves only when the release is the newest it covers: `2.0.11`
@@ -108,10 +108,20 @@ release of the newest line (`scripts/release-latest.sh`); a patch on an older
 line is published with `--latest=false`, never taking Latest from the newest
 line by being published last (#337).
 
-A line's images are rebuilt every week from its own branch (#283), so they
-take every Debian security fix (`apt-get upgrade`) without waiting for a
-patch. The weekly run on `main` dispatches `images.yml` on each supported
-`release/X.Y` (a minor released within the last twelve months), and that run
+A line's images are rebuilt from its own branch (#283) every night it has
+something new (#966), so they take every Debian security fix (`apt-get
+upgrade`) the night after it is published, without waiting for a patch. The
+scheduled run on `main` dispatches `images.yml` on each supported
+`release/X.Y` (a minor released within the last twelve months): every line
+weekly, and on the other nights a line `scripts/images-line-stale.sh` finds
+something new for: images/ changed on its branch, an upstream image its
+Dockerfiles start from updated, or a Debian package to upgrade in its
+`build:X.Y`, since its last successful line rebuild. A line with nothing new
+is not rebuilt, so its dated tags (`build:<yyyymmdd>-<sha7>`, immutable) only
+appear when there is a new package set; the run's summary names each line's
+verdict, and the line's run names its digest. A repository's CI pins a dated
+(or `X.Y.Z`) tag, never the floating `build:X.Y`, which moves under it
+(tacplus-dev/roadmap: decisions/security-gates-ship-only-2026-11-23.md). That run
 builds `base` and `build` from the branch and pushes `base:X.Y`, `build:X.Y`
 and the dated tag, nothing else: never `latest`, `main`, `X` or any `X.Y.Z`.
 So `build:X.Y` (and `base:X.Y`) may move without a new `X.Y.Z`; every
@@ -127,7 +137,7 @@ any `X.Y.Z` or floating tag moves (`scripts/images-check-index.sh`).
 A Debian package advisory (a DSA) is fixed in `base`, not in `build` alone
 (#757). Both images run `apt-get upgrade`, so rebuilding `build` alone clears
 the build images but leaves `base:latest` and every `base:X.Y` on the old
-package until the weekly run. The Nightly security sweep scans `base:latest`
+package until the scheduled run. The Nightly security sweep scans `base:latest`
 and fails `main` until then. The fix is:
 
 1. Dispatch `images.yml` on `main` with `rebuild: base`. This moves
@@ -146,7 +156,7 @@ landed on `main` rebuilds `base:latest`. On a line, the same change backported
 to `release/X.Y` rebuilds `base:X.Y` with the line's next patch tag: a tag
 rebuilds `base` when its definition changed since the line's previous tag. A
 push to a release branch runs no image build. Otherwise the lines wait for the
-weekly run.
+nightly run.
 
 The definitions are `images/base.Dockerfile` and `images/build.Dockerfile`.
 Their Debian packages are `images/base.packages` and `images/build.packages`
@@ -163,7 +173,7 @@ and fuzzes a pinned repository in it through its `tacplus`.
 `.github/workflows/images.yml` builds and pushes them for linux/amd64 and
 linux/arm64: `build` on every release tag and when its file changed on
 `main`, `base` when its file changed (or weekly, or on demand), and both
-weekly on each supported release line. Each run
+nightly on each supported release line with something new. Each run
 writes the build image's digest to its summary. `just images` builds the set
 natively for one machine.
 

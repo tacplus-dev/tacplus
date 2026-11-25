@@ -951,6 +951,13 @@ the looper then marks it `promoted` or `declined` here with the date.
   change, and each `build:X.Y` only by the weekly line rebuild or a patch tag. The Images workflow could record
   the digest of each floating `FROM` it copies a binary from (`docker:29-cli`, `golang:1.27-trixie`) and rebuild
   `build` when one moves. Another option: the nightly sweep dispatches a rebuild when a finding is `fixed` upstream.
+  Since #966 (2026-11-23) each `build:X.Y` is rebuilt the night after an upstream image it starts from is updated
+  (`scripts/images-line-stale.sh`); `build:latest` on main still waits for a change or the weekly run.
+- **A line's dated tag is immutable only by the nightly check** (2026-11-23, #966): `scripts/images-line-stale.sh`
+  skips a line whose `build:<yyyymmdd>-<sha7>` exists, but a release branch's own images.yml (which a line rebuild
+  runs) re-pushes the tag on a second dispatch of the same commit the same day (a manual dispatch, then the
+  nightly). Proposed: build-manifest refuses an existing dated tag on a line rebuild, as it refuses an existing
+  `X.Y.Z`, shipped with the line's next minor (no backport: rule of the issue flow).
 - **TypeScript W2S: `W2SError.message` carries the error body's message** (2026-11-23, #953): `requestJson` in
   `w2sm.ts.tmpl` reads the failed response's body for the gRPC code (`w2sResponseCode`) and then throws
   `gRPC-over-REST error: <status> <statusText>`, dropping the body's `error` text. The Go, Python, Rust and Java W2S

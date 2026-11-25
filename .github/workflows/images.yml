@@ -18,10 +18,11 @@ name: Images
 #
 # A run on a release/X.Y branch is a line rebuild (#283): base and build from
 # that branch, pushed as base:X.Y and build:X.Y (and the dated tag) only, never
-# latest, main, X or an X.Y.Z. The weekly schedule on main dispatches one for
-# every supported line (job lines), so each line's images take the OS security
-# fixes (apt-get upgrade) without waiting for a patch. A release tag's build
-# starts from its line's base:X.Y when there is one.
+# latest, main, X or an X.Y.Z. The schedule on main dispatches one for every
+# supported line (job lines): weekly for every line, nightly for a line with
+# something new (#966), so each line's images take the OS security fixes
+# (apt-get upgrade) the night after they are published, without waiting for a
+# patch. A release tag's build starts from its line's base:X.Y when there is one.
 #
 # Every run upgrades the OS packages (#369): APT_REFRESH, unique to the run,
 # keeps the registry cache from handing back an older run's apt-get upgrade
@@ -40,7 +41,11 @@ on:
     branches: [main]
     tags: ["v*"]
   schedule:
+    # Weekly: main's base and build, and every supported line rebuilt.
     - cron: "23 5 * * 1"
+    # Nightly, the other days: each supported line rebuilt when something its
+    # images are made of is new (#966; scripts/images-line-stale.sh).
+    - cron: "23 5 * * 0,2-6"
   workflow_dispatch:
     inputs:
       rebuild:
@@ -67,6 +72,8 @@ env:
 jobs:
   plan:
     name: Which layers
+    # The nightly schedule rebuilds the release lines (job lines) and nothing on main.
+    if: github.event_name != 'schedule' || github.event.schedule == '23 5 * * 1'
     runs-on: ubuntu-latest
     outputs:
       base: ${{ steps.plan.outputs.base }}
@@ -369,12 +376,15 @@ jobs:
           echo "build image: $ref"
           echo "Build image: \`$ref\`" >> "$GITHUB_STEP_SUMMARY"
 
-  # The weekly line rebuild (#283): dispatch this workflow on every supported
+  # The line rebuild (#283, #966): dispatch this workflow on every supported
   # release/X.Y (a minor released within the last twelve months,
-  # docs/VERSIONING.md), each building from its own branch. A branch whose own
-  # scripts/images-tags.sh does not yet map release/X.Y to X.Y alone (its
-  # backport of #283 not merged) is skipped: its images.yml would push the
-  # line's image as build:latest.
+  # docs/VERSIONING.md), each building from its own branch and publishing the
+  # dated tag build:<yyyymmdd>-<sha7> and moving build:X.Y. Weekly, every line;
+  # nightly, only a line scripts/images-line-stale.sh finds something new for,
+  # so a dated tag always names a new package set; a line it cannot decide for
+  # is rebuilt. A branch whose own scripts/images-tags.sh does not yet map
+  # release/X.Y to X.Y alone (its backport of #283 not merged) is skipped: its
+  # images.yml would push the line's image as build:latest.
   lines:
     name: Rebuild each release line
     if: github.event_name == 'schedule'
@@ -382,13 +392,26 @@ jobs:
     permissions:
       contents: read
       actions: write
+      packages: read
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Free runner disk
+        if: github.event.schedule != '23 5 * * 1'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker system prune -af >/dev/null 2>&1 || true
+      - uses: docker/login-action@v3
+        if: github.event.schedule != '23 5 * * 1'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Dispatch a line rebuild per supported line
         env:
           GH_TOKEN: ${{ github.token }}
+          WEEKLY: ${{ github.event.schedule == '23 5 * * 1' }}
         run: |
           set -euo pipefail
           git fetch --force --tags origin '+refs/heads/release/*:refs/remotes/origin/release/*'
@@ -404,6 +427,20 @@ jobs:
             if [[ "$got" != "$line" ]]; then
               echo "::warning::$ref has no line rebuild yet (its images-tags.sh gives '$got'); skipped"; continue
             fi
+            why="weekly rebuild"
+            if [[ $WEEKLY != true ]]; then
+              if ! why="$(scripts/images-line-stale.sh "$ref")"; then
+                echo "::warning::$ref: images-line-stale.sh failed; rebuilding"
+                why="rebuild: the check failed"
+              fi
+              if [[ $why == current:* ]]; then
+                echo "$ref: $why; skipped"
+                echo "- \`$ref\`: not rebuilt, ${why#current: }" >> "$GITHUB_STEP_SUMMARY"
+                continue
+              fi
+              why="${why#rebuild: }"
+            fi
             gh workflow run images.yml --repo "$GITHUB_REPOSITORY" --ref "$ref"
-            echo "$ref: line rebuild dispatched"
+            echo "$ref: line rebuild dispatched ($why)"
+            echo "- \`$ref\`: rebuild dispatched, $why; its run's summary names the dated tag's digest" >> "$GITHUB_STEP_SUMMARY"
           done

@@ -140,3 +140,59 @@ func TestImagesPlanStepArguments(t *testing.T) {
 		})
 	}
 }
+
+// The nightly line rebuild (#966): a nightly schedule besides the weekly one,
+// on which main builds nothing and each supported line is dispatched only when
+// scripts/images-line-stale.sh finds something new; the weekly one rebuilds
+// main and every line.
+func TestImagesNightlyLineRebuild(t *testing.T) {
+	data, err := os.ReadFile("../.github/workflows/images.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var w struct {
+		On struct {
+			Schedule []struct {
+				Cron string `yaml:"cron"`
+			} `yaml:"schedule"`
+		} `yaml:"on"`
+		Jobs map[string]struct {
+			If    string         `yaml:"if"`
+			Steps []workflowStep `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &w); err != nil {
+		t.Fatal(err)
+	}
+	const weekly, nightly = "23 5 * * 1", "23 5 * * 0,2-6"
+	var crons []string
+	for _, s := range w.On.Schedule {
+		crons = append(crons, s.Cron)
+	}
+	if strings.Join(crons, "|") != weekly+"|"+nightly {
+		t.Errorf("schedules %q, want the weekly %q and the nightly %q", crons, weekly, nightly)
+	}
+	if want := "github.event_name != 'schedule' || github.event.schedule == '" + weekly + "'"; w.Jobs["plan"].If != want {
+		t.Errorf("job plan: if %q, want %q: main builds on the weekly schedule only", w.Jobs["plan"].If, want)
+	}
+	if w.Jobs["lines"].If != "github.event_name == 'schedule'" {
+		t.Errorf("job lines: if %q, want both schedules", w.Jobs["lines"].If)
+	}
+	var dispatch *workflowStep
+	for _, s := range w.Jobs["lines"].Steps {
+		if strings.Contains(s.Run, "gh workflow run images.yml") {
+			dispatch = &s
+		}
+	}
+	if dispatch == nil {
+		t.Fatal("job lines: no step dispatches images.yml")
+	}
+	if dispatch.Env["WEEKLY"] != "${{ github.event.schedule == '"+weekly+"' }}" {
+		t.Errorf("job lines: WEEKLY is %q", dispatch.Env["WEEKLY"])
+	}
+	for _, want := range []string{`scripts/images-line-stale.sh "$ref"`, `[[ $WEEKLY != true ]]`, "GITHUB_STEP_SUMMARY"} {
+		if !strings.Contains(dispatch.Run, want) {
+			t.Errorf("job lines: the dispatch step lacks %s", want)
+		}
+	}
+}

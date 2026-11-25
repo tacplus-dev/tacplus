@@ -1008,6 +1008,16 @@ the looper then marks it `promoted` or `declined` here with the date.
   only; the 2.6 backport; and whether the other clients' opposite gap (they ignore `grpc-status` and the body's `code`)
   gets its own proposal.
 
+- **A Rust client stream's open stamps a tenant's own tid too** (2026-11-18, #258): the generated S2S client of a
+  tenant's own service fills an empty route field with its own `tid` claim on unary, server-streaming and bidi calls
+  (`tenant_route::caller_route_tenant`), but a Rust client-streaming open is not async, so it cannot read the token
+  first: it still refuses an empty `tenant` (`INVALID_ARGUMENT`) and checks the token only in the stream's task.
+  An async open (or one taking the token) would make the three languages agree; Go and Java stamp at open.
+- **The typed clients stamp the route field before validating the request** (2026-11-18, #258): Go, Java and Rust
+  validate the request (`(spec.assert_required)` and friends) before the route check stamps an empty route field
+  with the caller's own tid, so a route field the proto marks required is refused as missing before it is stamped.
+  No contract marks its route field required today; swapping the two (stamp, then validate) removes the trap.
+
 ## Promoted / declined
 - **A floor check over every version tacplus emits, and template manifests that take versions from one place**
   (2026-11-06, #338) and **`just generated`: a resolved Python lock, and the C# and Swift trees** (2026-11-18, #854):

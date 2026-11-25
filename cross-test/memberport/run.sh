@@ -6,17 +6,19 @@
 # streams are bounded by their progress, never by wall time; then peer <->
 # member port <-> member port <-> peer: correctness, session rotation across token lifetimes,
 # backpressure, refusals and their statuses, faults, failure modes, the
-# sender's checks of the receiver), the member port's stream-expiry leg and the
-# Hazelcast integration test (two tenants' members through the port; Hazelcast
-# 5.7.0, Stratum's version). MEMBERPORT_SOAK=1 adds the opt-in soak, which
+# sender's checks of the receiver), the config check (a non-loopback
+# target_address is refused before startup, #258), the member port's
+# stream-expiry leg and the Hazelcast integration test (two tenants' members
+# through the port; Hazelcast 5.7.0, Stratum's version). MEMBERPORT_SOAK=1 adds the opt-in soak, which
 # prints the overhead against a direct connection. --test <classes> runs only
 # those (cross-test/stream-expiry runs MemberPortStreamExpiryTest this way).
 #
 # go (tacplus#322): generate the same service, assert the ServiceManager owns
 # its member port the same way, and run testdata/go (the Go twins of
 # MemberportPeerTest, MemberPortBehaviorTest and MemberPortStreamExpiryTest,
-# Hazelcast aside) with
-# -race inside the generated module. --test <regexp> is `go test -run` there
+# Hazelcast aside) with -race inside the generated module, and testdata/go/s2sm
+# (MemberPortConfigTest's twin, #258) in the generated s2sm package. --test
+# <regexp> is `go test -run` there
 # (default ^TestMemberPort; cross-test/stream-expiry passes
 # ^TestMemberPortStreamExpiry). MEMBERPORT_SOAK=1 adds the soak as for java.
 # --interop (needs mvn) adds the Go <-> Java leg: the java fixture is generated
@@ -33,8 +35,9 @@
 # its member port the same way, and run testdata/rust (the Rust twins of
 # MemberportPeerTest, MemberPortBehaviorTest and MemberPortStreamExpiryTest,
 # Hazelcast aside) as integration tests of the generated memberport crate, one
-# at a time. --test names the targets (memberport_peer, memberport_behavior,
-# memberport_stream_expiry, or their
+# at a time, and testdata/rust/s2sm (MemberPortConfigTest's twin, #258) as a
+# test module of s2sm. --test names the targets (memberport_peer,
+# memberport_behavior, memberport_stream_expiry, memberport_config, or their
 # Java class names; cross-test/stream-expiry can pass MemberPortStreamExpiryTest).
 # The build shares cross-test/lib/cargo-target.sh's target directory
 # (TACPLUS_CROSS_TEST_CARGO_TARGET moves it). No soak leg. --interop (needs
@@ -47,7 +50,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROTO_SRC="$ROOT_DIR/cross-test/memberport/proto"
 LANGUAGE="java"
-TESTS="MemberportPeerTest,MemberPortBehaviorTest,MemberPortStreamExpiryTest,HazelcastMemberPortTest"
+TESTS="MemberportPeerTest,MemberPortBehaviorTest,MemberPortConfigTest,MemberPortStreamExpiryTest,HazelcastMemberPortTest"
 TESTS_SET=""
 INTEROP=""
 while [[ $# -gt 0 ]]; do
@@ -342,6 +345,8 @@ case "$LANGUAGE" in
       || die "refused without auto_tls for another reason: $(tail -5 <<<"$out")"
 
     cp "$ROOT_DIR"/cross-test/memberport/testdata/go/*_test.go "$OUT/chassis/memberport/"
+    # The config check (#258) tests the ServiceManager's unexported memberPortAddresses.
+    cp "$ROOT_DIR"/cross-test/memberport/testdata/go/s2sm/*_test.go "$OUT/s2sm/"
     # The fixture's own dependency pins (proto/dependencies.yaml), not a copy.
     {
       printf 'module example.com/grid/tacplus/model\n\ngo 1.23\n\nrequire (\n'
@@ -356,7 +361,7 @@ case "$LANGUAGE" in
 
     echo "==> Running the member port tests: $GO_RUN"
     (cd "$OUT" && go mod tidy && go vet ./chassis/memberport ./s2sm \
-      && MEMBERPORT_SOAK="${MEMBERPORT_SOAK:-}" go test -race -count=1 -timeout 600s ./chassis/memberport -run "$GO_RUN" -v) \
+      && MEMBERPORT_SOAK="${MEMBERPORT_SOAK:-}" go test -race -count=1 -timeout 600s ./chassis/memberport ./s2sm -run "$GO_RUN" -v) \
       || die "member port tests failed"
 
     if [[ -n "$INTEROP" ]]; then
@@ -435,10 +440,12 @@ case "$LANGUAGE" in
     # --test names test targets; the Java class names map to their Rust twins
     # (the Rust Hazelcast leg runs under --interop).
     RUST_TESTS=()
+    RUST_CONFIG=""
     IFS=',' read -r -a requested <<<"$TESTS"
     for t in "${requested[@]}"; do
       case "$t" in
         MemberportPeerTest|memberport_peer) RUST_TESTS+=(--test memberport_peer) ;;
+        MemberPortConfigTest|memberport_config) RUST_CONFIG=1 ;;
         MemberPortBehaviorTest|memberport_behavior) RUST_TESTS+=(--test memberport_behavior) ;;
         MemberPortStreamExpiryTest|memberport_stream_expiry) RUST_TESTS+=(--test memberport_stream_expiry) ;;
         HazelcastMemberPortTest) [[ -z "$TESTS_SET" ]] || die "the Rust Hazelcast leg runs under --interop, not --test" ;;
@@ -449,8 +456,21 @@ case "$LANGUAGE" in
     echo "==> Running the member port tests: ${RUST_TESTS[*]}"
     # One test at a time, like the Java and Go legs: several assert timings
     # (a stream closed within 1.5 s of exp, a reset under a second).
-    (cd "$OUT" && cargo test -p memberport "${RUST_TESTS[@]}" -- --test-threads=1) \
-      || die "member port tests failed"
+    if [[ ${#RUST_TESTS[@]} -gt 0 ]]; then
+      (cd "$OUT" && cargo test -p memberport "${RUST_TESTS[@]}" -- --test-threads=1) \
+        || die "member port tests failed"
+    fi
+    if [[ -n "$RUST_CONFIG" ]]; then
+      # The config check (#258) tests the ServiceManager's private
+      # member_port_addresses, so it runs as a test module of s2sm.
+      echo "==> Running the member port config check"
+      cp "$ROOT_DIR/cross-test/memberport/testdata/rust/s2sm/memberport_config_test.rs" "$OUT/s2sm/"
+      printf '\n#[cfg(test)]\nmod memberport_config_test;\n' >> "$SM"
+      (cd "$OUT" && cargo test --lib memberport_config_) >"$WORK/config-test.log" 2>&1 \
+        || { tail -40 "$WORK/config-test.log" >&2; die "member port config tests failed"; }
+      grep -q 'memberport_config_non_loopback_target_is_refused ... ok' "$WORK/config-test.log" \
+        || die "the member port config tests did not run"
+    fi
 
     if [[ -n "$INTEROP" ]]; then
       command -v mvn >/dev/null || die "--interop needs mvn to run the Java member port"

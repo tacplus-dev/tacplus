@@ -183,6 +183,25 @@ public class {{.ClientName}} {
             return Boolean.TRUE;
         });
     }
+{{- if .HasRoute}}
+
+    /**
+     * The caller's own bearer token, which a (spec.rpc).route_field call is
+     * routed by (RouteTenant.forCaller: S2S never crosses tenants), or null
+     * when there is no provider or it fails: the named tenant is then required
+     * as is, and an authenticated call is refused by its auth block anyway.
+     */
+    private String __ownToken() {
+        if (tokenProvider == null) {
+            return null;
+        }
+        try {
+            return tokenProvider.get();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+{{- end}}
 {{- if .HasCursor}}
 
     /** A lazy server-stream cursor (Tier-3). close() cancels the call; use with try-with-resources. */

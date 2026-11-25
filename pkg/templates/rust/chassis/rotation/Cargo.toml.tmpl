@@ -2,6 +2,10 @@
 name = "rotation"
 version = "0.1.0"
 edition = "2021"
+{{- if .License}}
+license = "{{.License}}"
+{{- end}}
+publish = false
 description = "Make-before-break rotation of service-to-service streams (tacplus#322)"
 
 # Every dependency is a workspace pin: this crate adds no version of its own.

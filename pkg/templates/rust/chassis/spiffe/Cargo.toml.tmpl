@@ -2,6 +2,10 @@
 name = "spiffe"
 version = "0.1.0"
 edition = "2021"
+{{- if .License}}
+license = "{{.License}}"
+{{- end}}
+publish = false
 description = "Canonical SPIFFE identity model: construction, parsing, normalization, and comparison of SPIFFE IDs"
 
 [dependencies]

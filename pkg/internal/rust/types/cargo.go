@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/packages"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/tmplutil"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
@@ -43,12 +44,14 @@ type cargoWorkspaceData struct {
 	RmcpVersion        string
 	SchemarsVersion    string
 	LibCrates          []cargoLibCrate
+	License            string // SPDX id of the configured header; the manifest omits license when empty
 }
 
 // typesCargoData holds data for the types-only crate Cargo.toml.
 type typesCargoData struct {
 	CrateName          string
 	HasServiceWrappers bool
+	License            string // SPDX id of the configured header; the manifest omits license when empty
 }
 
 // createWorkspaceCargoToml creates a combined workspace + package Cargo.toml at rust/Cargo.toml.
@@ -150,6 +153,7 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 		RmcpVersion:        rmcpCrateVersion,
 		SchemarsVersion:    schemarsCrateVersion,
 		LibCrates:          libCrates,
+		License:            header.License(),
 	}
 
 	typeFS, err := fs.Sub(templates.FS, "rust/types")
@@ -161,6 +165,7 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 	typesData := typesCargoData{
 		CrateName:          crateName,
 		HasServiceWrappers: hasServiceWrappers,
+		License:            header.License(),
 	}
 	typesResult, err := tmplutil.ExecuteTemplate(typeFS, "types_cargo.toml.tmpl", funcMap, typesData)
 	if err != nil {

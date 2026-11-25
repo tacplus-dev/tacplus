@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-23 by looper (#320).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-25 by looper (#862).
 
 - **Version / line:** v2.6.13 (latest release, 2026-11-15, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -124,6 +124,13 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-23 by lo
   The base and build images carry Go 1.27, Node 26 (LTS) and Swift 6.4.2 (#255; main only, from 2.6: the
   supported `build:X.Y` lines keep their toolchains). The rule beside the pins: Go follows the newest release, Node
   the newest LTS, Swift the newest release.
+  On main (2.7): no generated Rust crate depends on chrono 0.4 (RUSTSEC-2026-0543, unmaintained), though a
+  service with MCP tools still locks it through rmcp, which requires it (to its latest, 3.11): the
+  google.protobuf well-known types of the generated messages are the new `wkt` chassis crate's (`wkt::Timestamp`,
+  ...; prost-types' RFC 3339 and duration text, proto3 JSON serde), not prost-wkt-types', and
+  `token::Token::expires_in()` is an `Option<std::time::Duration>`; current-generation refuses a generated
+  Cargo.lock with chrono other than through rmcp (#862; a changed generated surface, so 2.7 only, migration in
+  docs/USER.md).
   On main (2.7): the build image builds images itself, with rootless BuildKit 0.34.2 under RootlessKit 3.3.0 as the
   user `build` (`tacplus-image-build`; no host Docker socket; multi-arch through BuildKit's QEMU helpers), and carries
   sccache 0.19.0. BuildKit, its runc 1.5.2 and RootlessKit are built from their release tags, each checked against

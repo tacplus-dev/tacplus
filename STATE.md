@@ -135,6 +135,10 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-23 by lo
   Line rebuild (#283): the weekly Images run on main dispatches images.yml on each supported `release/X.Y`, which
   rebuilds `base:X.Y` and `build:X.Y` from that branch (apt-get upgrade) and moves nothing else; a patch tag builds
   its `build` fresh. A line takes part once its backport of #283 merges (the dispatch skips a branch without it).
+  The other nights (#966), the Images run dispatches a line's rebuild only when `scripts/images-line-stale.sh` finds
+  something newer than its last successful one (images/ on its branch, an upstream base image, a Debian upgrade in
+  `build:X.Y`), so each `build:<yyyymmdd>-<sha7>` names a new package set; consumers pin that dated tag, never
+  `build:X.Y`.
   Every Images run upgrades the OS packages (#369): the `apt-get upgrade` layer of base and build depends on
   `APT_REFRESH`, the run's id, so the registry cache never hands back an older run's (v2.6.2's arm64 image was
   v2.6.1's, without the zlib1g fix), and `scripts/images-check-index.sh` fails the run before any release or

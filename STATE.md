@@ -118,6 +118,16 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-25 by lo
   dependencies.yaml inventory and each manifest of the cross-test models it generates (Rust, Python, TypeScript,
   C#, Swift), failing on an advisory the floor admits; a chassis manifest template names no version the inventory
   declares (soundness). Versions generator code still names outside the inventory are in PROPOSALS.md.
+  Accounting, typed and without data (#273, 2.7, on main): the Go, Java and Rust wrappers emit exactly one
+  `RpcCompleted` per call on every exit path, refusals before the handler included, with the gRPC code, a typed
+  outcome (`PERMITTED`/`DENIED_AUTHN`/`DENIED_AUTHZ`/`INVALID`/`FAILED`) and reason classified from one table
+  (`accountingpolicy`), and the `RpcMetrics` a handler attaches (`records_returned`, `bytes`); the free-text events
+  and `ErrorContext` are gone, `(spec.accounting_safe)` gates every accounting string field, the accounting
+  publisher carries the `x-tacplus-accounting-internal` marker a wrapper honours for a service caller, and the sink counts its own
+  health (`current-generation`'s accounting-sink fixture drives a query and a denial through the real wrapper).
+  Gaps: Go stream RPCs cannot attach metrics (unary only); the store side, per-tenant Stratum, is
+  tacplus-dev/stratum#24, so nothing stores a record yet, and the end-to-end exactly-one test through the event bus
+  and Stratum waits for it; tracing's own non-recursion is #265's.
   The build image's docker-buildx is built from the v0.39.1 source with moby/go-archive 0.3.3 (CVE-2026-17106); its
   release carries golang.org/x/net 0.62.0 (CVE-2026-78669, CVE-2026-78661, CVE-2026-97045) and containerd v2.4.2
   (CVE-2026-95839, #930); `tacplus-smoke` checks the floors

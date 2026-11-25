@@ -1132,6 +1132,22 @@ func writeMessageSerialization(b *strings.Builder, msg model.Message, outerClass
 	b.WriteString("}\n")
 	b.WriteString("}\n")
 
+	// fromFile method — reads a file and delegates to fromBytes. A service reads
+	// its Secrets this way from SECRETS_PATH, never from environment variables.
+	fmt.Fprintf(b, "public static %s %sFromFile(String path) throws ProtoException {\n", fullTypeName, lowerName)
+	b.WriteString("byte[] data;\n")
+	b.WriteString("try {\n")
+	b.WriteString("data = java.nio.file.Files.readAllBytes(java.nio.file.Path.of(path));\n")
+	b.WriteString("} catch (java.io.IOException | java.nio.file.InvalidPathException e) {\n")
+	b.WriteString("throw new ProtoException(ProtoException.INVALID_ARGUMENT, \"reading \" + path + \": \" + e.getMessage(), e);\n")
+	b.WriteString("}\n")
+	b.WriteString("try {\n")
+	fmt.Fprintf(b, "return %sFromBytes(data);\n", lowerName)
+	b.WriteString("} catch (ProtoException e) {\n")
+	b.WriteString("throw new ProtoException(e.getCode(), \"parsing \" + path + \": \" + e.getMessage(), e);\n")
+	b.WriteString("}\n")
+	b.WriteString("}\n")
+
 	// fromJson method — field-by-field JSON walking. No JsonFormat.parser().
 	// Parity with Go's FromJSON: parse with Gson, walk each field, use parseXxx
 	// for enums and xxxFromJson for nested messages.

@@ -82,6 +82,20 @@ return v, nil
 return nil, protoerrors.NewErrMissingInvalidData(nil, "failed to parse {{.TypeName}}: unsupported format or invalid data")
 }
 
+// {{.TypeName}}FromFile reads {{.TypeName}} from a file in any format {{.TypeName}}FromBytes
+// accepts: how a service reads its Secrets from SecretsPath, not the environment.
+func {{.TypeName}}FromFile(path string) (*{{.TypeName}}, error) {
+data, err := os.ReadFile(path)
+if err != nil {
+return nil, fmt.Errorf("reading {{.TypeName}} from %s: %w", path, err)
+}
+v, err := {{.TypeName}}FromBytes(data)
+if err != nil {
+return nil, fmt.Errorf("parsing {{.TypeName}} from %s: %w", path, err)
+}
+return v, nil
+}
+
 // {{.TypeName}}FromJSON creates {{.TypeName}} from JSON bytes.
 // Uses standard encoding/json and custom enum parsers for external JSON compatibility.
 func {{.TypeName}}FromJSON(data []byte) (*{{.TypeName}}, error) {

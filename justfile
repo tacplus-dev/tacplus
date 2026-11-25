@@ -20,6 +20,7 @@ lock := "bash scripts/with-tree-lock.sh"
 #   cross-test/cert-stream/run.sh         write_java_compile_pom()
 #   cross-test/external-token/testdata/pom.xml
 #   cross-test/stream-expiry/testdata/pom.xml
+#   cross-test/uni-config/testdata/java/pom.xml
 #   cross-test/consumer-contract/run.sh   (pom heredoc)
 #   cross-test/server-runtime/fixture/java/pom.xml
 #   cross-test/wire-corpus/decoder/java/pom.xml
@@ -186,7 +187,7 @@ protoc-check:
 # per gate would let another job interleave a regeneration between two of them.
 # The nested `just` calls re-enter this same lock.
 gates:
-  {{lock}} bash scripts/gates.sh soundness test current-generation determinism cert-stream stream-expiry rotation memberport claims-provenance accounting-identity w2s-validate c2d-server zero-rpc-s2s jwk-alg redact trace-carry floors tacplus-script
+  {{lock}} bash scripts/gates.sh soundness test current-generation determinism cert-stream stream-expiry rotation memberport claims-provenance accounting-identity w2s-validate c2d-server zero-rpc-s2s jwk-alg redact trace-carry floors uni-config tacplus-script
 
 # Run `just gates` inside the tacplus build image instead of against the
 # host toolchain: every SDK and tool at the pinned versions, with no host
@@ -381,6 +382,21 @@ external-token-java:
 
 external-token-rust:
   {{lock}} bash cross-test/external-token/run.sh --language rust
+
+# The uni-config (issue #262): the generated chassis reads the bootstrap config
+# from the fixed BOOTSTRAP_CONFIG_PATH, the projected token file from the
+# config's k8s_token_file, and a service's Secrets with the generated file
+# reader; no environment variable the config types don't declare moves them.
+uni-config: uni-config-go uni-config-java uni-config-rust
+
+uni-config-go:
+  {{lock}} bash cross-test/uni-config/run.sh --language go
+
+uni-config-java:
+  {{lock}} bash cross-test/uni-config/run.sh --language java
+
+uni-config-rust:
+  {{lock}} bash cross-test/uni-config/run.sh --language rust
 
 # JWK alg selection (issue #179): every generated language verifies the one
 # shared fixture of pre-signed tokens (cross-test/fixtures/jwk_alg_vectors.json)

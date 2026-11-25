@@ -22,15 +22,10 @@ use crate::cloud_detect::detect_cloud;
 /// Default audience for token exchange.
 const HAS_TOKEN_EXCHANGER: bool = {{if .HasTokenExchanger}}true{{else}}false{{end}};
 const DEFAULT_AUDIENCE: &str = "{{.DefaultAudience}}";
-/// Env var naming the projected Kubernetes token file for the token authority.
-/// Mirrors the operator's `KMAKER_K8S_TOKEN_FILE` precedent. When set and the
-/// file is readable, the service authenticates to the token authority with the
-/// projected token. This is the in-cluster bootstrap path.
-const K8S_TOKEN_FILE_ENV: &str = "KERNEL_K8S_TOKEN_FILE";
 /// Env var naming a bootstrap token file a parent workload wrote for this process
 /// (WorkloadMint). Read once at startup and exchanged for a refresh + access pair;
-/// renewal then runs from the retained refresh token. Takes precedence over
-/// `KERNEL_K8S_TOKEN_FILE`.
+/// renewal then runs from the retained refresh token. Takes precedence over the
+/// config's `k8s_token_file`.
 const BOOTSTRAP_TOKEN_FILE_ENV: &str = "KERNEL_BOOTSTRAP_TOKEN_FILE";
 const RECONNECT_POLL: Duration = Duration::from_secs(30);
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -76,6 +71,17 @@ impl std::fmt::Display for WorkloadRevoked {
 
 impl std::error::Error for WorkloadRevoked {}
 
+/// Returns the identity bootstrap sources: (the bootstrap token file a parent
+/// workload named in `KERNEL_BOOTSTRAP_TOKEN_FILE`, the projected Kubernetes
+/// token file from `config.k8s_token_file`). Empty means not configured. The
+/// Kubernetes token file comes from config only, never from the environment
+/// (tacplus#262, the uni-config).
+pub fn bootstrap_sources(config: &Config) -> (Option<String>, Option<String>) {
+    let bootstrap_token_file = std::env::var(BOOTSTRAP_TOKEN_FILE_ENV).ok().filter(|p| !p.is_empty());
+    let k8s_token_file = Some(config.k8s_token_file.clone()).filter(|p| !p.is_empty());
+    (bootstrap_token_file, k8s_token_file)
+}
+
 /// IdentityManager handles service identity: bootstrap, token caching, and renewal.
 /// The channel is provided by the ServiceManager — IM does not manage its own connections.
 pub struct IdentityManager {
@@ -93,7 +99,6 @@ impl IdentityManager {
     /// The channel comes from the state-store ServiceConnection — IM does not
     /// create its own connections.
     pub async fn new(channel: Channel, config: &Config) -> Result<Self, Box<dyn std::error::Error>> {
-        let _ = config;
         let mut k8s_minter: Option<Arc<RwLock<KubernetesTokenMinter>>> = None;
         let mut cloud_minter: Option<Arc<RwLock<CloudTokenMinter>>> = None;
         let mut instance_id = String::new();
@@ -102,8 +107,7 @@ impl IdentityManager {
         // file is the in-cluster bootstrap path. Otherwise cloud-native identity
         // is attempted. The static cred_pair (`private_key`) bootstrap arm has
         // been removed; `config.private_key` is no longer read.
-        let bootstrap_token_file = std::env::var(BOOTSTRAP_TOKEN_FILE_ENV).ok().filter(|p| !p.is_empty());
-        let k8s_token_file = std::env::var(K8S_TOKEN_FILE_ENV).ok().filter(|p| !p.is_empty());
+        let (bootstrap_token_file, k8s_token_file) = bootstrap_sources(config);
 
         if let Some(ref bootstrap_file) = bootstrap_token_file {
             if !HAS_TOKEN_EXCHANGER {

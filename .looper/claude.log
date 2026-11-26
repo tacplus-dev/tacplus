@@ -1,0 +1,92 @@
+= init
+= thinking_tokens
+= thinking_tokens
+> Bash git log --oneline -3 && git status --short && git diff --stat && /usr/local/bin/repo-looper --repo tacplus --issue-text 954 | tail -30
+> Bash git diff; git log origin/main --oneline -8; git tag --contains v2.7.0 2>/dev/null | head; git log v2.7.0..origin/main --oneline
+< 6a271f80 HISTORY.md: #953 (looper) 9b64eedc HISTORY.md: #932 (looper) e4f41885 PROPOSALS: #953 is built; its opposite gap is #988  M pkg/internal/rust/types/enum_go_alias_test.go  M pkg/internal/rust/types/enums.go  M pkg/templates/rust/types/enums_test.rs.tmpl  pkg/internal/rust/types/enum_go_alias...
+< diff --git a/pkg/internal/rust/types/enum_go_alias_test.go b/pkg/internal/rust/types/enum_go_alias_test.go index 6ca749e4..b519105e 100644 --- a/pkg/internal/rust/types/enum_go_alias_test.go +++ b/pkg/internal/rust/types/enum_go_alias_test.go @@ -57,3 +57,35 @@ func TestRustEnumFromStrAcceptsGoFrien...
+= thinking_tokens
+= thinking_tokens
+> Bash git log v2.7.0..origin/main --oneline | wc -l; git log v2.7.0..origin/main --stat --format='%h %s' -- . ':!HISTORY.md' ':!PROPOSALS.md' ':!ROADMAP.md' ':!STATE.md' | head -60; ls /var/lib/looper-cache/work/tacplus/runs/ | grep 954
+< 10 29c8a739 TypeScript W2S: W2SError.message carries the error body's message (#953)   docs/USER.md                                       |  10 ++  .../types/w2s_client_error_message_test.go         | 109 +++++++++++++++++++++  .../typescript/types/w2sm_token_service_test.go    |   3 +-  pkg/templat...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash which go cargo; go test ./pkg/internal/rust/types/ 2>&1 | tail -5; gh issue view 953 --repo tacplus-dev/tacplus --json labels -q '.labels[].name'
+< /usr/local/go/bin/go /usr/local/cargo/bin/cargo # github.com/tacplus-dev/tacplus/pkg/internal/rust/types pkg/internal/common/parser/descriptor.go:22:2: no required module provides package github.com/tacplus-dev/tacplus/target/proto/spec/sys; to add it: 	go get github.com/tacplus-dev/tacplus/target/p...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash sed -n 150,230p pkg/internal/rust/types/enums.go; grep -n "patch\|backport" docs/VERSIONING.md | head -30
+< 			HasAlias:     alias != lowerName, 			Alias:        alias, 		}) 	}  	if len(validValues) == 0 { 		return nil 	}  	data := rustEnumTemplateData{ 		EnumName:     enumName, 		ValidValues:  validValues, 		HasSentinels: len(validValues) < len(enum.Values), 	}  	typeFS, err := fs.Sub(templates.FS, "rust...
+> Bash sed -n 55,75p docs/VERSIONING.md
+< ## Backports  Every fix is made on `main` first. It is then backported to **every minor released within the last twelve months**, as its own patch release of that minor. A minor older than a year is out of support: it gets no patches, and a consumer still on it upgrades.  Each supported minor has a ...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash git add -A && git commit -q -F - <<'EOF' Rust enum tests: from_str_invalid probes a string no value accepts (#954)  The generated test_<enum>_from_str_invalid asserted that "invalid" fails to parse. RpcOutcome gained RPC_OUTCOME_INVALID in 2.7 (#273), whose friendly name is "invalid", so the generat...
+< Author identity unknown  *** Please tell me who you are.  Run    git config --global user.email "you@example.com"   git config --global user.name "Your Name"  to set your account's default identity. Omit --global to set the identity only in this repository.  fatal: empty ident name (for <looper-954@...
+> Bash kill 35319; sleep 1; git log --format='%an <%ae>' -5 origin/main | sort | uniq -c; git log --all --format='%an <%ae> %s' | grep -i '#954' | head -3
+< /bin/bash: line 1: kill: (35319) - No such process       2 jodydadescott <jody@thescottsweb.com>       1 tacplus-looper <looper-932@tacplus-dev.invalid>       2 tacplus-looper <looper-953@tacplus-dev.invalid> tacplus-looper <looper-954@tacplus-dev.invalid> looper: work in progress on #954 (the VM is...
+> Bash cat /tmp/b954.log | tail -5; git status --short; git config user.name tacplus-looper && git config user.email looper-954@tacplus-dev.invalid && git add -A && git commit -q -F - <<'EOF' Rust enum tests: from_str_invalid probes a string no value accepts (#954)  The generated test_<enum>_from_str_inval...
+< [2026-11-26T23:23:14Z] FATAL uncommitted changes: commit them first; --build builds your HEAD as committed M  pkg/internal/rust/types/enum_go_alias_test.go M  pkg/internal/rust/types/enums.go M  pkg/templates/rust/types/enums_test.rs.tmpl 45d45009 Rust enum tests: from_str_invalid probes a string no...
+= thinking_tokens
+= thinking_tokens
+> Bash gh pr list --repo tacplus-dev/tacplus --state all --base release/2.6 --limit 5 --json number,headRefName,title,state; git fetch -q origin release/2.7 && git diff v2.7.0 origin/release/2.7 --stat | tail -2
+< [{"headRefName":"backport/830-release-2.6","number":997,"state":"OPEN","title":"[release/2.6] Rust enum tests: from_str_invalid asserts a name FromStr refuses (#830)"},{"headRefName":"backport/953-release-2.6","number":989,"state":"OPEN","title":"[release/2.6] TypeScript W2S: W2SError.message carrie...
+= thinking_tokens
+= thinking_tokens
+Issue #830 looks like the same fix. Checking it before I go on:
+> Bash /usr/local/bin/repo-looper --repo tacplus --pr-text 997 | head -40; gh pr list --repo tacplus-dev/tacplus --state all --search "830" --json number,baseRefName,state,title --limit 10; gh issue view 830 --repo tacplus-dev/tacplus --json state,labels,title
+= task_started
+= task_notification
+< hint: if you need to wait for this pull request to be reviewed, merged, or closed before continuing, use this instead of polling:     gh event listen --resource https://github.com/tacplus-dev/tacplus/pull/997 --event com.github.pull_request.review.submitted.v1,com.github.pull_request.state.changed.v...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash kill 39758; sleep 2; tail -3 /tmp/b954.log; /usr/local/bin/repo-looper --repo tacplus --pr-text 998 2>/dev/null | grep -v '^hint\|^  -\|gh event' | head -30
+= task_started
+= task_notification
+< [2026-11-26T23:23:28Z] build requested: tacplus 45d4500, the gates rust (all 3 changed paths map to rust) the local build of tacplus 45d4500, the gates rust on base 6a271f8, in the build image it pins, on this looper VM: its full log is /var/lib/looper-cache/work/tacplus/runs/20261126T232229Z-issue-...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+I'm resetting my duplicate commit, then posting comments on #954 and #830. The #830 comment flags that main now has #953 (`feature`), so v2.7.1 has to come from release/2.7 rather than main.
+> Bash git reset -q --hard origin/main && git status --short && git log --oneline -1 gh issue comment 830 --repo tacplus-dev/tacplus --body "From #954's looper: #954 had the same generator fix and has dropped it in favour of yours (ec231784 and the backports #991-#998). One correction to #998's note: main ...
+= task_started
+= task_notification
+< 6a271f80 HISTORY.md: #953 (looper) https://github.com/tacplus-dev/tacplus/issues/830#issuecomment-7205511282 https://github.com/tacplus-dev/tacplus/issues/954#issuecomment-7205511668
+> Bash /usr/local/bin/repo-looper --repo tacplus --issue 954 --checkpoint "Blocked on #830, which owns the same generator fix (ec231784 queued for main; backport PR #998 to release/2.7 names v2.7.1); this run's duplicate commit was dropped, nothing pushed. Main took #953 (feature) since v2.7.0, so v2.7.1 i...

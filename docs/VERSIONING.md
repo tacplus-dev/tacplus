@@ -37,38 +37,26 @@ branch is protected: changes land only by pull request.
 
 Supported today: `release/2.0` through `release/2.5`, one per minor (2.0 was
 cut at `v2.0.1`; 2.0.0 published images but its release build failed, so
-2.0.1 is the first usable 2.0 release). Consumers pin `MAJOR.MINOR`: the
-`tacplus:X.Y` image and `tacplus upgrade` both follow its newest patch. The fix looper opens one pull
+2.0.1 is the first usable 2.0 release). Consumers pin `MAJOR.MINOR`:
+`tacplus upgrade` follows its newest patch. The fix looper opens one pull
 request against `main` and one against each supported release branch; the
 release-branch pull request carries only the fix and its test.
 
 ## Images
 
-Three images. `build` is `FROM base`; `tacplus` copies its tools out of
-`build` onto a slim OS, so a consumer pulls a few hundred megabytes, not the
-SDKs:
+Two images. `build` is `FROM base`:
 
 | image | contents | rebuilt when |
 |---|---|---|
 | `ghcr.io/tacplus-dev/tacplus/base` | OS and every SDK tacplus is built and tested with: Go, Java (JDK, Maven), Rust, Python, Node (TypeScript), Swift, .NET | weekly (`latest` from main, each supported line's `X.Y` from its release branch), or when an SDK pin changes |
 | `ghcr.io/tacplus-dev/tacplus/build` | `base` plus every tool: protoc and every plugin, grpcio-tools, JBMC and OpenJML, just, the docker CLI, gcloud. The one image the gates run in: CI, the nightly gates, `just gates-container`. Not for consumers. | every release (built fresh), weekly for each supported line from its release branch, and when a tool pin changes |
-| `ghcr.io/tacplus-dev/tacplus/tacplus` | the tacplus binary and the protoc plugins for every language that needs its own (Go, Java, TypeScript, Rust, Swift, Python); C# needs none, its generated project runs Grpc.Tools from NuGet | every push to `main` and every release |
 
-A consumer's build does not start `FROM` the tacplus image. It runs it as its
-own step (`tacplus build`, writing the generated model) and compiles the
-result in its own builder image, so a new tacplus patch is picked up by the
-generate step pulling `tacplus:X.Y` again, without rebuilding the consumer's
-image.
-
-Tags on the `tacplus` image follow the version policy:
-
-| tag | meaning |
-|---|---|
-| `2.1.3` | that release, immutable |
-| `2.1` | the newest 2.1.x patch (what a consumer pins) |
-| `2` | the newest 2.x |
-| `latest` | the newest release |
-| `main-<sha>` | an unreleased build of `main` |
+`ghcr.io/tacplus-dev/tacplus/tacplus` is deprecated (#193, #932): its tags
+stay as they are and it is never pushed again, so `tacplus:2.5` stays at
+`2.5.25` and takes none of this line's later patches. tacplus is a binary,
+published with each release (`tacplus-X-Y-Z-<os>-<arch>` and
+`checksums.txt`): a consumer's generate step runs the release binary, and
+`tacplus upgrade` keeps it on the newest patch of its line.
 
 Releases are cut on several lines at once (a 2.0.x patch after 2.3.x), so a
 floating tag moves only when the release is the newest it covers: `2.0.11`
@@ -86,9 +74,8 @@ take every Debian security fix (`apt-get upgrade`) without waiting for a
 patch. The weekly run on `main` dispatches `images.yml` on each supported
 `release/X.Y` (a minor released within the last twelve months), and that run
 builds `base` and `build` from the branch and pushes `base:X.Y`, `build:X.Y`
-and the dated tag, nothing else: never `latest`, `main`, `X` or any `X.Y.Z`,
-and no tacplus image. So `build:X.Y` (and `base:X.Y`) may move without a new
-`X.Y.Z`; every `X.Y.Z` stays the image of that release, immutable. A dispatch
+and the dated tag, nothing else: never `latest`, `main`, `X` or any `X.Y.Z`.
+So `build:X.Y` (and `base:X.Y`) may move without a new `X.Y.Z`; every `X.Y.Z` stays the image of that release, immutable. A dispatch
 on a release branch is always such a line rebuild. A patch tag builds its
 `build` fresh (`apt-get upgrade`), from its line's `base:X.Y`, never
 re-tagging the line's older image. Every run upgrades the OS packages (#369): the `apt-get upgrade`
@@ -97,9 +84,8 @@ back an older run's layer, and a run whose `base` or `build` index lacks
 linux/amd64 or linux/arm64, or holds an image created before the run started,
 fails before its tags move (`scripts/images-check-index.sh`).
 
-The definitions are `images/base.Dockerfile`, `images/build.Dockerfile` and
-`images/tacplus.Dockerfile`; `images/smoke.sh` ships in the build and
-tacplus images as `tacplus-smoke` and runs inside every pushed image. `.github/workflows/images.yml` builds and pushes them for
+The definitions are `images/base.Dockerfile` and `images/build.Dockerfile`;
+`images/smoke.sh` ships in the build image as `tacplus-smoke` and runs inside every pushed image. `.github/workflows/images.yml` builds and pushes them for
 linux/amd64 and linux/arm64 on every push to `main` and every release tag,
 rebuilding `base` and `build` only when their file changed (or weekly for
 `base`, or on demand). `just images` builds the set natively for one machine.

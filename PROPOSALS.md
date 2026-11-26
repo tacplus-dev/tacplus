@@ -1105,6 +1105,14 @@ the looper then marks it `promoted` or `declined` here with the date.
   validate the request (`(spec.assert_required)` and friends) before the route check stamps an empty route field
   with the caller's own tid, so a route field the proto marks required is refused as missing before it is stamped.
   No contract marks its route field required today; swapping the two (stamp, then validate) removes the trap.
+- **`looper.yaml`, tacplus's looper/builder VM spec** (2026-11-26, #968): a root file naming tacplus's VM (roadmap
+  decisions/looper-build-vms-2026-11-24.md point 9; tacplus is the pilot), read only outside the repository (the
+  looper's planner, tacplus-dev/cloud#108, the kicker), and `/looper.yaml` in `docs`' paths in `gates.yaml` so a
+  spec change gates on the docs set, not `full`. Jody approved it as a file on 2026-11-25 with `c4a-standard-8`
+  (what the VM runs on today, measured in #976, #977, #979), not the issue's `c4a-standard-32`: capacity grows only
+  by a change to this file when a measurement says so. Waits for a ROADMAP.md entry. Open: the machine key's name
+  (`machine` in the issue, `machine_type` in the approval), and whether `vm:` stays while looper#241's kicker
+  switches on `LOOPER_VM_REPOS`.
 
 ## Promoted / declined
 - **A floor check over every version tacplus emits, and template manifests that take versions from one place**

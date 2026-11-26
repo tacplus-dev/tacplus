@@ -221,6 +221,16 @@ server-streaming RPCs use SSE, and client-streaming or bidirectional RPCs use
 WebSockets. Tacplus surfaces blocked or timed-out transports as errors; polling
 fallback is application behavior.
 
+A failed unary W2S call carries the server's message, not the HTTP status line:
+the Go, Python, Rust, Java and TypeScript W2S clients take the message from the
+JSON error body's `error`
+(TypeScript's `W2SError.message` also reads `message`, and falls back to
+`gRPC-over-REST error: <status> <statusText>` when the body has neither). This
+is how a backend's refusal (a `FAILED_PRECONDITION` asking the person to
+confirm, say) reaches the person. TypeScript's `W2SError.code` is the gRPC code
+the gateway carries (the `grpc-status` header, else the body's `code`), else the
+code mapped from the HTTP status.
+
 The obsolete `clients.c2s/w2s/c2d.enabled` YAML block is **rejected** with a
 config error. Two builds of the same proto graph, service identity, language, and
 package name produce the same surfaces regardless of local build settings —

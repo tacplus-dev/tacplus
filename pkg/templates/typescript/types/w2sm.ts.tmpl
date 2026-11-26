@@ -97,6 +97,27 @@ function w2sResponseCode(resp: Response, body: string): number {
   return w2sHttpStatusToCode(resp.status);
 }
 
+/**
+ * Resolves the message of a failed gateway response: the JSON error body's
+ * non-empty `error` (the gateway's grpc-message, decoded already), else its
+ * non-empty `message`, else the HTTP status line (parity with Go's
+ * w2sHTTPStatusToError). A non-JSON body, such as a proxy's HTML page, is never
+ * the message.
+ */
+function w2sResponseMessage(resp: Response, body: string): string {
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown; message?: unknown } | null;
+    for (const message of [parsed?.error, parsed?.message]) {
+      if (typeof message === 'string' && message !== '') {
+        return message;
+      }
+    }
+  } catch {
+    // Non-JSON error body: fall back to the HTTP status line.
+  }
+  return `gRPC-over-REST error: ${resp.status} ${resp.statusText}`;
+}
+
 {{- if .MintTokenMethod}}
 
 /** Storage key under which MintTokenProvider persists the refresh token. */
@@ -402,7 +423,7 @@ export class FetchTransport {
       const errorBody = await resp.text().catch(() => '');
       throw new W2SError(
         w2sResponseCode(resp, errorBody),
-        `gRPC-over-REST error: ${resp.status} ${resp.statusText}`,
+        w2sResponseMessage(resp, errorBody),
         resp.status,
       );
     }

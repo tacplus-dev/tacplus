@@ -67,7 +67,8 @@ func TestTypeScriptW2STransportErrorCarriesStatusAndCode(t *testing.T) {
 		"case 503: return 14; // UNAVAILABLE",
 		"case 504: return 4;  // DEADLINE_EXCEEDED",
 		"default: return 2;   // UNKNOWN",
-		"throw new W2SError(\n        w2sResponseCode(resp, errorBody),\n        `gRPC-over-REST error: ${resp.status} ${resp.statusText}`,\n        resp.status,\n      );",
+		"throw new W2SError(\n        w2sResponseCode(resp, errorBody),\n        w2sResponseMessage(resp, errorBody),\n        resp.status,\n      );",
+		"return `gRPC-over-REST error: ${resp.status} ${resp.statusText}`;",
 	} {
 		if !strings.Contains(tmpl, want) {
 			t.Errorf("w2sm.ts.tmpl missing %q", want)

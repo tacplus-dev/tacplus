@@ -69,11 +69,15 @@ docs:
   minutes: 5
   paths: ["*.md", docs/**, /looper.yaml]
 # The image set. `just test` first: pkg/images and scripts test the files under
-# images/.
+# images/ (a change to pkg/images alone matched no set, so it ran full, which
+# builds no image). Its minutes cover a cold base and build, which a change to
+# a base pin makes (tacplus#947): at 30, the requester's wait was its 3h floor,
+# and a Swift bump's gates ran past it twice with no verdict. images.yml gives
+# base alone 90 minutes; base and build for release/2.6 took 1h29m.
 images:
   run: just test && just images && just tacplus-script
-  minutes: 30
-  paths: [images/]
+  minutes: 180
+  paths: [images/, pkg/images/**]
 # The pre-land gate (tacplus-dev/looper#196): `just test` on the land rebased
 # onto current main, before it is queued and when the manager stages it onto a
 # newer main, so a land older than a repo-wide check goes back before a batch.

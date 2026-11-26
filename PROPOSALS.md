@@ -1061,6 +1061,15 @@ the looper then marks it `promoted` or `declined` here with the date.
   means what it does today. The questions for Jody are on the issue: does `export_to` require or imply `export`; are
   importers named by package; does the list also govern tenant-pinned TenantConfig reads and the event-C2S topics of
   an exported root; does `registry.json` carry it.
+- **The `images` gate rebuilds base and build cold on every run** (2026-11-21, #947): gates.yaml's `images` set
+  (`just test && just images && just tacplus-script`) builds both images from scratch with `docker build`. A
+  change to a base pin never got a verdict from tacplus-dev/build for #947: pipeline 3097248374 failed and 3097659078
+  ran 10803 s, the requester's 3h wait, with the set at 30 minutes; #930's two pre-land builds of an images/ change
+  got no verdict either. Neither log is readable by agents (404). #947 raised the set to 180 minutes (a wait of
+  3h30m) and declares each `ARG` just before the `RUN` that uses it (`pkg/images`, TestDockerfilesDeclareArgsWhereUsed),
+  so a pin bump rebuilds only its own layers onward, given a cache. The gate still has none: keeping the build
+  runner's BuildKit cache between runs, or building the changed Dockerfile on top of the published base (cached
+  from the registry, as images.yml does), would bring an images/ land back to minutes.
 - **The versions generator code still names, outside `dependencies.yaml`** (2026-11-22, #949): `just floors`
   checks them where they are emitted, but they move only by a change to tacplus: the C# (`Google.Protobuf`,
   `Grpc.*`) and Swift (`swift-protobuf`, `grpc-swift-*`) defaults in `pkg/internal/{csharp,swift}/types/generator.go`,

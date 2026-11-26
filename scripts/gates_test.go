@@ -15,35 +15,49 @@ import (
 )
 
 // fakeJust stands in for `just` under scripts/gates.sh. `multi` names two
-// legs and nothing else, the way cert-stream does; every other gate has a
-// body. A leg fails when it finds its cargo directory in use by another leg
-// running at the same time, so a shared slot changes the verdict, when the
-// gates' work directory is not fenced off the root Go module, and when it is
-// not given its share of the CPUs for cargo and the go tool, or the cap for
-// current-generation's own worker pool.
+// legs and nothing else, the way cert-stream does; `sharded` lists its shards
+// (sharded-shards), the way current-generation does, each run by
+// `sharded-shard SHARD`: `late` after `base`, `checks` after every other;
+// every other gate has a body and no shards. A leg fails when it finds its
+// cargo directory in use by another leg running at the same time, so a shared
+// slot changes the verdict, when the gates' work directory is not fenced off
+// the root Go module, and when it is not given its share of the CPUs for cargo
+// and the go tool. A shard fails when one it depends on has not ended.
 const fakeJust = `#!/usr/bin/env bash
 case "$1" in
   protoc-check) echo "protoc-check: fake"; exit 0 ;;
   --show)
     case "$2" in
       multi) printf '# a gate of two legs\nmulti: multi-a multi-b\n' ;;
+      sharded-shards) printf 'sharded-shards:\n    run --list-shards\n' ;;
+      *-shards) echo "error: Justfile does not contain recipe $2"; exit 1 ;;
       *) printf '# a gate\n%s: generate\n    {{ lock }} run %s\n' "$2" "$2" ;;
     esac
     exit 0 ;;
-  --no-deps) leg="$2" ;;
+  --no-deps)
+    case "$2" in
+      sharded-shards) printf 'base\nslow\nlate base\nbroken\nchecks base slow late broken\n'; exit 0 ;;
+      sharded-shard) leg="$3" ;;
+      *) leg="$2" ;;
+    esac ;;
   *) echo "unexpected: $*"; exit 99 ;;
 esac
 [[ -f "$GATES_WORKDIR/go.mod" ]] || { echo "leg $leg: $GATES_WORKDIR is not fenced off the root Go module"; exit 8; }
 [[ "$CARGO_BUILD_JOBS" =~ ^[0-9]+$ && "$GOFLAGS" == *-p=[0-9]* && "$GOFLAGS" == *-timeout=* ]] \
   || { echo "leg $leg: no CPU share (CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS GOFLAGS=$GOFLAGS)"; exit 7; }
-[[ "$TACPLUS_CURRENT_GENERATION_JOBS" =~ ^[1-9][0-9]*$ ]] \
-  || { echo "leg $leg: current-generation's pool is not capped (TACPLUS_CURRENT_GENERATION_JOBS=$TACPLUS_CURRENT_GENERATION_JOBS)"; exit 6; }
+if [[ "$2" == sharded-shard ]]; then
+  case "$leg" in late) deps=base ;; checks) deps="base slow late" ;; *) deps="" ;; esac
+  for d in $deps; do
+    [[ -e "$GATES_WORKDIR/shard-$d.ended" ]] || { echo "shard $leg started before shard $d ended"; exit 5; }
+  done
+fi
 dir="$TACPLUS_CROSS_TEST_CARGO_TARGET"
 mkdir -p "$(dirname "$dir")"
 mkdir "$dir.in-use" 2>/dev/null || { echo "leg $leg: $dir is in use by another leg"; exit 9; }
 echo "leg $leg starts"
 case "$leg" in
-  slow) sleep 2 ;;
+  # slow spends its time on a CPU, which the pool's use of the machine counts.
+  slow) end=$((SECONDS + 2)); while ((SECONDS < end)); do :; done ;;
   # hang never ends by itself, and leaves a child that marks the work
   # directory if it outlives the leg.
   hang) ( sleep 4; touch "$GATES_WORKDIR/orphan" ) & sleep 30 ;;
@@ -51,6 +65,7 @@ case "$leg" in
 esac
 echo "leg $leg ends"
 rmdir "$dir.in-use"
+[[ "$2" != sharded-shard ]] || : >"$GATES_WORKDIR/shard-$leg.ended"
 case "$leg" in broken|multi-b) echo "$leg check FAILED: $leg broke"; echo "error: Recipe $leg failed"; exit 3 ;; esac
 exit 0
 `
@@ -91,6 +106,10 @@ func runGatesOf(t *testing.T, dir, cap string, env []string, gates ...string) (s
 }
 
 var gateTimes = regexp.MustCompile(` *\b\d+s\b|GATES_JOBS=\d+`)
+
+// poolLine is the pool's use of the machine, the last line of the wall-time
+// table: the one line of the table that depends on the cap.
+var poolLine = regexp.MustCompile(`(?m)^  pool: .*\n`)
 
 // progressLines are the lines gates.sh prints as each gate ends, in the order
 // they end (tacplus#893): the only ones that depend on the cap.
@@ -142,7 +161,7 @@ func TestGatesVerdictDoesNotDependOnTheCap(t *testing.T) {
 		}
 	}
 	normal := func(out string) string {
-		return gateTimes.ReplaceAllString(progressLines.ReplaceAllString(out, ""), "N")
+		return gateTimes.ReplaceAllString(poolLine.ReplaceAllString(progressLines.ReplaceAllString(out, ""), ""), "N")
 	}
 	if a, b := normal(serial), normal(parallel); a != b {
 		t.Errorf("the output depends on the cap\n--- GATES_JOBS=1:\n%s\n--- GATES_JOBS=4:\n%s", a, b)
@@ -181,6 +200,58 @@ func TestGatesReportEachGateAsItEndsAndStopAHungOne(t *testing.T) {
 	time.Sleep(5*time.Second - took)
 	if _, err := os.Stat(filepath.Join(dir, "work", "orphan")); err == nil {
 		t.Errorf("the hung gate's child outlived its timeout")
+	}
+}
+
+// A gate that lists its shards (current-generation, tacplus#977) runs each
+// shard as a leg of its own in the gates' pool, after the shards it depends
+// on, so its wall time is its slowest chain of shards, not the run of a pool
+// of its own in one slot. Its verdict does not depend on the cap either: the
+// same failure names the same shard, and a shard whose dependency failed does
+// not run. The wall-time table gives each shard's time and, last, the pool's
+// use of the machine.
+func TestGatesRunAShardedGatesShardsInThePool(t *testing.T) {
+	gates := []string{"alpha", "sharded", "omega"}
+	serial, serialRC, serialTook := runGatesOf(t, t.TempDir(), "1", nil, gates...)
+	parallel, parallelRC, parallelTook := runGatesOf(t, t.TempDir(), "4", nil, gates...)
+
+	for _, want := range []string{
+		"=== sharded ===\n--- sharded[base] ---\nleg base starts\nleg base ends\n--- sharded[base] rc=0 ---\n--- sharded[slow] ---\n",
+		"--- sharded[late] ---\nleg late starts\nleg late ends\n--- sharded[late] rc=0 ---\n",
+		"--- sharded[broken] ---\nleg broken starts\nleg broken ends\nbroken check FAILED: broken broke\nerror: Recipe broken failed\n--- sharded[broken] rc=3 ---\n",
+		"--- sharded[checks] ---\nnot run: dependency sharded[broken] failed\n--- sharded[checks] rc=1 ---\n=== sharded rc=3 ===\n",
+	} {
+		if !strings.Contains(serial, want) {
+			t.Errorf("GATES_JOBS=1 output lacks %q:\n%s", want, serial)
+		}
+	}
+	if !strings.HasSuffix(serial, "=== OVERALL fail=1 (sharded[broken]: broken broke; failed: sharded[broken] sharded[checks]) ===\n") || serialRC != 1 {
+		t.Errorf("a failing shard must end the gates naming it, and exit 1; exit %d:\n%s", serialRC, serial)
+	}
+	for _, shard := range []string{"base", "slow", "late"} {
+		if !regexp.MustCompile(`(?m)^    ` + shard + ` +\d+s  pass$`).MatchString(serial) {
+			t.Errorf("the wall-time table has no row for shard %s:\n%s", shard, serial)
+		}
+	}
+	if !regexp.MustCompile(`(?m)^    broken +\d+s  FAIL$`).MatchString(serial) ||
+		!regexp.MustCompile(`(?m)^  sharded +\d+s  FAIL$`).MatchString(serial) {
+		t.Errorf("the wall-time table does not give the failing shard and its gate:\n%s", serial)
+	}
+	pool := regexp.MustCompile(`(?m)^  pool: (\d+) slots, \d+% busy; CPU time (\d+\.\d) of \d+ CPUs \(\d+%\)\n=== OVERALL `)
+	for cap, out := range map[string]string{"1": serial, "4": parallel} {
+		if m := pool.FindStringSubmatch(out); m == nil || m[1] != cap || m[2] == "0.0" {
+			t.Errorf("GATES_JOBS=%s: the table does not end with the pool's use of the machine:\n%s", cap, out)
+		}
+	}
+
+	normal := func(out string) string {
+		return gateTimes.ReplaceAllString(poolLine.ReplaceAllString(progressLines.ReplaceAllString(out, ""), ""), "N")
+	}
+	if a, b := normal(serial), normal(parallel); a != b || serialRC != parallelRC {
+		t.Errorf("the output depends on the cap\n--- GATES_JOBS=1:\n%s\n--- GATES_JOBS=4:\n%s", a, b)
+	}
+	if parallelTook >= serialTook {
+		t.Errorf("GATES_JOBS=4 took %s, GATES_JOBS=1 %s: the shards did not run concurrently", parallelTook, serialTook)
 	}
 }
 

@@ -11,6 +11,7 @@
 # full's minutes: 79 on an 8-CPU runner from a cold target/cross-test,
 # current-generation about 33 of them on its worker pool with one cargo test per
 # Rust fixture (tacplus#812; was 2h55m, 2h26m), and a margin for a slower runner.
+# Since tacplus#977 its shards are legs of the gates' own pool.
 full:
   run: just gates
   minutes: 100

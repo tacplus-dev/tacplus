@@ -35,19 +35,29 @@ same test fails if a leg runs cargo and never prunes.
 `just gates` (`scripts/gates.sh`) runs its gates concurrently, and runs the
 language legs of a gate that only names its legs (`cert-stream:
 cert-stream-go cert-stream-java cert-stream-rust`) as jobs of their own:
-`GATES_JOBS` at once, half the CPUs by default (#300), with the bounded
+`GATES_JOBS` at once, the CPUs by default (#300, #977), with the bounded
 scheduler in `cross-test/lib/jobs.sh`. It prints each job's output whole, in
 the order the jobs were added, so the log and the verdict are the same
 whatever the cap; `scripts/gates_test.go` runs the gates with two caps and
-compares. `current-generation` runs its fixtures, one job per fixture and
-language, on its own worker pool (`cross-test/lib/parallel-jobs.sh`, #812);
-`just gates` caps that pool at its own cap
-(`TACPLUS_CURRENT_GENERATION_JOBS`). Each job builds with its share of the CPUs
-(`jobs_share`: twice its even share, through `CARGO_BUILD_JOBS` and `GOFLAGS
--p`), since left to their defaults cargo and the go tool use every CPU in
-every job and the heavy `go test` packages ran past their deadline; `just
-gates` also gives `go test` a 40-minute deadline (`GATES_GO_TEST_TIMEOUT`)
-for a package that runs beside the other gates.
+compares. `current-generation` run by itself runs its fixtures, one job per
+fixture and language, on its own worker pool
+(`cross-test/lib/parallel-jobs.sh`, #812). Under `just gates` its shards are
+jobs of the gates' pool instead (#977): `just current-generation-shards`
+lists them (`run.sh --list-shards`, `SHARD [DEP...]`: every
+`LANGUAGE/FIXTURE`, each build of a fixture of two as
+`LANGUAGE/FIXTURE/SIDE`, every Rust shard after `rust/base`, whose
+dependencies it starts from, and `checks`, the checks across the languages'
+main fixtures, after every other), and `just current-generation-shard SHARD`
+runs one, so they fill every slot the other gates leave and the gate takes
+as long as its slowest chain of shards. The wall-time table gives each
+shard's time under its gate, and its last line the pool's use of the
+machine: how busy its slots were, and the CPU time its processes used
+against the CPUs'. Each job builds with the share of the CPUs a job of a
+pool half as wide would get (`jobs_share`, through `CARGO_BUILD_JOBS` and
+`GOFLAGS -p`), since left to their defaults cargo and the go tool use every
+CPU in every job and the heavy `go test` packages ran past their deadline;
+`just gates` also gives `go test` a 40-minute deadline
+(`GATES_GO_TEST_TIMEOUT`) for a package that runs beside the other gates.
 
 A gate's output waits for every gate named before it, so `scripts/gates.sh`
 also prints one line as each gate ends, in the order they end: `gates: GATE

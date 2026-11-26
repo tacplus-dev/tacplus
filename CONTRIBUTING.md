@@ -23,7 +23,9 @@ use (its cgroup's quota when lower). Every line of a job's output is
 labelled with it (`[rust/tenantroute] ...`) and its last line names the jobs
 that failed. `TACPLUS_CURRENT_GENERATION_JOBS=1` runs them one after another,
 in one process; `cross-test/current-generation/run.sh --language rust
---fixture tenantroute` runs one job alone.
+--fixture tenantroute` runs one job alone (`--side crew` one of its two builds).
+`just gates` runs the same jobs, its shards (`just current-generation-shards`),
+in its own pool beside the other gates.
 
 A land runs the gates its diff calls for: `gates.yaml` maps paths to gate sets
 (the format is tacplus-dev/looper's README, "Gates scaled to the diff"). A change

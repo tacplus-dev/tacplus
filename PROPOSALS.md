@@ -270,14 +270,15 @@ the looper then marks it `promoted` or `declined` here with the date.
   cross-test crates build without debuginfo or incremental caches. On an 8-CPU arm64 runner from a cold
   `target/cross-test` it takes about 33 minutes (47 before the last two, 2h26m serially): Go jobs about a minute,
   Java 4–6 (tenantrecord 13), Rust 3.5–7.5, the two-build Rust fixtures (`tenantrecord`, `tenantroute`, `redo`) 12–15,
-  and those start last, so they are the tail. Next: (1) start the two-build Rust fixtures first once `rust/base` has
-  seeded the dependencies (now they queue behind every Java job), or split them per build; (2) the workers each copy
-  `rust/base`'s target directory (several GB) and each compile the dependency feature sets a fixture adds: one shared
-  directory with sccache (in the build image, #315) instead of a copy per worker; (3) since #300 the other gates run
-  beside `current-generation`, which gets half the CPUs (`GATES_JOBS`) for its pool, not all of them: its Rust tail
-  is the run's tail, so give its pool the CPUs the other gates leave once they finish; (4)
-  `cross-test/consumer-contract/run.sh` still runs a `cargo test -p` per crate (not in `just gates`).
-  `gates.yaml`'s `full: minutes` follows.
+  and those start last, so they are the tail. Since #977 (2026-11-26) `just gates` runs current-generation's shards
+  in its own pool, `GATES_JOBS` the CPUs, each two-build fixture as a shard per build, every Rust shard as soon as
+  `rust/base` passed, and prints each shard's time and the pool's use of the machine (slots busy, CPU time against
+  the CPUs'). Next: (1) read those numbers off a full run on an 8-CPU runner and tune from them: the order the shards
+  start in (longest first, by measured time), the cap, and the share each job builds with (half the pool's width
+  today, so that `go test ./...` alone is not slowed); (2) each slot copies `rust/base`'s target directory (several
+  GB) and compiles the dependency feature sets a fixture adds: one shared directory with sccache (in the build image,
+  #315) instead of a copy per slot; (3) `cross-test/consumer-contract/run.sh` still runs a `cargo test -p` per crate
+  (not in `just gates`). `gates.yaml`'s `full: minutes` follows.
 - **The OS-advisory image fix a looper can run** (2026-11-15, #757, #711): an OS package advisory is fixed by
   rebuilding `base` (docs/VERSIONING.md, Images). That takes a `rebuild: base` dispatch on main and on each
   `release/X.Y`. The looper's token cannot dispatch a workflow (HTTP 403, no `actions: write`). Its only image path is

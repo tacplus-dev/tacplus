@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # A bounded job scheduler for the gates (tacplus#300): `just gates` runs its
-# gates and their language legs with it. (current-generation runs its fixtures
-# on cross-test/lib/parallel-jobs.sh, tacplus#812.)
+# gates, their language legs and current-generation's shards (tacplus#977)
+# with it. (current-generation run by itself runs its fixtures on
+# cross-test/lib/parallel-jobs.sh, tacplus#812.)
 # Run serially, the full gates used about 1.5 of 16 CPUs and a land took hours.
 #
 #   jobs_init LOGDIR CAP        start a job set; at most CAP jobs run at once
@@ -40,20 +41,12 @@
 # Plain bash 3.2 (macOS): indexed arrays only, no `wait -n`. The scheduler
 # polls each running job's status file.
 
+# The CPUs the jobs may use: parallel_jobs_cpus's, which a container's CPU
+# quota lowers (the default cap of `just gates`).
+# shellcheck source=parallel-jobs.sh
+source "$(dirname "${BASH_SOURCE[0]}")/parallel-jobs.sh"
 jobs_cpus() {
-  local cpus
-  cpus="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
-  [[ "$cpus" =~ ^[0-9]+$ && "$cpus" -ge 1 ]] || cpus=2
-  echo "$cpus"
-}
-
-# Half the CPUs, at least one: the default cap of `just gates` and of the
-# runners that run their own legs concurrently. Each job is itself a build
-# that uses more than one CPU.
-jobs_default_cap() {
-  local cpus
-  cpus="$(jobs_cpus)"
-  echo $(( cpus / 2 > 0 ? cpus / 2 : 1 ))
+  parallel_jobs_cpus
 }
 
 # How many compiles or test binaries one job of a set capped at $1 runs at

@@ -539,13 +539,14 @@ Current durable gates:
 
 ### The gates run concurrently
 
-`just gates` runs its gates, and the language legs of each, concurrently,
-`GATES_JOBS` at once (half the CPUs by default), and caps
-`current-generation`'s own fixture pool (#812) with the same number (#300; run one after another they used about 1.5
+`just gates` runs its gates, the language legs of each and
+`current-generation`'s shards (each language of each fixture, #977)
+concurrently, `GATES_JOBS` at once (the CPUs by default; #300: run one after another they used about 1.5
 of 16 CPUs and a land took hours). The output is assembled in the order the
 gates are named, so it and the verdict (`=== OVERALL fail=N ===`, each gate's
-`=== GATE rc=N ===`) do not depend on the cap; a table of each gate's wall
-time and the total comes before the verdict. Each job builds with its share
+`=== GATE rc=N ===`, a failing shard named `current-generation[rust/redo/redo]`)
+do not depend on the cap; a table of each gate's and each shard's wall time,
+the total and the pool's use of the machine comes before the verdict. Each job builds with its share
 of the CPUs (`CARGO_BUILD_JOBS`, `GOFLAGS -p`), and `go test` runs with a
 40-minute deadline, since a package runs beside the other gates. A gate you
 add runs beside every other: it takes its own work directory, builds Rust in

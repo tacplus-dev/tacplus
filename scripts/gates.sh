@@ -11,11 +11,17 @@
 # run one after another they used about 1.5 of 16 CPUs and a land took hours.
 # A gate whose recipe only names other recipes (cert-stream: cert-stream-go
 # cert-stream-java cert-stream-rust) runs each of them, its legs, as a job of
-# its own. At most GATES_JOBS jobs run at once (default: half the CPUs), each
-# building with its share of the CPUs (CARGO_BUILD_JOBS, GOFLAGS -p), and
-# current-generation, which runs its fixtures on a worker pool of its own
-# (tacplus#812), gets the same cap as TACPLUS_CURRENT_GENERATION_JOBS. So the
-# gates use at most about every CPU.
+# its own. A gate GATE with a recipe GATE-shards (current-generation, its
+# languages and fixtures: tacplus#977) runs its shards as its legs: each line
+# GATE-shards prints is `SHARD [DEP...]`, and the leg GATE[SHARD] runs
+# `just GATE-shard SHARD` once the shards DEP passed (a dependency named
+# before it). The shards fill every slot the other gates leave, so the gate's
+# wall time is its slowest chain of shards: run on a pool of its own in one
+# slot (tacplus#812) it was the longest gate, 1767 s of a 46-minute run.
+# At most GATES_JOBS jobs run at once (default: the CPUs), each building with
+# the share of the CPUs a job of half as many would get (CARGO_BUILD_JOBS,
+# GOFLAGS -p): most legs use about one CPU or two, and a heavy one alone (the
+# test gate's `go test ./...`) is not slowed by the pool's width.
 #
 # The verdict does not depend on the cap or the order the jobs ran in: each
 # gate's output prints whole, in the order named, as soon as it and every gate
@@ -24,7 +30,9 @@
 # leg's reason and naming the failing legs after a failure
 # (`=== OVERALL fail=1 (LEG: REASON; failed: LEG...) ===`; scripts/gates_test.go runs it
 # with two caps and compares). Before that last line a table gives each gate's
-# wall time and the total.
+# wall time, each shard's under its gate, the total, and the pool's use of the
+# machine: how busy its slots were, and the CPU time its processes used
+# against the CPUs' (a reaped process's: bash's `times`).
 #
 # A gate whose output waits on a slower one named before it still shows in the
 # trace as it ends (tacplus#893): `gates: GATE rc=N pass|FAIL in Ss, D of T
@@ -59,7 +67,7 @@ fi
 
 JUST="${GATES_JUST:-just}"
 WORKDIR="${GATES_WORKDIR:-$ROOT_DIR/target/gates}"
-CAP="${GATES_JOBS:-$(jobs_default_cap)}"
+CAP="${GATES_JOBS:-$(jobs_cpus)}"
 started=$(date +%s)
 cd "$ROOT_DIR" || exit 1
 
@@ -81,17 +89,14 @@ if [[ -z "${TACPLUS_BIN:-}" ]]; then
   fi
 fi
 export TACPLUS_BIN TACPLUS_BIN_PREBUILT=1
-export TACPLUS_CURRENT_GENERATION_JOBS="${TACPLUS_CURRENT_GENERATION_JOBS:-$CAP}"
 
 # Each job builds with its share of the CPUs (jobs_share): cargo's and the go
 # tool's parallelism, which otherwise is every CPU in each of CAP jobs at once.
-# current-generation's workers inherit it, so its pool uses about its slot's
-# share times its cap: every CPU, in its slot.
 # `go test` gets a longer deadline than its default 10 minutes for the same
 # reason: a heavy package (one that builds generated Java, C# or Rust in its
 # tests) runs beside the other gates, and the gates' budget, not the
 # package's, bounds the run (gates.yaml).
-share="$(jobs_share "$CAP")"
+share="$(jobs_share "$(( CAP / 2 > 0 ? CAP / 2 : 1 ))")"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$share}"
 export GOFLAGS="${GOFLAGS:+$GOFLAGS }-p=$share -timeout=${GATES_GO_TEST_TIMEOUT:-40m}"
 
@@ -106,17 +111,35 @@ for fence in "$WORKDIR" "$ROOT_DIR/target/cross-test"; do
 done
 export GATES_WORKDIR="$WORKDIR"
 
-# The legs of gate $1: the recipes it names, when that is all it does;
-# otherwise the gate itself.
-gate_legs() {
-  local show header body
-  show="$("$JUST" --show "$1" 2>/dev/null | grep -v '^#')"
+# Adds the legs of gate $1 as jobs: its shards, when it lists them; else the
+# recipes it names, when that is all it does; otherwise the gate itself.
+gate_add_legs() {
+  local gate="$1" show header body leg shards shard deps dep
+  if "$JUST" --show "$gate-shards" >/dev/null 2>&1; then
+    if shards="$("$JUST" --no-deps "$gate-shards" 2>&1)" && [[ -n "$shards" ]]; then
+      while read -r shard deps; do
+        [[ -n "$shard" ]] || continue
+        leg=""
+        for dep in $deps; do
+          leg+="$gate[$dep] "
+        done
+        jobs_add "$gate[$shard]" "$leg" run_leg "$gate[$shard]" "$gate-shard" "$shard"
+      done <<<"$shards"
+      return
+    fi
+    # Its whole recipe then: the same verdict, in one slot.
+    printf '%s\n' "$shards"
+    echo "gates: $gate-shards listed no shards: running $gate whole"
+  fi
+  show="$("$JUST" --show "$gate" 2>/dev/null | grep -v '^#')"
   header="$(head -1 <<<"$show")"
   body="$(tail -n +2 <<<"$show" | grep -v '^[[:space:]]*$')"
-  if [[ -z "$body" && "$header" == "$1: "* ]]; then
-    echo "${header#"$1: "}"
+  if [[ -z "$body" && "$header" == "$gate: "* ]]; then
+    for leg in ${header#"$gate: "}; do
+      jobs_add "$leg" "" run_leg "$leg" "$leg"
+    done
   else
-    echo "$1"
+    jobs_add "$gate" "" run_leg "$gate" "$gate"
   fi
 }
 
@@ -127,21 +150,23 @@ if [[ "$TIMEOUT" != 0 ]]; then
   [[ -n "$timeout_cmd" ]] || echo "gates: no timeout(1) on PATH: GATES_TIMEOUT=$TIMEOUT is not enforced"
 fi
 
-# One leg, in its job slot's own cargo directory. The gate's dependencies
-# (generate, ...) ran before the gates, so --no-deps: run again by every gate
-# at once they would write the same files concurrently. timeout(1) runs it in
-# a process group of its own and stops the whole group: TERM, then KILL a
-# minute later.
+# Leg $1, the recipe $2 with the arguments after it, in its job slot's own
+# cargo directory. The gate's dependencies (generate, ...) ran before the
+# gates, so --no-deps: run again by every gate at once they would write the
+# same files concurrently. timeout(1) runs it in a process group of its own
+# and stops the whole group: TERM, then KILL a minute later.
 run_leg() {
+  local name="$1"
+  shift
   export TACPLUS_CROSS_TEST_CARGO_TARGET="$WORKDIR/cargo-slot$JOBS_SLOT"
   if [[ -z "$timeout_cmd" ]]; then
-    "$JUST" --no-deps "$1"
+    "$JUST" --no-deps "$@"
     return
   fi
   local rc=0 start=$SECONDS
-  "$timeout_cmd" -k 60 "$TIMEOUT" "$JUST" --no-deps "$1" || rc=$?
+  "$timeout_cmd" -k 60 "$TIMEOUT" "$JUST" --no-deps "$@" || rc=$?
   if [[ $rc -eq 124 || ( $rc -eq 137 && $((SECONDS - start)) -ge $TIMEOUT ) ]]; then
-    echo "gates: $1 timed out after ${TIMEOUT}s (GATES_TIMEOUT): stopped"
+    echo "gates: $name timed out after ${TIMEOUT}s (GATES_TIMEOUT): stopped"
     rc=124
   fi
   return $rc
@@ -154,9 +179,7 @@ jobs_init "$WORKDIR/jobs" "$CAP"
 for gate in "$@"; do
   gate_names+=("$gate")
   gate_first+=("${#JOBS_NAMES[@]}")
-  for leg in $(gate_legs "$gate"); do
-    jobs_add "$leg" "" run_leg "$leg"
-  done
+  gate_add_legs "$gate"
   gate_last+=("$((${#JOBS_NAMES[@]} - 1))")
 done
 
@@ -231,7 +254,15 @@ for ((g = 0; g < ${#gate_names[@]}; g++)); do
     verdict=FAIL
     fail=1
   fi
-  printf '  %-22s %6ss  %s\n' "${gate_names[$g]}" "${gate_secs[$g]}" "$verdict"
+  printf '  %-32s %6ss  %s\n' "${gate_names[$g]}" "${gate_secs[$g]}" "$verdict"
+  # A sharded gate's shards, each with its own time: the slowest bounds it.
+  for ((j = gate_first[g]; j <= gate_last[g]; j++)); do
+    [[ "${JOBS_NAMES[$j]}" == "${gate_names[$g]}["* ]] || continue
+    shard="${JOBS_NAMES[$j]#"${gate_names[$g]}["}"
+    leg_verdict=pass
+    [[ ${JOBS_RC[$j]} -eq 0 ]] || leg_verdict=FAIL
+    printf '    %-30s %6ss  %s\n' "${shard%]}" "${JOBS_SECS[$j]}" "$leg_verdict"
+  done
 done
 # The failing legs, named on the last line: a build's verdict quotes it, and
 # whoever reads only the verdict (a looper run cannot read the build job's
@@ -252,7 +283,23 @@ for ((j = 0; j < ${#JOBS_NAMES[@]}; j++)); do
     reason="${JOBS_NAMES[$j]}: ${reason:0:100}; "
   fi
 done
-printf '  %-22s %6ss\n' total "$(( $(date +%s) - started ))"
+wall=$(( $(date +%s) - started ))
+printf '  %-32s %6ss\n' total "$wall"
+# The pool's use of the machine: its slots' busy time against CAP slots for
+# the whole run, and the CPU time of every process the gates ran and reaped
+# (`times`' second line, the children's user and system time) against the
+# CPUs'. A low share says the run waited on a long leg or on I/O, not CPUs.
+busy=0
+for ((j = 0; j < ${#JOBS_NAMES[@]}; j++)); do
+  busy=$((busy + ${JOBS_SECS[$j]:-0}))
+done
+cpus="$(jobs_cpus)"
+# In this shell, not a pipeline's: a subshell's children start at zero.
+times >"$WORKDIR/times"
+tail -n 1 "$WORKDIR/times" | awk -v cap="$CAP" -v busy="$busy" -v wall="$wall" -v cpus="$cpus" '
+  function secs(t,  m) { m = t; sub(/m.*/, "", m); sub(/^[0-9]+m/, "", t); sub(/s$/, "", t); return m * 60 + t }
+  { if (wall < 1) wall = 1; cpu = (secs($1) + secs($2)) / wall
+    printf "  pool: %d slots, %d%% busy; CPU time %.1f of %d CPUs (%d%%)\n", cap, 100 * busy / (cap * wall), cpu, cpus, 100 * cpu / cpus }'
 # Each slot's cargo directory holds a dependency build; a failing run keeps
 # them, with the jobs' trees, for diagnosis.
 [[ $fail -eq 0 ]] && rm -rf "$WORKDIR"/cargo-slot*

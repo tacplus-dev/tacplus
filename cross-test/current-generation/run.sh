@@ -43,8 +43,11 @@ TACPLUS_BIN="${TACPLUS_BIN:-}"
 PYTHON_BIN="${TACPLUS_PYTHON:-}"
 LANG_FILTER=""
 FIXTURE_FILTER=""
+SIDE_FILTER=""
 JOBS="${TACPLUS_CURRENT_GENERATION_JOBS:-}"
 KEEP=false
+SHARD=""
+LIST_SHARDS=false
 
 usage() {
   cat <<'USAGE'
@@ -55,8 +58,14 @@ Options:
   --language LANG   Run one language: go, java, rust, or typescript (the main
                     fixture's model only)
   --fixture NAME    Run one fixture (base, c2sonly, ..., tenantslice-config-owner)
+  --side NAME       Run one build of a fixture of two (tenantroute: harbor or
+                    crew; redo: stratum or redo; tenantrecord: tstratum or
+                    tmessaging); needs --fixture
   --jobs N          Run N fixture builds at once (default: the CPUs; 1 runs
                     them one after another in this process)
+  --list-shards     List the run's shards, one per line: SHARD [DEP...]
+  --shard SHARD     Run one shard (LANGUAGE/FIXTURE[/SIDE], or checks) once
+                    those it depends on passed: `just gates` runs each as a leg
   --workdir DIR     Use a specific generated-output work directory
   --tacplus BIN     Use an existing tacplus binary
   --keep            Keep generated outputs after success
@@ -93,6 +102,11 @@ while [[ $# -gt 0 ]]; do
       FIXTURE_FILTER="$2"
       shift 2
       ;;
+    --side)
+      need_value "$1" "${2:-}"
+      SIDE_FILTER="$2"
+      shift 2
+      ;;
     --jobs)
       need_value "$1" "${2:-}"
       JOBS="$2"
@@ -111,6 +125,15 @@ while [[ $# -gt 0 ]]; do
     --keep)
       KEEP=true
       shift
+      ;;
+    --list-shards)
+      LIST_SHARDS=true
+      shift
+      ;;
+    --shard)
+      need_value "$1" "${2:-}"
+      SHARD="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -167,6 +190,76 @@ if [[ -n "$FIXTURE_FILTER" && " ${all_fixtures[*]} " != *" $FIXTURE_FILTER "* ]]
 fi
 [[ -z "$JOBS" || "$JOBS" =~ ^[1-9][0-9]*$ ]] || die "--jobs takes a positive number: $JOBS"
 
+# The builds of a fixture of two, each a shard of its own: built one after
+# another they were the gate's longest shards, 12-15 minutes in Rust (#977).
+fixture_sides() {
+  case "$1" in
+    tenantroute) echo harbor crew ;;
+    redo) echo stratum redo ;;
+    tenantrecord) echo tstratum tmessaging ;;
+  esac
+}
+# The builds of fixture $1 this run builds: one with --side, else every one.
+fixture_selves() {
+  local self
+  for self in $(fixture_sides "$1"); do
+    [[ -z "$SIDE_FILTER" || "$SIDE_FILTER" == "$self" ]] && echo "$self"
+  done
+  return 0
+}
+if [[ -n "$SIDE_FILTER" && " $(fixture_sides "$FIXTURE_FILTER") " != *" $SIDE_FILTER "* ]]; then
+  die "--side $SIDE_FILTER is not a build of --fixture ${FIXTURE_FILTER:-(none)}"
+fi
+
+# The run's shards (tacplus#977), each with the shards it depends on: every
+# language of every fixture, LANGUAGE/FIXTURE, and each build of a fixture of
+# two, LANGUAGE/FIXTURE/SIDE. A pool starts the ones ready in this order, so
+# the longest come first: rust/base, whose dependencies every other Rust shard
+# starts from, then those, which start as soon as it passed, then Java's
+# (4-6 minutes each), then the rest (Go's about one).
+# `just gates` runs each as a leg of its own in the gates' pool
+# (scripts/gates.sh), and then checks (--list-shards), after every other; a run
+# of the gate by itself runs them on its worker pool below.
+current_generation_shards() {
+  local language fixture self deps
+  [[ " ${languages[*]} " != *" rust "* ]] || echo rust/base
+  for language in rust java "${model_languages[@]}" go; do
+    [[ " ${languages[*]} ${model_languages[*]} " == *" $language "* ]] || continue
+    deps=""
+    [[ "$language" != rust ]] || deps=" rust/base"
+    for fixture in "${all_fixtures[@]}"; do
+      [[ "$language/$fixture" != rust/base ]] || continue
+      [[ " ${model_languages[*]} " != *" $language "* || "$fixture" == base ]] || continue
+      fixture_builds "$fixture" "$language" || continue
+      if [[ -z "$(fixture_sides "$fixture")" ]]; then
+        echo "$language/$fixture$deps"
+      fi
+      for self in $(fixture_sides "$fixture"); do
+        echo "$language/$fixture/$self$deps"
+      done
+    done
+  done
+}
+if [[ "$LIST_SHARDS" == true || -n "$SHARD" ]]; then
+  shards="$(current_generation_shards)"
+  # checks: the checks across the languages' main fixtures, which it reads
+  # from the work root, and then the work root cleared: after every shard.
+  shards+=$'\n'"checks $(cut -d' ' -f1 <<<"$shards" | tr '\n' ' ' | sed 's/ $//')"
+fi
+if [[ "$LIST_SHARDS" == true ]]; then
+  printf '%s\n' "$shards"
+  exit 0
+fi
+if [[ -n "$SHARD" ]]; then
+  [[ -z "$LANG_FILTER" && -z "$FIXTURE_FILTER" ]] || die "--shard runs one shard: not with --language or --fixture"
+  cut -d' ' -f1 <<<"$shards" | grep -qxF -- "$SHARD" || die "unknown shard: $SHARD (one of: $(cut -d' ' -f1 <<<"$shards" | tr '\n' ' '))"
+  if [[ "$SHARD" == checks ]]; then
+    # Every fixture was built by its shard: this run checks across them.
+    FIXTURES_BUILT=true
+    JOBS=1
+  fi
+fi
+
 if [[ -n "$PYTHON_BIN" && "$PYTHON_BIN" == */* && ! -x "$PYTHON_BIN" ]]; then
   die "TACPLUS_PYTHON is not executable: $PYTHON_BIN"
 fi
@@ -176,7 +269,11 @@ WORK_ROOT="$(cd "$WORK_ROOT" && pwd)"
 # The Rust chassis crates whose self-tests passed in this run, by content hash:
 # a later fixture rendering the same source reuses them (rust_selftest_reused,
 # #843). A job of the worker pool below shares the pool's.
-rust_selftest_start "$WORK_ROOT/rust-selftests-passed" "$([[ -n "$FIXTURE_FILTER" ]] && echo true || echo false)"
+# A shard joins the record rust/base, the first Rust shard, started.
+if [[ -n "$SHARD" && "$SHARD" != rust/base ]]; then
+  export RUST_SELFTEST_PASSED_DIR="$WORK_ROOT/rust-selftests-passed"
+fi
+rust_selftest_start "$WORK_ROOT/rust-selftests-passed" "$([[ -n "$FIXTURE_FILTER$SHARD" ]] && echo true || echo false)"
 
 if [[ -z "$TACPLUS_BIN" ]]; then
   TACPLUS_BIN="$ROOT_DIR/target/tacplus-current-generation"
@@ -2646,61 +2743,80 @@ READERS_PY
 # printed whole, labelled with its language and fixture. The fixture blocks
 # below then build nothing in this process, and the parity checks read the
 # jobs' main fixtures from the shared work root.
+# Shard $3 (LANGUAGE/FIXTURE[/SIDE]): this script on that language, fixture and
+# build, its Rust built in the cargo directory $1. separate-cargo-target: cargo
+# locks its target directory for a whole build, so shards running at once
+# sharing one would build Rust one at a time. A cold one costs a shard about 16
+# CPU-minutes more than a warm one, so only rust/base builds the dependencies:
+# once it passed, its directory is copied to the seed $2, and a cargo
+# directory's first other Rust shard starts from a copy of that. With $4 true
+# it waits for the seed (the pool below runs rust/base beside the others);
+# otherwise rust/base has passed (`just gates` runs it first).
+current_generation_shard() {
+  local cargo_target="$1" cargo_seed="$2" job="$3" wait="$4"
+  local language="${job%%/*}" fixture="${job#*/}" side=()
+  if [[ "$fixture" == */* ]]; then
+    side=(--side "${fixture#*/}")
+    fixture="${fixture%%/*}"
+  fi
+  if [[ "$language" == rust && "$fixture" != base && ! -e "$cargo_target/.seeded" ]]; then
+    until [[ -e "$cargo_seed/.seeded" ]]; do
+      [[ "$wait" == true ]] || { echo "rust/base has not passed: no Rust dependencies to start from" >&2; return 1; }
+      [[ ! -e "$WORK_ROOT/rust-base.failed" ]] || { echo "rust/base failed: no Rust dependencies to start from" >&2; return 1; }
+      sleep 5
+    done
+    echo "==> Copying the Rust dependencies rust/base built"
+    rm -rf "$cargo_target"
+    cp -a "$cargo_seed" "$cargo_target"
+  fi
+  local keep=()
+  [[ "$KEEP" != true ]] || keep=(--keep)
+  # Maven's own locks of its local repository are per JVM: shards resolving
+  # the same artifact at once need its file locks.
+  MAVEN_ARGS="${MAVEN_ARGS:-} -Daether.syncContext.named.factory=file-lock -Daether.syncContext.named.nameMapper=file-gav" \
+    TACPLUS_CROSS_TEST_CARGO_TARGET="$cargo_target" bash "$0" --language "$language" --fixture "$fixture" "${side[@]}" \
+    --workdir "$WORK_ROOT" --tacplus "$TACPLUS_BIN" "${keep[@]}" \
+    || { [[ "$job" != rust/base ]] || : >"$WORK_ROOT/rust-base.failed"; return 1; }
+  if [[ "$job" == rust/base ]]; then
+    rm -rf "$cargo_seed"
+    cp -a "$cargo_target" "$cargo_seed"
+    : >"$cargo_target/.seeded"
+    : >"$cargo_seed/.seeded"
+  fi
+}
+
+# A shard of `just gates`, in the cargo directory of its slot.
+if [[ -n "$SHARD" && "$SHARD" != checks ]]; then
+  current_generation_shard "$CROSS_TEST_CARGO_TARGET" "$WORK_ROOT/cargo-seed" "$SHARD" false
+  exit 0
+fi
+
 if [[ -z "$FIXTURE_FILTER" && -z "$JOBS" ]]; then
   JOBS="$(parallel_jobs_cpus)"
 fi
 if [[ -z "$FIXTURE_FILTER" && "$JOBS" -gt 1 ]]; then
-  # separate-cargo-target: cargo locks its target directory for a whole build,
-  # so workers sharing one would build Rust one at a time. Worker 1 keeps the
-  # shared one, which the gates after this one reuse; worker N its own, -N.
-  # A cold one costs a leg about 16 CPU-minutes more than a warm one, so only
-  # rust/base builds the dependencies: once it passed, its directory is copied
-  # to the seed, and a worker's first Rust job starts from a copy of that.
+  # Worker 1 keeps the shared cargo directory, which the gates after this one
+  # reuse; worker N its own, -N.
   cargo_seed="$CROSS_TEST_CARGO_TARGET-seed"
   current_generation_job() {
     local worker="$1" job="$2"
-    local language="${job%%/*}" fixture="${job#*/}"
     local cargo_target="$CROSS_TEST_CARGO_TARGET"
     ((worker == 1)) || cargo_target="$CROSS_TEST_CARGO_TARGET-$worker"
-    if [[ "$language" == rust && "$fixture" != base && ! -e "$cargo_target/.seeded" ]]; then
-      until [[ -e "$cargo_seed/.seeded" ]]; do
-        [[ ! -e "$WORK_ROOT/rust-base.failed" ]] || { echo "rust/base failed: no Rust dependencies to start from" >&2; return 1; }
-        sleep 5
-      done
-      echo "==> Copying the Rust dependencies rust/base built"
-      rm -rf "$cargo_target"
-      cp -a "$cargo_seed" "$cargo_target"
-    fi
-    local keep=()
-    [[ "$KEEP" != true ]] || keep=(--keep)
-    TACPLUS_CROSS_TEST_CARGO_TARGET="$cargo_target" bash "$0" --language "$language" --fixture "$fixture" \
-      --workdir "$WORK_ROOT" --tacplus "$TACPLUS_BIN" "${keep[@]}" \
-      || { [[ "$job" != rust/base ]] || : >"$WORK_ROOT/rust-base.failed"; return 1; }
-    if [[ "$job" == rust/base ]]; then
-      rm -rf "$cargo_seed"
-      cp -a "$cargo_target" "$cargo_seed"
-      : >"$cargo_target/.seeded"
-      : >"$cargo_seed/.seeded"
-    fi
+    current_generation_shard "$cargo_target" "$cargo_seed" "$job" true
   }
-  # Maven's own locks of its local repository are per JVM: workers resolving
-  # the same artifact at once need its file locks.
-  export MAVEN_ARGS="${MAVEN_ARGS:-} -Daether.syncContext.named.factory=file-lock -Daether.syncContext.named.nameMapper=file-gav"
-  # rust/base first: the other Rust jobs wait for its dependencies, so the
-  # workers run Go's and Java's jobs meanwhile.
+  # rust/base first, the other Rust jobs last: a worker that claims one waits
+  # for rust/base's dependencies, so the workers run Go's and Java's jobs
+  # meanwhile.
   fixture_jobs=()
-  [[ " ${languages[*]} " != *" rust "* ]] || fixture_jobs+=(rust/base)
-  for language in "${model_languages[@]}"; do
-    fixture_jobs+=("$language/base")
-  done
-  for language in go java rust; do
-    [[ " ${languages[*]} " == *" $language "* ]] || continue
-    for fixture in "${all_fixtures[@]}"; do
-      if [[ "$language/$fixture" != rust/base ]] && fixture_builds "$fixture" "$language"; then
-        fixture_jobs+=("$language/$fixture")
-      fi
-    done
-  done
+  rust_jobs=()
+  while read -r job _; do
+    if [[ "$job" == rust/* && "$job" != rust/base ]]; then
+      rust_jobs+=("$job")
+    else
+      fixture_jobs+=("$job")
+    fi
+  done < <(current_generation_shards)
+  ((${#rust_jobs[@]} == 0)) || fixture_jobs+=("${rust_jobs[@]}")
   echo "==> Running ${#fixture_jobs[@]} fixture builds, $JOBS at once"
   rm -f "$WORK_ROOT/rust-base.failed"
   # In the background and waited for: run as the left side of || its jobs'
@@ -3405,7 +3521,7 @@ fi
 # with the route table, the per-tenant S2S client and the server's route check.
 if [[ -d "$TENANTROUTE_PROTO_SRC" ]]; then
   for language in $(fixture_languages tenantroute); do
-    for self in harbor crew; do
+    for self in $(fixture_selves tenantroute); do
       dir="$WORK_ROOT/tenantroute-$self-$language"
       log="$WORK_ROOT/tenantroute-$self-$language.log"
       rm -rf "$dir"
@@ -3438,7 +3554,7 @@ fi
 # contract's wrapper was never written in Go).
 if [[ -d "$REDO_PROTO_SRC" ]]; then
   for language in $(fixture_languages redo); do
-    for self in stratum redo; do
+    for self in $(fixture_selves redo); do
       dir="$WORK_ROOT/redo-$self-$language"
       log="$WORK_ROOT/redo-$self-$language.log"
       rm -rf "$dir"
@@ -3495,7 +3611,7 @@ fi
 # misrouted call (its self-test, run by compile_current_output).
 if [[ -d "$TENANTRECORD_PROTO_SRC" ]]; then
   for language in $(fixture_languages tenantrecord); do
-    for self in tstratum tmessaging; do
+    for self in $(fixture_selves tenantrecord); do
       dir="$WORK_ROOT/tenantrecord-$self-$language"
       log="$WORK_ROOT/tenantrecord-$self-$language.log"
       rm -rf "$dir"

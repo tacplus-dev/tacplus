@@ -94,6 +94,17 @@ site-venv:
 current-generation:
   {{lock}} bash cross-test/current-generation/run.sh
 
+# current-generation's shards (tacplus#977), one per line, `SHARD [DEP...]`:
+# every language of every fixture, then checks across them. `just gates` runs
+# each, `just current-generation-shard SHARD`, as a leg of its own in its pool
+# (scripts/gates.sh), so the gate's wall time is its slowest shards', not that
+# of its own pool in one slot.
+current-generation-shards:
+  @bash cross-test/current-generation/run.sh --list-shards
+
+current-generation-shard shard:
+  {{lock}} bash cross-test/current-generation/run.sh --shard {{shard}}
+
 current-generation-go:
   {{lock}} bash cross-test/current-generation/run.sh --language go
 
@@ -169,10 +180,12 @@ protoc-check:
 # `echo` always exits 0 regardless of what failed inside — do not write that
 # pattern again; this recipe exists so nobody has to.
 #
-# scripts/gates.sh runs the gates, and the language legs of a gate that only
-# names its legs (cert-stream: cert-stream-go ...), concurrently: GATES_JOBS
-# at once, half the CPUs by default (tacplus#300). The output and the verdict
-# are the same whatever the cap; a table of each gate's wall time comes last.
+# scripts/gates.sh runs the gates, the language legs of a gate that only
+# names its legs (cert-stream: cert-stream-go ...) and the shards of a gate
+# that lists them (current-generation-shards, tacplus#977), concurrently:
+# GATES_JOBS at once, the CPUs by default (tacplus#300). The output and the
+# verdict are the same whatever the cap; a table of each gate's and each
+# shard's wall time, and the pool's use of the machine, comes last.
 # A gate added here runs concurrently with every other: it must not write a
 # path another gate writes (each takes its own work directory, its Rust builds
 # in $CARGO_TARGET_DIR, the tacplus binary in $TACPLUS_BIN).

@@ -206,3 +206,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-25 looper issue Generators, proto passes, the fetch layer and the verifiers touch walked paths unconfined (gosec G122, HIGH, 51 sites): walk through one os.Root-scoped helper (#753)
 - 2026-11-26 looper issue Rust generator: generated crates' Cargo.toml declare no license and no publish = false, so every Rust service's cargo-deny fails (22 crates) (#368)
 - 2026-11-26 looper issue Enforce: S2S never crosses tenants (door refuses other tenants' service tokens even on ANY_TENANT; S2S client stamps its own tid) (#258)
+- 2026-11-26 looper issue gates.yaml: per-language gate sets for pkg/**, failing closed, so a change runs only the gates it can break (#976)

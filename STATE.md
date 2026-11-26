@@ -118,7 +118,10 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-26 by lo
   `just gates` runs its gates, their language legs and current-generation's shards (every language of every fixture,
   each build of a two-build fixture, then the checks across them: #977) concurrently (`scripts/gates.sh`),
   `GATES_JOBS` at once (the CPUs by default); each job slot builds Rust in its own cargo directory with its share of the
-  CPUs (`CARGO_BUILD_JOBS`, `GOFLAGS -p`, a 40-minute `go test` deadline). The log and the verdict are the same whatever
+  CPUs (`CARGO_BUILD_JOBS`, `GOFLAGS -p`, a 40-minute `go test` deadline). With sccache on PATH every leg's rustc goes
+  through it, one cache for every slot, and current-generation's Rust shards copy no cargo directory (#979); the pinned
+  build image (2.6's) has none, so they still start from a copy of rust/base's, and the 15-minute gate run waits on an
+  image that carries it (#830, #954). The log and the verdict are the same whatever
   the cap, and a table of each gate's and each shard's wall time and the pool's use of the machine comes before the
   verdict: 3396 s on 8 CPUs at `GATES_JOBS=4`, current-generation the longest (#300); 46 minutes, current-generation
   1767 s of them, on its own pool, before #977. Each gate's rc and wall time

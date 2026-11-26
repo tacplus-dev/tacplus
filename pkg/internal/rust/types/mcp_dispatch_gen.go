@@ -82,6 +82,10 @@ type rustMcpTool struct {
 	// rows the response carries.
 	NamespaceField     string
 	StoreNamespaceRows []rustNamespaceListField
+	// CallerTidField is the request's (spec.caller_tid) field (#475), "" when
+	// it declares none: absent from Schema, refused as an argument, and bound
+	// to the session caller's tid claim.
+	CallerTidField string
 	// RouteField is the rpc's (spec.rpc).route_field on a tenant-routed
 	// service, nil on a platform one. Like the fields above it is absent from
 	// Schema and refused as an argument; dispatch sets it to the session's
@@ -187,6 +191,7 @@ func rustMcpTools(svc *parser.ServiceInfo, servicePkg string, crossPkgTypes map[
 			StorePrincipalRows:     san.principalListFields(m.FullOutputType, servicePkg),
 			NamespaceField:         san.requestNamespaceField(m.FullInputType, servicePkg),
 			StoreNamespaceRows:     san.namespaceListFields(m.FullOutputType, servicePkg),
+			CallerTidField:         san.annotatedStringField(m.FullInputType, servicePkg, "caller_tid"),
 			OwnerDefaultGuard:      ownerDefaultGuard,
 			Page:                   rustMcpPageOf(m, servicePkg, crossPkgTypes),
 			RouteField:             m.RouteField,
@@ -262,8 +267,8 @@ func rustMcpToolGeneratable(svc *parser.ServiceInfo, m *parser.MethodInfo, servi
 // Three kinds of field are absent from it, and absence is the point: a field
 // that is not in the schema is not a shape of tool call the model can make.
 //   - (spec.principal) / (spec.store_principal) and (spec.namespace) /
-//     (spec.store_namespace): the server computes these from the verified
-//     Caller. Dispatch refuses a call that names one anyway, rather than
+//     (spec.store_namespace), and (spec.caller_tid): the server computes these
+//     from the verified Caller. Dispatch refuses a call that names one anyway, rather than
 //     silently overwriting it.
 //   - the injected trace_id/noop pair: tacplus's own transport fields, not part
 //     of the rpc's user-facing contract.
@@ -475,6 +480,9 @@ func (es *rustEgressSanitizer) mcpMessageSchema(fullType, servicePkg string, vis
 			continue
 		}
 		if _, ok := f.Annotations["store_namespace"]; ok {
+			continue
+		}
+		if _, ok := f.Annotations["caller_tid"]; ok {
 			continue
 		}
 		properties[f.Name] = es.mcpFieldSchema(f, pkg, servicePkg, visiting)
@@ -880,6 +888,7 @@ func rustMcpToolDispatch(serviceName string, t rustMcpTool) string {
 	for _, f := range []struct{ marker, field, why string }{
 		{"spec.principal", t.PrincipalField, "your verified identity"},
 		{"spec.namespace", t.NamespaceField, "your verified namespace claim"},
+		{"spec.caller_tid", t.CallerTidField, "your verified tid claim"},
 	} {
 		if f.field == "" {
 			continue
@@ -935,6 +944,11 @@ func rustMcpToolDispatch(serviceName string, t rustMcpTool) string {
 		}
 		if t.NamespaceField != "" {
 			b.WriteString(rustRequestNamespaceBlock(t.NamespaceField, t.Method.Name, "req", "        "))
+		}
+		// (spec.caller_tid): the gRPC wrapper's own block, bound to the
+		// session caller's tid claim (#475, products-layer-2026-11-08).
+		if t.CallerTidField != "" {
+			b.WriteString(rustRequestCallerTidBlock(t.CallerTidField, t.Method.Name, "req", "        "))
 		}
 		b.WriteString(t.OwnerDefaultGuard)
 		if t.Page != nil {

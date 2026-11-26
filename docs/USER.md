@@ -1697,15 +1697,16 @@ every rpc shape (a request stream, on every message) before the handler runs:
 an empty field is filled with the caller's token's `tid` claim, the same value
 passes, and another tenant, or a caller without a `tid` claim (the platform, a
 product), is `PERMISSION_DENIED`. A handler keying its rows by that field
-reaches only the calling tenant's.
+reaches only the calling tenant's. The generated MCP tool surface binds it the
+same way: the field is absent from the tool's schema, a call naming it is
+refused, and it is bound to the session caller's `tid` claim.
 
 The generated Go, Java and Rust servers of a record plane's S2S half (its
 reads, watches and record write surface) refuse a caller whose namespace claim
 is in a product's layer, `PERMISSION_DENIED` on every rpc before any tenant pin
 reads its namespace.
 
-The rest of the generated doors (the `caller_tid` binding on the MCP tool
-surface and tenant deletion) are not in this release
+The rest of the generated doors (tenant deletion) are not in this release
 yet, so a **server** of a product service, or of an rpc binding
 `(spec.caller_tid)`, is still refused at generation in every server language
 rather than generated without them. Clients of a product service generate as

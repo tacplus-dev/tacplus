@@ -120,6 +120,10 @@ type javaMcpTool struct {
 	// boundary.
 	NamespaceField     string
 	StoreNamespaceRows []javaMcpRowField
+	// CallerTidField is the request's (spec.caller_tid) field (#475), "" when
+	// it declares none: absent from Schema, refused as an argument, and bound
+	// to the session caller's tid claim.
+	CallerTidField string
 	// OwnerDefaultGuard is the (spec.owner_default) refusal rendered by the same
 	// helper the gRPC wrapper uses, "" when the tool touches no such type or
 	// its access contradicts nothing.
@@ -263,6 +267,7 @@ func javaMcpTools(svc *parser.ServiceInfo, servicePackage, outerClassName string
 			StorePrincipalRows:      san.mcpRowFields(m.FullOutputType, servicePackage, "store_principal"),
 			NamespaceField:          san.mcpAnnotatedStringField(m.FullInputType, servicePackage, "namespace"),
 			StoreNamespaceRows:      san.mcpRowFields(m.FullOutputType, servicePackage, "store_namespace"),
+			CallerTidField:          san.mcpAnnotatedStringField(m.FullInputType, servicePackage, "caller_tid"),
 			OwnerDefaultGuard:       ownerDefaultGuard,
 			RouteField:              m.RouteField,
 			Page: javaMcpPageOf(m, resolveJavaMethodType(m.FullOutputType, m.OutputType, servicePackage, outerClassName, crossPkgOuterClasses),
@@ -620,7 +625,7 @@ func (es *javaEgressSanitizer) mcpMessageSchema(fullType, servicePackage string,
 // javaMcpServerComputed reports whether a field's value is the server's to
 // compute from the verified Caller rather than the model's to supply.
 func javaMcpServerComputed(f *model.Field) bool {
-	for _, a := range []string{"principal", "store_principal", "namespace", "store_namespace"} {
+	for _, a := range []string{"principal", "store_principal", "namespace", "store_namespace", "caller_tid"} {
 		if _, ok := f.Annotations[a]; ok {
 			return true
 		}
@@ -1004,6 +1009,7 @@ func javaMcpToolDispatch(serviceName string, t javaMcpTool) string {
 	for _, f := range []struct{ marker, field, why string }{
 		{"spec.principal", t.PrincipalField, "your verified identity"},
 		{"spec.namespace", t.NamespaceField, "your verified namespace claim"},
+		{"spec.caller_tid", t.CallerTidField, "your verified tid claim"},
 	} {
 		if f.field == "" {
 			continue
@@ -1054,6 +1060,9 @@ func javaMcpToolDispatch(serviceName string, t javaMcpTool) string {
 		if t.NamespaceField != "" {
 			b.WriteString(javaMcpRequestScopeBlock(t, t.NamespaceField, "namespace", "getNamespace",
 				"an authenticated caller carrying a namespace claim", "the authenticated caller's namespace", ind))
+		}
+		if t.CallerTidField != "" {
+			b.WriteString(javaMcpCallerTidBlock(t, t.CallerTidField, ind))
 		}
 		// (spec.owner_default): refuse the access the row's owner does not hold,
 		// from the gRPC wrapper's own helper and in the wrapper's own order —
@@ -1151,6 +1160,26 @@ func javaMcpRequestScopeBlock(t javaMcpTool, field, marker, accessor, needs, mis
 %[1]s    return toolError("%[3]s does not match %[4]s");
 %[1]s}
 `, ind, marker, field, mismatch, local, accessor, t.Method.Name, needs, pf)
+}
+
+// javaMcpCallerTidBlock binds a (spec.caller_tid) field to the session
+// caller's tid claim, as javaCallerTidPin does on the gRPC wrapper and with its
+// refusals verbatim: empty is stamped, another tenant or a caller with no tid
+// claim (the platform, a product) is refused. Go's goMcpCallerTidBlock reads
+// the same.
+func javaMcpCallerTidBlock(t javaMcpTool, field, ind string) string {
+	pf := javaPascalField(field)
+	return fmt.Sprintf(`%[1]s// (spec.caller_tid) %[2]s: bind the field to the caller's tenant.
+%[1]sfinal String __callerTid = caller.getTid();
+%[1]sif (__callerTid.isEmpty()) {
+%[1]s    return toolError("%[3]s requires a caller in a tenant: its token carries no tid claim (products-layer-2026-11-08)");
+%[1]s}
+%[1]sif (__req.get%[4]s().isEmpty()) {
+%[1]s    __req = __req.toBuilder().set%[4]s(__callerTid).build();
+%[1]s} else if (!__callerTid.equals(__req.get%[4]s())) {
+%[1]s    return toolError("%[2]s does not match the caller's tenant (its token's tid claim): a call keys only its own tenant's data");
+%[1]s}
+`, ind, field, t.Method.Name, pf)
 }
 
 // javaMcpRowFilters renders the egress row filters over the response: rows the

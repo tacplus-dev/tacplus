@@ -102,6 +102,10 @@ type goMcpTool struct {
 	// boundary.
 	NamespaceField     string
 	StoreNamespaceRows []goMcpRowField
+	// CallerTidField is the request's (spec.caller_tid) field (#475), "" when
+	// it declares none: absent from Schema, refused as an argument, and bound
+	// to the session caller's tid claim.
+	CallerTidField string
 
 	// RouteField is the rpc's (spec.rpc).route_field on a tenant-routed
 	// service, nil otherwise. The tenant a tool call is directed at is the
@@ -208,6 +212,7 @@ func goMcpTools(svc *parser.ServiceInfo, servicePackage string, san *egressSanit
 			StorePrincipalRows: san.mcpRowFields(m.FullOutputType, servicePackage, "store_principal"),
 			NamespaceField:     san.annotatedStringField(m.FullInputType, servicePackage, "namespace"),
 			StoreNamespaceRows: san.mcpRowFields(m.FullOutputType, servicePackage, "store_namespace"),
+			CallerTidField:     san.annotatedStringField(m.FullInputType, servicePackage, "caller_tid"),
 			RouteField:         m.RouteField,
 			OwnerDefaultGuard:  ownerDefaultGuard,
 			Page:               goMcpPageOf(m, servicePackage),
@@ -574,7 +579,7 @@ func (es *egressSanitizer) mcpMessageSchema(fullType, servicePackage string, vis
 // goMcpServerComputed reports whether a field's value is the server's to compute
 // from the verified Caller rather than the model's to supply.
 func goMcpServerComputed(f *model.Field) bool {
-	for _, a := range []string{"principal", "store_principal", "namespace", "store_namespace"} {
+	for _, a := range []string{"principal", "store_principal", "namespace", "store_namespace", "caller_tid"} {
 		if _, ok := f.Annotations[a]; ok {
 			return true
 		}
@@ -993,7 +998,7 @@ func (s *%[5]s) %[1]s(ctx context.Context, arguments json.RawMessage) (*mcp.Call
 
 	// `named` is read only by the refusals below and by the no-argument check;
 	// a tool with neither would leave it unused, which Go rejects.
-	if t.PrincipalField == "" && t.NamespaceField == "" && t.RouteField == nil && !t.EmptyRequest {
+	if t.PrincipalField == "" && t.NamespaceField == "" && t.CallerTidField == "" && t.RouteField == nil && !t.EmptyRequest {
 		b.WriteString("\t_ = named\n")
 	}
 
@@ -1003,6 +1008,7 @@ func (s *%[5]s) %[1]s(ctx context.Context, arguments json.RawMessage) (*mcp.Call
 	for _, f := range []struct{ marker, field, why string }{
 		{"spec.principal", t.PrincipalField, "your verified identity"},
 		{"spec.namespace", t.NamespaceField, "your verified namespace claim"},
+		{"spec.caller_tid", t.CallerTidField, "your verified tid claim"},
 	} {
 		if f.field == "" {
 			continue
@@ -1072,6 +1078,9 @@ func (s *%[5]s) %[1]s(ctx context.Context, arguments json.RawMessage) (*mcp.Call
 		if t.NamespaceField != "" {
 			b.WriteString(goMcpRequestScopeBlock(prefix, t.Method.Name, t.NamespaceField,
 				"namespace", "GetNamespace", "an authenticated caller carrying a namespace claim", "the authenticated caller's namespace"))
+		}
+		if t.CallerTidField != "" {
+			b.WriteString(goMcpCallerTidBlock(prefix, t.Method.Name, t.CallerTidField))
 		}
 		// (spec.owner_default): refuse the access the row's owner does not hold,
 		// from the gRPC wrapper's own helper and in the wrapper's own order —
@@ -1189,6 +1198,29 @@ func goMcpRequestScopeBlock(prefix, method, field, marker, accessor, needs, mism
 			"%[2]s does not match %[3]s")), nil
 	}
 `, marker, field, mismatch, local, accessor, prefix, method, needs, toGoFieldName(field))
+}
+
+// goMcpCallerTidBlock binds a (spec.caller_tid) field to the session
+// caller's tid claim, as goCallerTidBlock does on the gRPC wrapper and with
+// its refusals verbatim: empty is stamped, another tenant or a caller with no
+// tid claim (the platform, a product) is PERMISSION_DENIED.
+func goMcpCallerTidBlock(prefix, method, field string) string {
+	return fmt.Sprintf(`	// (spec.caller_tid) %[1]s: bind the field to the caller's tenant.
+	__caller_tid := ""
+	if s.caller != nil {
+		__caller_tid = s.caller.Token().GetTid()
+	}
+	if __caller_tid == "" {
+		return %[2]sToolError(status.Error(codes.PermissionDenied,
+			"%[3]s requires a caller in a tenant: its token carries no tid claim (products-layer-2026-11-08)")), nil
+	}
+	if req.%[4]s == "" {
+		req.%[4]s = __caller_tid
+	} else if req.%[4]s != __caller_tid {
+		return %[2]sToolError(status.Error(codes.PermissionDenied,
+			"%[1]s does not match the caller's tenant (its token's tid claim): a call keys only its own tenant's data")), nil
+	}
+`, field, prefix, method, toGoFieldName(field))
 }
 
 // goMcpRowFilterBlock renders the egress row filter for one repeated record

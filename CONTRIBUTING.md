@@ -29,9 +29,15 @@ in its own pool beside the other gates.
 
 A land runs the gates its diff calls for: `gates.yaml` maps paths to gate sets
 (the format is tacplus-dev/looper's README, "Gates scaled to the diff"). A change
-to Markdown or `docs/` only runs `just docs`; anything the map does not name, a
-change to `gates.yaml` itself, the nightly gates and every release run
-`just gates`.
+to Markdown or `docs/` only runs `just docs`; a change to one language's
+generator or templates (`pkg/internal/<lang>/`, `pkg/templates/<lang>/`) runs
+that language's set, `just gates-lang <lang>`: the legs of `just gates` that
+generate it (`scripts/gate-sets.sh legs <lang>` lists them). Anything the map
+does not name (the rest of `pkg/`), a change to `gates.yaml` or the justfile,
+the nightly gates and every release run `just gates`. `just gate-audit [BASE]`
+prints, for a diff, the sets chosen and why, their legs and their minutes. A
+gate added to `just gates` is added to `scripts/gate-sets.sh`'s table, with
+the languages it generates (`scripts/gate_sets_test.go` fails until it is).
 
 `docs/DEVELOPMENT.md` is the compiler developer guide: architecture, the model,
 code-generation patterns and the parity rules between language backends.

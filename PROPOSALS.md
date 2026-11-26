@@ -351,13 +351,21 @@ the looper then marks it `promoted` or `declined` here with the date.
   (0644/0755 is intended for generated source: tighten the rest, or `#nosec` with a reason); G104 (46) unchecked
   errors want checking; the 34 `github-actions-mutable-action-tag` want actions pinned by SHA (overlaps #194). Each
   fixed finding lowers its entry's count: re-record with `looper-scan baseline` (tacplus-dev/looper#146).
-- **Per-language gate sets, and more of the map** (2026-11-08, #266): `gates.yaml` runs the full gates (~3h) for any
-  change under `pkg/**`, `cmd/**` or `.github/`. Next: `pkg/internal/<lang>/**` and `pkg/templates/<lang>/**` to that
-  language's `current-generation-<lang>`, `determinism-<lang>` and `-<lang>` cross-tests (with `just test`), once each
-  language's recipes are confirmed to cover what such a path can break (shared templates and `pkg/internal/common`
-  stay full); `cmd/sitegen/**` and `site/**` to `just docs` plus `just site`; `.github/workflows/**` to a workflow
-  lint. Also for `just docs`: it checks relative links but not their anchors (GitHub's heading slugs) nor external
-  URLs, and does not build the site (`site/docs/*.md` link to site paths; `just site` checks them, needing a venv).
+- **More of the gate map** (2026-11-08, #266; the per-language sets landed in #976): `gates.yaml` runs the full gates
+  for any change under `pkg/**` but one language's generator and templates, `cmd/**`, `cross-test/**`, `scripts/**`
+  or `.github/`. Next: `cross-test/<gate>/**` to that gate's legs alone (its fixture, its testdata; `cross-test/lib/**`
+  and the shared protos stay full); `cmd/sitegen/**` and `site/**` to `just docs` plus `just site`;
+  `.github/workflows/**` to a workflow lint. Also for `just docs`: it checks relative links but not their anchors
+  (GitHub's heading slugs) nor external URLs, and does not build the site (`site/docs/*.md` link to site paths;
+  `just site` checks them, needing a venv).
+- **The per-language gate sets' cost** (2026-11-26, #976): a change to two languages runs both sets one after
+  another (the looper joins them with `&&`), so soundness, test and floors run twice and go+rust's estimate (120
+  minutes) passes full's (100). Either the looper runs full when the chosen sets' minutes reach full's (a
+  tacplus-dev/looper change, for every repository's map), or `just gates-lang` takes several languages and runs the
+  union of their legs once (a map whose sets are language lists). `floors` generates every language for each set: a
+  `--language` filter on `scripts/floors.sh` would save its other six generations. And a set runs
+  `current-generation-<lang>` whole, on a pool of its own, not as #977's shards in the gates' pool: a
+  `current-generation-<lang>-shards` recipe (`--list-shards` filtered to the language) would let it.
 - **The single-account mode of the sign-in config** (2026-11-07, #224): `signin.ACCOUNT_MODEL_SINGLE` is declared
   (one account type, no personal links, no link prompt) but its exact shape is still to be designed (tacplus-dev/roadmap
   `decisions/login-flow-panel-2026-10-29/SYNTHESIS.md`, last note): which `Tenant` fields it ignores or refuses (a

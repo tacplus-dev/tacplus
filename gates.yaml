@@ -5,17 +5,55 @@
 # at the root of the checkout, with LOOPER_GATES_BASE the main the land is
 # rebased on.
 #
-# pkg/** runs full until per-language sets (pkg/internal/<lang>/** to that
-# language's generation, compile and cross-tests) are confirmed to cover
-# everything such a path can break (PROPOSALS.md).
 # full's minutes: 79 on an 8-CPU runner from a cold target/cross-test,
 # current-generation about 33 of them on its worker pool with one cargo test per
 # Rust fixture (tacplus#812; was 2h55m, 2h26m), and a margin for a slower runner.
 # Since tacplus#977 its shards are legs of the gates' own pool.
+# Under pkg/, only the language sets below are split out (tacplus#976): any
+# other path of pkg/ (the shared generator, pkg/internal/common, the spec
+# protos, pkg/templates/embed.go) matches no set, so it runs full.
 full:
   run: just gates
   minutes: 100
-  paths: [pkg/**, proto/**, cmd/**, /justfile, /dependencies.yaml, /go.mod, /go.sum, /main.go, /docs/embed.go, /docs/*.tmpl]
+  paths: [proto/**, cmd/**, /justfile, /dependencies.yaml, /go.mod, /go.sum, /main.go, /docs/embed.go, /docs/*.tmpl]
+# One language's generator and templates (tacplus#976): every leg of the full
+# gates that generates that language (its generation, compile and cross-tests,
+# and a leg of another language's that runs against it: the Go server of the
+# client-only languages' rotation legs, the Java member port of Go's and
+# Rust's interop), with soundness, test and floors. scripts/gate-sets.sh names
+# each set's legs and why; `just gate-audit` reports, for a diff, the sets
+# chosen and why (scripts/gate_sets_test.go). A change to two languages runs
+# both sets. Their minutes are budgets, not yet measured alone: the full gates
+# took 64 on the 8-CPU looper VM (GATES_JOBS=4, 2026-11-26), current-generation
+# 3826 s of it for its four languages; a set runs one language of it.
+go:
+  run: just gates-lang go
+  minutes: 60
+  paths: [pkg/internal/go/**, pkg/templates/go/**]
+java:
+  run: just gates-lang java
+  minutes: 60
+  paths: [pkg/internal/java/**, pkg/templates/java/**]
+rust:
+  run: just gates-lang rust
+  minutes: 60
+  paths: [pkg/internal/rust/**, pkg/templates/rust/**]
+typescript:
+  run: just gates-lang typescript
+  minutes: 30
+  paths: [pkg/internal/typescript/**, pkg/templates/typescript/**]
+python:
+  run: just gates-lang python
+  minutes: 25
+  paths: [pkg/internal/python/**, pkg/templates/python/**]
+csharp:
+  run: just gates-lang csharp
+  minutes: 20
+  paths: [pkg/internal/csharp/**, pkg/templates/csharp/**]
+swift:
+  run: just gates-lang swift
+  minutes: 25
+  paths: [pkg/internal/swift/**, pkg/templates/swift/**]
 # Documentation: the planning files, links, secrets and `just test`, which
 # checks README.md against README.src.md and the docs the compiler embeds
 # (see the justfile). docs/embed.go and docs/AGENT.md.tmpl are code: full's.

@@ -201,6 +201,21 @@ protoc-check:
 gates:
   {{lock}} bash scripts/gates.sh soundness test current-generation determinism cert-stream stream-expiry rotation memberport claims-provenance accounting-identity w2s-validate c2d-server zero-rpc-s2s llm-rule jwk-alg redact trace-carry floors tacplus-script
 
+# The gates of one language (tacplus#976): what a land changing only
+# pkg/internal/LANG/ or pkg/templates/LANG/ runs instead of `just gates`
+# (gates.yaml). Every leg of `gates` that generates LANG, with soundness, test
+# and floors, through the same scripts/gates.sh; scripts/gate-sets.sh names
+# the legs, and a gate added to `gates` above is added to its table too
+# (scripts/gate_sets_test.go).
+gates-lang LANG:
+  {{lock}} bash scripts/gates.sh $(bash scripts/gate-sets.sh legs {{quote(LANG)}})
+
+# For a diff (BASE..HEAD; default: since origin/main), or the paths given
+# (`just gate-audit --paths pkg/internal/go/x.go`): the gate sets gates.yaml
+# chooses for it and why, the legs they run and their total minutes.
+gate-audit *ARGS:
+  @bash scripts/gate-sets.sh audit {{ARGS}}
+
 # Run `just gates` inside the tacplus build image instead of against the
 # host toolchain: every SDK and tool at the pinned versions, with no host
 # installs. This is the image CI and the nightly gates run in.

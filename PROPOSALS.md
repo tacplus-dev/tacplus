@@ -4,6 +4,11 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **The Java LLM-rule gate sees one module** (2026-11-26, #909): `LlmRule` takes the service to be the classes
+  compiled beside it (`target/classes`, `target/test-classes`). A service split into Maven modules, with its core in
+  another module than the generated tree, would let the advisor reference the core's classes unseen (jdeps reports
+  them "not found", as a library's). Every Java service is one module today; a multi-module service would need the
+  gate to take the other modules' class directories too (a system property, or the surefire classpath).
 - **fleet build locks a service at a main release** (2026-11-26, #981): fleet-seatrials#82 rolls dev to each
   service's green main release, which is tacplus-dev/build's record (a commit and an image by digest), not a tag.
   Swapping only the image would run main's code against the tag's contracts, so the lock has to be resolved at the

@@ -17,7 +17,8 @@ import (
 )
 
 // layerTokens are a service token of each layer, a workload of a product, a
-// user, and two that name no consistent layer.
+// user, one whose namespace names no layer, and one whose subject is outside
+// the grammar: its layer is its namespace's, the door checks the subject.
 func layerTokens(t *testing.T) map[string]string {
 	t.Helper()
 	return map[string]string{
@@ -26,7 +27,7 @@ func layerTokens(t *testing.T) map[string]string {
 		"ledger":          ownToken(t, map[string]string{"sub_type": "service", "namespace": "/products/ledger", "sub": "spiffe://example.com/products/ledger/services/billing"}),
 		"ledger-workload": ownToken(t, map[string]string{"sub_type": "workload", "namespace": "/products/ledger", "sub": "spiffe://example.com/products/ledger/services/billing/workloads/pigeon-1"}),
 		"user":            ownToken(t, map[string]string{"sub_type": "user", "namespace": "/products/ledger", "sub": "spiffe://example.com/users/u1"}),
-		"mismatched":      ownToken(t, map[string]string{"sub_type": "service", "namespace": "/tenants/alpha", "sub": "spiffe://example.com/products/ledger/services/billing"}),
+		"foreign-subject": ownToken(t, map[string]string{"sub_type": "service", "namespace": "/tenants/alpha", "sub": "spiffe://example.com/services/harbor"}),
 		"no-layer":        ownToken(t, map[string]string{"sub_type": "service", "namespace": "/", "sub": "spiffe://example.com/system/services/mcp"}),
 	}
 }
@@ -34,8 +35,8 @@ func layerTokens(t *testing.T) map[string]string {
 // Every cell of the S2S edge table (products-layer-2026-11-08), from the
 // caller's own token: a product never calls a tenant or another product, the
 // platform never calls a product; everything else passes, as do a user and a
-// call without a token (no S2S edge). A token in no consistent layer, or one
-// that cannot be read, is refused.
+// call without a token (no S2S edge). A token whose namespace is in no layer,
+// or one that cannot be read, is refused.
 func TestCheckTargetLayer(t *testing.T) {
 	tok := layerTokens(t)
 	for _, tc := range []struct {
@@ -58,7 +59,7 @@ func TestCheckTargetLayer(t *testing.T) {
 		{"ledger-workload", "product:ledger", codes.OK},
 		{"user", "tenant", codes.OK},
 		{"user", "product:books", codes.OK},
-		{"mismatched", "tenant", codes.PermissionDenied},
+		{"foreign-subject", "tenant", codes.OK},
 		{"no-layer", "product:ledger", codes.PermissionDenied},
 		{"no-layer", "system", codes.OK},
 	} {

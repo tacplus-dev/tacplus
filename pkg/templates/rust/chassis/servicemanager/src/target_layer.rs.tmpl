@@ -19,9 +19,10 @@
 /// a service in layer `target` (`tenant` or `product:<name>`; any other value
 /// admits every caller).
 ///
-/// The caller's layer is read from its own token's namespace claim and
-/// cross-checked against its subject (`spiffe::caller_layer`); a token that
-/// does not parse, or a service token in no layer, is refused, fail closed. A
+/// The caller's layer is read from its own token's namespace claim
+/// (`spiffe::caller_layer`); the target's door cross-checks it against the
+/// subject. A token that does not parse, or a service token whose namespace is
+/// in no layer, is refused, fail closed. A
 /// user (RPC_FLAG_ANY_TENANT and C2S are for users) and a call without a token
 /// are not an S2S edge and pass: the target's door decides. The token is the
 /// caller's own, so it is parsed, never verified: the target verifies it.
@@ -43,7 +44,7 @@ pub fn check_target_layer(target: &str, own_token: Option<&str>) -> Result<(), t
     if !matches!(token.sub_type(), Some("service") | Some("workload")) {
         return Ok(());
     }
-    let l = ::spiffe::caller_layer(token.namespace().unwrap_or(""), token.subject().unwrap_or(""), true).map_err(|e| {
+    let l = ::spiffe::caller_layer(token.namespace().unwrap_or(""), "", false).map_err(|e| {
         tonic::Status::permission_denied(format!("the caller's own identity, calling a {} service: {}", target, e))
     })?;
     match (l.kind, product) {
@@ -80,8 +81,9 @@ mod tests {
         format!("{}.{}.", enc(r#"{"alg":"ES256","typ":"JWT"}"#), enc(&claims))
     }
 
-    /// A service token of each layer, a workload of a product, a user, and
-    /// two that name no consistent layer.
+    /// A service token of each layer, a workload of a product, a user, one
+    /// whose namespace names no layer, and one whose subject is outside the
+    /// grammar: its layer is its namespace's, the door checks the subject.
     fn layer_token(caller: &str) -> String {
         match caller {
             "system" => own_token("service", "/system", "spiffe://example.com/system/services/mcp"),
@@ -93,7 +95,7 @@ mod tests {
                 "spiffe://example.com/products/ledger/services/billing/workloads/pigeon-1",
             ),
             "user" => own_token("user", "/products/ledger", "spiffe://example.com/users/u1"),
-            "mismatched" => own_token("service", "/tenants/alpha", "spiffe://example.com/products/ledger/services/billing"),
+            "foreign-subject" => own_token("service", "/tenants/alpha", "spiffe://example.com/services/harbor"),
             "no-layer" => own_token("service", "/", "spiffe://example.com/system/services/mcp"),
             other => panic!("no token for {other:?}"),
         }
@@ -102,8 +104,9 @@ mod tests {
     // Every cell of the S2S edge table (products-layer-2026-11-08), from the
     // caller's own token: a product never calls a tenant or another product,
     // the platform never calls a product; everything else passes, as do a user
-    // and a call without a token (no S2S edge). A token in no consistent
-    // layer, or one that cannot be read, is refused.
+    // and a call without a token (no S2S edge). A token whose namespace is in
+    // no layer, or one that cannot be read, is refused; a subject outside the
+    // grammar is the door's to refuse.
     #[test]
     fn every_cell_of_the_s2s_edge_table() {
         let denied = tonic::Code::PermissionDenied;
@@ -125,7 +128,7 @@ mod tests {
             ("ledger-workload", "product:ledger", ok),
             ("user", "tenant", ok),
             ("user", "product:books", ok),
-            ("mismatched", "tenant", denied),
+            ("foreign-subject", "tenant", ok),
             ("no-layer", "product:ledger", denied),
             ("no-layer", "system", ok),
         ] {

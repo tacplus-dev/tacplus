@@ -29,9 +29,9 @@ import (
 // CheckTargetLayer returns PERMISSION_DENIED when the caller, the holder of
 // ownToken, may not call a service in layer target ("tenant" or
 // "product:<name>"; any other value admits every caller). The caller's layer is
-// read from its own token's namespace claim and cross-checked against its
-// subject (wrapperSpiffe.CallerLayer); an unreadable token, or a service token
-// in no layer, is refused, fail closed. A user (RPC_FLAG_ANY_TENANT and C2S
+// read from its own token's namespace claim (wrapperSpiffe.CallerLayer); the
+// target's door cross-checks it against the subject. An unreadable token, or a
+// service token whose namespace is in no layer, is refused, fail closed. A user (RPC_FLAG_ANY_TENANT and C2S
 // are for users) and a call without a token are not an S2S edge and pass: the
 // target's door decides. ownToken is never verified here: it is the caller's
 // own, and the target verifies it.
@@ -49,7 +49,7 @@ func CheckTargetLayer(target, ownToken string) error {
 	if subType := tw.GetSubType(); subType != "service" && subType != "workload" {
 		return nil
 	}
-	l, err := wrapperSpiffe.CallerLayer(tw.GetNamespace(), tw.GetSubject(), true)
+	l, err := wrapperSpiffe.CallerLayer(tw.GetNamespace(), "", false)
 	switch {
 	case err != nil:
 		return protoerrors.NewErrPermissionDenied(nil, "the caller's own identity, calling a %s service: %v", target, err)

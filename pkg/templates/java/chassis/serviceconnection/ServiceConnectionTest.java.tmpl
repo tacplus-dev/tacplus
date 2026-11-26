@@ -372,8 +372,9 @@ public class ServiceConnectionTest {
     }
 
     /**
-     * A service token of each layer, a workload of a product, a user, and two
-     * that name no consistent layer.
+     * A service token of each layer, a workload of a product, a user, one
+     * whose namespace names no layer, and one whose subject is outside the
+     * grammar: its layer is its namespace's, the door checks the subject.
      */
     private static java.util.Map<String, String> layerTokens() {
         return java.util.Map.of(
@@ -383,7 +384,7 @@ public class ServiceConnectionTest {
                 "ledger-workload", layerToken("workload", "/products/ledger",
                         "spiffe://example.com/products/ledger/services/billing/workloads/pigeon-1"),
                 "user", layerToken("user", "/products/ledger", "spiffe://example.com/users/u1"),
-                "mismatched", layerToken("service", "/tenants/alpha", "spiffe://example.com/products/ledger/services/billing"),
+                "foreign-subject", layerToken("service", "/tenants/alpha", "spiffe://example.com/services/harbor"),
                 "no-layer", layerToken("service", "/", "spiffe://example.com/system/services/mcp"));
     }
 
@@ -401,8 +402,8 @@ public class ServiceConnectionTest {
      * Every cell of the S2S edge table, from the caller's own token: a product
      * never calls a tenant or another product, the platform never calls a
      * product; everything else passes, as do a user and a call without a token
-     * (no S2S edge). A token in no consistent layer, or one that cannot be
-     * read, is refused.
+     * (no S2S edge). A token whose namespace is in no layer, or one that cannot
+     * be read, is refused.
      */
     private static void checkTargetLayer() {
         java.util.Map<String, String> tok = layerTokens();
@@ -425,7 +426,7 @@ public class ServiceConnectionTest {
             {"ledger-workload", "product:ledger", ok},
             {"user", "tenant", ok},
             {"user", "product:books", ok},
-            {"mismatched", "tenant", denied},
+            {"foreign-subject", "tenant", ok},
             {"no-layer", "product:ledger", denied},
             {"no-layer", "system", ok},
         };

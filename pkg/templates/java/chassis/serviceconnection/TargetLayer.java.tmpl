@@ -39,9 +39,9 @@ public final class TargetLayer {
      * Refuses, PERMISSION_DENIED, a caller, the holder of ownToken, that may
      * not call a service in layer target ("tenant" or "product:&lt;name&gt;"; any
      * other value admits every caller). The caller's layer is read from its own
-     * token's namespace claim and cross-checked against its subject
-     * ({@link Spiffe#callerLayer}); an unreadable token, or a service token in
-     * no layer, is refused, fail closed. A user (RPC_FLAG_ANY_TENANT and C2S
+     * token's namespace claim ({@link Spiffe#callerLayer}); the target's door
+     * cross-checks it against the subject. An unreadable token, or a service
+     * token whose namespace is in no layer, is refused, fail closed. A user (RPC_FLAG_ANY_TENANT and C2S
      * are for users) and a call without a token are not an S2S edge and pass:
      * the target's door decides. ownToken is never verified here: it is the
      * caller's own, and the target verifies it.
@@ -69,7 +69,7 @@ public final class TargetLayer {
         }
         Spiffe.Layer l;
         try {
-            l = Spiffe.callerLayer(token.getNamespace(), token.getSubject(), true);
+            l = Spiffe.callerLayer(token.getNamespace(), null, false);
         } catch (RuntimeException e) {
             throw new ProtoException(ProtoException.PERMISSION_DENIED,
                     "the caller's own identity, calling a " + target + " service: " + e.getMessage());

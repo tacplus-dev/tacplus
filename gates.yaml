@@ -23,36 +23,38 @@ full:
 # Rust's interop), with soundness, test and floors. scripts/gate-sets.sh names
 # each set's legs and why; `just gate-audit` reports, for a diff, the sets
 # chosen and why (scripts/gate_sets_test.go). A change to two languages runs
-# both sets. Their minutes are budgets, not yet measured alone: the full gates
-# took 64 on the 8-CPU looper VM (GATES_JOBS=4, 2026-11-26), current-generation
-# 3826 s of it for its four languages; a set runs one language of it.
+# both sets. Their minutes: each set measured alone on the 8-CPU looper VM
+# (GATES_JOBS=8, 2026-11-26, a warm cache), its gates' wall time go 893 s,
+# java 863, rust 1300 (current-generation-rust 1292 of it), typescript 183,
+# python 137, csharp 124, swift 379; and a margin, as full's, for a cold cache
+# (`just test` took 494 s of go's, 118 of csharp's) and a slower runner.
 go:
   run: just gates-lang go
-  minutes: 60
+  minutes: 25
   paths: [pkg/internal/go/**, pkg/templates/go/**]
 java:
   run: just gates-lang java
-  minutes: 60
+  minutes: 25
   paths: [pkg/internal/java/**, pkg/templates/java/**]
 rust:
   run: just gates-lang rust
-  minutes: 60
+  minutes: 35
   paths: [pkg/internal/rust/**, pkg/templates/rust/**]
 typescript:
   run: just gates-lang typescript
-  minutes: 30
+  minutes: 10
   paths: [pkg/internal/typescript/**, pkg/templates/typescript/**]
 python:
   run: just gates-lang python
-  minutes: 25
+  minutes: 10
   paths: [pkg/internal/python/**, pkg/templates/python/**]
 csharp:
   run: just gates-lang csharp
-  minutes: 20
+  minutes: 10
   paths: [pkg/internal/csharp/**, pkg/templates/csharp/**]
 swift:
   run: just gates-lang swift
-  minutes: 25
+  minutes: 15
   paths: [pkg/internal/swift/**, pkg/templates/swift/**]
 # Documentation: the planning files, links, secrets and `just test`, which
 # checks README.md against README.src.md and the docs the compiler embeds

@@ -204,3 +204,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-25 looper issue Generated Rust without chrono: a chrono-free WKT crate in place of prost-wkt-types, Token::expires_in on a std type (next minor/major) (#862)
 - 2026-11-25 looper issue Generated Rust chassis depends on rustls-pemfile, unmaintained (RUSTSEC-2025-0134, no fix): move to rustls-pki-types PemObject (#308)
 - 2026-11-25 looper issue Generators, proto passes, the fetch layer and the verifiers touch walked paths unconfined (gosec G122, HIGH, 51 sites): walk through one os.Root-scoped helper (#753)
+- 2026-11-26 looper issue Rust generator: generated crates' Cargo.toml declare no license and no publish = false, so every Rust service's cargo-deny fails (22 crates) (#368)

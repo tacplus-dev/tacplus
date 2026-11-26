@@ -280,7 +280,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   when it is on PATH (`cross-test/lib/sccache.sh`; the wrapper drops the slot's `CARGO_TARGET_DIR`, which sccache
   keys on: 0 hits across two slots with it, 522 of 530 without) and the shards copy nothing, but the pinned build
   image (`build.lock`, the 2.6 line's) predates #315 and has no sccache, so the gates still copy until a pinned
-  image carries it (#830, #954); then measure; (3) `cross-test/consumer-contract/run.sh` still runs a `cargo test -p` per crate
+  image carries it (#830, #954); then measure. Each Rust step's time now prints in its shard's log (#979): on the
+  looper VM beside another build, `cargo check` of the whole workspace took 88-150 s a shard and the self-tests'
+  `cargo test` 97-237 s (rust/base 150 s and 237 s), the doc tests 6-20 s. The check compiles every member in check
+  mode, the generated types crate among them, and the test then compiles them again: a `cargo build` of the
+  workspace in its place would share its units with the test's, at the cost of codegen for the members no test
+  builds; measure both on one fixture before choosing, a lighter rust/base among them; (3) `cross-test/consumer-contract/run.sh` still runs a `cargo test -p` per crate
   (not in `just gates`). `gates.yaml`'s `full: minutes` follows. The first sharded run (2026-11-26, #977, a looper VM's
   local build of 41742e1a, shared with other builds: load average about 50 on 8 CPUs, the gates' own processes 2.5 CPUs
   on average) took 3770 s, current-generation 2455 s of it with the slots 97% busy: `rust/base` 850 s, then the other

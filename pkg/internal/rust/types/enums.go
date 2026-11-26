@@ -33,6 +33,7 @@ type rustEnumTemplateData struct {
 	ValidCount        int
 	FirstFriendlyName string
 	FirstVariantName  string
+	InvalidName       string // a string FromStr refuses, for the from_str_invalid test
 }
 
 // toProstEnumName converts proto enum name to prost's PascalCase format
@@ -227,6 +228,7 @@ func writeEnumTestContent(b *strings.Builder, enum model.Enum) {
 		ValidCount:        len(validValues),
 		FirstFriendlyName: firstFriendlyName,
 		FirstVariantName:  firstVariantName,
+		InvalidName:       unacceptedEnumName(validValues),
 	}
 
 	typeFS, err := fs.Sub(templates.FS, "rust/types")
@@ -243,6 +245,23 @@ func writeEnumTestContent(b *strings.Builder, enum model.Enum) {
 	}
 
 	b.Write(result)
+}
+
+// unacceptedEnumName returns a string FromStr refuses: "invalid", suffixed with
+// "-x" until it matches none of the names FromStr accepts (an enum with a value
+// named INVALID, like sys.RpcOutcome, accepts "invalid" itself).
+func unacceptedEnumName(values []rustEnumValueData) string {
+	accepted := make(map[string]bool)
+	for _, v := range values {
+		for _, name := range []string{v.LowerName, v.DisplayName, v.FriendlyName, v.Alias} {
+			accepted[strings.ToLower(strings.ReplaceAll(name, "_", "-"))] = true
+		}
+	}
+	name := "invalid"
+	for accepted[name] {
+		name += "-x"
+	}
+	return name
 }
 
 // goEnumFriendlyAlias returns the string Go's generated <Enum>ToString emits for

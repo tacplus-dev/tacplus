@@ -1,0 +1,21 @@
+{{- /* The model port crate of a service's LLM advisor (tacplus#909) */ -}}
+[package]
+name = "{{.PortCrate}}"
+version = "1.0.0"
+edition = "2021"
+{{- if .License}}
+license = "{{.License}}"
+{{- end}}
+publish = false
+description = "Generated model port of the service's LLM advisor"
+build = "build.rs"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+{{.CrateName}}-types = { path = "../types" }
+async-trait = { workspace = true }
+
+[build-dependencies]
+toml = { workspace = true }

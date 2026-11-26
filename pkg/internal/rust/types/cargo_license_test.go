@@ -56,7 +56,8 @@ service GridService {
 }
 
 // generateRustManifests writes every Cargo.toml the Rust generator emits (the
-// chassis crates, optional ones included, the root crate and the types crate)
+// chassis crates, optional ones included, the root crate, the types crate and
+// the advisor's port crate)
 // under a fresh directory, with the header configured, and returns their paths.
 func generateRustManifests(t *testing.T, headerText string) []string {
 	t.Helper()
@@ -90,6 +91,13 @@ func generateRustManifests(t *testing.T, headerText string) []string {
 	if err != nil {
 		t.Fatalf("walk %s: %v", out, err)
 	}
+	// The advisor's model port crate (tacplus#909), generated only for a
+	// service that declares an advisor.
+	advisorConfig, advisorClients := advisorFixture(t)
+	if err := generateRustAdvisorPort(advisorConfig, advisorClients); err != nil {
+		t.Fatalf("generateRustAdvisorPort: %v", err)
+	}
+	manifests = append(manifests, filepath.Join(advisorConfig.OutputDir, advisorPortDir, "Cargo.toml"))
 
 	// Every Cargo manifest template is covered: a crate added later is held
 	// to the same rule without touching this test.

@@ -382,3 +382,17 @@ func TestCleanOutputDirKeepsHandMaintainedFiles(t *testing.T) {
 		}
 	}
 }
+
+// The per-language config carries the advisor's directory, so that the
+// generators emit its model port and gate (tacplus#909): a build that drops
+// it generates a service whose advisor nothing keeps from a token.
+func TestLanguageConfigCarriesAdvisorDir(t *testing.T) {
+	b := &Builder{config: &tactype.Config{AdvisorDir: "/repo/advisor", SelfPackage: "acme.svc"}}
+	got := b.languageConfig("rust", "/repo/model", false)
+	if got.AdvisorDir != "/repo/advisor" {
+		t.Fatalf("AdvisorDir = %q, want /repo/advisor", got.AdvisorDir)
+	}
+	if got.SelfPackage != "acme.svc" || got.OutputDir != "/repo/model" || got.Language != "rust" {
+		t.Fatalf("languageConfig lost a field: %+v", got)
+	}
+}

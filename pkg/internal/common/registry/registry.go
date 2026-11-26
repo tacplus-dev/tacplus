@@ -43,6 +43,12 @@ type Config struct {
 	// the source field on ServiceInfo and EntitlementGrantInfo; nil means no
 	// source declared a layer.
 	FileLayers map[string]string
+
+	// Advisor marks the services of SelfPackage, the generated service's own
+	// proto package, as having an LLM advisor (tacplus.yaml advisor,
+	// tacplus#909).
+	Advisor     bool
+	SelfPackage string
 }
 
 // treeNode is an internal node in the package hierarchy.
@@ -238,6 +244,9 @@ func Generate(cfg Config, allParsedFiles []model.ProtoFile, dp *parser.Descripto
 							}
 							if svc.IsMemberPort {
 								si.MemberPort = true
+							}
+							if cfg.Advisor && fd.Package == cfg.SelfPackage {
+								si.Advisor = true
 							}
 							for _, vg := range svc.VolumeGroups {
 								si.VolumeGroups = append(si.VolumeGroups, &spec.VolumeGroupInfo{

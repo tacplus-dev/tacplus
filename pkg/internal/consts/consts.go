@@ -72,3 +72,10 @@ func ExampleHeaderLines(source string) []string {
 	}
 	return lines
 }
+
+// AdvisorModelService is the registry name of the one service an LLM advisor
+// reaches a model through (tacplus#909; tacplus-dev/roadmap
+// decisions/skipper-and-admiral-2026-11-01.md: "Skipper and Admiral reach
+// models only through llmproxy"). The advisor's generated model port is typed
+// on its messages, and the core's adapter calls it over its S2S client.
+const AdvisorModelService = "llmproxy"

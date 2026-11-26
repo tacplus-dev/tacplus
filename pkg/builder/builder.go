@@ -403,6 +403,40 @@ func validateReservedNamespaces(inputDir string) error {
 	return nil
 }
 
+// languageConfig is the config one language's generator runs on: the
+// builder's, with that language's output directory.
+func (b *Builder) languageConfig(lang, outputDir string, localMode bool) *tactype.Config {
+	return &tactype.Config{
+		Language:           lang,
+		InputDir:           b.config.InputDir,
+		OutputDir:          outputDir,
+		ProjectDir:         b.config.ProjectDir,
+		DepsYAMLPath:       b.config.DepsYAMLPath,
+		VersionTag:         b.config.VersionTag,
+		LocalMode:          localMode,
+		Lang:               b.config.Lang,
+		Registry:           b.config.Registry,
+		ProtocGenSwift:     b.config.ProtocGenSwift,
+		ProtocGenGrpcSwift: b.config.ProtocGenGrpcSwift,
+		FlatProtoDir:       b.config.FlatProtoDir,
+		GrpcServers:        b.config.GrpcServers,
+		GrpcS2SClients:     b.config.GrpcS2SClients,
+		GrpcC2SClients:     b.config.GrpcC2SClients,
+		GrpcW2SClients:     b.config.GrpcW2SClients,
+		GrpcC2DClients:     b.config.GrpcC2DClients,
+		RestClients:        b.config.RestClients,
+		GrpcServerAll:      b.config.GrpcServerAll,
+		GrpcS2SClientAll:   b.config.GrpcS2SClientAll,
+		RestClientAll:      b.config.RestClientAll,
+		States:             b.config.States,
+		AllStates:          b.config.AllStates,
+		SelfPackage:        b.config.SelfPackage,
+		SysOnly:            b.config.SysOnly,
+		SourceLayers:       b.config.SourceLayers,
+		AdvisorDir:         b.config.AdvisorDir,
+	}
+}
+
 // generateLanguage generates code for a specific language
 func (b *Builder) generateLanguage(lang, versionStr string, localMode bool) error {
 	zap.L().Info("generating language", zap.String("language", strings.ToUpper(lang)))
@@ -437,34 +471,7 @@ func (b *Builder) generateLanguage(lang, versionStr string, localMode bool) erro
 	)
 
 	// Create language-specific config
-	config := &tactype.Config{
-		Language:           lang,
-		InputDir:           b.config.InputDir,
-		OutputDir:          langOutputDir,
-		ProjectDir:         b.config.ProjectDir,
-		DepsYAMLPath:       b.config.DepsYAMLPath,
-		VersionTag:         b.config.VersionTag,
-		LocalMode:          localMode,
-		Lang:               b.config.Lang,
-		Registry:           b.config.Registry,
-		ProtocGenSwift:     b.config.ProtocGenSwift,
-		ProtocGenGrpcSwift: b.config.ProtocGenGrpcSwift,
-		FlatProtoDir:       b.config.FlatProtoDir,
-		GrpcServers:        b.config.GrpcServers,
-		GrpcS2SClients:     b.config.GrpcS2SClients,
-		GrpcC2SClients:     b.config.GrpcC2SClients,
-		GrpcW2SClients:     b.config.GrpcW2SClients,
-		GrpcC2DClients:     b.config.GrpcC2DClients,
-		RestClients:        b.config.RestClients,
-		GrpcServerAll:      b.config.GrpcServerAll,
-		GrpcS2SClientAll:   b.config.GrpcS2SClientAll,
-		RestClientAll:      b.config.RestClientAll,
-		States:             b.config.States,
-		AllStates:          b.config.AllStates,
-		SelfPackage:        b.config.SelfPackage,
-		SysOnly:            b.config.SysOnly,
-		SourceLayers:       b.config.SourceLayers,
-	}
+	config := b.languageConfig(lang, langOutputDir, localMode)
 
 	// Call the appropriate language generator
 	// Target matrix: python/typescript/csharp/swift all support C2S+W2S+C2D.

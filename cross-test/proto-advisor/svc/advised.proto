@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// The advisor fixture (#909): a service with one rpc and an s2s client to
+// llmproxy (upstreamllm.LlmProxy, services/llmproxy.proto), built with
+// tacplus.yaml advisor: {path: advisor} by cross-test/llm-rule. Its generated
+// model port is typed on llmproxy's messages; the core's adapter calls llmproxy
+// over the generated s2s client.
+
+syntax = "proto3";
+
+package advised;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "advised"};
+option (spec.grpc_s2s_client) = {service: "upstreamllm.LlmProxy"};
+
+message GetAnswerRequest {
+  string question = 1;
+}
+
+message GetAnswerResponse {
+  string answer = 1;
+}
+
+service Advised {
+  option (spec.service_s2s) = {};
+
+  rpc GetAnswer(GetAnswerRequest) returns (GetAnswerResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}

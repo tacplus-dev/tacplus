@@ -23,6 +23,7 @@ targets (`go`, `rust`, `java`):
 | Client managers | Expose typed C2S/W2S/S2S/C2D clients selected by proto annotations and `tacplus.yaml` transport settings, subject to the target language support matrix. |
 | State clients | Expose typed read/write/watch access to proto-declared state roots, with imports restricted to generated read-only accessors. |
 | Typed disk persistence | Exposes typed snapshot and redo-log persistence for generated store/state types when enabled by the generated service/store config. |
+| LLM advisor port | With tacplus.yaml `advisor:`, the advisor's model port, the core's adapter over the llmproxy S2S client, and the build gate keeping the advisor from every other part of the service (see LLM Advisor below). Rust and Go; Java refuses `advisor:` until its gate follows. |
 | registry.json | Exposes the normalized semantic IR: types, services, auth metadata, RPC verb/pattern metadata, state roots, projections, annotations, and generated surface metadata. |
 
 No full-service language is the reference implementation. The contract is the
@@ -1163,6 +1164,57 @@ tests, a multi-copy simulation, and the digests of one scenario byte for byte):
 - `digest` is the SHA-256 of the entry's protobuf encoding with its set fields
   (which the op sets determine) cleared: equal on two copies exactly when they
   hold the same entry, in any language.
+
+## LLM Advisor
+
+The LLM rule (tacplus#909): an LLM may propose; it never holds a token or a
+write path. A service whose tacplus.yaml declares `advisor: {path: <dir>}`
+gets, in Rust:
+
+- `<crate>-advisor` at `<output>/advisor/`: `ModelPort`, `#[async_trait]`,
+  `Send + Sync`, one method per unary rpc of the S2S client to the service
+  whose `(spec.service).name` is `llmproxy` whose request and response are
+  that service's own messages (streams and collection reads are not on it):
+  `async fn <rpc_snake>(&self, trace_id: &str, request: wire::<Req>) ->
+  Result<wire::<Resp>, ModelPortError>`. `wire` re-exports that proto
+  package's top-level messages, enums and oneof modules, and nothing else of
+  its types module. `ModelPortError { code: i32, message: String }` is the
+  failed call's gRPC status. `async_trait` is re-exported so an advisor needs
+  no other crate to implement the trait in its tests. The crate's only
+  dependencies are the types crate and async-trait.
+- `<crate>::advisor_port::ModelPortAdapter::new(Arc<ServiceManager>)`, which
+  implements `ModelPort` by setting the request's `trace_id` to the one given
+  and calling the generated S2S client; the crate re-exports `ModelPort`,
+  `ModelPortError`, `wire` and `async_trait` there.
+- The gate: the port's build script, run by every build of the model crate,
+  fails with `tacplus LLM rule:` when the advisor's `Cargo.toml` declares, in
+  any dependency table, a crate of the generated tree (the model crate, the
+  types crate, a chassis crate; by package name, so renamed too), a path
+  dependency other than the port, a git dependency, or a patch or replace of a
+  dependency (its own or its workspace's); a `{ workspace = true }` entry is
+  judged by what it inherits; a missing manifest fails.
+- registry.json: `advisor: true` on the services of the generated service's
+  own proto package; false (omitted) everywhere else.
+
+In Go, the same three:
+
+- package `advisor` at `<output>/advisor/`: `type ModelPort interface` with,
+  for the same rpcs, `<Rpc>(ctx context.Context, traceID string, req *<Req>)
+  (*<Resp>, error)`; type aliases for that proto package's top-level messages,
+  enums and oneof wrapper types, and constants for its enum values; nothing
+  else of its types package. The error is the call's gRPC status error.
+- `sm.NewModelPortAdapter(*sm.ServiceManager) *sm.ModelPortAdapter` in
+  `<output>/s2sm/advisor_port.go`, which calls the generated S2S client with a
+  copy of the request whose `TraceId` is the one given.
+- The gate: `<output>/advisor/llm_rule_test.go`, `TestLLMRule`, which runs
+  `go list -e -json -deps -test ./...` in the advisor's directory and fails with
+  `tacplus LLM rule:` when an advisor package (its tests included) imports a
+  package of the service's module or of the generated tree other than the port
+  and the advisor's own, or depends there on a package the port does not; or
+  when the advisor directory holds no Go package.
+
+Generation refuses an advisor with no S2S client to llmproxy, one inside the
+output directory or containing it, and one on a client-only target.
 
 ## Tracing And Registry
 

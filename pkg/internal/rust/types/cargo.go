@@ -44,6 +44,8 @@ type cargoWorkspaceData struct {
 	RmcpVersion        string
 	SchemarsVersion    string
 	LibCrates          []cargoLibCrate
+	HasAdvisor         bool
+	AdvisorPortCrate   string
 	License            string // SPDX id of the configured header; the manifest omits license when empty
 }
 
@@ -99,6 +101,12 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 			}
 		}
 	}
+	// The advisor's model port (tacplus#909): a member, and a dependency of the
+	// model crate, whose adapter implements its trait.
+	hasAdvisor := config.AdvisorDir != ""
+	if hasAdvisor {
+		members = append(members, advisorPortDir)
+	}
 	// Workspace dependency versions come from the package registry
 	allDeps := registry.GetAllRustDependencies()
 
@@ -153,6 +161,8 @@ func createWorkspaceCargoToml(config *tactype.Config, outputDir string, hasServi
 		RmcpVersion:        rmcpCrateVersion,
 		SchemarsVersion:    schemarsCrateVersion,
 		LibCrates:          libCrates,
+		HasAdvisor:         hasAdvisor,
+		AdvisorPortCrate:   advisorPortCrate(crateName),
 		License:            header.License(),
 	}
 

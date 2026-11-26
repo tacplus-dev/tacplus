@@ -307,6 +307,10 @@ exceptions:
     reason: "a crate tacplus generates, which declares no license yet (#368)"
     decided_by: looper, tacplus#376 (triage; #368 is the fix)
     expires: 2027-01-15
+  - id: cargo-deny:unlicensed:zerorpc-model-advisor@1.0.0
+    reason: "a crate tacplus generates (the advisor's model port, #909), which declares no license yet (#368)"
+    decided_by: looper, tacplus#909 (as #376's triage of the other generated crates; #368 is the fix)
+    expires: 2027-01-15
   - id: cargo-deny:unlicensed:zerorpc-model-types@1.0.0
     reason: "a crate tacplus generates, which declares no license yet (#368)"
     decided_by: looper, tacplus#376 (triage; #368 is the fix)

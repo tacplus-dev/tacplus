@@ -684,6 +684,13 @@ func Generate(config *tactype.Config) error {
 		return fmt.Errorf("failed to create spec helpers: %w", err)
 	}
 
+	// The advisor's model port crate and the core's adapter (tacplus#909):
+	// after the chassis crates, which the port's gate forbids by name, and
+	// before the workspace Cargo.toml, which lists the port.
+	if err := generateRustAdvisorPort(config, clientServices); err != nil {
+		return err
+	}
+
 	// Create workspace Cargo.toml at rust/Cargo.toml (one level above types/)
 	// This must happen AFTER HTTP client generation so we can detect client crate directories.
 	// The workspace defines shared dependency versions for all crates.
@@ -717,6 +724,8 @@ func Generate(config *tactype.Config) error {
 		Language:    "rust",
 		PackageBase: config.CrateBasePath,
 		FileLayers:  config.SourceLayers,
+		Advisor:     config.AdvisorDir != "",
+		SelfPackage: config.SelfPackage,
 	}, allParsedFiles, dp); err != nil {
 		return fmt.Errorf("failed to generate registry.json: %w", err)
 	}

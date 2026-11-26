@@ -659,6 +659,13 @@ message ServiceInfo {
   // Read by the operator to expose the pod's member port and nothing else of
   // the member protocol.
   bool member_port = 19;
+
+  // advisor is true when this service's tacplus.yaml declares an LLM advisor
+  // (advisor: {path: ...}, tacplus#909): a unit of its code that may propose
+  // but holds no state client, no S2S client and no token. tacplus generates
+  // its model port and the build gate that keeps it so. Set on the generated
+  // service's own services only, never on those it depends on.
+  bool advisor = 20;
 }
 
 // VolumeGroupInfo describes one declared blob-store volume group.

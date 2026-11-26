@@ -521,6 +521,12 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 		}
 	}
 
+	advisorDir, err := resolveAdvisorDir(cwd, outDir, cfg, lang)
+	if err != nil {
+		protoCleanup()
+		return nil, err
+	}
+
 	// Create unified tactype.Config
 	config := &tactype.Config{
 		ProtoDir:     absProtoDir,
@@ -537,6 +543,7 @@ func resolveConfig(p Params) (*resolvedConfig, error) {
 		VersionTag:   resolvedVersion,
 		LocalMode:    localMode,
 		SelfPackage:  selfPackage(yamlPkg, ownProtoDir),
+		AdvisorDir:   advisorDir,
 		SysOnly:      sysOnly,
 		SourceLayers: fileLayers,
 	}

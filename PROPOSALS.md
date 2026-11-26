@@ -4,6 +4,30 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **The LLM-rule gate in Java** (2026-11-20, #909): Rust and Go generate the advisor's model port, the core's
+  adapter and the gate; Java refuses `advisor:`. The accepted Java gate ("a Maven module with only those
+  dependencies") needs the generated Java tree split into Maven modules, which it is not today (one source tree the
+  service's pom compiles). Recommended instead, asked on #909
+  (https://github.com/tacplus-dev/tacplus/issues/909#issuecomment-7045044397): a generated JUnit test running the
+  JDK's `jdeps` (in process, `ToolProvider`) over the advisor package's compiled classes, failing on any reference to
+  the generated tree or the service's other packages but the port's, as Go's `go list` check does.
+- **The advisor's port re-exports top-level types only** (2026-11-20, #909): `wire::` (Rust) and the Go aliases
+  cover the model service's top-level messages, enums, oneof modules and wrappers and enum values. A message declared
+  inside a message (its prost module, its Go `Outer_Inner` type) is not reached, since `parser.MessageDescriptor`
+  carries no nested declarations. llmproxy's messages are all top-level today; the parser would need the nesting
+  for the port to follow one that is not.
+- **A runtime test of the advisor adapter's trace** (2026-11-20, #909): the adapters' `trace_id` on the llmproxy
+  call is pinned by render tests (`advisor_gen_test.go`, Rust and Go) and compiled by `cross-test/llm-rule`, which
+  does not run them against a peer. `cross-test/zero-rpc-s2s` already runs a fake kernel and a fake llmproxy for
+  Rust; an adapter call through it, with the peer asserting the trace it received, would make it a runtime proof.
+- **The Go advisor templates in the security scan** (2026-11-20, #909): `scripts/generated.sh` generates the zerorpc
+  set (Rust) with an advisor, so the Rust port, its build script and the adapter are scanned. Its sets are the
+  current-generation fixtures, and none builds an advisor in Go, so the Go port, its gate test and the adapter are
+  not scanned. If current-generation built `cross-test/proto-advisor` in Go, both lists could take it.
+- **The advisor gate and third-party network libraries** (2026-11-20, #909): the gate refuses every part of the
+  service but the port; it does not refuse a crates.io crate or Go module that opens a network connection (a
+  tokenless connection, which a tacplus service refuses). If the platform wants the advisor to have no network
+  path at all, the gate could refuse a named set of network crates and modules too; that is a policy choice.
 - **Chassis crates' license is tacplus's, not the consumer's header** (2026-11-08, #368): every generated Rust crate
   now declares the SPDX expression of tacplus.yaml's `header:` as its `license` (none when the header names none),
   as #368 asks. The chassis crates (am, grpcserver, httpclient, ...) are tacplus's own Apache-2.0 source copied into

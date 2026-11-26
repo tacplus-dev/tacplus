@@ -48,6 +48,7 @@ Release lines with branches: 2.0 through 2.4.
 - Gates a change can afford: per-language gate sets for `pkg/**`, failing closed (#976), and `current-generation` sharded so a full gate run is under 15 minutes on 8 CPUs (#977). Hub, at Jody's request, 2026-11-25 (`tacplus-dev/roadmap:decisions/agentic-dev-flow-2026-11-25.md`, approved after a panel review).
 - current-generation's shards share one Rust target directory with sccache, and rust/base is lighter, so a full gate run is under 15 minutes on 8 CPUs (#979; follows #977). Hub, on its recommendation (tp-act-on-recommendations), 2026-11-26.
 - Generated tenant-to-owner config push: a tenant config_slice with push delivery (#927; tacplus-dev/kernel#70). Hub, on its recommendation with Jody's standing agreement (tp-act-on-recommendations), 2026-11-26.
+- State export allow-list: an exported service_state root names the services allowed to import it (#928; tacplus-dev/kernel#71). Hub, on its recommendation with Jody's standing agreement (tp-act-on-recommendations), 2026-11-26.
 
 ## Later
 - Generated S2S clients to a peer service in another cluster or deployment (#204): parked (Jody, 2026-11-06). Cross-deployment work is a future item and needs a deeper huddle with Jody before any design or build. (Was: redo site-to-site, redo#1 option A, 2026-10-28; flock gossip.)

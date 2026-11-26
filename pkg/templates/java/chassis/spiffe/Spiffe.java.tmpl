@@ -12,6 +12,7 @@
 //
 //   spiffe://<trust_domain>/system/<location...>/services/<svc>[/workloads/<child>...]
 //   spiffe://<trust_domain>/tenants/<tenant>/services/<svc>[/workloads/<child>...]
+//   spiffe://<trust_domain>/products/<product>/services/<svc>[/workloads/<child>...]
 //   spiffe://<trust_domain>/tenants/<tenant>[/workspaces/<ws>...]
 //   spiffe://<trust_domain>/users/<xid>
 //   spiffe://<trust_domain>/<namespace>/users/<user>
@@ -57,6 +58,7 @@ public final class Spiffe {
     /** Reserved path tags. Each is a structural separator at its designated position. */
     public static final String SYSTEM_SEGMENT = "system";
     public static final String TENANTS_SEGMENT = "tenants";
+    public static final String PRODUCTS_SEGMENT = "products";
     public static final String PEOPLE_SEGMENT = "people";
     public static final String SERVICES_SEGMENT = "services";
     public static final String WORKLOADS_SEGMENT = "workloads";
@@ -93,11 +95,18 @@ public final class Spiffe {
     }
 
     private static final Set<String> RESERVED_TAGS = new LinkedHashSet<>(Arrays.asList(
-            SYSTEM_SEGMENT, TENANTS_SEGMENT, PEOPLE_SEGMENT, SERVICES_SEGMENT, WORKLOADS_SEGMENT,
-            USERS_SEGMENT, WORKSPACES_SEGMENT, CLIENTS_SEGMENT, CREDENTIALS_SEGMENT, DATA_SEGMENT));
+            SYSTEM_SEGMENT, TENANTS_SEGMENT, PRODUCTS_SEGMENT, PEOPLE_SEGMENT, SERVICES_SEGMENT,
+            WORKLOADS_SEGMENT, USERS_SEGMENT, WORKSPACES_SEGMENT, CLIENTS_SEGMENT, CREDENTIALS_SEGMENT, DATA_SEGMENT));
 
     // Shared single-segment grammar: {{.Spiffe.SegmentGrammar}}.
     private static final Pattern SEGMENT_RE = Pattern.compile({{printf "%q" .Spiffe.SegmentPattern}});
+
+    // A fleet product's name, the segment after /products:
+    // {{.Spiffe.ProductNameGrammar}}, never a tid's shape (TID_SHAPE_RE), a reserved
+    // tag, nor {{printf "%q" .Spiffe.ReservedProductName}} (products-layer-2026-11-08).
+    private static final Pattern PRODUCT_NAME_RE = Pattern.compile({{printf "%q" .Spiffe.ProductNamePattern}});
+
+    private static final Pattern TID_SHAPE_RE = Pattern.compile({{printf "%q" .Spiffe.TidShapePattern}});
 
     private static final String BASE32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 
@@ -124,6 +133,23 @@ public final class Spiffe {
                     "spiffe: segment \"" + seg + "\" violates grammar {{.Spiffe.SegmentGrammar}}");
         }
         return seg;
+    }
+
+    /** Validates a fleet product's name and returns it unchanged. */
+    public static String normalizeProductName(String name) {
+        String n = name == null ? "" : name;
+        if (RESERVED_TAGS.contains(n) || n.equals({{printf "%q" .Spiffe.ReservedProductName}})) {
+            throw new IllegalArgumentException(
+                    "spiffe: \"" + n + "\" is reserved and cannot be a product name");
+        }
+        if (!PRODUCT_NAME_RE.matcher(n).matches()) {
+            throw new IllegalArgumentException(
+                    "spiffe: product name \"" + n + "\" violates grammar {{.Spiffe.ProductNameGrammar}}");
+        }
+        if (TID_SHAPE_RE.matcher(n).matches()) {
+            throw new IllegalArgumentException("spiffe: product name \"" + n + "\" has a tid's shape");
+        }
+        return n;
     }
 
     /**
@@ -164,6 +190,10 @@ public final class Spiffe {
      * (leading slash; no trailing slash except root). It does NOT strip a SPIFFE
      * scheme &mdash; use {@link #parseNamespaceOrSpiffe} for a value that may be a
      * full URI.
+     *
+     * <p>Valid shapes: "/" (root); "/system" or "/system/&lt;loc&gt;..."; "/tenants" or
+     * "/tenants/&lt;tenant&gt;"; "/tenants/&lt;tenant&gt;/workspaces/&lt;ws&gt;..."; "/users/&lt;xid&gt;";
+     * "/products/&lt;product&gt;", exactly ({@link #normalizeProductName}).
      */
     public static String normalizeNamespace(String namespace) {
         String ns = namespace == null ? "" : namespace.trim();
@@ -243,9 +273,16 @@ public final class Spiffe {
                             "spiffe: reserved tag \"" + segs[1] + "\" cannot be a user id");
                 }
                 break;
+            case PRODUCTS_SEGMENT:
+                if (segs.length != 2) {
+                    throw new IllegalArgumentException("spiffe: a product namespace is exactly /"
+                            + PRODUCTS_SEGMENT + "/<product>, got /" + String.join("/", segs));
+                }
+                normalizeProductName(segs[1]);
+                break;
             default:
                 throw new IllegalArgumentException("spiffe: namespace must start with \"" + SYSTEM_SEGMENT
-                        + "\", \"" + TENANTS_SEGMENT + "\", or \"" + USERS_SEGMENT
+                        + "\", \"" + TENANTS_SEGMENT + "\", \"" + PRODUCTS_SEGMENT + "\", or \"" + USERS_SEGMENT
                         + "\", got \"" + segs[0] + "\"");
         }
     }
@@ -320,12 +357,16 @@ public final class Spiffe {
     }
 
     // namespaceBase for a typed leaf or pair. A user root is a complete identity,
-    // so nothing may be appended under /users/<xid>.
+    // so nothing may be appended under /users/<xid>; a product holds services only.
     private static String leafBase(String trustDomain, String namespace) {
         String ns = normalizeNamespace(namespace);
         if (ns.startsWith("/" + USERS_SEGMENT + "/")) {
             throw new IllegalArgumentException(
                     "spiffe: nothing may follow a user root, got namespace \"" + ns + "\"");
+        }
+        if (ns.startsWith("/" + PRODUCTS_SEGMENT + "/")) {
+            throw new IllegalArgumentException(
+                    "spiffe: a product holds services only, got namespace \"" + ns + "\"");
         }
         return namespaceBase(trustDomain, ns);
     }
@@ -348,6 +389,17 @@ public final class Spiffe {
         }
         b.append("/").append(SERVICES_SEGMENT).append("/").append(svc);
         return b.toString();
+    }
+
+    /**
+     * {@code spiffe://<td>/products/<product>/services/<service>}, a fleet product's
+     * service, once per fleet (products-layer-2026-11-08).
+     */
+    public static String productServiceSpiffeId(String trustDomain, String product, String serviceLabel) {
+        String base = authority(trustDomain);
+        String name = normalizeProductName(product);
+        String svc = normalizeSegment(serviceLabel);
+        return base + "/" + PRODUCTS_SEGMENT + "/" + name + "/" + SERVICES_SEGMENT + "/" + svc;
     }
 
     /** Appends {@code /workloads/<name>} to a service or workload parent. */
@@ -532,8 +584,7 @@ public final class Spiffe {
         } else if (idx.get(WORKLOADS_SEGMENT) >= 0) {
             p.subjectKind = SubjectKind.WORKLOAD;
             classifySystem(p, segs);
-        } else if ((segs.get(0).equals(SYSTEM_SEGMENT) || segs.get(0).equals(TENANTS_SEGMENT))
-                && idx.get(SERVICES_SEGMENT) >= 0) {
+        } else if (isServiceRoot(segs.get(0)) && idx.get(SERVICES_SEGMENT) >= 0) {
             p.subjectKind = SubjectKind.SERVICE;
             classifySystem(p, segs);
         } else if (idx.get(USERS_SEGMENT) >= 0) {
@@ -552,14 +603,20 @@ public final class Spiffe {
         }
     }
 
-    // Handles both service-root shapes: /system/<location...>/services/<svc> (shared
-    // services, location-agnostic) and /tenants/<tenant>/services/<svc> (tenant-owned
-    // services, one operator-managed instance per tenant). Namespace is everything
-    // before "services"; for the tenant root that's exactly "/tenants/<tenant>".
+    // Reports whether a first path segment roots service identities.
+    private static boolean isServiceRoot(String seg) {
+        return seg.equals(SYSTEM_SEGMENT) || seg.equals(TENANTS_SEGMENT) || seg.equals(PRODUCTS_SEGMENT);
+    }
+
+    // Handles the three service-root shapes: /system/<location...>/services/<svc> (shared
+    // services, location-agnostic), /tenants/<tenant>/services/<svc> (tenant-owned
+    // services, one operator-managed instance per tenant) and /products/<product>/services/<svc>
+    // (a fleet product's services, once per fleet). Namespace is everything before
+    // "services"; for the tenant and product roots that's exactly "/tenants/<tenant>" or
+    // "/products/<product>", no location.
     private static void classifySystem(ParsedSpiffeId p, List<String> segs) {
         int si = segs.indexOf(SERVICES_SEGMENT);
-        if ((!segs.get(0).equals(SYSTEM_SEGMENT) && !segs.get(0).equals(TENANTS_SEGMENT))
-                || si < 0 || si + 1 >= segs.size()) {
+        if (!isServiceRoot(segs.get(0)) || si < 0 || si + 1 >= segs.size()) {
             throw new IllegalArgumentException(
                     "spiffe: malformed system/service identity: /" + String.join("/", segs));
         }
@@ -578,7 +635,7 @@ public final class Spiffe {
                     "spiffe: malformed system/service identity: /" + String.join("/", segs));
         }
         p.locationPath = String.join("/", segs.subList(1, si));
-        p.namespace = "/" + String.join("/", segs.subList(0, si)); // /system[/location...]
+        p.namespace = "/" + String.join("/", segs.subList(0, si)); // /system[/location...], /tenants/<tenant> or /products/<product>
         p.subjectPath = String.join("/", segs.subList(si + 1, segs.size())); // <service>[/workloads/<child>...]
     }
 
@@ -598,7 +655,8 @@ public final class Spiffe {
     }
 
     // The parse-side twin of leafBase: the namespace before a typed tag must pass the
-    // namespace validator, and a user root is a complete identity, so nothing may follow it.
+    // namespace validator, and a user root is a complete identity, so nothing may follow it;
+    // a product holds services only.
     private static void validateLeafNamespace(List<String> nsSegs) {
         if (nsSegs.isEmpty()) {
             throw new IllegalArgumentException("spiffe: a typed identity needs a namespace");
@@ -606,6 +664,10 @@ public final class Spiffe {
         if (nsSegs.get(0).equals(USERS_SEGMENT)) {
             throw new IllegalArgumentException(
                     "spiffe: nothing may follow a user root, got namespace /" + String.join("/", nsSegs));
+        }
+        if (nsSegs.get(0).equals(PRODUCTS_SEGMENT)) {
+            throw new IllegalArgumentException(
+                    "spiffe: a product holds services only, got namespace /" + String.join("/", nsSegs));
         }
         validateNamespaceSegments(nsSegs.toArray(new String[0]));
     }

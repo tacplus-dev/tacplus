@@ -70,6 +70,9 @@ type ServiceEntry struct {
 	ProjectSliceField int32  `yaml:"project_slice_field,omitempty"`
 	Contract          string `yaml:"contract,omitempty"` // home of the service's proto (not necessarily its implementation, nor necessarily public)
 	Visibility        string `yaml:"visibility,omitempty"`
+	// Product is the fleet product whose code the service is, as its proto's
+	// (spec.service).product says; the fleet build checks they agree (#475).
+	Product string `yaml:"product,omitempty"`
 }
 
 // VServiceEntry is a single vservice entry in the registry.

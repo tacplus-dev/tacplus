@@ -2367,6 +2367,18 @@ extend google.protobuf.FieldOptions {
   // Example: string request_id = 3 [(spec.accounting_safe) = true];
   bool accounting_safe = 60104;
 
+  // caller_tid: this REQUEST string field carries the tenant the call is for,
+  // bound to the caller's token's `tid` claim, never the client's value (the
+  // product layer's custodian rule, roadmap/PRODUCTS_LAYER.md, #475). The
+  // generated wrapper fills an empty field with the caller's tid and refuses a
+  // differing one; a caller without a tid claim (a /system or product service)
+  // is refused. A handler keying its storage by this field reaches only the
+  // caller's tenant's rows. A singular, non-optional string field of an rpc's
+  // request. On a product service every request field that names a tenant
+  // (tenant, tenant_id, tid) must carry it.
+  // Example: string tenant = 1 [(spec.caller_tid) = true];
+  bool caller_tid = 60105;
+
   // ----- Principal annotations (§4b: the principal is a property of the type) -----
   // These two say WHERE the caller's principal lives, once, on the type. The
   // generated service wrapper then owns the stamp, the forgery refusal and the
@@ -2940,6 +2952,17 @@ message ServiceAnnotation {
   // silently. Empty — the default, and what every service today carries —
   // leaves tenant_owned's per-tenant replication exactly as it is.
   string pinned_tenant = 9;
+
+  // product names the fleet product whose code this service is: it runs once
+  // per fleet at spiffe://<td>/products/<product>/services/<name>, between
+  // /system and the tenants, never per tenant (roadmap/PRODUCTS_LAYER.md,
+  // #475). Its S2S edges are fixed at build time: a tenant and its own product
+  // may call it; it may call /system and its own product, never a tenant or
+  // another product; /system never calls it. Exclusive with tenant_owned, never
+  // declared by a sys contract. The name is [a-z][a-z0-9-]{0,30}[a-z0-9], not a
+  // tid's shape (8 of [0-9a-z]) and not system, tenants, products or tacplus.
+  // Empty, the default: a platform or tenant-owned service, as before.
+  string product = 10;
 }
 
 // GrpcConfigAnnotation marks a message as a gRPC service's configuration.

@@ -1026,6 +1026,7 @@ spiffe://<trust_domain>/
   tenants/<tenant>/...[/clients/<client>]
   tenants/<tenant>/...[/credentials/<kind>/<id>]
   tenants/<tenant>/...[/data/<kind>/<id>]
+  products/<product>/services/<service>[/workloads/<child>...]
   users/<xid>
 ```
 
@@ -1034,9 +1035,15 @@ tenant-scoped principals and resources; `/users/<xid>` is a user principal
 that exists outside every tenant (one minted opaque id), and its namespace is
 `/users/<xid>`. It is exactly two segments and is its own subtree: it is not
 at or below any `/tenants/...` namespace, and no `/tenants/...` namespace is
-at or below it. The `<location...>` tiers between
+at or below it. `/products/<product>` holds a fleet product's services, once
+per fleet (decision `products-layer-2026-11-08`, #475): its namespace is
+exactly `/products/<product>` (no bare `/products`, no location, no typed
+leaf), its own subtree beside `/system` and the tenants, and the product name
+is `[a-z][a-z0-9-]{0,30}[a-z0-9]`, never a tid's shape (8 of `[0-9a-z]`), a
+reserved tag or `tacplus`; `product_service_spiffe_id(td, product, svc)`
+constructs it. The `<location...>` tiers between
 `/system/` and `services` are opaque and variable-arity (the parser keys off
-the `services` tag). Reserved tags (`system`, `tenants`, `services`,
+the `services` tag). Reserved tags (`system`, `tenants`, `products`, `services`,
 `workloads`, `users`, `workspaces`, `clients`, `credentials`, `data`) are
 rejected as namespace segments at every depth.
 

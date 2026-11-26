@@ -12,6 +12,7 @@
 //
 //   spiffe://<trust_domain>/system/<location...>/services/<svc>[/workloads/<child>...]
 //   spiffe://<trust_domain>/tenants/<tenant>/services/<svc>[/workloads/<child>...]
+//   spiffe://<trust_domain>/products/<product>/services/<svc>[/workloads/<child>...]
 //   spiffe://<trust_domain>/tenants/<tenant>[/workspaces/<ws>...]
 //   spiffe://<trust_domain>/users/<xid>
 //   spiffe://<trust_domain>/<namespace>/users/<user>
@@ -31,6 +32,7 @@ export const SCHEME_VERSION = 'v1';
 // and is rejected as a user-supplied identifier segment at any depth.
 export const SYSTEM_SEGMENT = 'system';
 export const TENANTS_SEGMENT = 'tenants';
+export const PRODUCTS_SEGMENT = 'products';
 export const PEOPLE_SEGMENT = 'people';
 export const SERVICES_SEGMENT = 'services';
 export const WORKLOADS_SEGMENT = 'workloads';
@@ -53,6 +55,7 @@ export enum SubjectKind {
 const RESERVED_TAGS: Set<string> = new Set([
   SYSTEM_SEGMENT,
   TENANTS_SEGMENT,
+  PRODUCTS_SEGMENT,
   PEOPLE_SEGMENT,
   SERVICES_SEGMENT,
   WORKLOADS_SEGMENT,
@@ -67,6 +70,15 @@ const RESERVED_TAGS: Set<string> = new Set([
 // It rejects empty, leading separators, "." / "..", "/", "\", ":", "%", query,
 // fragment, and encoded separators by construction.
 const SEGMENT_RE = new RegExp({{printf "%q" .Spiffe.SegmentPattern}});
+
+// PRODUCT_NAME_RE is a fleet product's name, the segment after /products:
+// {{.Spiffe.ProductNameGrammar}}, never a tid's shape (TID_SHAPE_RE), a reserved
+// tag, nor {{printf "%q" .Spiffe.ReservedProductName}} (products-layer-2026-11-08).
+const PRODUCT_NAME_RE = new RegExp({{printf "%q" .Spiffe.ProductNamePattern}});
+
+const TID_SHAPE_RE = new RegExp({{printf "%q" .Spiffe.TidShapePattern}});
+
+const RESERVED_PRODUCT_NAME = {{printf "%q" .Spiffe.ReservedProductName}};
 
 // isReservedTag reports whether s is a reserved structural tag.
 export function isReservedTag(s: string): boolean {
@@ -92,6 +104,23 @@ export function normalizeSegment(seg: string): string {
     );
   }
   return seg;
+}
+
+// normalizeProductName validates a fleet product's name and returns it
+// unchanged, or throws.
+export function normalizeProductName(name: string): string {
+  if (RESERVED_TAGS.has(name) || name === RESERVED_PRODUCT_NAME) {
+    throw new Error(`spiffe: "${name}" is reserved and cannot be a product name`);
+  }
+  if (!PRODUCT_NAME_RE.test(name)) {
+    throw new Error(
+      `spiffe: product name "${name}" violates grammar {{.Spiffe.ProductNameGrammar}}`,
+    );
+  }
+  if (TID_SHAPE_RE.test(name)) {
+    throw new Error(`spiffe: product name "${name}" has a tid's shape`);
+  }
+  return name;
 }
 
 // normalizeTenantSegment validates a tenant label. It is normalizeSegment with a
@@ -131,8 +160,8 @@ export function normalizeTrustDomain(value: string): string {
 // full URI.
 //
 // Valid shapes: "/" (root); "/system" or "/system/<loc>..."; "/tenants" or
-// "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>..."; "/users/<xid>". A
-// reserved tag is rejected as a tenant/location/workspace/user id, the workspaces
+// "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>..."; "/users/<xid>";
+// "/products/<product>", exactly (normalizeProductName). A reserved tag is rejected as a tenant/location/workspace/user id, the workspaces
 // tag is the only structural tag permitted under a tenant, and a user root is
 // exactly "/users/<xid>": bare "/users" and anything after the xid are rejected.
 export function normalizeNamespace(namespace: string): string {
@@ -214,9 +243,17 @@ function validateNamespaceSegments(segs: string[]): void {
         throw new Error(`spiffe: reserved tag "${segs[1]}" cannot be a user id`);
       }
       break;
+    case PRODUCTS_SEGMENT:
+      if (segs.length !== 2) {
+        throw new Error(
+          `spiffe: a product namespace is exactly /${PRODUCTS_SEGMENT}/<product>, got /${segs.join('/')}`,
+        );
+      }
+      normalizeProductName(segs[1]);
+      break;
     default:
       throw new Error(
-        `spiffe: namespace must start with "${SYSTEM_SEGMENT}", "${TENANTS_SEGMENT}", or "${USERS_SEGMENT}", got "${segs[0]}"`,
+        `spiffe: namespace must start with "${SYSTEM_SEGMENT}", "${TENANTS_SEGMENT}", "${PRODUCTS_SEGMENT}", or "${USERS_SEGMENT}", got "${segs[0]}"`,
       );
   }
 }
@@ -251,11 +288,15 @@ function namespaceBase(trustDomain: string, namespace: string): string {
 }
 
 // leafBase is namespaceBase for a typed leaf or pair. A user root is a complete
-// identity, so nothing may be appended under /users/<xid>.
+// identity, so nothing may be appended under /users/<xid>; a product holds
+// services only, so no typed leaf goes under /products/<product>.
 function leafBase(trustDomain: string, namespace: string): string {
   const ns = normalizeNamespace(namespace);
   if (ns.startsWith('/' + USERS_SEGMENT + '/')) {
     throw new Error(`spiffe: nothing may follow a user root, got namespace "${ns}"`);
+  }
+  if (ns.startsWith('/' + PRODUCTS_SEGMENT + '/')) {
+    throw new Error(`spiffe: a product holds services only, got namespace "${ns}"`);
   }
   return namespaceBase(trustDomain, ns);
 }
@@ -280,6 +321,19 @@ export function serviceSpiffeId(
   }
   b += '/' + SERVICES_SEGMENT + '/' + svc;
   return b;
+}
+
+// productServiceSpiffeId: spiffe://<td>/products/<product>/services/<service>,
+// a fleet product's service, once per fleet (products-layer-2026-11-08).
+export function productServiceSpiffeId(
+  trustDomain: string,
+  product: string,
+  serviceLabel: string,
+): string {
+  const base = authority(trustDomain);
+  const name = normalizeProductName(product);
+  const svc = normalizeSegment(serviceLabel);
+  return base + '/' + PRODUCTS_SEGMENT + '/' + name + '/' + SERVICES_SEGMENT + '/' + svc;
 }
 
 // workloadSpiffeId appends /workloads/<name> to a service or workload parent.
@@ -516,7 +570,7 @@ function classify(p: ParsedSpiffeId, segs: string[]): void {
     classifySystem(p, segs);
     return;
   }
-  if ((segs[0] === SYSTEM_SEGMENT || segs[0] === TENANTS_SEGMENT) && idx[SERVICES_SEGMENT] >= 0) {
+  if (isServiceRoot(segs[0]) && idx[SERVICES_SEGMENT] >= 0) {
     p.subjectKind = SubjectKind.Service;
     classifySystem(p, segs);
     return;
@@ -543,13 +597,20 @@ function classify(p: ParsedSpiffeId, segs: string[]): void {
   p.namespace = '/' + segs.join('/');
 }
 
-// Handles both service-root shapes: /system/<location...>/services/<svc> (shared
-// services, location-agnostic) and /tenants/<tenant>/services/<svc> (tenant-owned
-// services, one operator-managed instance per tenant). Namespace is everything
-// before "services"; for the tenant root that's exactly "/tenants/<tenant>".
+// isServiceRoot reports whether a first path segment roots service identities.
+function isServiceRoot(seg: string): boolean {
+  return seg === SYSTEM_SEGMENT || seg === TENANTS_SEGMENT || seg === PRODUCTS_SEGMENT;
+}
+
+// Handles the three service-root shapes: /system/<location...>/services/<svc> (shared
+// services, location-agnostic), /tenants/<tenant>/services/<svc> (tenant-owned
+// services, one operator-managed instance per tenant) and
+// /products/<product>/services/<svc> (a fleet product's services, once per fleet).
+// Namespace is everything before "services"; for the tenant and product roots that's
+// exactly "/tenants/<tenant>" or "/products/<product>".
 function classifySystem(p: ParsedSpiffeId, segs: string[]): void {
   const si = indexOf(segs, SERVICES_SEGMENT);
-  if ((segs[0] !== SYSTEM_SEGMENT && segs[0] !== TENANTS_SEGMENT) || si < 0 || si + 1 >= segs.length) {
+  if (!isServiceRoot(segs[0]) || si < 0 || si + 1 >= segs.length) {
     throw new Error(`spiffe: malformed system/service identity: /${segs.join('/')}`);
   }
   validateNamespaceSegments(segs.slice(0, si));
@@ -565,7 +626,7 @@ function classifySystem(p: ParsedSpiffeId, segs: string[]): void {
     throw new Error(`spiffe: malformed system/service identity: /${segs.join('/')}`);
   }
   p.locationPath = segs.slice(1, si).join('/');
-  p.namespace = '/' + segs.slice(0, si).join('/'); // /system[/location...]
+  p.namespace = '/' + segs.slice(0, si).join('/'); // /system[/location...], /tenants/<t> or /products/<p>
   p.subjectPath = segs.slice(si + 1).join('/'); // <service>[/workloads/<child>...]
 }
 
@@ -584,13 +645,17 @@ function classifyUserRoot(p: ParsedSpiffeId, segs: string[]): void {
 }
 
 // The parse-side twin of leafBase: the namespace before a typed tag must pass the
-// namespace validator, and a user root is a complete identity, so nothing may follow it.
+// namespace validator, a user root is a complete identity, so nothing may follow it,
+// and a product holds services only.
 function validateLeafNamespace(nsSegs: string[]): void {
   if (nsSegs.length === 0) {
     throw new Error('spiffe: a typed identity needs a namespace');
   }
   if (nsSegs[0] === USERS_SEGMENT) {
     throw new Error(`spiffe: nothing may follow a user root, got namespace /${nsSegs.join('/')}`);
+  }
+  if (nsSegs[0] === PRODUCTS_SEGMENT) {
+    throw new Error(`spiffe: a product holds services only, got namespace /${nsSegs.join('/')}`);
   }
   validateNamespaceSegments(nsSegs);
 }

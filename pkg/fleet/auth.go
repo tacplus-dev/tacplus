@@ -26,7 +26,9 @@ var fromFleetRe = regexp.MustCompile(`auth_services_from_fleet\s*:\s*true`)
 // all_grpc_s2s_clients). The contract repo never carries one fleet's list; the
 // tree each service is generated from does. A service nobody in the fleet
 // calls keeps the flag and so admits no callers, which is the fail-closed
-// answer, and is logged.
+// answer, and is logged. An all_grpc_s2s_clients caller is admitted only where
+// the product layer allows its edge (#475): it asks for every client the edge
+// table allows, never a refused one.
 func stampFleetAuth(mergedDir string) error {
 	root, cleanup, err := registry.PrepareDescriptorRoot(mergedDir)
 	if err != nil {
@@ -38,6 +40,7 @@ func stampFleetAuth(mergedDir string) error {
 		return fmt.Errorf("fleet: parsing merged protos: %w", err)
 	}
 	files := dp.GetAllFiles()
+	layers := parser.ServiceLayers(dp)
 
 	// Who calls whom, by "pkg.Service".
 	callers := map[string]map[string]bool{}
@@ -71,7 +74,14 @@ func stampFleetAuth(mergedDir string) error {
 			for who := range callers[key] {
 				set[who] = true
 			}
+			target := layers[fd.Package]
+			if fd.ServiceName != "" {
+				target = layers[fd.ServiceName]
+			}
 			for _, who := range callsAll {
+				if parser.S2SEdgeRefusal(layers[who], target) != "" {
+					continue
+				}
 				set[who] = true
 			}
 			if len(set) == 0 {

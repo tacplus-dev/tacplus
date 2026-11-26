@@ -22,6 +22,7 @@ import {
   workloadSpiffeId,
   tenantSpiffeId,
   tenantServiceSpiffeId,
+  productServiceSpiffeId,
   workspaceSpiffeId,
   namespaceSpiffeId,
   userSpiffeId,
@@ -144,6 +145,8 @@ function callSharedConstruct(fn: string, args: string[]): string {
       return namespaceSpiffeId(args[0], args[1]);
     case 'tenant_spiffe_id':
       return tenantSpiffeId(args[0], args[1]);
+    case 'product_service_spiffe_id':
+      return productServiceSpiffeId(args[0], args[1], args[2]);
     default:
       throw new Error(`unsupported shared construct: ${fn}`);
   }

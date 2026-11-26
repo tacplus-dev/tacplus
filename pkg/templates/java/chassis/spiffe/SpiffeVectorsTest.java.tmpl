@@ -102,6 +102,8 @@ public final class SpiffeVectorsTest {
                 return Spiffe.namespaceSpiffeId(arg(args, 0), arg(args, 1));
             case "tenant_spiffe_id":
                 return Spiffe.tenantSpiffeId(arg(args, 0), arg(args, 1));
+            case "product_service_spiffe_id":
+                return Spiffe.productServiceSpiffeId(arg(args, 0), arg(args, 1), arg(args, 2));
             default:
                 throw new IllegalArgumentException("unsupported shared construct: " + fn);
         }

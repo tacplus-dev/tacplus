@@ -79,6 +79,19 @@
       "subject_kind": "resource",
       "resource_kind": "gitlab-event",
       "resource_id": "evt-1"
+    },
+    {
+      "_comment": "a fleet product's service (products-layer-2026-11-08): its namespace is exactly /products/<name>, no location",
+      "input": "spiffe://example.com/products/ledger/services/billing",
+      "subject_kind": "service",
+      "namespace": "/products/ledger",
+      "subject_path": "billing"
+    },
+    {
+      "input": "spiffe://example.com/products/ledger/services/billing/workloads/agent-1",
+      "subject_kind": "workload",
+      "namespace": "/products/ledger",
+      "subject_path": "billing/workloads/agent-1"
     }
   ],
   "round_trip": [
@@ -88,7 +101,9 @@
     "spiffe://example.com/tenants/acme/workspaces/dev",
     "spiffe://example.com/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b",
     "spiffe://example.com/tenants/acme/workspaces/dev/users/jody",
-    "spiffe://example.com/tenants/acme/workspaces/dev/data/gitlab-event/evt-1"
+    "spiffe://example.com/tenants/acme/workspaces/dev/data/gitlab-event/evt-1",
+    "spiffe://example.com/products/ledger/services/billing",
+    "spiffe://example.com/products/ledger/services/billing/workloads/agent-1"
   ],
   "comparison": {
     "is_at_or_below": [
@@ -100,7 +115,14 @@
       { "caller": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "target": "/tenants/acme/workspaces/dev", "expect": false },
       { "caller": "/tenants/acme/workspaces/dev", "target": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "expect": false },
       { "caller": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "target": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "expect": true },
-      { "caller": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "target": "/users/7d3e9f20-1c4b-4a6e-8f5d-2b1a0c9e8d7f", "expect": false }
+      { "caller": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "target": "/users/7d3e9f20-1c4b-4a6e-8f5d-2b1a0c9e8d7f", "expect": false },
+      { "_comment": "/products/<name> is its own subtree, beside /system and the tenants",
+        "caller": "/products/ledger", "target": "/products/ledger", "expect": true },
+      { "caller": "/products/ledger", "target": "/products/ledger2", "expect": false },
+      { "caller": "/system", "target": "/products/ledger", "expect": false },
+      { "caller": "/products/ledger", "target": "/system", "expect": false },
+      { "caller": "/tenants/acme", "target": "/products/ledger", "expect": false },
+      { "caller": "/products/ledger", "target": "/tenants/acme", "expect": false }
     ],
     "same_trust_domain": [
       { "a": "spiffe://example.com/tenants/a", "b": "spiffe://example.com/tenants/b", "expect": true },
@@ -108,7 +130,8 @@
     ],
     "service_path_location_agnostic": [
       { "input": "spiffe://example.com/system/aws/acct1/az1/cluster1/services/mcp", "expect": "mcp" },
-      { "input": "spiffe://example.com/system/gcp/acct2/az9/cluster9/services/mcp", "expect": "mcp" }
+      { "input": "spiffe://example.com/system/gcp/acct2/az9/cluster9/services/mcp", "expect": "mcp" },
+      { "input": "spiffe://example.com/products/ledger/services/billing", "expect": "billing" }
     ]
   },
   "normalization": {
@@ -117,7 +140,8 @@
     ],
     "namespace": [
       { "input": " tenants/acme/ ", "expect": "/tenants/acme" },
-      { "input": " users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b/ ", "expect": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b" }
+      { "input": " users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b/ ", "expect": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b" },
+      { "input": " products/ledger/ ", "expect": "/products/ledger" }
     ]
   },
   "invalid_parse": [
@@ -153,7 +177,22 @@
     "spiffe://example.com/system/aws/services/workloads",
     "spiffe://example.com/tenants/x/services/s/workloads/users",
     "spiffe://example.com/foo/services/s",
-    "spiffe://example.com/tenants/x/data/k/i/j"
+    "spiffe://example.com/tenants/x/data/k/i/j",
+    "spiffe://example.com/products",
+    "spiffe://example.com/products/services/billing",
+    "spiffe://example.com/products/abcd1234/services/billing",
+    "spiffe://example.com/products/system/services/billing",
+    "spiffe://example.com/products/tacplus/services/billing",
+    "spiffe://example.com/products/Ledger/services/billing",
+    "spiffe://example.com/products/ledger-/services/billing",
+    "spiffe://example.com/products/ledger/aws/services/billing",
+    "spiffe://example.com/products/ledger/workspaces/dev",
+    "spiffe://example.com/products/ledger/users/jody",
+    "spiffe://example.com/products/ledger/clients/c",
+    "spiffe://example.com/products/ledger/data/k/i",
+    "spiffe://example.com/products/ledger/services/users",
+    "spiffe://example.com/system/products/services/s",
+    "spiffe://example.com/tenants/products"
   ],
   "invalid_construct": [
     { "fn": "normalize_trust_domain", "args": ["example.com/x"] },
@@ -178,7 +217,21 @@
     { "fn": "user_spiffe_id", "args": ["example.com", "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b"] },
     { "fn": "user_spiffe_id", "args": ["example.com", "/tenants/acme", "users"] },
     { "fn": "resource_spiffe_id", "args": ["example.com", "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "gitlab-event", "evt-1"] },
-    { "fn": "credential_spiffe_id", "args": ["example.com", "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "cred-pair", "cred-1"] }
+    { "fn": "credential_spiffe_id", "args": ["example.com", "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "cred-pair", "cred-1"] },
+    { "_comment": "a product name is [a-z][a-z0-9-]{0,30}[a-z0-9], not a tid's shape (8 of [0-9a-z]), not a reserved tag nor tacplus",
+      "fn": "product_service_spiffe_id", "args": ["example.com", "abcd1234", "billing"] },
+    { "fn": "product_service_spiffe_id", "args": ["example.com", "system", "billing"] },
+    { "fn": "product_service_spiffe_id", "args": ["example.com", "tacplus", "billing"] },
+    { "fn": "product_service_spiffe_id", "args": ["example.com", "Ledger", "billing"] },
+    { "fn": "product_service_spiffe_id", "args": ["example.com", "l", "billing"] },
+    { "fn": "product_service_spiffe_id", "args": ["example.com", "ledger", "services"] },
+    { "fn": "product_service_spiffe_id", "args": ["example.com/x", "ledger", "billing"] },
+    { "fn": "namespace_spiffe_id", "args": ["example.com", "/products"] },
+    { "fn": "namespace_spiffe_id", "args": ["example.com", "/products/abcd1234"] },
+    { "fn": "namespace_spiffe_id", "args": ["example.com", "/products/ledger/workspaces/dev"] },
+    { "fn": "tenant_spiffe_id", "args": ["example.com", "products"] },
+    { "fn": "user_spiffe_id", "args": ["example.com", "/products/ledger", "jody"] },
+    { "fn": "resource_spiffe_id", "args": ["example.com", "/products/ledger", "usage", "u-1"] }
   ],
   "valid_construct": [
     { "fn": "namespace_spiffe_id", "args": ["example.com", "/system/aws/acct1"], "expect": "spiffe://example.com/system/aws/acct1" },
@@ -188,7 +241,10 @@
     { "fn": "user_spiffe_id", "args": ["example.com", "/tenants/people", "jody"], "expect": "spiffe://example.com/tenants/people/users/jody" },
     { "fn": "user_root_spiffe_id", "args": ["example.com", "0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b"], "expect": "spiffe://example.com/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b" },
     { "fn": "namespace_spiffe_id", "args": ["example.com", "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b"], "expect": "spiffe://example.com/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b" },
-    { "fn": "user_spiffe_id", "args": ["example.com", "/tenants/acme", "0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b"], "expect": "spiffe://example.com/tenants/acme/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b" }
+    { "fn": "user_spiffe_id", "args": ["example.com", "/tenants/acme", "0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b"], "expect": "spiffe://example.com/tenants/acme/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b" },
+    { "fn": "product_service_spiffe_id", "args": ["example.com", "ledger", "billing"], "expect": "spiffe://example.com/products/ledger/services/billing" },
+    { "fn": "product_service_spiffe_id", "args": ["example.com", "abcd-123", "billing"], "expect": "spiffe://example.com/products/abcd-123/services/billing" },
+    { "fn": "namespace_spiffe_id", "args": ["example.com", "/products/ledger"], "expect": "spiffe://example.com/products/ledger" }
   ],
   "opaque_segment": {
     "spec": "base32_lower_nopad(SHA256(utf8(kind) || 0x1F || utf8(NFC(value)))[:20]); 32 chars [a-z2-7]; kind domain-separates",

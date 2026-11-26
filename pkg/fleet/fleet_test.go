@@ -466,7 +466,7 @@ func TestValidateFleetChecksTheRedoHostIsASystemService(t *testing.T) {
 		merged := t.TempDir()
 		write(t, filepath.Join(merged, "registry.yaml"), "services:\n    - name: redo\n      id: 1\n")
 		write(t, filepath.Join(merged, "services", "redo.proto"), "syntax = \"proto3\";\n\npackage redo;\n\nimport \"sys/spec.proto\";\n\noption (spec.service) = "+tc.option+";\n")
-		err := validateFleet(merged)
+		_, err := validateFleet(merged)
 		if tc.ok && err != nil {
 			t.Fatalf("%s: validateFleet: %v", tc.option, err)
 		}
@@ -561,5 +561,77 @@ func TestBuildRefusesContributionsWithoutTheirInputs(t *testing.T) {
 				t.Fatalf("got %v, want an error naming echo and %s", err, tc.want)
 			}
 		})
+	}
+}
+
+// The fleet is where both ends of an edge are loaded: a product service that
+// declares a client of a tenant-owned one is refused (#475), and a product
+// service's registry entry names the product its proto declares.
+func TestValidateFleetChecksTheProductLayer(t *testing.T) {
+	proto := func(pkg, option, extra string) string {
+		svc := strings.ToUpper(pkg[:1]) + pkg[1:]
+		return "syntax = \"proto3\";\n\npackage " + pkg + ";\n\nimport \"sys/spec.proto\";\n\noption (spec.service) = " + option + ";\n" + extra +
+			"\nmessage PingRequest {}\nmessage PingResponse {}\n\nservice " + svc + " {\n  option (spec.service_s2s) = {auth_services: [\"*\"]};\n\n  rpc Ping(PingRequest) returns (PingResponse);\n}\n"
+	}
+	for _, tc := range []struct {
+		name, billingRegistry, billingExtra string
+		want                                []string
+	}{
+		{name: "agreeing", billingRegistry: ", product: ledger", want: nil},
+		{name: "product to tenant", billingRegistry: ", product: ledger", billingExtra: "option (spec.grpc_s2s_client) = {service: \"crew.Crew\"};\n", want: []string{"billing", "crew", "never calls a tenant"}},
+		{name: "registry without the product", billingRegistry: "", want: []string{"billing", "registry", "ledger"}},
+		{name: "registry with another product", billingRegistry: ", product: other", want: []string{"billing", "other", "ledger"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			merged := t.TempDir()
+			write(t, filepath.Join(merged, "registry.yaml"), "services:\n    - {name: billing, id: 1"+tc.billingRegistry+"}\n    - {name: crew, id: 2}\n")
+			write(t, filepath.Join(merged, "services", "billing.proto"), proto("billing", `{name: "billing", product: "ledger"}`, tc.billingExtra))
+			write(t, filepath.Join(merged, "services", "crew.proto"), "syntax = \"proto3\";\n\npackage crew;\n\nimport \"sys/spec.proto\";\n\noption (spec.service) = {name: \"crew\", tenant_owned: true};\n"+
+				"\nmessage PingRequest { string tenant = 1; }\nmessage PingResponse {}\n\nservice Crew {\n  option (spec.service_s2s) = {auth_services: [\"*\"]};\n\n  rpc Ping(PingRequest) returns (PingResponse) {\n    option (spec.rpc) = {route_field: \"tenant\"};\n  }\n}\n")
+			products, err := validateFleet(merged)
+			if tc.want == nil {
+				if err != nil {
+					t.Fatalf("validateFleet: %v", err)
+				}
+				if products["billing"] != "ledger" || products["crew"] != "" {
+					t.Fatalf("products = %v, want billing in ledger", products)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("validateFleet accepted it, want a refusal naming %q", tc.want)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(err.Error(), w) {
+					t.Fatalf("err %q does not name %q", err, w)
+				}
+			}
+		})
+	}
+}
+
+// all_grpc_s2s_clients asks for a client of every service the edge table
+// allows (#475): stamping a /system caller of it onto a product service would
+// be an edge the fleet refuses, so the stamp leaves it out.
+func TestStampFleetAuthKeepsToTheProductLayer(t *testing.T) {
+	merged := t.TempDir()
+	write(t, filepath.Join(merged, "registry.yaml"), "services:\n    - {name: core, id: 1}\n    - {name: crew, id: 2}\n    - {name: billing, id: 3, product: ledger}\n    - {name: audit, id: 4, product: other}\n    - {name: meter, id: 5, product: ledger}\n")
+	svc := func(pkg, option, s2s, extra string) string {
+		name := strings.ToUpper(pkg[:1]) + pkg[1:]
+		return "syntax = \"proto3\";\npackage " + pkg + ";\nimport \"sys/spec.proto\";\noption (spec.service) = " + option + ";\n" + extra +
+			"message PingRequest { string m = 1; }\nservice " + name + " {\n  option (spec.service_s2s) = {" + s2s + "};\n  rpc Ping(PingRequest) returns (PingRequest);\n}\n"
+	}
+	all := "option (spec.all_grpc_s2s_clients) = true;\n"
+	write(t, filepath.Join(merged, "services", "core.proto"), svc("core", `{name: "core"}`, `auth_services: ["*"]`, all))
+	write(t, filepath.Join(merged, "services", "crew.proto"), svc("crew", `{name: "crew", tenant_owned: true}`, `auth_services: ["*"]`, all))
+	write(t, filepath.Join(merged, "services", "audit.proto"), svc("audit", `{name: "audit", product: "other"}`, `auth_services: ["*"]`, all))
+	write(t, filepath.Join(merged, "services", "meter.proto"), svc("meter", `{name: "meter", product: "ledger"}`, `auth_services: ["*"]`, all))
+	write(t, filepath.Join(merged, "services", "billing.proto"), svc("billing", `{name: "billing", product: "ledger"}`, `auth_services_from_fleet: true`, ""))
+	if err := stampFleetAuth(merged); err != nil {
+		t.Fatal(err)
+	}
+	stamped, _ := os.ReadFile(filepath.Join(merged, "services", "billing.proto"))
+	if !strings.Contains(string(stamped), `auth_services: ["crew", "meter"]`) {
+		t.Fatalf("billing admits the tenant and its own product's callers, not /system nor another product:\n%s", stamped)
 	}
 }

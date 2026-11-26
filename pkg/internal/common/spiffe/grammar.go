@@ -10,8 +10,19 @@ const (
 	SegmentGrammar = `[A-Za-z0-9][A-Za-z0-9._-]*`
 	SegmentPattern = `^` + SegmentGrammar + `$`
 
+	// A fleet product's name, the segment after /products
+	// (products-layer-2026-11-08, #475): a Kubernetes label's alphabet, since
+	// its namespace is tac-<deployment>-<name>, and never a tid's shape, the
+	// shape of a tenant's tac-<deployment>-<tid>, nor a reserved tag nor
+	// ReservedProductName.
+	ProductNameGrammar  = `[a-z][a-z0-9-]{0,30}[a-z0-9]`
+	ProductNamePattern  = `^` + ProductNameGrammar + `$`
+	TidShapePattern     = `^[0-9a-z]{8}$`
+	ReservedProductName = "tacplus"
+
 	SystemSegment      = "system"
 	TenantsSegment     = "tenants"
+	ProductsSegment    = "products"
 	PeopleSegment      = "people"
 	ServicesSegment    = "services"
 	WorkloadsSegment   = "workloads"
@@ -25,6 +36,7 @@ const (
 var ReservedSegments = []string{
 	SystemSegment,
 	TenantsSegment,
+	ProductsSegment,
 	PeopleSegment,
 	ServicesSegment,
 	WorkloadsSegment,
@@ -36,14 +48,22 @@ var ReservedSegments = []string{
 }
 
 type TemplateGrammar struct {
-	SegmentGrammar string
-	SegmentPattern string
+	SegmentGrammar      string
+	SegmentPattern      string
+	ProductNameGrammar  string
+	ProductNamePattern  string
+	TidShapePattern     string
+	ReservedProductName string
 }
 
 func TemplateData() TemplateGrammar {
 	return TemplateGrammar{
-		SegmentGrammar: SegmentGrammar,
-		SegmentPattern: SegmentPattern,
+		SegmentGrammar:      SegmentGrammar,
+		SegmentPattern:      SegmentPattern,
+		ProductNameGrammar:  ProductNameGrammar,
+		ProductNamePattern:  ProductNamePattern,
+		TidShapePattern:     TidShapePattern,
+		ReservedProductName: ReservedProductName,
 	}
 }
 

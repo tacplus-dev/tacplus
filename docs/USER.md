@@ -1617,6 +1617,55 @@ service Crew {
 `registry.json` carries `route_field`, `route_field_number` and `any_tenant` on
 every rpc.
 
+### Product services: `/products/<name>` (in progress)
+
+A fleet's own product code runs between `/system` (tacplus.dev's platform only)
+and the tenants, at `spiffe://<td>/products/<name>/services/<svc>`, once per
+fleet (decision `products-layer-2026-11-08`; design
+[roadmap/PRODUCTS_LAYER.md](../roadmap/PRODUCTS_LAYER.md), #475). The proto
+declares it:
+
+```protobuf
+option (spec.service) = {name: "billing", product: "ledger"};
+
+message RecordUsageRequest {
+  string tenant = 1 [(spec.caller_tid) = true];  // the caller's token's tid, never the client's value
+  int64 units = 2;
+}
+```
+
+What this release checks, in the service's own build and again over the
+fleet's merged protos:
+
+- **The name** is `[a-z][a-z0-9-]{0,30}[a-z0-9]`, not a tid's shape (8 of
+  `[0-9a-z]`: the product's namespace is `tac-<deployment>-<name>`, a tenant's
+  shape) and not `system`, `tenants`, `products` or `tacplus`. `product` is
+  exclusive with `tenant_owned` and `pinned_tenant`, and a sys contract never
+  declares it.
+- **The S2S edges.** A tenant may call a product, a product may call `/system`
+  and its own product; a product never calls a tenant or another product, and
+  `/system` never calls a product. Every edge a service declares
+  (`(spec.grpc_s2s_client)`, a hosted surface resolved to its host,
+  `(spec.record_read)`, a `state_import`, a literal `auth_services` caller)
+  that the table refuses fails generation, naming both ends and the rule.
+  `auth_services_from_fleet` admits an `all_grpc_s2s_clients` caller only
+  where its edge is allowed. User traffic (C2S) is not an edge.
+- **`(spec.caller_tid)`** goes on one plain `string` field of an rpc's
+  request. On a product service every request field named `tenant`,
+  `tenant_id` or `tid` must carry it: a product keeps a tenant's data only as
+  its custodian, keyed by the caller's token's tid.
+- **The registry** entry of a product service names its product
+  (`tacplus registry register NAME --product <name>`), and the fleet build
+  refuses a registry that disagrees with the proto. `fleet.lock` lists the
+  fleet's `products:` and each service's `product:`; `registry.json`'s
+  service info carries `product`.
+
+The generated doors (the product door, the S2S client's refusal before
+sending, the `caller_tid` binding and tenant deletion) are not in this release
+yet, so a **server** of a product service, or of an rpc binding
+`(spec.caller_tid)`, is refused at generation in every server language rather
+than generated without them. Clients of a product service generate as before.
+
 ### Every user RPC is also an MCP tool
 
 **An rpc on a `(spec.service_c2s)` service is published as an MCP tool

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
 
 // LegalID reports whether id may appear in any registry: a legacy per-repo id
@@ -81,6 +83,27 @@ func (r *Registry) Register(kind, name, contract, visibility string) (int32, err
 	}
 	r.dirty = true
 	return id, nil
+}
+
+// SetProduct records, in this AUTHORITY, the fleet product a registered
+// service's code belongs to (#475). The name is checked as the proto's
+// (spec.service).product is; the fleet build checks the two agree.
+func (r *Registry) SetProduct(name, product string) error {
+	if r.IsLock() {
+		return fmt.Errorf("product: this registry.yaml is a lock of %s, not an authority", strings.Join(r.Registries, ", "))
+	}
+	e, ok := r.byName[name]
+	if !ok {
+		return fmt.Errorf("product: service %q is not registered", name)
+	}
+	if err := parser.ValidateProductName(product); err != nil {
+		return fmt.Errorf("product: %w", err)
+	}
+	if e.Product != product {
+		e.Product = product
+		r.dirty = true
+	}
+	return nil
 }
 
 // Slice kinds: a (spec.config_slice) is tenant- or project-scoped, and its
@@ -266,14 +289,14 @@ func (r *Registry) SyncFromGlobal(global *Registry, serviceNames, vserviceNames 
 			}
 			// Slice fields are wire numbers too (TenantConfig / ProjectConfig
 			// field numbers); the global registry owns them like the id.
-			if l.Contract != g.Contract || l.Visibility != g.Visibility || l.TenantSliceField != g.TenantSliceField || l.ProjectSliceField != g.ProjectSliceField {
-				l.Contract, l.Visibility = g.Contract, g.Visibility
+			if l.Contract != g.Contract || l.Visibility != g.Visibility || l.Product != g.Product || l.TenantSliceField != g.TenantSliceField || l.ProjectSliceField != g.ProjectSliceField {
+				l.Contract, l.Visibility, l.Product = g.Contract, g.Visibility, g.Product
 				l.TenantSliceField, l.ProjectSliceField = g.TenantSliceField, g.ProjectSliceField
 				r.dirty = true
 			}
 			continue
 		}
-		e := &ServiceEntry{Name: name, ID: g.ID, Contract: g.Contract, Visibility: g.Visibility, TenantSliceField: g.TenantSliceField, ProjectSliceField: g.ProjectSliceField}
+		e := &ServiceEntry{Name: name, ID: g.ID, Contract: g.Contract, Visibility: g.Visibility, Product: g.Product, TenantSliceField: g.TenantSliceField, ProjectSliceField: g.ProjectSliceField}
 		r.Services = append(r.Services, e)
 		r.byName[name] = e
 		r.dirty = true

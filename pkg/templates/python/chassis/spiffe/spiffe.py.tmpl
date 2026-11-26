@@ -13,6 +13,7 @@ Identity is a typed, self-describing URI:
 
     spiffe://<trust_domain>/system/<location...>/services/<svc>[/workloads/<child>...]
     spiffe://<trust_domain>/tenants/<tenant>/services/<svc>[/workloads/<child>...]
+    spiffe://<trust_domain>/products/<product>/services/<svc>[/workloads/<child>...]
     spiffe://<trust_domain>/tenants/<tenant>[/workspaces/<ws>...]
     spiffe://<trust_domain>/users/<xid>
     spiffe://<trust_domain>/<namespace>/users/<user>
@@ -45,6 +46,7 @@ SCHEME_VERSION = "v1"
 # and is rejected as a user-supplied identifier segment at any depth.
 SYSTEM_SEGMENT = "system"
 TENANTS_SEGMENT = "tenants"
+PRODUCTS_SEGMENT = "products"
 PEOPLE_SEGMENT = "people"
 SERVICES_SEGMENT = "services"
 WORKLOADS_SEGMENT = "workloads"
@@ -66,6 +68,7 @@ _RESERVED_TAGS = frozenset(
     {
         SYSTEM_SEGMENT,
         TENANTS_SEGMENT,
+        PRODUCTS_SEGMENT,
         PEOPLE_SEGMENT,
         SERVICES_SEGMENT,
         WORKLOADS_SEGMENT,
@@ -81,6 +84,15 @@ _RESERVED_TAGS = frozenset(
 # leading separators, "." / "..", "/", "\", ":", "%", query, fragment, and
 # encoded separators by construction.
 _SEGMENT_RE = re.compile({{printf "%q" .Spiffe.SegmentPattern}})
+
+# A fleet product's name, the segment after /products:
+# {{.Spiffe.ProductNameGrammar}}, never a tid's shape (_TID_SHAPE_RE), a reserved
+# tag, nor {{printf "%q" .Spiffe.ReservedProductName}} (products-layer-2026-11-08).
+_PRODUCT_NAME_RE = re.compile({{printf "%q" .Spiffe.ProductNamePattern}})
+
+_TID_SHAPE_RE = re.compile({{printf "%q" .Spiffe.TidShapePattern}})
+
+_RESERVED_PRODUCT_NAME = {{printf "%q" .Spiffe.ReservedProductName}}
 
 
 def is_reserved_tag(s: str) -> bool:
@@ -106,6 +118,24 @@ def normalize_segment(seg: str) -> str:
             f"spiffe: segment {seg!r} violates grammar {{.Spiffe.SegmentGrammar}}"
         )
     return seg
+
+
+def normalize_product_name(name: str) -> str:
+    """Validate a fleet product's name and return it unchanged.
+
+    Raises ValueError on a reserved tag or {{printf "%q" .Spiffe.ReservedProductName}}, a
+    name outside {{.Spiffe.ProductNameGrammar}}, or a name with a tid's shape.
+    """
+    if name in _RESERVED_TAGS or name == _RESERVED_PRODUCT_NAME:
+        raise ValueError(f"spiffe: {name!r} is reserved and cannot be a product name")
+    if not _PRODUCT_NAME_RE.fullmatch(name):
+        raise ValueError(
+            f"spiffe: product name {name!r} violates grammar "
+            + {{printf "%q" .Spiffe.ProductNameGrammar}}
+        )
+    if _TID_SHAPE_RE.fullmatch(name):
+        raise ValueError(f"spiffe: product name {name!r} has a tid's shape")
+    return name
 
 
 def _normalize_tenant_segment(tenant: str) -> str:
@@ -147,7 +177,8 @@ def normalize_namespace(namespace: str) -> str:
     full URI.
 
     Valid shapes: "/" (root); "/system" or "/system/<loc>..."; "/tenants" or
-    "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>..."; "/users/<xid>".
+    "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>..."; "/users/<xid>";
+    "/products/<product>", exactly (normalize_product_name).
     A reserved tag is rejected as a tenant/location/workspace/user id, the
     workspaces tag is the only structural tag permitted under a tenant, and a
     user root is exactly "/users/<xid>": bare "/users" and anything after the
@@ -213,10 +244,18 @@ def _validate_namespace_segments(segs: List[str]) -> None:
             )
         if segs[1] in _RESERVED_TAGS:
             raise ValueError(f"spiffe: reserved tag {segs[1]!r} cannot be a user id")
+    elif segs[0] == PRODUCTS_SEGMENT:
+        if len(segs) != 2:
+            raise ValueError(
+                f"spiffe: a product namespace is exactly /{PRODUCTS_SEGMENT}/<product>, got /"
+                + "/".join(segs)
+            )
+        normalize_product_name(segs[1])
     else:
         raise ValueError(
             f"spiffe: namespace must start with {SYSTEM_SEGMENT!r}, "
-            f"{TENANTS_SEGMENT!r}, or {USERS_SEGMENT!r}, got {segs[0]!r}"
+            f"{TENANTS_SEGMENT!r}, {PRODUCTS_SEGMENT!r}, or {USERS_SEGMENT!r}, "
+            f"got {segs[0]!r}"
         )
 
 
@@ -259,10 +298,13 @@ def _namespace_base(trust_domain: str, namespace: str) -> str:
 
 def _leaf_base(trust_domain: str, namespace: str) -> str:
     # _namespace_base for a typed leaf or pair. A user root is a complete
-    # identity, so nothing may be appended under /users/<xid>.
+    # identity, so nothing may be appended under /users/<xid>; a product holds
+    # services only, so no typed leaf goes under /products/<product>.
     ns = normalize_namespace(namespace)
     if ns.startswith("/" + USERS_SEGMENT + "/"):
         raise ValueError(f"spiffe: nothing may follow a user root, got namespace {ns!r}")
+    if ns.startswith("/" + PRODUCTS_SEGMENT + "/"):
+        raise ValueError(f"spiffe: a product holds services only, got namespace {ns!r}")
     return _namespace_base(trust_domain, ns)
 
 
@@ -279,6 +321,15 @@ def service_spiffe_id(trust_domain: str, location_path: str, service_label: str)
         parts.append("/" + seg)
     parts.append("/" + SERVICES_SEGMENT + "/" + svc)
     return "".join(parts)
+
+
+def product_service_spiffe_id(trust_domain: str, product: str, service_label: str) -> str:
+    """spiffe://<td>/products/<product>/services/<service>, a fleet product's
+    service, once per fleet (products-layer-2026-11-08)."""
+    base = _authority(trust_domain)
+    name = normalize_product_name(product)
+    svc = normalize_segment(service_label)
+    return base + "/" + PRODUCTS_SEGMENT + "/" + name + "/" + SERVICES_SEGMENT + "/" + svc
 
 
 def workload_spiffe_id(parent_spiffe_id: str, workload_name: str) -> str:
@@ -446,7 +497,7 @@ def _classify(p: ParsedSpiffeId, segs: List[str]) -> None:
     elif idx[WORKLOADS_SEGMENT] >= 0:
         p.subject_kind = KIND_WORKLOAD
         _classify_system(p, segs)
-    elif segs[0] in (SYSTEM_SEGMENT, TENANTS_SEGMENT) and idx[SERVICES_SEGMENT] >= 0:
+    elif _is_service_root(segs[0]) and idx[SERVICES_SEGMENT] >= 0:
         p.subject_kind = KIND_SERVICE
         _classify_system(p, segs)
     elif idx[USERS_SEGMENT] >= 0:
@@ -464,14 +515,20 @@ def _classify(p: ParsedSpiffeId, segs: List[str]) -> None:
         p.namespace = "/" + "/".join(segs)
 
 
+def _is_service_root(seg: str) -> bool:
+    """Report whether a first path segment roots service identities."""
+    return seg in (SYSTEM_SEGMENT, TENANTS_SEGMENT, PRODUCTS_SEGMENT)
+
+
 def _classify_system(p: ParsedSpiffeId, segs: List[str]) -> None:
-    # Handles both service-root shapes: /system/<location...>/services/<svc>
-    # (shared services, location-agnostic) and /tenants/<tenant>/services/<svc>
-    # (tenant-owned services, one operator-managed instance per tenant).
-    # Namespace is everything before "services"; for the tenant root that's
-    # exactly "/tenants/<tenant>".
+    # Handles the three service-root shapes: /system/<location...>/services/<svc>
+    # (shared services, location-agnostic), /tenants/<tenant>/services/<svc>
+    # (tenant-owned services, one operator-managed instance per tenant) and
+    # /products/<product>/services/<svc> (a fleet product's services, once per
+    # fleet). Namespace is everything before "services"; for the tenant and
+    # product roots that's exactly "/tenants/<tenant>" or "/products/<product>".
     si = _index_of(segs, SERVICES_SEGMENT)
-    if segs[0] not in (SYSTEM_SEGMENT, TENANTS_SEGMENT) or si < 0 or si + 1 >= len(segs):
+    if not _is_service_root(segs[0]) or si < 0 or si + 1 >= len(segs):
         raise ValueError(
             "spiffe: malformed system/service identity: /" + "/".join(segs)
         )
@@ -489,7 +546,7 @@ def _classify_system(p: ParsedSpiffeId, segs: List[str]) -> None:
             "spiffe: malformed system/service identity: /" + "/".join(segs)
         )
     p.location_path = "/".join(segs[1:si])
-    p.namespace = "/" + "/".join(segs[:si])  # /system[/location...]
+    p.namespace = "/" + "/".join(segs[:si])  # /system[/location...], /tenants/<t> or /products/<p>
     p.subject_path = "/".join(segs[si + 1:])  # <service>[/workloads/<child>...]
 
 
@@ -508,13 +565,17 @@ def _classify_user_root(p: ParsedSpiffeId, segs: List[str]) -> None:
 
 def _validate_leaf_namespace(ns_segs: List[str]) -> None:
     # The parse-side twin of _leaf_base: the namespace before a typed tag must
-    # pass the namespace validator, and a user root is a complete identity, so
-    # nothing may follow it.
+    # pass the namespace validator, a user root is a complete identity, so
+    # nothing may follow it, and a product holds services only.
     if not ns_segs:
         raise ValueError("spiffe: a typed identity needs a namespace")
     if ns_segs[0] == USERS_SEGMENT:
         raise ValueError(
             "spiffe: nothing may follow a user root, got namespace /" + "/".join(ns_segs)
+        )
+    if ns_segs[0] == PRODUCTS_SEGMENT:
+        raise ValueError(
+            "spiffe: a product holds services only, got namespace /" + "/".join(ns_segs)
         )
     _validate_namespace_segments(ns_segs)
 

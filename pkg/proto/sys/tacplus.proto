@@ -666,6 +666,12 @@ message ServiceInfo {
   // its model port and the build gate that keeps it so. Set on the generated
   // service's own services only, never on those it depends on.
   bool advisor = 20;
+
+  // product mirrors (spec.service).product: non-empty when this service is a
+  // fleet product's code, run once per fleet at /products/<product> (#475).
+  // Read by the operator (the product's namespace) and checked by the fleet
+  // build against the registry entry's product. Default empty.
+  string product = 21;
 }
 
 // VolumeGroupInfo describes one declared blob-store volume group.

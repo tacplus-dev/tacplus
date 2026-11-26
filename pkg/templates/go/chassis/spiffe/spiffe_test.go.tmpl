@@ -283,6 +283,8 @@ func callSharedConstruct(fn string, args []string) (string, error) {
 		return NamespaceSpiffeID(args[0], args[1])
 	case "tenant_spiffe_id":
 		return TenantSpiffeID(args[0], args[1])
+	case "product_service_spiffe_id":
+		return ProductServiceSpiffeID(args[0], args[1], args[2])
 	default:
 		return "", &unsupportedSharedConstruct{fn: fn}
 	}

@@ -42,6 +42,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -88,7 +89,10 @@ type Lock struct {
 	Registries []LockedSource  `yaml:"registries"`
 	Services   []LockedService `yaml:"services"`
 	Libraries  []LockedLibrary `yaml:"libraries,omitempty"` // contract-only vservices pulled in by reference
-	Launcher   *LockedLauncher `yaml:"launcher,omitempty"`
+	// Products are the fleet products its services' protos declare (#475), so
+	// a lock diff shows a product appearing.
+	Products []string        `yaml:"products,omitempty"`
+	Launcher *LockedLauncher `yaml:"launcher,omitempty"`
 	// Gateway is what tacplus fleet gateway built (gateway.go).
 	Gateway *LockedGateway `yaml:"gateway,omitempty"`
 }
@@ -113,6 +117,9 @@ type LockedService struct {
 	Contract       string   `yaml:"contract,omitempty"`
 	ContractCommit string   `yaml:"contract_commit,omitempty"`
 	Depends        []string `yaml:"depends,omitempty"`
+	// Product is the fleet product this service's code belongs to, its
+	// proto's (spec.service).product; empty for a platform or tenant service.
+	Product string `yaml:"product,omitempty"`
 	// InputsDigest is a sha256 over the descriptors of everything this
 	// service generates from (its scope: own contract, depends closure, sys
 	// protos; the whole tree for grpc-servers/grpc-clients: all). The image
@@ -442,9 +449,19 @@ func Build(manifestDir, outDir string) (*Result, error) {
 	}
 
 	// 5. Whole-fleet checks over the merged tree.
-	if err := validateFleet(mergedDir); err != nil {
+	products, err := validateFleet(mergedDir)
+	if err != nil {
 		return nil, err
 	}
+	for i := range lock.Services {
+		if p := products[lock.Services[i].Name]; p != "" {
+			lock.Services[i].Product = p
+			if !slices.Contains(lock.Products, p) {
+				lock.Products = append(lock.Products, p)
+			}
+		}
+	}
+	sort.Strings(lock.Products)
 
 	// 5b. Each service's scope and inputs digest. The scope is what its
 	// tacplus.yaml declares (own contract + depends, or the whole tree); a
@@ -661,20 +678,22 @@ func writeLock(lock *Lock, path string) error {
 // routing label served by a loaded service, every C2S host label served, one
 // SMB authority if any SMB member, at most one approval broker, a route field
 // on every rpc a tenant-owned service hosts, every host_tenant_owned surface's
-// host tenant-owned, exactly one minter, a complete and collision-free
-// registry.
-func validateFleet(mergedDir string) error {
+// host tenant-owned, every S2S edge allowed by the product layer, exactly one
+// minter, a complete and collision-free registry, each product service's
+// registry entry naming its proto's product. It returns each service's
+// product (by its registry name; absent for a platform or tenant service).
+func validateFleet(mergedDir string) (map[string]string, error) {
 	if err := registry.Validate(mergedDir); err != nil {
-		return fmt.Errorf("fleet: %w", err)
+		return nil, fmt.Errorf("fleet: %w", err)
 	}
 	root, cleanup, err := registry.PrepareDescriptorRoot(mergedDir)
 	if err != nil {
-		return fmt.Errorf("fleet: preparing descriptors: %w", err)
+		return nil, fmt.Errorf("fleet: preparing descriptors: %w", err)
 	}
 	defer cleanup()
 	dp, err := parser.NewDescriptorParser(root)
 	if err != nil {
-		return fmt.Errorf("fleet: parsing merged protos: %w", err)
+		return nil, fmt.Errorf("fleet: parsing merged protos: %w", err)
 	}
 	for _, check := range []func(*parser.DescriptorParser) error{
 		parser.ValidateRoutingLabels,
@@ -683,15 +702,49 @@ func validateFleet(mergedDir string) error {
 		parser.ValidateApprovalBroker,
 		parser.ValidateHostTenantOwned,
 		parser.ValidateTenantRouting,
+		parser.ValidateProductLayer,
 	} {
 		if err := check(dp); err != nil {
-			return fmt.Errorf("fleet: %w", err)
+			return nil, fmt.Errorf("fleet: %w", err)
 		}
 	}
 	if err := parser.ValidateTokenMinters(root, true); err != nil {
-		return fmt.Errorf("fleet: %w", err)
+		return nil, fmt.Errorf("fleet: %w", err)
 	}
-	return nil
+	return fleetProducts(mergedDir, dp)
+}
+
+// fleetProducts checks that the registry, the proto and so the lock agree on
+// whose code each service is: a registry entry's product is its proto's
+// (spec.service).product (#475).
+func fleetProducts(mergedDir string, dp *parser.DescriptorParser) (map[string]string, error) {
+	reg, err := registry.Load(mergedDir)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: %w", err)
+	}
+	products := map[string]string{}
+	var errs []string
+	for _, fd := range dp.GetAllFiles() {
+		if fd.ServiceName == "" {
+			continue
+		}
+		e, ok := reg.ServiceEntry(fd.ServiceName)
+		if !ok {
+			continue
+		}
+		if e.Product != fd.ServiceProduct {
+			errs = append(errs, fmt.Sprintf("service %q: the registry says product %q, its proto (spec.service).product %q; register it with --product %s",
+				fd.ServiceName, e.Product, fd.ServiceProduct, fd.ServiceProduct))
+		}
+		if fd.ServiceProduct != "" {
+			products[fd.ServiceName] = fd.ServiceProduct
+		}
+	}
+	if len(errs) > 0 {
+		sort.Strings(errs)
+		return nil, fmt.Errorf("fleet: the registry and the protos disagree on products:\n  %s", strings.Join(errs, "\n  "))
+	}
+	return products, nil
 }
 
 // resolveImplementation fetches a repo at tag (an exact version, or "latest"

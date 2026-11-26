@@ -22,6 +22,7 @@ var (
 	registerVisibility string
 	registerTenant     bool
 	registerProject    bool
+	registerProduct    string
 )
 
 var rootCmd = &cobra.Command{
@@ -56,7 +57,11 @@ TenantConfig / ProjectConfig, which a service that declares a tenant- or
 project-scope (spec.config_slice) needs: a build never assigns one. For a
 service already registered, give only the slice flag(s); for a new one, give
 --contract too and the id and the field(s) are registered together. Global
-fields start at 1, private ones at 1024.`,
+fields start at 1, private ones at 1024.
+
+--product names the fleet product NAME's code belongs to, the same name its
+proto's (spec.service).product declares; the fleet build checks they agree.
+For a service already registered, give only --product.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runRegister,
 }
@@ -68,6 +73,7 @@ func init() {
 	registerCmd.Flags().StringVar(&registerVisibility, "visibility", registry.VisibilityPrivate, "public | private: a note on who the contract is for")
 	registerCmd.Flags().BoolVar(&registerTenant, "tenant-slice", false, "register NAME's TenantConfig field (its tenant-scope config_slice)")
 	registerCmd.Flags().BoolVar(&registerProject, "project-slice", false, "register NAME's ProjectConfig field (its project-scope config_slice)")
+	registerCmd.Flags().StringVar(&registerProduct, "product", "", "the fleet product NAME's code belongs to, as its proto's (spec.service).product")
 	rootCmd.AddCommand(registerCmd)
 }
 
@@ -87,15 +93,24 @@ func runRegister(cmd *cobra.Command, args []string) error {
 	if len(slices) > 0 && registerKind != "service" {
 		return fmt.Errorf("register: a config slice belongs to a service, not a %s", registerKind)
 	}
-	// A slice of a service already here needs no contract: only its field is
-	// new. Anything else registers NAME itself first.
+	if registerProduct != "" && registerKind != "service" {
+		return fmt.Errorf("register: a product's code is a service, not a %s", registerKind)
+	}
+	// A slice or the product of a service already here needs no contract:
+	// only its field is new. Anything else registers NAME itself first.
 	var lines []string
-	if _, known := reg.ServiceEntry(name); len(slices) == 0 || !known {
+	if _, known := reg.ServiceEntry(name); (len(slices) == 0 && registerProduct == "") || !known {
 		id, err := reg.Register(registerKind, name, registerContract, registerVisibility)
 		if err != nil {
 			return err
 		}
 		lines = append(lines, fmt.Sprintf("%s %s = %d", registerKind, name, id))
+	}
+	if registerProduct != "" {
+		if err := reg.SetProduct(name, registerProduct); err != nil {
+			return err
+		}
+		lines = append(lines, fmt.Sprintf("%s product = %s", name, registerProduct))
 	}
 	for _, kind := range slices {
 		field, err := reg.RegisterSlice(name, kind)

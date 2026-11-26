@@ -63,6 +63,7 @@ type FileDescriptor struct {
 	ServiceRestDispatch bool             // Whether this service needs REST→gRPC dispatch from option (spec.service).rest_dispatch
 	ServiceTenantOwned  bool             // Whether this service is a per-tenant instance from option (spec.service).tenant_owned
 	ServicePinnedTenant string           // Tenant this tenant-owned service is pinned to from option (spec.service).pinned_tenant; empty means per-tenant replication
+	ServiceProduct      string           // Fleet product this service's code belongs to from option (spec.service).product; empty means a platform or tenant-owned service
 	StateImports        []string         // Canonical state imports from field-level state_import roots plus legacy file-level mirrors
 	FileStateImports    []string         // Legacy file-level state_imports option values, e.g. "identity.Identity"
 	FieldStateImports   []FieldStateImport
@@ -596,6 +597,7 @@ func (p *DescriptorParser) parseFileDescriptor(fd protoreflect.FileDescriptor) {
 	// Parse generate_user_api option
 	fileDesc.GenerateUserApi = p.parseGenerateUserApi(fd)
 	fileDesc.ServiceName, fileDesc.ServiceID, fileDesc.ServiceStore, fileDesc.ServiceConfigStore, fileDesc.ServiceGateway, fileDesc.ServiceRestDispatch, fileDesc.ServiceTenantOwned, fileDesc.ServicePinnedTenant = p.parseServiceIdentity(fd, fileDesc.Package)
+	fileDesc.ServiceProduct = p.parseServiceProduct(fd)
 	fileDesc.FileStateImports = p.parseStateImports(fd)
 	fileDesc.FieldStateImports = collectFieldStateImports(fileDesc.Messages)
 	fileDesc.StateImports = mergeStateImportRoots(fileDesc.FileStateImports, fileDesc.FieldStateImports)
@@ -1856,6 +1858,20 @@ func (p *DescriptorParser) parseServiceIdentity(fd protoreflect.FileDescriptor, 
 	return name, 0, val.GetStore(), val.GetConfigStore(), val.GetGateway(), val.GetRestDispatch(), val.GetTenantOwned(), val.GetPinnedTenant()
 }
 
+// parseServiceProduct extracts (spec.service).product: the fleet product this
+// service's code belongs to, empty for a platform or tenant-owned service.
+func (p *DescriptorParser) parseServiceProduct(fd protoreflect.FileDescriptor) string {
+	opts := fd.Options().(*descriptorpb.FileOptions)
+	if opts == nil || !proto.HasExtension(opts, spec.E_Service) {
+		return ""
+	}
+	val := proto.GetExtension(opts, spec.E_Service).(*spec.ServiceAnnotation)
+	if val == nil {
+		return ""
+	}
+	return val.GetProduct()
+}
+
 // parsemodel.ParamMapConfig extracts the generate_from_map message option
 func (p *DescriptorParser) parseParamMapConfig(md protoreflect.MessageDescriptor) *model.ParamMapConfig {
 	opts := md.Options().(*descriptorpb.MessageOptions)
@@ -2463,6 +2479,11 @@ func (p *DescriptorParser) parseFieldAnnotations(fd protoreflect.FieldDescriptor
 	}
 	if proto.HasExtension(opts, spec.E_StoreNamespace) && proto.GetExtension(opts, spec.E_StoreNamespace).(bool) {
 		annotations["store_namespace"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
+	}
+	// caller_tid: the request field bound to the caller's token's tid claim,
+	// the product layer's custodian key (#475).
+	if proto.HasExtension(opts, spec.E_CallerTid) && proto.GetExtension(opts, spec.E_CallerTid).(bool) {
+		annotations["caller_tid"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 	}
 	// store_epoch: where the row's last-write clock lives on the type. Same
 	// doctrine as the two above — the annotation owns the LOCATION, the generated

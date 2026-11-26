@@ -23,6 +23,7 @@ pub const SCHEME_VERSION: &str = "v1";
 // and is rejected as a user-supplied identifier segment at any depth.
 pub const SYSTEM_SEGMENT: &str = "system";
 pub const TENANTS_SEGMENT: &str = "tenants";
+pub const PRODUCTS_SEGMENT: &str = "products";
 pub const PEOPLE_SEGMENT: &str = "people";
 pub const SERVICES_SEGMENT: &str = "services";
 pub const WORKLOADS_SEGMENT: &str = "workloads";
@@ -35,6 +36,7 @@ pub const DATA_SEGMENT: &str = "data";
 const RESERVED_TAGS: &[&str] = &[
     SYSTEM_SEGMENT,
     TENANTS_SEGMENT,
+    PRODUCTS_SEGMENT,
     PEOPLE_SEGMENT,
     SERVICES_SEGMENT,
     WORKLOADS_SEGMENT,
@@ -112,6 +114,44 @@ fn segment_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new({{printf "%q" .Spiffe.SegmentPattern}}).unwrap())
 }
 
+// A fleet product's name, the segment after /products:
+// {{.Spiffe.ProductNameGrammar}}, never a tid's shape (tid_shape_re), a reserved
+// tag, nor {{printf "%q" .Spiffe.ReservedProductName}} (products-layer-2026-11-08).
+// The grammar is passed to format! as an argument: its `{m,n}` repetition would
+// otherwise read as a placeholder.
+const PRODUCT_NAME_GRAMMAR: &str = {{printf "%q" .Spiffe.ProductNameGrammar}};
+const RESERVED_PRODUCT_NAME: &str = {{printf "%q" .Spiffe.ReservedProductName}};
+
+fn product_name_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new({{printf "%q" .Spiffe.ProductNamePattern}}).unwrap())
+}
+
+fn tid_shape_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new({{printf "%q" .Spiffe.TidShapePattern}}).unwrap())
+}
+
+/// Validates a fleet product's name and returns it unchanged, or an error.
+pub fn normalize_product_name(name: &str) -> Result<String> {
+    if is_reserved_tag(name) || name == RESERVED_PRODUCT_NAME {
+        return err(format!(
+            "spiffe: {:?} is reserved and cannot be a product name",
+            name
+        ));
+    }
+    if !product_name_re().is_match(name) {
+        return err(format!(
+            "spiffe: product name {:?} violates grammar {}",
+            name, PRODUCT_NAME_GRAMMAR
+        ));
+    }
+    if tid_shape_re().is_match(name) {
+        return err(format!("spiffe: product name {:?} has a tid's shape", name));
+    }
+    Ok(name.to_string())
+}
+
 /// Validates a single identity segment and returns it unchanged, or an error.
 /// Reserved tags are rejected so user identifiers cannot impersonate a
 /// structural position.
@@ -171,6 +211,10 @@ pub fn normalize_trust_domain(value: &str) -> Result<String> {
 /// Validates an authorization-tree namespace path and returns it canonicalized
 /// (leading slash; no trailing slash except root). It does NOT strip a SPIFFE
 /// scheme — use `parse_namespace_or_spiffe` for a value that may be a full URI.
+///
+/// Valid shapes: "/" (root); "/system" or "/system/<loc>..."; "/tenants" or
+/// "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>..."; "/users/<xid>";
+/// "/products/<product>", exactly (`normalize_product_name`).
 pub fn normalize_namespace(namespace: &str) -> Result<String> {
     let trimmed = namespace.trim();
     if trimmed.is_empty() {
@@ -265,10 +309,20 @@ fn validate_namespace_segments(segs: &[&str]) -> Result<()> {
                 ));
             }
         }
+        PRODUCTS_SEGMENT => {
+            if segs.len() != 2 {
+                return err(format!(
+                    "spiffe: a product namespace is exactly /{}/<product>, got /{}",
+                    PRODUCTS_SEGMENT,
+                    segs.join("/")
+                ));
+            }
+            normalize_product_name(segs[1])?;
+        }
         other => {
             return err(format!(
-                "spiffe: namespace must start with {:?}, {:?}, or {:?}, got {:?}",
-                SYSTEM_SEGMENT, TENANTS_SEGMENT, USERS_SEGMENT, other
+                "spiffe: namespace must start with {:?}, {:?}, {:?}, or {:?}, got {:?}",
+                SYSTEM_SEGMENT, TENANTS_SEGMENT, PRODUCTS_SEGMENT, USERS_SEGMENT, other
             ));
         }
     }
@@ -314,11 +368,14 @@ fn namespace_base(trust_domain: &str, namespace: &str) -> Result<String> {
 }
 
 // namespace_base for a typed leaf or pair. A user root is a complete identity,
-// so nothing may be appended under /users/<xid>.
+// so nothing may be appended under /users/<xid>; a product holds services only.
 fn leaf_base(trust_domain: &str, namespace: &str) -> Result<String> {
     let ns = normalize_namespace(namespace)?;
     if ns.starts_with(&format!("/{}/", USERS_SEGMENT)) {
         return err(format!("spiffe: nothing may follow a user root, got namespace {:?}", ns));
+    }
+    if ns.starts_with(&format!("/{}/", PRODUCTS_SEGMENT)) {
+        return err(format!("spiffe: a product holds services only, got namespace {:?}", ns));
     }
     namespace_base(trust_domain, &ns)
 }
@@ -342,6 +399,15 @@ pub fn service_spiffe_id(trust_domain: &str, location_path: &str, service_label:
     b.push('/');
     b.push_str(&svc);
     Ok(b)
+}
+
+/// `spiffe://<td>/products/<product>/services/<service>`, a fleet product's
+/// service, once per fleet (products-layer-2026-11-08).
+pub fn product_service_spiffe_id(trust_domain: &str, product: &str, service_label: &str) -> Result<String> {
+    let base = authority(trust_domain)?;
+    let name = normalize_product_name(product)?;
+    let svc = normalize_segment(service_label)?;
+    Ok(format!("{}/{}/{}/{}/{}", base, PRODUCTS_SEGMENT, name, SERVICES_SEGMENT, svc))
 }
 
 /// Appends `/workloads/<name>` to a service or workload parent.
@@ -525,7 +591,7 @@ fn classify(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
     } else if idx_of(&idx, WORKLOADS_SEGMENT) >= 0 {
         p.subject_kind = SubjectKind::Workload;
         classify_system(p, segs)
-    } else if (segs[0] == SYSTEM_SEGMENT || segs[0] == TENANTS_SEGMENT) && idx_of(&idx, SERVICES_SEGMENT) >= 0 {
+    } else if is_service_root(segs[0]) && idx_of(&idx, SERVICES_SEGMENT) >= 0 {
         p.subject_kind = SubjectKind::Service;
         classify_system(p, segs)
     } else if idx_of(&idx, USERS_SEGMENT) >= 0 {
@@ -545,13 +611,20 @@ fn classify(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
     }
 }
 
-// Handles both service-root shapes: /system/<location...>/services/<svc> (shared
-// services, location-agnostic) and /tenants/<tenant>/services/<svc> (tenant-owned
-// services, one operator-managed instance per tenant). Namespace is everything
-// before "services"; for the tenant root that's exactly "/tenants/<tenant>".
+// Reports whether a first path segment roots service identities.
+fn is_service_root(seg: &str) -> bool {
+    seg == SYSTEM_SEGMENT || seg == TENANTS_SEGMENT || seg == PRODUCTS_SEGMENT
+}
+
+// Handles the three service-root shapes: /system/<location...>/services/<svc> (shared
+// services, location-agnostic), /tenants/<tenant>/services/<svc> (tenant-owned
+// services, one operator-managed instance per tenant) and /products/<product>/services/<svc>
+// (a fleet product's services, once per fleet). Namespace is everything before
+// "services"; for the tenant and product roots that's exactly "/tenants/<tenant>" or
+// "/products/<product>", no location.
 fn classify_system(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
     let si = index_of(segs, SERVICES_SEGMENT);
-    if (segs[0] != SYSTEM_SEGMENT && segs[0] != TENANTS_SEGMENT) || si < 0 || (si as usize) + 1 >= segs.len() {
+    if !is_service_root(segs[0]) || si < 0 || (si as usize) + 1 >= segs.len() {
         return err(format!("spiffe: malformed system/service identity: /{}", segs.join("/")));
     }
     let si = si as usize;
@@ -566,7 +639,7 @@ fn classify_system(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
         return err(format!("spiffe: malformed system/service identity: /{}", segs.join("/")));
     }
     p.location_path = segs[1..si].join("/");
-    p.namespace = format!("/{}", segs[..si].join("/")); // /system[/location...]
+    p.namespace = format!("/{}", segs[..si].join("/")); // /system[/location...], /tenants/<tenant> or /products/<product>
     p.subject_path = segs[si + 1..].join("/"); // <service>[/workloads/<child>...]
     Ok(())
 }
@@ -587,13 +660,17 @@ fn classify_user_root(p: &mut ParsedSpiffeId, segs: &[&str]) -> Result<()> {
 }
 
 // The parse-side twin of leaf_base: the namespace before a typed tag must pass the
-// namespace validator, and a user root is a complete identity, so nothing may follow it.
+// namespace validator, and a user root is a complete identity, so nothing may follow it;
+// a product holds services only.
 fn validate_leaf_namespace(ns_segs: &[&str]) -> Result<()> {
     if ns_segs.is_empty() {
         return err("spiffe: a typed identity needs a namespace".to_string());
     }
     if ns_segs[0] == USERS_SEGMENT {
         return err(format!("spiffe: nothing may follow a user root, got namespace /{}", ns_segs.join("/")));
+    }
+    if ns_segs[0] == PRODUCTS_SEGMENT {
+        return err(format!("spiffe: a product holds services only, got namespace /{}", ns_segs.join("/")));
     }
     validate_namespace_segments(ns_segs)
 }
@@ -878,6 +955,7 @@ mod tests {
             "user_root_spiffe_id" => user_root_spiffe_id(arg(0), arg(1)),
             "namespace_spiffe_id" => namespace_spiffe_id(arg(0), arg(1)),
             "tenant_spiffe_id" => tenant_spiffe_id(arg(0), arg(1)),
+            "product_service_spiffe_id" => product_service_spiffe_id(arg(0), arg(1), arg(2)),
             other => Err(SpiffeError(format!("unsupported shared construct: {}", other))),
         }
     }

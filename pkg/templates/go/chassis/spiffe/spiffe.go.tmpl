@@ -12,6 +12,7 @@
 //
 //	spiffe://<trust_domain>/system/<location...>/services/<svc>[/workloads/<child>...]
 //	spiffe://<trust_domain>/tenants/<tenant>/services/<svc>[/workloads/<child>...]
+//	spiffe://<trust_domain>/products/<product>/services/<svc>[/workloads/<child>...]
 //	spiffe://<trust_domain>/tenants/<tenant>[/workspaces/<ws>...]
 //	spiffe://<trust_domain>/users/<xid>
 //	spiffe://<trust_domain>/<namespace>/users/<user>
@@ -45,6 +46,7 @@ const (
 const (
 	SystemSegment      = "system"
 	TenantsSegment     = "tenants"
+	ProductsSegment    = "products"
 	PeopleSegment      = "people"
 	ServicesSegment    = "services"
 	WorkloadsSegment   = "workloads"
@@ -68,7 +70,7 @@ const (
 )
 
 var reservedTags = map[string]bool{
-	SystemSegment: true, TenantsSegment: true, PeopleSegment: true,
+	SystemSegment: true, TenantsSegment: true, ProductsSegment: true, PeopleSegment: true,
 	ServicesSegment: true, WorkloadsSegment: true, UsersSegment: true,
 	WorkspacesSegment: true, ClientsSegment: true, CredentialsSegment: true,
 	DataSegment: true,
@@ -78,6 +80,27 @@ var reservedTags = map[string]bool{
 // It rejects empty, leading separators, "." / "..", "/", "\", ":", "%", query,
 // fragment, and encoded separators by construction.
 var segmentRe = regexp.MustCompile({{printf "%q" .Spiffe.SegmentPattern}})
+
+// productNameRe is a fleet product's name, the segment after /products:
+// {{.Spiffe.ProductNameGrammar}}, never a tid's shape (tidShapeRe), a reserved
+// tag, nor {{printf "%q" .Spiffe.ReservedProductName}} (products-layer-2026-11-08).
+var productNameRe = regexp.MustCompile({{printf "%q" .Spiffe.ProductNamePattern}})
+
+var tidShapeRe = regexp.MustCompile({{printf "%q" .Spiffe.TidShapePattern}})
+
+// NormalizeProductName validates a fleet product's name and returns it
+// unchanged, or an error.
+func NormalizeProductName(name string) (string, error) {
+	switch {
+	case reservedTags[name] || name == {{printf "%q" .Spiffe.ReservedProductName}}:
+		return "", fmt.Errorf("spiffe: %q is reserved and cannot be a product name", name)
+	case !productNameRe.MatchString(name):
+		return "", fmt.Errorf("spiffe: product name %q violates grammar {{.Spiffe.ProductNameGrammar}}", name)
+	case tidShapeRe.MatchString(name):
+		return "", fmt.Errorf("spiffe: product name %q has a tid's shape", name)
+	}
+	return name, nil
+}
 
 // IsReservedTag reports whether s is a reserved structural tag.
 func IsReservedTag(s string) bool { return reservedTags[s] }
@@ -136,7 +159,8 @@ func NormalizeTrustDomain(value string) (string, error) {
 // full URI.
 //
 // Valid shapes: "/" (root); "/system" or "/system/<loc>..."; "/tenants" or
-// "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>..."; "/users/<xid>".
+// "/tenants/<tenant>"; "/tenants/<tenant>/workspaces/<ws>..."; "/users/<xid>";
+// "/products/<product>", exactly (NormalizeProductName).
 // A reserved tag is rejected as a tenant/location/workspace/user id — except
 // "people", which is the platform's identity tenant and is legal as a tenant
 // name — the workspaces tag is the only structural tag permitted under a
@@ -212,8 +236,15 @@ func validateNamespaceSegments(segs []string) error {
 		if reservedTags[segs[1]] {
 			return fmt.Errorf("spiffe: reserved tag %q cannot be a user id", segs[1])
 		}
+	case ProductsSegment:
+		if len(segs) != 2 {
+			return fmt.Errorf("spiffe: a product namespace is exactly /%s/<product>, got /%s", ProductsSegment, strings.Join(segs, "/"))
+		}
+		if _, err := NormalizeProductName(segs[1]); err != nil {
+			return err
+		}
 	default:
-		return fmt.Errorf("spiffe: namespace must start with %q, %q, or %q, got %q", SystemSegment, TenantsSegment, UsersSegment, segs[0])
+		return fmt.Errorf("spiffe: namespace must start with %q, %q, %q, or %q, got %q", SystemSegment, TenantsSegment, ProductsSegment, UsersSegment, segs[0])
 	}
 	return nil
 }
@@ -272,6 +303,9 @@ func leafBase(trustDomain, namespace string) (string, error) {
 	if strings.HasPrefix(ns, "/"+UsersSegment+"/") {
 		return "", fmt.Errorf("spiffe: nothing may follow a user root, got namespace %q", ns)
 	}
+	if strings.HasPrefix(ns, "/"+ProductsSegment+"/") {
+		return "", fmt.Errorf("spiffe: a product holds services only, got namespace %q", ns)
+	}
 	return namespaceBase(trustDomain, ns)
 }
 
@@ -297,6 +331,24 @@ func ServiceSpiffeID(trustDomain, locationPath, serviceLabel string) (string, er
 	}
 	b.WriteString("/" + ServicesSegment + "/" + svc)
 	return b.String(), nil
+}
+
+// ProductServiceSpiffeID: spiffe://<td>/products/<product>/services/<service>,
+// a fleet product's service, once per fleet (products-layer-2026-11-08).
+func ProductServiceSpiffeID(trustDomain, product, serviceLabel string) (string, error) {
+	base, err := authority(trustDomain)
+	if err != nil {
+		return "", err
+	}
+	name, err := NormalizeProductName(product)
+	if err != nil {
+		return "", err
+	}
+	svc, err := NormalizeSegment(serviceLabel)
+	if err != nil {
+		return "", err
+	}
+	return base + "/" + ProductsSegment + "/" + name + "/" + ServicesSegment + "/" + svc, nil
 }
 
 // WorkloadSpiffeID appends /workloads/<name> to a service or workload parent.
@@ -507,7 +559,7 @@ func classify(p *ParsedSpiffeID, segs []string) error {
 	case idx[WorkloadsSegment] >= 0:
 		p.SubjectKind = KindWorkload
 		return classifySystem(p, segs)
-	case (segs[0] == SystemSegment || segs[0] == TenantsSegment) && idx[ServicesSegment] >= 0:
+	case isServiceRoot(segs[0]) && idx[ServicesSegment] >= 0:
 		p.SubjectKind = KindService
 		return classifySystem(p, segs)
 	case idx[UsersSegment] >= 0:
@@ -529,15 +581,22 @@ func classify(p *ParsedSpiffeID, segs []string) error {
 	}
 }
 
-// classifySystem handles both service-root shapes: /system/<location...>/services/<svc>
-// (shared services, location-agnostic) and /tenants/<tenant>/services/<svc> (tenant-owned
-// services, one operator-managed instance per tenant). Namespace is everything before
-// "services"; for the tenant root that's exactly "/tenants/<tenant>", no location.
+// isServiceRoot reports whether a first path segment roots service identities.
+func isServiceRoot(seg string) bool {
+	return seg == SystemSegment || seg == TenantsSegment || seg == ProductsSegment
+}
+
+// classifySystem handles the three service-root shapes: /system/<location...>/services/<svc>
+// (shared services, location-agnostic), /tenants/<tenant>/services/<svc> (tenant-owned
+// services, one operator-managed instance per tenant) and /products/<product>/services/<svc>
+// (a fleet product's services, once per fleet). Namespace is everything before
+// "services"; for the tenant and product roots that's exactly "/tenants/<tenant>" or
+// "/products/<product>", no location.
 // Parse fails closed: the namespace passes the validator the constructors use, and the
 // service and workload names are not reserved tags.
 func classifySystem(p *ParsedSpiffeID, segs []string) error {
 	si := indexOf(segs, ServicesSegment)
-	if (segs[0] != SystemSegment && segs[0] != TenantsSegment) || si < 0 || si+1 >= len(segs) {
+	if !isServiceRoot(segs[0]) || si < 0 || si+1 >= len(segs) {
 		return fmt.Errorf("spiffe: malformed system/service identity: /%s", strings.Join(segs, "/"))
 	}
 	if err := validateNamespaceSegments(segs[:si]); err != nil {
@@ -556,7 +615,7 @@ func classifySystem(p *ParsedSpiffeID, segs []string) error {
 		}
 	}
 	p.LocationPath = strings.Join(segs[1:si], "/")
-	p.Namespace = "/" + strings.Join(segs[:si], "/") // /system[/location...] or /tenants/<tenant>
+	p.Namespace = "/" + strings.Join(segs[:si], "/") // /system[/location...], /tenants/<tenant> or /products/<product>
 	p.SubjectPath = strings.Join(segs[si+1:], "/")    // <service>[/workloads/<child>...]
 	return nil
 }
@@ -585,6 +644,9 @@ func validateLeafNamespace(nsSegs []string) error {
 	}
 	if nsSegs[0] == UsersSegment {
 		return fmt.Errorf("spiffe: nothing may follow a user root, got namespace /%s", strings.Join(nsSegs, "/"))
+	}
+	if nsSegs[0] == ProductsSegment {
+		return fmt.Errorf("spiffe: a product holds services only, got namespace /%s", strings.Join(nsSegs, "/"))
 	}
 	return validateNamespaceSegments(nsSegs)
 }

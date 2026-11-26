@@ -4,6 +4,7 @@
 package registry
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -268,5 +269,48 @@ func TestUnionRefusesSliceFieldCollisions(t *testing.T) {
 	p2, _ := Load(writeRegistry(t, "scope: private\nservices:\n    - {name: ours, id: 1024, contract: r, project_slice_field: 1024}\n    - {name: theirs, id: 1025, contract: r, project_slice_field: 1024}\n"))
 	if _, err := Union([]*Registry{g, p2}, []string{"global", "private"}); err == nil || !strings.Contains(err.Error(), "project_slice_field 1024") {
 		t.Fatalf("same project slice field twice err = %v", err)
+	}
+}
+
+// A product service's entry names its product (#475): set in the authority,
+// carried into a lock, its name checked as the proto's is.
+func TestSetProductAndSyncCarriesIt(t *testing.T) {
+	g, err := Load(writeRegistry(t, globalSeed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Register("service", "billing", "https://example/ledger.git", "private"); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"Ledger", "abcd1234", "system"} {
+		if err := g.SetProduct("billing", bad); err == nil {
+			t.Fatalf("product %q accepted", bad)
+		}
+	}
+	if err := g.SetProduct("nobody", "ledger"); err == nil || !strings.Contains(err.Error(), "not registered") {
+		t.Fatalf("product of an unregistered service: err = %v", err)
+	}
+	if err := g.SetProduct("billing", "ledger"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Save(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(g.inputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := again.ServiceEntry("billing"); e == nil || e.Product != "ledger" {
+		t.Fatalf("saved entry = %+v, want product ledger", e)
+	}
+	lock, err := Load(writeRegistry(t, "registries:\n    - https://github.com/tacplus-dev/registry.git\nservices:\n    - {name: billing, id: "+fmt.Sprint(again.byName["billing"].ID)+", contract: https://example/ledger.git, visibility: private}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.SyncFromGlobal(again, []string{"billing"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := lock.ServiceEntry("billing"); e.Product != "ledger" {
+		t.Fatalf("lock entry = %+v, want the global registry's product", e)
 	}
 }

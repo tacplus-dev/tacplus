@@ -239,6 +239,12 @@ func (b *Builder) validateSemanticAnnotations() error {
 	if err := parser.ValidateTenantRouting(dp); err != nil {
 		return err
 	}
+	if err := parser.ValidateProductLayer(dp); err != nil {
+		return err
+	}
+	if err := parser.ValidateProductLayerHosting(dp, b.config.SelfPackage, b.config.Language); err != nil {
+		return err
+	}
 	if err := parser.ValidateAuthAnnotations(dp); err != nil {
 		return err
 	}

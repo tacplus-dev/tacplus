@@ -74,7 +74,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-26 by lo
   shared vectors. The layer door (step 2's first part): Go, Java and Rust read a caller's layer through one
   `caller_layer` helper (shared vectors); a product's instance admits only tenants' and its own product's services,
   a tenant-owned one refuses a product's caller on every rpc, and an instance whose own identity is in another layer
-  than its proto declares does not start.
+  than its proto declares does not start. The Go, Java and Rust S2S client of a tenant's or a product's service refuses
+  a caller whose own token's layer may not call it, before sending; their server wrappers bind `(spec.caller_tid)` to
+  the caller's `tid` claim on every rpc shape (empty stamped, another tenant or none `PERMISSION_DENIED`).
   Deterministic builds (#193): a repository pins the exact release and the build image digest in `tacplus.lock`
   (`tacplus pin` writes it; moving it is a commit); there is no tacplus image (the old tags stay, deprecated, and
   2.6 gets none); `build:X.Y` per line, rebuilt on every release as an immutable `build:X.Y.Z`, carries Kani and
@@ -338,7 +340,7 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-26 by lo
   namespace is `/tenants/<tid>`; kernel#23's `/tenants/<name>` namespaces need #202 first (PROPOSALS.md).
   The record write surface stamps no `(spec.identity_spiffe_subject)` (PROPOSALS.md). A fleet's service images must be on ghcr.io from a
   github.com repo (PROPOSALS.md).
-  The product layer's remaining generated doors (the S2S client's check, the `caller_tid` binding,
+  The product layer's remaining generated doors (the `caller_tid` binding on the MCP tool surface,
   `OnTenantDeleted`, every "not `/system`, so a tenant" check) and their cross-tests are not done (#475 steps 2-4),
   so a server of a product service, or of an rpc binding `caller_tid`, is refused at generation; the kernel mints no
   product token yet (tacplus-dev/kernel#63), nor does the operator deploy one (tacplus-dev/operator#33).

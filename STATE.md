@@ -100,11 +100,13 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-26 by lo
   `go run ./cmd/sitegen -check-links`, gitleaks, `just test`: about a minute); `images/` runs `just test`, `just images`
   and `just tacplus-script`; `pkg/**`, `cmd/**`, `docs/embed.go`, `docs/*.tmpl`, the justfile, any path the map does
   not name and a change to the map run `just gates`, as do the nightly gates and every release.
-  `just gates` runs its gates and their language legs concurrently (`scripts/gates.sh`), `GATES_JOBS` at once (half
-  the CPUs by default), and caps current-generation's own fixture pool (#812) at the same number; each job slot builds
-  Rust in its own cargo directory with its share of the CPUs (`CARGO_BUILD_JOBS`, `GOFLAGS -p`, a 40-minute `go test`
-  deadline). The log and the verdict are the same whatever the cap, and a table of each gate's wall time comes before
-  the verdict: 3396 s on 8 CPUs at `GATES_JOBS=4`, current-generation the longest (#300). Each gate's rc and wall time
+  `just gates` runs its gates, their language legs and current-generation's shards (every language of every fixture,
+  each build of a two-build fixture, then the checks across them: #977) concurrently (`scripts/gates.sh`),
+  `GATES_JOBS` at once (the CPUs by default); each job slot builds Rust in its own cargo directory with its share of the
+  CPUs (`CARGO_BUILD_JOBS`, `GOFLAGS -p`, a 40-minute `go test` deadline). The log and the verdict are the same whatever
+  the cap, and a table of each gate's and each shard's wall time and the pool's use of the machine comes before the
+  verdict: 3396 s on 8 CPUs at `GATES_JOBS=4`, current-generation the longest (#300); 46 minutes, current-generation
+  1767 s of them, on its own pool, before #977. Each gate's rc and wall time
   also print as it ends, and a leg past `GATES_TIMEOUT` (5400 s) is stopped and fails naming itself; every Java
   fixture logs io.grpc and io.netty at INFO, which kept the trace under GitLab's 4 MiB (#893).
   The generated code is scanned at the source (#376, tacplus-dev/looper#108): `just generated DIR` writes every proto

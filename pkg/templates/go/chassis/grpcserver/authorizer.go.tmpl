@@ -17,6 +17,7 @@ import (
 	protoerrors "{{.ModuleBasePath}}/types/sys/errors"
 	jwkviewpb "{{.ModuleBasePath}}/types/sys/jwkview"
 	"{{.ModuleBasePath}}/chassis/serviceconnection"
+	wrapperSpiffe "{{.ModuleBasePath}}/chassis/spiffe"
 	entitlementspb "{{.ModuleBasePath}}/types/generated/entitlements"
 	granthelper "{{.ModuleBasePath}}/grants"
 	wrapperJwk "{{.ModuleBasePath}}/chassis/jwk"
@@ -200,6 +201,11 @@ func (m *JwkCache) watchView(ctx context.Context, client jwkviewpb.JwkVerifyingK
 // serviceName is the service identity baked in at code generation time.
 const serviceName = "{{.ServiceLabel}}"
 
+// serviceProduct is the fleet product this service's code belongs to, its
+// proto's (spec.service).product, or "" for a platform or tenant-owned
+// service. The instance's own identity must agree (checkOwnLayer).
+const serviceProduct = "{{.ServiceProduct}}"
+
 // acceptedAudiences is every token audience this service accepts: its own name
 // plus the name of each trait it hosts. A trait's audience is the trait name,
 // not the host's, so a host that implements a trait must accept the trait
@@ -235,6 +241,9 @@ type authorizer struct {
 	// hostTenant is the instance's own tenant namespace ("/tenants/<t>"), or ""
 	// for a shared instance. See SetHostNamespace.
 	hostTenant atomic.Value // string
+	// hostProduct is the product of the instance's own namespace
+	// ("/products/<p>"), or "" for any other instance. See SetHostNamespace.
+	hostProduct atomic.Value // string
 	// hostNamespace is the instance's own namespace claim, whatever its depth,
 	// and hostTid the tid of its own subject (/tenants/<tid>/services/<svc>),
 	// "" when the subject names no tenant. See SetHostIdentity.
@@ -279,14 +288,20 @@ func NewAuthorizer(ctx context.Context, conn grpc.ClientConnInterface) (*authori
 // is neither at-or-above that tenant nor /system or below. A token's aud is the
 // service name, which every tenant's instance accepts, so without this check
 // another tenant's token is admitted on any RPC with no target_namespace_field.
-// Any other namespace (a shared instance's /system or below) leaves the
-// authorizer exactly as it was.
+// A product's instance runs in exactly "/products/<p>": from then on every door
+// refuses, PERMISSION_DENIED, a service or workload caller that is not of a
+// tenant or of product <p> (checkHostProduct). Any other namespace (a shared
+// instance's /system or below) leaves the authorizer exactly as it was.
 func (a *authorizer) SetHostNamespace(ns string) {
+	a.hostProduct.Store("")
 	if isTenantNamespace(ns) {
 		a.hostTenant.Store(ns)
 		return
 	}
 	a.hostTenant.Store("")
+	if l, err := wrapperSpiffe.CallerLayer(ns, "", false); err == nil && l.Kind == wrapperSpiffe.LayerProduct {
+		a.hostProduct.Store(l.Product)
+	}
 }
 
 // SetHostIdentity tells the authorizer the instance's own identity: its
@@ -305,12 +320,32 @@ func (a *authorizer) SetHostIdentity(ns, subject string) {
 
 // SetHostNamespaceFromToken is SetHostIdentity with the namespace and subject
 // read from the instance's own service token (the identity manager's GetToken).
+// An identity in another layer than the one the service's proto declares
+// (checkOwnLayer) is an error, so the instance does not start.
 func (a *authorizer) SetHostNamespaceFromToken(token string) error {
 	tw, err := tokenlib.ParseToken(token)
 	if err != nil {
 		return fmt.Errorf("parse own identity token: %w", err)
 	}
+	if err := checkOwnLayer(serviceProduct, tw.GetNamespace()); err != nil {
+		return err
+	}
 	a.SetHostIdentity(tw.GetNamespace(), tw.GetSubject())
+	return nil
+}
+
+// checkOwnLayer is the instance's own layer check at startup: a service whose
+// proto declares product p runs at exactly /products/<p>, and one that declares
+// none never runs at a product's namespace (products-layer-2026-11-08).
+func checkOwnLayer(product, ns string) error {
+	l, err := wrapperSpiffe.CallerLayer(ns, "", false)
+	inProduct := err == nil && l.Kind == wrapperSpiffe.LayerProduct
+	switch {
+	case product != "" && (!inProduct || l.Product != product):
+		return fmt.Errorf("own identity namespace %q: this service is product %q's and runs at /products/%s", ns, product, product)
+	case product == "" && inProduct:
+		return fmt.Errorf("own identity namespace %q is product %q's: this service declares no (spec.service).product", ns, l.Product)
+	}
 	return nil
 }
 
@@ -334,6 +369,10 @@ func (a *authorizer) checkHostTenant(tw *tokenlib.TokenWrapper, fullMethod strin
 	if IsAtOrBelow("/system", callerNamespace) || IsAtOrBelow(callerNamespace, host) {
 		return nil
 	}
+	if l, err := wrapperSpiffe.CallerLayer(callerNamespace, "", false); err == nil && l.Kind == wrapperSpiffe.LayerProduct {
+		return protoerrors.NewErrPermissionDenied(nil,
+			"caller namespace %q is product %q's: a product never calls a tenant (products-layer-2026-11-08)", callerNamespace, l.Product)
+	}
 	if subType := tw.GetSubType(); subType == "service" || subType == "workload" {
 		return protoerrors.NewErrPermissionDenied(nil,
 			"service caller namespace %q is not at-or-above this instance's tenant %q: S2S never crosses tenants", callerNamespace, host)
@@ -343,6 +382,33 @@ func (a *authorizer) checkHostTenant(tw *tokenlib.TokenWrapper, fullMethod strin
 	}
 	return protoerrors.NewErrPermissionDenied(nil,
 		"caller namespace %q is not at-or-above this instance's tenant %q", callerNamespace, host)
+}
+
+// checkHostProduct is a product instance's door check: a service or workload
+// caller is admitted from a tenant or from the instance's own product, never
+// from the platform (/system) or another product (products-layer-2026-11-08).
+// Its layer is read from its namespace claim and cross-checked against its
+// subject (wrapperSpiffe.CallerLayer). A user passes, to meet entitlements.
+func (a *authorizer) checkHostProduct(tw *tokenlib.TokenWrapper) error {
+	host, _ := a.hostProduct.Load().(string)
+	if host == "" {
+		return nil
+	}
+	if subType := tw.GetSubType(); subType != "service" && subType != "workload" {
+		return nil
+	}
+	l, err := wrapperSpiffe.CallerLayer(tw.GetNamespace(), tw.GetSubject(), true)
+	switch {
+	case err != nil:
+		return protoerrors.NewErrPermissionDenied(nil, "service caller of product %q: %v", host, err)
+	case l.Kind == wrapperSpiffe.LayerSystem:
+		return protoerrors.NewErrPermissionDenied(nil,
+			"service caller namespace %q is the platform's: the platform never calls a product (products-layer-2026-11-08)", tw.GetNamespace())
+	case l.Kind == wrapperSpiffe.LayerProduct && l.Product != host:
+		return protoerrors.NewErrPermissionDenied(nil,
+			"service caller namespace %q is product %q's, this instance product %q's: a product never calls another product (products-layer-2026-11-08)", tw.GetNamespace(), l.Product, host)
+	}
+	return nil
 }
 
 // SetMethodTargetNamespaceField registers the request field name that carries the
@@ -738,6 +804,9 @@ func (a *authorizer) verifyBearer(ctx context.Context, fullMethod string) (*toke
 			"token audience %q is not accepted by service %q", tw.GetAudience(), serviceName)
 	}
 	if err := a.checkHostTenant(tw, fullMethod); err != nil {
+		return nil, err
+	}
+	if err := a.checkHostProduct(tw); err != nil {
 		return nil, err
 	}
 	return tw, nil

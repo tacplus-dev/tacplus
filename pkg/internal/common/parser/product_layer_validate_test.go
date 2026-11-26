@@ -299,3 +299,17 @@ func TestValidateProductLayerHosting(t *testing.T) {
 	tid := writeSurfaceProtoDir(t, callerTidProto("", `  string tenant = 1 [(spec.caller_tid) = true];`))
 	wantLayerRefusal(t, ValidateProductLayerHosting(tid, "billing", "go"), "RecordUsageRequest.tenant", "caller_tid")
 }
+
+// The generated authorizer bakes in its own service's product.
+func TestSelfServiceProduct(t *testing.T) {
+	dp := writeSurfaceProtoDir(t, layerProto("billing", `, product: "ledger"`, "", `auth_services: ["*"]`),
+		layerProto("crew", `, tenant_owned: true`, "", `auth_services: ["*"]`))
+	for _, tc := range []struct{ pkg, want string }{{"billing", "ledger"}, {"crew", ""}, {"absent", ""}, {"", ""}} {
+		if got := SelfServiceProduct(dp, tc.pkg); got != tc.want {
+			t.Errorf("SelfServiceProduct(%q) = %q, want %q", tc.pkg, got, tc.want)
+		}
+	}
+	if got := SelfServiceProduct(nil, "billing"); got != "" {
+		t.Errorf("SelfServiceProduct(nil) = %q, want empty", got)
+	}
+}

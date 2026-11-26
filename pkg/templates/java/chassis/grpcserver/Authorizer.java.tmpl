@@ -593,6 +593,12 @@ public class Authorizer {
     // with the audience the verify path actually checks.
     static final String SERVICE_NAME = "{{.ServiceLabel}}";
     /**
+     * The fleet product this service's code belongs to, its proto's
+     * (spec.service).product, or "" for a platform or tenant-owned service. The
+     * instance's own identity must agree ({@link #checkOwnLayer}).
+     */
+    static final String SERVICE_PRODUCT = "{{.ServiceProduct}}";
+    /**
      * Every token audience this service accepts: its own name plus the name of
      * each trait it hosts. A trait's audience is the trait name, not the host's,
      * so a host that implements a trait must accept the trait audience or it
@@ -610,6 +616,11 @@ public class Authorizer {
     private final Set<String> methodAnyTenant = ConcurrentHashMap.newKeySet();
     /** The instance's own tenant namespace ("/tenants/&lt;t&gt;"), or "" for a shared instance. */
     private volatile String hostTenant = "";
+    /**
+     * The product of the instance's own namespace ({@code /products/<p>}), or ""
+     * for any other instance. See {@link #setHostNamespace}.
+     */
+    private volatile String hostProduct = "";
     /** The instance's own namespace claim, whatever its depth. See {@link #setHostIdentity}. */
     private volatile String hostNamespace = "";
     /**
@@ -806,11 +817,16 @@ public class Authorizer {
      * neither at-or-above that tenant nor /system or below. A token's aud is the
      * service name, which every tenant's instance accepts, so without this check
      * another tenant's token is admitted on any RPC with no
-     * target_namespace_field. Any other namespace (a shared instance's /system or
-     * below) leaves the authorizer exactly as it was.
+     * target_namespace_field. A product's instance runs in exactly
+     * {@code /products/<p>}: from then on every door refuses, PERMISSION_DENIED,
+     * a service or workload caller that is not of a tenant or of product
+     * {@code <p>} ({@link #checkHostProduct}). Any other namespace (a shared
+     * instance's /system or below) leaves the authorizer exactly as it was.
      */
     public void setHostNamespace(String namespace) {
         hostTenant = isTenantNamespace(namespace) ? namespace : "";
+        {{.ChassisBase}}.spiffe.Spiffe.Layer l = namespaceLayerOrNull(namespace);
+        hostProduct = hostTenant.isEmpty() && l != null && l.kind == {{.ChassisBase}}.spiffe.Spiffe.LayerKind.PRODUCT ? l.product : "";
     }
 
     /**
@@ -831,11 +847,41 @@ public class Authorizer {
 
     /**
      * {@link #setHostIdentity} with the namespace and subject read from the
-     * instance's own service token.
+     * instance's own service token. An identity in another layer than the one
+     * the service's proto declares ({@link #checkOwnLayer}) throws, so the
+     * instance does not start.
      */
     public void setHostNamespaceFromToken(String token) throws Exception {
         TokenWrapper tw = TokenWrapper.parse(token);
+        checkOwnLayer(SERVICE_PRODUCT, tw.getNamespace());
         setHostIdentity(tw.getNamespace(), tw.getSubject());
+    }
+
+    /**
+     * The instance's own layer check at startup: a service whose proto declares
+     * product p runs at exactly {@code /products/<p>}, and one that declares none
+     * never runs at a product's namespace (products-layer-2026-11-08).
+     */
+    static void checkOwnLayer(String product, String namespace) throws ProtoException {
+        {{.ChassisBase}}.spiffe.Spiffe.Layer l = namespaceLayerOrNull(namespace);
+        boolean inProduct = l != null && l.kind == {{.ChassisBase}}.spiffe.Spiffe.LayerKind.PRODUCT;
+        if (!product.isEmpty() && (!inProduct || !l.product.equals(product))) {
+            throw ProtoException.newErrPermissionDenied(null, "%s", "own identity namespace \"" + namespace + "\": this service is product \""
+                    + product + "\"'s and runs at /products/" + product);
+        }
+        if (product.isEmpty() && inProduct) {
+            throw ProtoException.newErrPermissionDenied(null, "%s", "own identity namespace \"" + namespace + "\" is product \"" + l.product
+                    + "\"'s: this service declares no (spec.service).product");
+        }
+    }
+
+    /** The layer a namespace claim names, or null when it names none. */
+    private static {{.ChassisBase}}.spiffe.Spiffe.Layer namespaceLayerOrNull(String namespace) {
+        try {
+            return {{.ChassisBase}}.spiffe.Spiffe.callerLayer(namespace, "", false);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     /** True when namespace is exactly {@code /tenants/<t>}. */
@@ -859,6 +905,11 @@ public class Authorizer {
         if (Spiffe.isAtOrBelow("/system", caller) || Spiffe.isAtOrBelow(caller, host)) {
             return;
         }
+        {{.ChassisBase}}.spiffe.Spiffe.Layer layer = namespaceLayerOrNull(caller);
+        if (layer != null && layer.kind == {{.ChassisBase}}.spiffe.Spiffe.LayerKind.PRODUCT) {
+            throw ProtoException.newErrPermissionDenied(null, "%s", "caller namespace \"" + caller + "\" is product \""
+                    + layer.product + "\"'s: a product never calls a tenant (products-layer-2026-11-08)");
+        }
         String subType = tw.getSubType();
         if ("service".equals(subType) || "workload".equals(subType)) {
             throw ProtoException.newErrPermissionDenied(null,
@@ -868,6 +919,37 @@ public class Authorizer {
         if (methodKey != null && methodAnyTenant.contains(methodKey)) return;
         throw ProtoException.newErrPermissionDenied(null,
                 "caller namespace \"" + caller + "\" is not at-or-above this instance's tenant \"" + host + "\"");
+    }
+
+    /**
+     * A product instance's door check: a service or workload caller is admitted
+     * from a tenant or from the instance's own product, never from the platform
+     * (/system) or another product (products-layer-2026-11-08). Its layer is read
+     * from its namespace claim and cross-checked against its subject
+     * ({@code Spiffe.callerLayer}). A user passes, to meet entitlements.
+     */
+    private void checkHostProduct(TokenWrapper tw) throws ProtoException {
+        String host = hostProduct;
+        if (host.isEmpty()) return;
+        String subType = tw.getSubType();
+        if (!"service".equals(subType) && !"workload".equals(subType)) return;
+        String caller = tw.getNamespace() == null ? "" : tw.getNamespace();
+        {{.ChassisBase}}.spiffe.Spiffe.Layer layer;
+        try {
+            layer = {{.ChassisBase}}.spiffe.Spiffe.callerLayer(caller, tw.getSubject() == null ? "" : tw.getSubject(), true);
+        } catch (IllegalArgumentException e) {
+            throw ProtoException.newErrPermissionDenied(null, "%s",
+                    "service caller of product \"" + host + "\": " + e.getMessage());
+        }
+        if (layer.kind == {{.ChassisBase}}.spiffe.Spiffe.LayerKind.SYSTEM) {
+            throw ProtoException.newErrPermissionDenied(null, "%s", "service caller namespace \"" + caller
+                    + "\" is the platform's: the platform never calls a product (products-layer-2026-11-08)");
+        }
+        if (layer.kind == {{.ChassisBase}}.spiffe.Spiffe.LayerKind.PRODUCT && !layer.product.equals(host)) {
+            throw ProtoException.newErrPermissionDenied(null, "%s", "service caller namespace \"" + caller
+                    + "\" is product \"" + layer.product + "\"'s, this instance product \"" + host
+                    + "\"'s: a product never calls another product (products-layer-2026-11-08)");
+        }
     }
 
     /**
@@ -1130,6 +1212,7 @@ public class Authorizer {
                     "token audience \"" + aud + "\" is not accepted by service \"" + SERVICE_NAME + "\"");
         }
         checkHostTenant(tw, methodKey);
+        checkHostProduct(tw);
 
         // Signature, expiry, token class and audience all checked: this is the
         // only place a token becomes readable as the caller's identity.

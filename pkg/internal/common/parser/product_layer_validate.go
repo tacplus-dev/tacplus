@@ -351,6 +351,35 @@ func validateCallerTid(ix *layerIndex, paths []string) []string {
 	return errs
 }
 
+// SelfServiceProduct is the (spec.service).product of the service
+// selfPackage names, or "" when it declares none (a platform or tenant-owned
+// service) or nothing is loaded. The generated authorizer bakes it in, and an
+// instance whose own identity is in another layer does not start.
+func SelfServiceProduct(dp *DescriptorParser, selfPackage string) string {
+	if dp == nil || selfPackage == "" {
+		return ""
+	}
+	for _, fd := range dp.GetAllFiles() {
+		if fd.Package == selfPackage && fd.ServiceName != "" {
+			return fd.ServiceProduct
+		}
+	}
+	return ""
+}
+
+// SelfServiceProductIn is SelfServiceProduct over the protos under
+// annotatedProtoDir, "" when there is none.
+func SelfServiceProductIn(annotatedProtoDir, selfPackage string) (string, error) {
+	if annotatedProtoDir == "" || selfPackage == "" {
+		return "", nil
+	}
+	dp, err := NewDescriptorParser(annotatedProtoDir)
+	if err != nil {
+		return "", fmt.Errorf("create descriptor parser for the service's product: %w", err)
+	}
+	return SelfServiceProduct(dp, selfPackage), nil
+}
+
 // productLayerServerLanguages are the languages that generate servers (each
 // has a generated door, #258).
 var productLayerServerLanguages = map[string]bool{"go": true, "java": true, "rust": true, "python": true, "typescript": true}

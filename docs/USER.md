@@ -1660,11 +1660,27 @@ fleet's merged protos:
   fleet's `products:` and each service's `product:`; `registry.json`'s
   service info carries `product`.
 
-The generated doors (the product door, the S2S client's refusal before
-sending, the `caller_tid` binding and tenant deletion) are not in this release
-yet, so a **server** of a product service, or of an rpc binding
-`(spec.caller_tid)`, is refused at generation in every server language rather
-than generated without them. Clients of a product service generate as before.
+The generated Go, Java and Rust servers enforce the layer at the door, on
+every entry point (authorize, authenticate, the at-or-below check and the
+enforcing interceptors), `PERMISSION_DENIED` before the handler runs:
+
+- **A product's instance** (its own namespace `/products/<p>`) admits the
+  service and workload callers of any tenant and of product `<p>`, and refuses
+  the platform's (`/system`), another product's, and one whose subject is in
+  another layer than its namespace claim. Users pass it, to meet entitlements.
+- **A tenant-owned instance** refuses a product's caller on every rpc,
+  `RPC_FLAG_ANY_TENANT` included, whatever its `sub_type`.
+- **A `/system` instance** admits a product's services.
+- **At startup** an instance refuses an identity in another layer than its
+  proto declares: a product's service runs at exactly `/products/<p>`, and a
+  service with no `product` never at a product's namespace.
+
+The rest of the generated doors (the S2S client's refusal before sending, the
+`caller_tid` binding, tenant deletion and the record plane's checks) are not in
+this release yet, so a **server** of a product service, or of an rpc binding
+`(spec.caller_tid)`, is still refused at generation in every server language
+rather than generated without them. Clients of a product service generate as
+before.
 
 ### Every user RPC is also an MCP tool
 

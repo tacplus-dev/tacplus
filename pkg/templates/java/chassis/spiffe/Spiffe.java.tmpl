@@ -782,6 +782,97 @@ public final class Spiffe {
         return new ResourceParts(p.namespace, p.resourceKind, p.resourceId);
     }
 
+    // ---- The caller's layer (products-layer-2026-11-08). ----
+
+    /**
+     * One of the three layers every principal is in: the platform (/system), a
+     * fleet product (/products/&lt;name&gt;) or a tenant (/tenants/&lt;t&gt;).
+     */
+    public enum LayerKind { SYSTEM, PRODUCT, TENANT }
+
+    /** A caller's layer; {@link #product} names the product of a PRODUCT. */
+    public static final class Layer {
+        public final LayerKind kind;
+        public final String product;
+
+        Layer(LayerKind kind, String product) {
+            this.kind = kind;
+            this.product = product == null ? "" : product;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof Layer && ((Layer) o).kind == kind && ((Layer) o).product.equals(product);
+        }
+
+        @Override
+        public int hashCode() {
+            return kind.hashCode() * 31 + product.hashCode();
+        }
+
+        /** "system", "tenant" or "product:&lt;name&gt;". */
+        @Override
+        public String toString() {
+            return kind == LayerKind.PRODUCT ? "product:" + product : kind.name().toLowerCase(java.util.Locale.ROOT);
+        }
+    }
+
+    /**
+     * Reads a caller's layer from its namespace claim. For a service principal
+     * ({@code service}: the token's sub_type is service or workload) the subject
+     * must be a service or workload identity in the same layer, and for a
+     * product the same product: a tenant-owned service's subject names its tid
+     * where its namespace names the tenant (kernel#23), so only the root is
+     * compared there. The root, the bare tenants tag and a user root name no
+     * layer. Every layer door asks this, never a prefix of the namespace.
+     *
+     * @throws IllegalArgumentException when the caller is in no layer, or its
+     *     subject is in another one than its namespace
+     */
+    public static Layer callerLayer(String namespace, String subject, boolean service) {
+        Layer l = namespaceLayer(namespace);
+        if (!service) {
+            return l;
+        }
+        ParsedSpiffeId p;
+        try {
+            p = parseSpiffeId(subject);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("spiffe: service caller subject \"" + subject + "\": " + e.getMessage(), e);
+        }
+        if (p.subjectKind != SubjectKind.SERVICE && p.subjectKind != SubjectKind.WORKLOAD) {
+            throw new IllegalArgumentException(
+                    "spiffe: service caller subject \"" + subject + "\" is not a service or workload identity");
+        }
+        Layer sl;
+        try {
+            sl = namespaceLayer(p.namespace);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("spiffe: service caller subject \"" + subject + "\": " + e.getMessage(), e);
+        }
+        if (!sl.equals(l)) {
+            throw new IllegalArgumentException("spiffe: service caller subject \"" + subject + "\" is in layer " + sl
+                    + ", its namespace \"" + namespace + "\" in layer " + l);
+        }
+        return l;
+    }
+
+    private static Layer namespaceLayer(String namespace) {
+        String ns = normalizeNamespace(namespace);
+        String[] segs = ns.substring(1).split("/", -1);
+        if (segs[0].equals(SYSTEM_SEGMENT)) {
+            return new Layer(LayerKind.SYSTEM, "");
+        }
+        if (segs[0].equals(PRODUCTS_SEGMENT)) {
+            return new Layer(LayerKind.PRODUCT, segs[1]);
+        }
+        if (segs[0].equals(TENANTS_SEGMENT) && segs.length >= 2) {
+            return new Layer(LayerKind.TENANT, "");
+        }
+        throw new IllegalArgumentException(
+                "spiffe: namespace \"" + ns + "\" names no layer (system, products or a tenant)");
+    }
+
     // ---- Comparison. ----
 
     /**

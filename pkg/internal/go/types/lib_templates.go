@@ -45,6 +45,7 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 	// EventBusSink is gated on it — it cannot name a type that was never
 	// generated.
 	hasAccountingRecord := false
+	serviceProduct := ""
 	if config.AnnotatedProtoDir != "" {
 		dp, err := parser.NewDescriptorParser(config.AnnotatedProtoDir)
 		if err != nil {
@@ -54,6 +55,7 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		if err != nil {
 			return fmt.Errorf("resolve accounting record topic: %w", err)
 		}
+		serviceProduct = parser.SelfServiceProduct(dp, config.SelfPackage)
 	}
 
 	serviceRPCs := make([]amServiceRPC, 0, len(svcRPCs))
@@ -66,6 +68,7 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		ModuleBasePath             string
 		ServiceLabel               string   // service identity baked into Authorizer
 		AcceptedAudiences          []string // every `aud` the Authorizer accepts: own label + hosted traits
+		ServiceProduct             string   // (spec.service).product the Authorizer requires of its own identity
 		Spiffe                     commonspiffe.TemplateGrammar
 		KeepaliveTimeSecs          int
 		KeepaliveTimeoutSecs       int
@@ -77,6 +80,7 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		ModuleBasePath:             config.ModuleBasePath,
 		ServiceLabel:               config.ServiceLabel(),
 		AcceptedAudiences:          acceptedAudiences,
+		ServiceProduct:             serviceProduct,
 		Spiffe:                     commonspiffe.TemplateData(),
 		KeepaliveTimeSecs:          keepaliveconst.TimeSecs,
 		KeepaliveTimeoutSecs:       keepaliveconst.TimeoutSecs,

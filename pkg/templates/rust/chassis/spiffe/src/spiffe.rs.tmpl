@@ -752,6 +752,84 @@ pub fn resource_parts_from_spiffe(spiffe_id: &str) -> Result<ResourceParts> {
     })
 }
 
+// ---- The caller's layer (products-layer-2026-11-08). ----
+
+/// One of the three layers every principal is in: the platform (/system), a
+/// fleet product (/products/<name>) or a tenant (/tenants/<t>).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerKind {
+    System,
+    Product,
+    Tenant,
+}
+
+/// A caller's layer; `product` names the product of a `LayerKind::Product`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Layer {
+    pub kind: LayerKind,
+    pub product: String,
+}
+
+impl fmt::Display for Layer {
+    /// "system", "tenant" or "product:<name>".
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.kind {
+            LayerKind::System => f.write_str("system"),
+            LayerKind::Tenant => f.write_str("tenant"),
+            LayerKind::Product => write!(f, "product:{}", self.product),
+        }
+    }
+}
+
+/// Reads a caller's layer from its namespace claim. For a service principal
+/// (`service`: the token's sub_type is service or workload) the subject must
+/// be a service or workload identity in the same layer, and for a product the
+/// same product: a tenant-owned service's subject names its tid where its
+/// namespace names the tenant (kernel#23), so only the root is compared there.
+/// The root, the bare tenants tag and a user root name no layer: error. Every
+/// layer door asks this, never a prefix of the namespace.
+pub fn caller_layer(namespace: &str, subject: &str, service: bool) -> Result<Layer> {
+    let l = namespace_layer(namespace)?;
+    if !service {
+        return Ok(l);
+    }
+    let p = parse_spiffe_id(subject)
+        .map_err(|e| SpiffeError(format!("spiffe: service caller subject {:?}: {}", subject, e)))?;
+    if p.subject_kind != SubjectKind::Service && p.subject_kind != SubjectKind::Workload {
+        return err(format!(
+            "spiffe: service caller subject {:?} is not a service or workload identity",
+            subject
+        ));
+    }
+    let sl = namespace_layer(&p.namespace)
+        .map_err(|e| SpiffeError(format!("spiffe: service caller subject {:?}: {}", subject, e)))?;
+    if sl != l {
+        return err(format!(
+            "spiffe: service caller subject {:?} is in layer {}, its namespace {:?} in layer {}",
+            subject, sl, namespace, l
+        ));
+    }
+    Ok(l)
+}
+
+fn namespace_layer(namespace: &str) -> Result<Layer> {
+    let ns = normalize_namespace(namespace)?;
+    let segs: Vec<&str> = ns.trim_start_matches('/').split('/').collect();
+    if segs[0] == SYSTEM_SEGMENT {
+        return Ok(Layer { kind: LayerKind::System, product: String::new() });
+    }
+    if segs[0] == PRODUCTS_SEGMENT {
+        return Ok(Layer { kind: LayerKind::Product, product: segs[1].to_string() });
+    }
+    if segs[0] == TENANTS_SEGMENT && segs.len() >= 2 {
+        return Ok(Layer { kind: LayerKind::Tenant, product: String::new() });
+    }
+    err(format!(
+        "spiffe: namespace {:?} names no layer (system, products or a tenant)",
+        ns
+    ))
+}
+
 // ---- Comparison. ----
 
 /// Reports whether `target` is the same as `caller` or a strict path-segment
@@ -1077,6 +1155,16 @@ mod tests {
                 call_shared_construct(field(entry, "fn"), args).unwrap(),
                 field(entry, "expect")
             );
+        }
+        let layers = root["caller_layer"]["vectors"].as_array().expect("caller_layer vectors");
+        assert!(!layers.is_empty(), "caller_layer: no vectors");
+        for entry in layers {
+            let service = entry["service"].as_bool().expect("service bool");
+            let got = match caller_layer(field(entry, "namespace"), field(entry, "subject"), service) {
+                Ok(l) => l.to_string(),
+                Err(_) => "error".to_string(),
+            };
+            assert_eq!(got, field(entry, "expect"), "caller_layer vector {:?}", entry);
         }
         assert_eq!(
             opaque_segment("user", "issuer/user").len(),

@@ -153,6 +153,10 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		return fmt.Errorf("failed to resolve accounting publisher for chassis am templates: %w", err)
 	}
 	hasAccountingRecord := accountingPublisher != nil
+	serviceProduct, err := parser.SelfServiceProductIn(protoDir, config.SelfPackage)
+	if err != nil {
+		return err
+	}
 	gcsArchive, err := javaGcsArchiveEnabled(config)
 	if err != nil {
 		return err
@@ -188,6 +192,7 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		AudienceMappings               []audienceMapping
 		ServiceLabel                   string   // service identity baked into Authorizer
 		AcceptedAudiences              []string // every `aud` the Authorizer accepts: own label + hosted traits
+		ServiceProduct                 string   // (spec.service).product the Authorizer requires of its own identity
 		Spiffe                         commonspiffe.TemplateGrammar
 		KeepaliveTimeSecs              int
 		KeepaliveTimeoutSecs           int
@@ -216,6 +221,7 @@ func writeLibTemplates(config *tactype.Config, acceptedAudiences []string, svcRP
 		AudienceMappings:               audienceMappings,
 		ServiceLabel:                   config.ServiceLabel(),
 		AcceptedAudiences:              acceptedAudiences,
+		ServiceProduct:                 serviceProduct,
 		Spiffe:                         commonspiffe.TemplateData(),
 		KeepaliveTimeSecs:              keepaliveconst.TimeSecs,
 		KeepaliveTimeoutSecs:           keepaliveconst.TimeoutSecs,

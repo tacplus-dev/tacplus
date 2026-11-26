@@ -15,6 +15,7 @@ import (
 	"crypto/ed25519"
 	libBase64 "encoding/base64"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -785,6 +786,155 @@ func TestAuthorizerAnyTenantNeverAdmitsAnotherTenantsService(t *testing.T) {
 		if _, err := a.Authorize(bearerCtx(tok), openMethod, nil); err != nil {
 			t.Fatalf("ANY_TENANT: beta's own and /system services must pass beta's door, got: %v", err)
 		}
+	}
+}
+
+// The product layer's doors (roadmap/PRODUCTS_LAYER.md, #475;
+// products-layer-2026-11-08). A product's instance (/products/ledger) admits
+// the service principals of any tenant and of its own product, and refuses the
+// platform's, another product's, and one whose subject is in another layer than
+// its namespace, on every door. Users pass the layer door, to meet entitlements.
+func TestAuthorizerProductInstanceDoor(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth(testMethodKey, []string{"caller-svc", "caller-svc/workloads/.*"})
+	a.SetHostIdentity("/products/ledger", "spiffe://example.com/products/ledger/services/demo")
+
+	principal := func(subType, sub, ns string) string {
+		return signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
+			tok.SetSubType(subType).SetSubject(sub).SetNamespace(ns)
+		})
+	}
+	admitted := []struct{ sub, ns string }{
+		{"spiffe://example.com/tenants/aaaaaaaa/services/caller-svc", "/tenants/acme"},
+		{"spiffe://example.com/tenants/bbbbbbbb/services/caller-svc/workloads/pigeon-1", "/tenants/beta"},
+		{"spiffe://example.com/products/ledger/services/caller-svc", "/products/ledger"},
+		{"spiffe://example.com/products/ledger/services/caller-svc/workloads/pigeon-1", "/products/ledger"},
+	}
+	for _, c := range admitted {
+		subType := "service"
+		if strings.Contains(c.sub, "/workloads/") {
+			subType = "workload"
+		}
+		tok := principal(subType, c.sub, c.ns)
+		if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err != nil {
+			t.Fatalf("%s (%s) must pass product ledger's door, got: %v", c.sub, c.ns, err)
+		}
+		if _, err := a.Authenticate(inMethod(bearerCtx(tok), testMethod)); err != nil {
+			t.Fatalf("Authenticate: %s (%s) must pass product ledger's door, got: %v", c.sub, c.ns, err)
+		}
+		if _, err := a.AuthenticateAtOrBelow(inMethod(bearerCtx(tok), testMethod), c.ns); err != nil {
+			t.Fatalf("AuthenticateAtOrBelow: %s (%s) must pass product ledger's door, got: %v", c.sub, c.ns, err)
+		}
+	}
+	refused := []struct{ sub, ns string }{
+		{"spiffe://example.com/system/services/caller-svc", "/system"},
+		{"spiffe://example.com/system/aws/us-east-1/services/caller-svc", "/system/aws/us-east-1"},
+		{"spiffe://example.com/products/books/services/caller-svc", "/products/books"},
+		{"spiffe://example.com/products/books/services/caller-svc", "/products/ledger"},
+		{"spiffe://example.com/system/services/caller-svc", "/products/ledger"},
+		{"spiffe://example.com/tenants/aaaaaaaa/services/caller-svc", "/system"},
+		{"caller-svc", "/tenants/acme"},
+		{"spiffe://example.com/system/services/caller-svc", "/"},
+	}
+	for _, c := range refused {
+		tok := principal("service", c.sub, c.ns)
+		if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("%s (%s) must be refused at product ledger's door, got: %v", c.sub, c.ns, err)
+		}
+		if _, err := a.Authenticate(inMethod(bearerCtx(tok), testMethod)); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("Authenticate: %s (%s) must be refused at product ledger's door, got: %v", c.sub, c.ns, err)
+		}
+		if _, err := a.AuthenticateAtOrBelow(inMethod(bearerCtx(tok), testMethod), c.ns); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("AuthenticateAtOrBelow: %s (%s) must be refused at product ledger's door, got: %v", c.sub, c.ns, err)
+		}
+	}
+	user := principal("user", "someone@example.com", "/tenants/acme")
+	if _, err := a.Authenticate(inMethod(bearerCtx(user), testMethod)); err != nil {
+		t.Fatalf("a tenant's user passes the layer door, got: %v", err)
+	}
+}
+
+// A tenant-owned instance refuses a product's caller on every rpc, an
+// RPC_FLAG_ANY_TENANT one included, whatever its sub_type: a product never
+// calls a tenant. Its own tenant and /system still pass.
+func TestAuthorizerTenantInstanceRefusesProduct(t *testing.T) {
+	const openMethod = "/demo.DemoService/Visit"
+	const openKey = "demo.DemoService/Visit"
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
+	a.SetMethodAuth(openKey, []string{"caller-svc"})
+	a.SetMethodAnyTenant(openKey)
+	a.SetHostIdentity("/tenants/beta", "spiffe://example.com/tenants/bbbbbbbb/services/demo")
+
+	for _, subType := range []string{"service", "user"} {
+		tok := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
+			tok.SetSubType(subType).SetSubject("spiffe://example.com/products/ledger/services/caller-svc").SetNamespace("/products/ledger")
+		})
+		for _, m := range []string{testMethod, openMethod} {
+			if _, err := a.Authenticate(inMethod(bearerCtx(tok), m)); status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("%s of product ledger on %s must be refused at tenant beta's door, got: %v", subType, m, err)
+			}
+		}
+		if _, err := a.Authorize(bearerCtx(tok), openMethod, nil); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("Authorize: %s of product ledger must be refused at tenant beta's door, got: %v", subType, err)
+		}
+	}
+	sys := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
+		tok.SetSubType("service").SetSubject("spiffe://example.com/system/services/caller-svc").SetNamespace("/system")
+	})
+	if _, err := a.Authorize(bearerCtx(sys), testMethod, nil); err != nil {
+		t.Fatalf("/system's service must still pass tenant beta's door, got: %v", err)
+	}
+}
+
+// A shared (/system) instance admits a product's service: product -> /system
+// is allowed.
+func TestAuthorizerSharedInstanceAdmitsProduct(t *testing.T) {
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth(testMethodKey, []string{"caller-svc"})
+	a.SetHostIdentity("/system", "spiffe://example.com/system/services/demo")
+	tok := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
+		tok.SetSubType("service").SetSubject("spiffe://example.com/products/ledger/services/caller-svc").SetNamespace("/products/ledger")
+	})
+	if _, err := a.Authorize(bearerCtx(tok), testMethod, nil); err != nil {
+		t.Fatalf("product ledger's service must pass a /system instance's door, got: %v", err)
+	}
+}
+
+// An instance starts only with an identity in the layer its proto declares: a
+// product's service at exactly /products/<its product>, any other service
+// never at a product's namespace.
+func TestCheckOwnLayer(t *testing.T) {
+	for _, tc := range []struct {
+		product, ns string
+		ok          bool
+	}{
+		{"", "/system", true},
+		{"", "/tenants/beta", true},
+		{"", "/products/ledger", false},
+		{"ledger", "/products/ledger", true},
+		{"ledger", "/products/books", false},
+		{"ledger", "/system", false},
+		{"ledger", "/tenants/beta", false},
+		{"ledger", "", false},
+	} {
+		if err := checkOwnLayer(tc.product, tc.ns); (err == nil) != tc.ok {
+			t.Errorf("checkOwnLayer(%q, %q) = %v, want ok %v", tc.product, tc.ns, err, tc.ok)
+		}
+	}
+	if serviceProduct != "" {
+		return
+	}
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	own := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
+		tok.SetSubType("service").SetSubject("spiffe://example.com/products/ledger/services/demo").SetNamespace("/products/ledger")
+	})
+	if err := a.SetHostNamespaceFromToken(own); err == nil {
+		t.Fatal("a service that declares no product must not start with a product's identity")
 	}
 }
 

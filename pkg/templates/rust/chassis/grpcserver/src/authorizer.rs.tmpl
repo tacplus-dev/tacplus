@@ -180,6 +180,9 @@ pub struct Authorizer {
     /// The instance's own tenant namespace ("/tenants/<t>"), or empty for a
     /// shared instance. See [`set_host_namespace`](Self::set_host_namespace).
     host_tenant: RwLock<String>,
+    /// The product of the instance's own namespace ("/products/<p>"), or empty
+    /// for any other instance. See [`set_host_namespace`](Self::set_host_namespace).
+    host_product: RwLock<String>,
     /// The instance's own identity, for the tenant-routing backstop and the
     /// record plane's route pin: its namespace claim and the tid of its own
     /// subject. See [`set_host_identity`](Self::set_host_identity).
@@ -188,6 +191,11 @@ pub struct Authorizer {
 
 /// The service identity baked in at code generation time.
 const SERVICE_NAME: &str = "{{.ServiceLabel}}";
+
+/// The fleet product this service's code belongs to, its proto's
+/// (spec.service).product, or empty for a platform or tenant-owned service.
+/// The instance's own identity must agree ([`check_own_layer`]).
+pub const SERVICE_PRODUCT: &str = "{{.ServiceProduct}}";
 
 /// Every token audience this service accepts: its own name plus the name of
 /// each trait it hosts. A trait's audience is the trait name, not the host's,
@@ -218,6 +226,7 @@ impl Authorizer {
             method_actor_patterns: RwLock::new(HashMap::new()),
             method_any_tenant: RwLock::new(HashSet::new()),
             host_tenant: RwLock::new(String::new()),
+            host_product: RwLock::new(String::new()),
             host_identity: RwLock::new(Default::default()),
         }
     }
@@ -232,6 +241,7 @@ impl Authorizer {
             method_actor_patterns: RwLock::new(HashMap::new()),
             method_any_tenant: RwLock::new(HashSet::new()),
             host_tenant: RwLock::new(String::new()),
+            host_product: RwLock::new(String::new()),
             host_identity: RwLock::new(Default::default()),
         }
     }
@@ -244,7 +254,10 @@ impl Authorizer {
     /// PERMISSION_DENIED, a caller whose namespace is neither at-or-above that
     /// tenant nor /system or below. A token's aud is the service name, which
     /// every tenant's instance accepts, so without this check another tenant's
-    /// token is admitted on any RPC with no target_namespace_field. Any other
+    /// token is admitted on any RPC with no target_namespace_field. A
+    /// product's instance runs in exactly `/products/<p>`: from then on every
+    /// door refuses, PERMISSION_DENIED, a service or workload caller that is
+    /// not of a tenant or of product `<p>` (`check_host_product`). Any other
     /// namespace (a shared instance's /system or below) leaves the authorizer
     /// exactly as it was.
     ///
@@ -253,6 +266,10 @@ impl Authorizer {
     pub fn set_host_namespace(&self, namespace: &str) {
         let tenant = if is_tenant_namespace(namespace) { namespace } else { "" };
         *self.host_tenant.write().unwrap() = tenant.to_string();
+        *self.host_product.write().unwrap() = match namespace_layer(namespace) {
+            Some(l) if tenant.is_empty() && l.kind == ::spiffe::LayerKind::Product => l.product,
+            _ => String::new(),
+        };
         *self.host_identity.write().unwrap() = servicemanager::tenant_route::HostIdentity {
             tenant_namespace: tenant.to_string(),
             ..Default::default()
@@ -274,11 +291,14 @@ impl Authorizer {
     }
 
     /// [`set_host_identity`](Self::set_host_identity) with the namespace and
-    /// subject read from the instance's own service token.
+    /// subject read from the instance's own service token. An identity in
+    /// another layer than the one the service's proto declares
+    /// ([`check_own_layer`]) is an error, so the instance does not start.
     pub fn set_host_namespace_from_token(&self, token_str: &str) -> Result<()> {
         let tw = token::Token::parse(token_str).map_err(|e| {
             AuthorizerError::unauthenticated(format!("own identity token: {}", e))
         })?;
+        check_own_layer(SERVICE_PRODUCT, tw.namespace().unwrap_or(""))?;
         self.set_host_identity(tw.namespace().unwrap_or(""), tw.subject().unwrap_or(""));
         Ok(())
     }
@@ -348,6 +368,14 @@ impl Authorizer {
         {
             return Ok(());
         }
+        if let Some(l) = namespace_layer(caller_namespace) {
+            if l.kind == ::spiffe::LayerKind::Product {
+                return Err(AuthorizerError::permission_denied(format!(
+                    "caller namespace \"{}\" is product \"{}\"'s: a product never calls a tenant (products-layer-2026-11-08)",
+                    caller_namespace, l.product
+                )));
+            }
+        }
         if matches!(tw.sub_type(), Some("service") | Some("workload")) {
             return Err(AuthorizerError::permission_denied(format!(
                 "service caller namespace \"{}\" is not at-or-above this instance's tenant \"{}\": S2S never crosses tenants",
@@ -361,6 +389,33 @@ impl Authorizer {
             "caller namespace \"{}\" is not at-or-above this instance's tenant \"{}\"",
             caller_namespace, *host
         )))
+    }
+
+    /// A product instance's door check: a service or workload caller is
+    /// admitted from a tenant or from the instance's own product, never from
+    /// the platform (/system) or another product (products-layer-2026-11-08).
+    /// Its layer is read from its namespace claim and cross-checked against its
+    /// subject (`spiffe::caller_layer`). A user passes, to meet entitlements.
+    fn check_host_product(&self, tw: &token::Token) -> Result<()> {
+        let host = self.host_product.read().unwrap().clone();
+        if host.is_empty() || !matches!(tw.sub_type(), Some("service") | Some("workload")) {
+            return Ok(());
+        }
+        let caller_namespace = tw.namespace().unwrap_or("");
+        let l = ::spiffe::caller_layer(caller_namespace, tw.subject().unwrap_or(""), true).map_err(|e| {
+            AuthorizerError::permission_denied(format!("service caller of product \"{}\": {}", host, e))
+        })?;
+        match l.kind {
+            ::spiffe::LayerKind::System => Err(AuthorizerError::permission_denied(format!(
+                "service caller namespace \"{}\" is the platform's: the platform never calls a product (products-layer-2026-11-08)",
+                caller_namespace
+            ))),
+            ::spiffe::LayerKind::Product if l.product != host => Err(AuthorizerError::permission_denied(format!(
+                "service caller namespace \"{}\" is product \"{}\"'s, this instance product \"{}\"'s: a product never calls another product (products-layer-2026-11-08)",
+                caller_namespace, l.product, host
+            ))),
+            _ => Ok(()),
+        }
     }
 
     /// Registers allowed caller patterns for a method. Patterns are RE2 regexes
@@ -608,6 +663,7 @@ impl Authorizer {
         // Tenant-owned instance: refuse another tenant's caller at the door,
         // unless the caller is a user and the rpc declares RPC_FLAG_ANY_TENANT.
         self.check_host_tenant(&tw, full_method)?;
+        self.check_host_product(&tw)?;
 
         Ok(tw)
     }
@@ -1189,6 +1245,30 @@ where
 
     fn is_end_stream(&self) -> bool {
         self.inner.as_ref().map_or(true, |b| b.is_end_stream())
+    }
+}
+
+/// The layer a namespace claim names, or None when it names none.
+fn namespace_layer(namespace: &str) -> Option<::spiffe::Layer> {
+    ::spiffe::caller_layer(namespace, "", false).ok()
+}
+
+/// The instance's own layer check at startup: a service whose proto declares
+/// product p runs at exactly `/products/<p>`, and one that declares none never
+/// runs at a product's namespace (products-layer-2026-11-08).
+pub fn check_own_layer(product: &str, namespace: &str) -> Result<()> {
+    let in_product = namespace_layer(namespace).filter(|l| l.kind == ::spiffe::LayerKind::Product);
+    match (&in_product, product.is_empty()) {
+        (Some(l), false) if l.product == product => Ok(()),
+        (_, false) => Err(AuthorizerError::permission_denied(format!(
+            "own identity namespace \"{}\": this service is product \"{}\"'s and runs at /products/{}",
+            namespace, product, product
+        ))),
+        (Some(l), true) => Err(AuthorizerError::permission_denied(format!(
+            "own identity namespace \"{}\" is product \"{}\"'s: this service declares no (spec.service).product",
+            namespace, l.product
+        ))),
+        (None, true) => Ok(()),
     }
 }
 
@@ -2015,6 +2095,142 @@ mod authorizer_behavior_tests {
             beta.authorize_grpc(TEST_METHOD, METHOD, Some(&own), &empty_md())
                 .await
                 .expect("ANY_TENANT: beta's own and /system services pass beta's door");
+        }
+    }
+
+    fn layer_token(key: &keys::ImmutableKey, sub_type: &str, sub: &str, ns: &str) -> String {
+        signed_token(key, now_plus(3600), SERVICE_NAME, |tok| {
+            tok.set_sub_type(sub_type).expect("sub_type");
+            tok.set_subject(sub).expect("subject");
+            tok.set_namespace(ns).expect("namespace");
+        })
+    }
+
+    // The product layer's doors (roadmap/PRODUCTS_LAYER.md, #475;
+    // products-layer-2026-11-08). A product's instance (/products/ledger)
+    // admits the service principals of any tenant and of its own product, and
+    // refuses the platform's, another product's, and one whose subject is in
+    // another layer than its namespace, on every entry point. Users pass the
+    // layer door, to meet entitlements.
+    #[tokio::test]
+    async fn product_instance_door() {
+        let key = new_test_key();
+        let ledger = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        ledger.set_method_auth(METHOD_KEY, &["caller-svc", "caller-svc/workloads/.*"]);
+        ledger.set_host_identity("/products/ledger", "spiffe://example.com/products/ledger/services/demo");
+
+        for (sub_type, sub, ns) in [
+            ("service", "spiffe://example.com/tenants/aaaaaaaa/services/caller-svc", "/tenants/acme"),
+            ("workload", "spiffe://example.com/tenants/bbbbbbbb/services/caller-svc/workloads/pigeon-1", "/tenants/beta"),
+            ("service", "spiffe://example.com/products/ledger/services/caller-svc", "/products/ledger"),
+            ("workload", "spiffe://example.com/products/ledger/services/caller-svc/workloads/pigeon-1", "/products/ledger"),
+        ] {
+            let tok = layer_token(&key, sub_type, sub, ns);
+            ledger
+                .authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
+                .await
+                .unwrap_or_else(|e| panic!("{} ({}) must pass product ledger's door: {:?}", sub, ns, e));
+            ledger
+                .authenticate_method(TEST_METHOD, Some(&tok))
+                .unwrap_or_else(|e| panic!("authenticate: {} ({}) must pass product ledger's door: {:?}", sub, ns, e));
+            ledger
+                .check_caller_at_or_below_method(TEST_METHOD, Some(&tok), ns)
+                .unwrap_or_else(|e| panic!("at-or-below: {} ({}) must pass product ledger's door: {:?}", sub, ns, e));
+        }
+        for (sub, ns) in [
+            ("spiffe://example.com/system/services/caller-svc", "/system"),
+            ("spiffe://example.com/system/aws/us-east-1/services/caller-svc", "/system/aws/us-east-1"),
+            ("spiffe://example.com/products/books/services/caller-svc", "/products/books"),
+            ("spiffe://example.com/products/books/services/caller-svc", "/products/ledger"),
+            ("spiffe://example.com/system/services/caller-svc", "/products/ledger"),
+            ("spiffe://example.com/tenants/aaaaaaaa/services/caller-svc", "/system"),
+            ("caller-svc", "/tenants/acme"),
+            ("spiffe://example.com/system/services/caller-svc", "/"),
+        ] {
+            let tok = layer_token(&key, "service", sub, ns);
+            let err = ledger
+                .authorize_grpc(TEST_METHOD, METHOD, Some(&tok), &empty_md())
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("{} ({}) must be refused at product ledger's door", sub, ns));
+            assert_eq!(err.code, 7, "{} ({}): {:?}", sub, ns, err);
+            let err = ledger
+                .authenticate_method(TEST_METHOD, Some(&tok))
+                .expect_err("authenticate: refused at product ledger's door");
+            assert_eq!(err.code, 7, "{} ({}): {:?}", sub, ns, err);
+            let err = ledger
+                .check_caller_at_or_below_method(TEST_METHOD, Some(&tok), ns)
+                .err()
+                .expect("at-or-below: refused at product ledger's door");
+            assert_eq!(err.code, 7, "{} ({}): {:?}", sub, ns, err);
+        }
+        let user = layer_token(&key, "user", "someone@example.com", "/tenants/acme");
+        ledger
+            .authenticate_method(TEST_METHOD, Some(&user))
+            .expect("a tenant's user passes the layer door");
+    }
+
+    // A tenant-owned instance refuses a product's caller on every rpc, an
+    // RPC_FLAG_ANY_TENANT one included, whatever its sub_type: a product never
+    // calls a tenant. A /system instance admits a product's service.
+    #[tokio::test]
+    async fn tenant_instance_refuses_product_and_shared_admits_it() {
+        const OPEN: &str = "/demo.DemoService/Visit";
+        let key = new_test_key();
+        let beta = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        beta.set_method_auth(METHOD_KEY, &["caller-svc"]);
+        beta.set_method_auth("demo.DemoService/Visit", &["caller-svc"]);
+        beta.set_method_any_tenant("demo.DemoService/Visit");
+        beta.set_host_identity("/tenants/beta", "spiffe://example.com/tenants/bbbbbbbb/services/demo");
+        for sub_type in ["service", "user"] {
+            let tok = layer_token(&key, sub_type, "spiffe://example.com/products/ledger/services/caller-svc", "/products/ledger");
+            for m in [TEST_METHOD, OPEN] {
+                let err = beta
+                    .authenticate_method(m, Some(&tok))
+                    .expect_err("tenant beta refuses product ledger's caller");
+                assert_eq!(err.code, 7, "{} on {}: {:?}", sub_type, m, err);
+            }
+            let err = beta
+                .authorize_grpc(OPEN, "Visit", Some(&tok), &empty_md())
+                .await
+                .err()
+                .expect("tenant beta refuses product ledger's caller on ANY_TENANT");
+            assert_eq!(err.code, 7, "{}: {:?}", sub_type, err);
+        }
+
+        let shared = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+        shared.set_method_auth(METHOD_KEY, &["caller-svc"]);
+        shared.set_host_identity("/system", "spiffe://example.com/system/services/demo");
+        let product = layer_token(&key, "service", "spiffe://example.com/products/ledger/services/caller-svc", "/products/ledger");
+        shared
+            .authorize_grpc(TEST_METHOD, METHOD, Some(&product), &empty_md())
+            .await
+            .expect("a /system instance admits product ledger's service");
+    }
+
+    // An instance starts only with an identity in the layer its proto
+    // declares: a product's service at exactly /products/<its product>, any
+    // other service never at a product's namespace.
+    #[test]
+    fn check_own_layer_at_startup() {
+        for (product, ns, ok) in [
+            ("", "/system", true),
+            ("", "/tenants/beta", true),
+            ("", "/products/ledger", false),
+            ("ledger", "/products/ledger", true),
+            ("ledger", "/products/books", false),
+            ("ledger", "/system", false),
+            ("ledger", "/tenants/beta", false),
+            ("ledger", "", false),
+        ] {
+            assert_eq!(check_own_layer(product, ns).is_ok(), ok, "check_own_layer({:?}, {:?})", product, ns);
+        }
+        if SERVICE_PRODUCT.is_empty() {
+            let key = new_test_key();
+            let a = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
+            let own = layer_token(&key, "service", "spiffe://example.com/products/ledger/services/demo", "/products/ledger");
+            a.set_host_namespace_from_token(own.trim_start_matches("Bearer "))
+                .expect_err("a service that declares no product does not start with a product's identity");
         }
     }
 

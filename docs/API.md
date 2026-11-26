@@ -1041,7 +1041,13 @@ exactly `/products/<product>` (no bare `/products`, no location, no typed
 leaf), its own subtree beside `/system` and the tenants, and the product name
 is `[a-z][a-z0-9-]{0,30}[a-z0-9]`, never a tid's shape (8 of `[0-9a-z]`), a
 reserved tag or `tacplus`; `product_service_spiffe_id(td, product, svc)`
-constructs it. The `<location...>` tiers between
+constructs it. A caller's layer is `caller_layer(namespace, subject, service)`
+(Go `CallerLayer`, Java `Spiffe.callerLayer`, Rust `spiffe::caller_layer`):
+`system`, `tenant` or `product:<name>`, read from the namespace claim and, for
+a service principal, refused unless its subject is a service or workload
+identity in the same layer (the same product for a product); the root, bare
+`/tenants` and a user root name none. The shared vectors' `caller_layer`
+section pins it, and the generated server doors use nothing else. The `<location...>` tiers between
 `/system/` and `services` are opaque and variable-arity (the parser keys off
 the `services` tag). Reserved tags (`system`, `tenants`, `products`, `services`,
 `workloads`, `users`, `workspaces`, `clients`, `credentials`, `data`) are

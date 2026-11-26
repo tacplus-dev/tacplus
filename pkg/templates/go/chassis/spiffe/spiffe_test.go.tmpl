@@ -107,6 +107,14 @@ type sharedSpiffeVectors struct {
 		Args   []string `json:"args"`
 		Expect string   `json:"expect"`
 	} `json:"valid_construct"`
+	CallerLayer struct {
+		Vectors []struct {
+			Namespace string `json:"namespace"`
+			Subject   string `json:"subject"`
+			Service   bool   `json:"service"`
+			Expect    string `json:"expect"`
+		} `json:"vectors"`
+	} `json:"caller_layer"`
 	OpaqueSegment struct {
 		Length  int `json:"length"`
 		Vectors []struct {
@@ -253,6 +261,19 @@ func TestSharedFixtureVectors(t *testing.T) {
 	for _, tc := range v.ValidConstruct {
 		got, err := callSharedConstruct(tc.Fn, tc.Args)
 		mustEq("fixture.valid_construct."+tc.Fn, got, err, tc.Expect)
+	}
+	if len(v.CallerLayer.Vectors) == 0 {
+		t.Fatal("fixture.caller_layer: no vectors")
+	}
+	for _, tc := range v.CallerLayer.Vectors {
+		l, err := CallerLayer(tc.Namespace, tc.Subject, tc.Service)
+		got := l.String()
+		if err != nil {
+			got = "error"
+		}
+		if got != tc.Expect {
+			t.Fatalf("fixture.caller_layer(%q, %q, %v) = %q (%v), want %q", tc.Namespace, tc.Subject, tc.Service, got, err, tc.Expect)
+		}
 	}
 	if got := len(OpaqueSegment("user", "issuer/user")); got != v.OpaqueSegment.Length {
 		t.Fatalf("fixture.opaque_segment length = %d, want %d", got, v.OpaqueSegment.Length)

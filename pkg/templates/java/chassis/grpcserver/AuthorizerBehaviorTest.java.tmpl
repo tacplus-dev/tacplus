@@ -387,6 +387,7 @@ public class AuthorizerBehaviorTest {
         }
 
         checkTenantRouting(key);
+        checkProductLayer(key);
         checkRemoteJwkSourceBackoff(jwkForKey(key));
 
         if (failures > 0) {
@@ -409,6 +410,106 @@ public class AuthorizerBehaviorTest {
         } catch (Exception e) {
             System.err.println("FAIL: " + name + " threw an untyped error: " + e);
             failures++;
+        }
+    }
+
+    // The product layer's doors (roadmap/PRODUCTS_LAYER.md, #475;
+    // products-layer-2026-11-08). A product's instance (/products/ledger) admits
+    // the service principals of any tenant and of its own product, and refuses
+    // the platform's, another product's, and one whose subject is in another
+    // layer than its namespace, on every door; users pass, to meet
+    // entitlements. A tenant-owned instance refuses a product's caller on every
+    // rpc, RPC_FLAG_ANY_TENANT included, whatever its sub_type; a /system
+    // instance admits it. An instance starts only with an identity in the layer
+    // its proto declares.
+    private static void checkProductLayer(ImmutableKey key) throws Exception {
+        final String anyTenantMethod = "CrewService/Hail";
+        Authorizer ledger = authorizerWithKeys(jwkForKey(key));
+        ledger.setMethodAuth(TEST_METHOD, List.of("caller-svc", "caller-svc/workloads/.*"));
+        ledger.setHostIdentity("/products/ledger", "spiffe://example.com/products/ledger/services/demo");
+        String[][] admitted = {
+            {"service", "spiffe://example.com/tenants/aaaaaaaa/services/caller-svc", "/tenants/acme"},
+            {"workload", "spiffe://example.com/tenants/bbbbbbbb/services/caller-svc/workloads/pigeon-1", "/tenants/beta"},
+            {"service", "spiffe://example.com/products/ledger/services/caller-svc", "/products/ledger"},
+            {"workload", "spiffe://example.com/products/ledger/services/caller-svc/workloads/pigeon-1", "/products/ledger"},
+        };
+        for (String[] c : admitted) {
+            String tok = signedToken(key, t -> t.setSubType(c[0]).setSubject(c[1]).setNamespace(c[2]));
+            mustPass("product ledger admits " + c[1], () -> ledger.authorizeWithToken(bearer(tok), TEST_METHOD, null));
+            mustPass("product ledger authenticates " + c[1], () -> ledger.authenticateWithToken(bearer(tok)));
+            mustPass("product ledger at-or-below admits " + c[1], () -> ledger.authenticateAtOrBelowWithToken(bearer(tok), c[2]));
+        }
+        String[][] refused = {
+            {"spiffe://example.com/system/services/caller-svc", "/system"},
+            {"spiffe://example.com/system/aws/us-east-1/services/caller-svc", "/system/aws/us-east-1"},
+            {"spiffe://example.com/products/books/services/caller-svc", "/products/books"},
+            {"spiffe://example.com/products/books/services/caller-svc", "/products/ledger"},
+            {"spiffe://example.com/system/services/caller-svc", "/products/ledger"},
+            {"spiffe://example.com/tenants/aaaaaaaa/services/caller-svc", "/system"},
+            {"caller-svc", "/tenants/acme"},
+            {"spiffe://example.com/system/services/caller-svc", "/"},
+        };
+        for (String[] c : refused) {
+            String tok = signedToken(key, t -> t.setSubType("service").setSubject(c[0]).setNamespace(c[1]));
+            mustRejectCode("product ledger refuses " + c[0] + " in " + c[1], ProtoException.PERMISSION_DENIED,
+                () -> ledger.authorizeWithToken(bearer(tok), TEST_METHOD, null));
+            mustRejectCode("product ledger authenticate refuses " + c[0] + " in " + c[1], ProtoException.PERMISSION_DENIED,
+                () -> ledger.authenticateWithToken(bearer(tok)));
+            mustRejectCode("product ledger at-or-below refuses " + c[0] + " in " + c[1], ProtoException.PERMISSION_DENIED,
+                () -> ledger.authenticateAtOrBelowWithToken(bearer(tok), c[1]));
+        }
+        String tenantUser = signedToken(key, t -> t.setSubType("user").setSubject("someone@example.com").setNamespace("/tenants/acme"));
+        mustPass("product ledger: a tenant's user passes the layer door", () -> ledger.authenticateWithToken(bearer(tenantUser)));
+
+        Authorizer beta = authorizerWithKeys(jwkForKey(key));
+        beta.setMethodAuth(TEST_METHOD, List.of("caller-svc"));
+        beta.setMethodAuth(anyTenantMethod, List.of("caller-svc"));
+        beta.setMethodAnyTenant(anyTenantMethod);
+        beta.setHostIdentity("/tenants/beta", "spiffe://example.com/tenants/bbbbbbbb/services/demo");
+        io.grpc.Context open = io.grpc.Context.current().withValue(Authorizer.ANY_TENANT_METHOD_CTX_KEY, anyTenantMethod);
+        for (String subType : List.of("service", "user")) {
+            String tok = signedToken(key, t -> t.setSubType(subType)
+                .setSubject("spiffe://example.com/products/ledger/services/caller-svc").setNamespace("/products/ledger"));
+            mustRejectCode("tenant beta refuses product ledger's " + subType, ProtoException.PERMISSION_DENIED,
+                () -> beta.authorizeWithToken(bearer(tok), TEST_METHOD, null));
+            mustRejectCode("tenant beta refuses product ledger's " + subType + " on ANY_TENANT", ProtoException.PERMISSION_DENIED,
+                () -> beta.authorizeWithToken(bearer(tok), anyTenantMethod, null));
+            mustRejectCode("tenant beta authenticate refuses product ledger's " + subType + " on ANY_TENANT", ProtoException.PERMISSION_DENIED,
+                () -> {
+                    io.grpc.Context prev = open.attach();
+                    try {
+                        beta.authenticateWithToken(bearer(tok));
+                    } finally {
+                        open.detach(prev);
+                    }
+                });
+        }
+        String product = signedToken(key, t -> t.setSubType("service")
+            .setSubject("spiffe://example.com/products/ledger/services/caller-svc").setNamespace("/products/ledger"));
+        Authorizer shared = authorizerWithKeys(jwkForKey(key));
+        shared.setMethodAuth(TEST_METHOD, List.of("caller-svc"));
+        shared.setHostIdentity("/system", "spiffe://example.com/system/services/demo");
+        mustPass("a /system instance admits product ledger's service", () -> shared.authorizeWithToken(bearer(product), TEST_METHOD, null));
+
+        String[][] own = {
+            {"", "/system", "ok"}, {"", "/tenants/beta", "ok"}, {"", "/products/ledger", "refused"},
+            {"ledger", "/products/ledger", "ok"}, {"ledger", "/products/books", "refused"},
+            {"ledger", "/system", "refused"}, {"ledger", "/tenants/beta", "refused"}, {"ledger", "", "refused"},
+        };
+        for (String[] c : own) {
+            if (c[2].equals("ok")) {
+                mustPass("checkOwnLayer(" + c[0] + ", " + c[1] + ")", () -> Authorizer.checkOwnLayer(c[0], c[1]));
+            } else {
+                mustRejectCode("checkOwnLayer(" + c[0] + ", " + c[1] + ")", ProtoException.PERMISSION_DENIED,
+                    () -> Authorizer.checkOwnLayer(c[0], c[1]));
+            }
+        }
+        if (Authorizer.SERVICE_PRODUCT.isEmpty()) {
+            Authorizer start = authorizerWithKeys(jwkForKey(key));
+            String ownToken = signedToken(key, t -> t.setSubType("service")
+                .setSubject("spiffe://example.com/products/ledger/services/demo").setNamespace("/products/ledger"));
+            mustReject("a service that declares no product does not start with a product's identity",
+                () -> start.setHostNamespaceFromToken(ownToken));
         }
     }
 

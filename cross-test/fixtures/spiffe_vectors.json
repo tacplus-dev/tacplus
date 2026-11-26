@@ -246,6 +246,35 @@
     { "fn": "product_service_spiffe_id", "args": ["example.com", "abcd-123", "billing"], "expect": "spiffe://example.com/products/abcd-123/services/billing" },
     { "fn": "namespace_spiffe_id", "args": ["example.com", "/products/ledger"], "expect": "spiffe://example.com/products/ledger" }
   ],
+  "caller_layer": {
+    "_comment": "The caller's layer (roadmap/PRODUCTS_LAYER.md, #475): read from the namespace claim and, for a service principal (service true), cross-checked against its subject, whose namespace must be in the same layer (for a product, the same product). expect is system, tenant, product:<name>, or error. Go, Java and Rust's sys/spiffe assert these; the server doors use nothing else.",
+    "vectors": [
+      { "namespace": "/system", "subject": "spiffe://example.com/system/services/mcp", "service": true, "expect": "system" },
+      { "namespace": "/system/aws/us-east-1", "subject": "spiffe://example.com/system/aws/us-east-1/services/mcp/workloads/pigeon-1", "service": true, "expect": "system" },
+      { "namespace": "/products/ledger", "subject": "spiffe://example.com/products/ledger/services/billing", "service": true, "expect": "product:ledger" },
+      { "namespace": "/products/ledger", "subject": "spiffe://example.com/products/ledger/services/billing/workloads/pigeon-1", "service": true, "expect": "product:ledger" },
+      { "_comment": "a tenant-owned service's subject names its tid, its namespace the tenant's name (kernel#23): only the root is compared",
+        "namespace": "/tenants/acme", "subject": "spiffe://example.com/tenants/aaaaaaaa/services/crew", "service": true, "expect": "tenant" },
+      { "namespace": "/tenants/acme/workspaces/dev", "subject": "", "service": false, "expect": "tenant" },
+      { "namespace": "/products/ledger", "subject": "", "service": false, "expect": "product:ledger" },
+      { "_comment": "a product service's subject and namespace name the same product",
+        "namespace": "/products/ledger", "subject": "spiffe://example.com/products/books/services/billing", "service": true, "expect": "error" },
+      { "namespace": "/products/ledger", "subject": "spiffe://example.com/system/services/billing", "service": true, "expect": "error" },
+      { "namespace": "/system", "subject": "spiffe://example.com/products/ledger/services/billing", "service": true, "expect": "error" },
+      { "namespace": "/tenants/acme", "subject": "spiffe://example.com/system/services/crew", "service": true, "expect": "error" },
+      { "namespace": "/system", "subject": "spiffe://example.com/tenants/aaaaaaaa/services/crew", "service": true, "expect": "error" },
+      { "_comment": "a service principal's subject is a service or a workload",
+        "namespace": "/system", "subject": "spiffe://example.com/tenants/acme", "service": true, "expect": "error" },
+      { "namespace": "/system", "subject": "", "service": true, "expect": "error" },
+      { "_comment": "the root, the bare tenants tag and a user root name no layer",
+        "namespace": "/", "subject": "", "service": false, "expect": "error" },
+      { "namespace": "/tenants", "subject": "", "service": false, "expect": "error" },
+      { "namespace": "/users/0b6f2c1e-4a5d-4e8f-9a7b-3c2d1e0f9a8b", "subject": "", "service": false, "expect": "error" },
+      { "namespace": "", "subject": "", "service": false, "expect": "error" },
+      { "namespace": "/products/ledger/x", "subject": "", "service": false, "expect": "error" },
+      { "namespace": "/products/aaaaaaaa", "subject": "", "service": false, "expect": "error" }
+    ]
+  },
   "opaque_segment": {
     "spec": "base32_lower_nopad(SHA256(utf8(kind) || 0x1F || utf8(NFC(value)))[:20]); 32 chars [a-z2-7]; kind domain-separates",
     "length": 32,

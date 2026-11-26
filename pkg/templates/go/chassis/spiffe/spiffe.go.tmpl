@@ -741,6 +741,81 @@ func ResourcePartsFromSpiffe(spiffeID string) (ResourceParts, error) {
 	return ResourceParts{Namespace: p.Namespace, Kind: p.ResourceKind, ID: p.ResourceID}, nil
 }
 
+// ---- The caller's layer (products-layer-2026-11-08). ----
+
+// LayerKind is one of the three layers every principal is in: the platform
+// (/system), a fleet product (/products/<name>) or a tenant (/tenants/<t>).
+type LayerKind string
+
+const (
+	LayerSystem  LayerKind = "system"
+	LayerProduct LayerKind = "product"
+	LayerTenant  LayerKind = "tenant"
+)
+
+// Layer is a caller's layer; Product names the product of a LayerProduct.
+type Layer struct {
+	Kind    LayerKind
+	Product string
+}
+
+// String is "system", "tenant" or "product:<name>".
+func (l Layer) String() string {
+	if l.Kind == LayerProduct {
+		return string(LayerProduct) + ":" + l.Product
+	}
+	return string(l.Kind)
+}
+
+// CallerLayer reads a caller's layer from its namespace claim. For a service
+// principal (service: the token's sub_type is service or workload) the subject
+// must be a service or workload identity in the same layer, and for a product
+// the same product: a tenant-owned service's subject names its tid where its
+// namespace names the tenant (kernel#23), so only the root is compared there.
+// The root, the bare tenants tag and a user root name no layer: error. Every
+// layer door asks this, never a prefix of the namespace.
+func CallerLayer(namespace, subject string, service bool) (Layer, error) {
+	l, err := namespaceLayer(namespace)
+	if err != nil {
+		return Layer{}, err
+	}
+	if !service {
+		return l, nil
+	}
+	p, err := ParseSpiffeID(subject)
+	if err != nil {
+		return Layer{}, fmt.Errorf("spiffe: service caller subject %q: %w", subject, err)
+	}
+	if p.SubjectKind != KindService && p.SubjectKind != KindWorkload {
+		return Layer{}, fmt.Errorf("spiffe: service caller subject %q is not a service or workload identity", subject)
+	}
+	sl, err := namespaceLayer(p.Namespace)
+	if err != nil {
+		return Layer{}, fmt.Errorf("spiffe: service caller subject %q: %w", subject, err)
+	}
+	if sl != l {
+		return Layer{}, fmt.Errorf("spiffe: service caller subject %q is in layer %s, its namespace %q in layer %s", subject, sl, namespace, l)
+	}
+	return l, nil
+}
+
+func namespaceLayer(namespace string) (Layer, error) {
+	ns, err := NormalizeNamespace(namespace)
+	if err != nil {
+		return Layer{}, err
+	}
+	segs := strings.Split(strings.TrimPrefix(ns, "/"), "/")
+	switch {
+	case segs[0] == SystemSegment:
+		return Layer{Kind: LayerSystem}, nil
+	case segs[0] == ProductsSegment:
+		return Layer{Kind: LayerProduct, Product: segs[1]}, nil
+	case segs[0] == TenantsSegment && len(segs) >= 2:
+		return Layer{Kind: LayerTenant}, nil
+	}
+	return Layer{}, fmt.Errorf("spiffe: namespace %q names no layer (system, products or a tenant)", ns)
+}
+
 // ---- Comparison. ----
 
 // IsAtOrBelow reports whether target is the same as caller or a strict

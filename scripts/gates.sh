@@ -59,6 +59,10 @@ set -uo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=../cross-test/lib/jobs.sh
 source "$ROOT_DIR/cross-test/lib/jobs.sh"
+# Every leg's Rust through one compiler cache, its server started here, once,
+# for them all (tacplus#979).
+# shellcheck source=../cross-test/lib/sccache.sh
+source "$ROOT_DIR/cross-test/lib/sccache.sh"
 
 if [[ $# -eq 0 ]]; then
   echo "gates: usage: bash scripts/gates.sh GATE..." >&2
@@ -70,6 +74,11 @@ WORKDIR="${GATES_WORKDIR:-$ROOT_DIR/target/gates}"
 CAP="${GATES_JOBS:-$(jobs_cpus)}"
 started=$(date +%s)
 cd "$ROOT_DIR" || exit 1
+
+if [[ "${RUSTC_WRAPPER:-}" == */sccache-rustc.sh ]]; then
+  sccache --zero-stats >/dev/null 2>&1 || true
+  echo "gates: Rust compiles through sccache, its cache ${SCCACHE_DIR:-${SCCACHE_GCS_BUCKET:+gs://$SCCACHE_GCS_BUCKET}}"
+fi
 
 echo "=== protoc-check ==="
 "$JUST" protoc-check
@@ -285,6 +294,10 @@ for ((j = 0; j < ${#JOBS_NAMES[@]}; j++)); do
 done
 wall=$(( $(date +%s) - started ))
 printf '  %-32s %6ss\n' total "$wall"
+# What the compiler cache the slots share did for this run's Rust. Its server
+# runs the compiles it misses, so their CPU time is not in the pool's below.
+stats="$(sccache_stats)"
+[[ -z "$stats" ]] || echo "  $stats"
 # The pool's use of the machine: its slots' busy time against CAP slots for
 # the whole run, and the CPU time of every process the gates ran and reaped
 # (`times`' second line, the children's user and system time) against the

@@ -80,7 +80,13 @@ never share one: each job slot of `just gates` gets its own directory under
 `target/gates/cargo-slotN` (through `TACPLUS_CROSS_TEST_CARGO_TARGET`), and
 each `current-generation` worker one beside its slot's. The jobs that run one after another in a slot share its directory,
 so its dependency builds, as before; a run that passes removes the slot
-directories. Before the gates, `scripts/gates.sh` generates once and builds
+directories. The dependencies are shared across the slots through sccache
+(#979), when it is on PATH (the build image carries it): every leg's rustc
+goes through `cross-test/lib/sccache-rustc.sh`, which drops the slot's
+`CARGO_TARGET_DIR` (sccache keys a compile on the `CARGO_` variables), into
+one cache, the build's own (`tacplus-cache env`) or `target/cross-test/sccache`.
+`scripts/gates.sh` starts its server before the legs and the wall-time table
+gives its hits; `TACPLUS_CROSS_TEST_SCCACHE=0` turns it off. Before the gates, `scripts/gates.sh` generates once and builds
 one tacplus binary for every gate (`TACPLUS_BIN`, `TACPLUS_BIN_PREBUILT`),
 and runs each leg with `just --no-deps`, so no two gates regenerate into the
 same paths at once. A new gate must not write a path another gate writes.

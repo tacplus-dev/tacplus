@@ -4,6 +4,7 @@
 package scripts
 
 import (
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -127,7 +128,8 @@ func TestPruneCargoWorkspaceKeepsSharedDependencies(t *testing.T) {
 		}
 		cmd := exec.Command("bash", "-c", "set -euo pipefail; ROOT_DIR="+root+"; source "+lib+"; "+script)
 		cmd.Dir = filepath.Join(root, "leg")
-		cmd.Env = append(os.Environ(), "TACPLUS_CROSS_TEST_CARGO_TARGET="+target)
+		// No sccache server of its own: TestCrossTestCargoTargetSharesDependenciesAcrossSlots tests it.
+		cmd.Env = append(os.Environ(), "TACPLUS_CROSS_TEST_CARGO_TARGET="+target, "TACPLUS_CROSS_TEST_SCCACHE=0")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s: %v\n%s", script, err, out)
@@ -181,7 +183,7 @@ func TestCrossTestCargoTargetBuildsWithoutIncrementalOrDebuginfo(t *testing.T) {
 		t.Helper()
 		script := "set -euo pipefail; ROOT_DIR=" + t.TempDir() + "; source " + lib + "; bash -c 'for v in " + strings.Join(vars, " ") + "; do echo \"$v=${!v-unset}\"; done'"
 		cmd := exec.Command("bash", "-c", script)
-		cmd.Env = append(os.Environ(), "TACPLUS_CROSS_TEST_CARGO_TARGET="+t.TempDir())
+		cmd.Env = append(os.Environ(), "TACPLUS_CROSS_TEST_CARGO_TARGET="+t.TempDir(), "TACPLUS_CROSS_TEST_SCCACHE=0")
 		for _, v := range vars {
 			cmd.Env = append(cmd.Env, v+"=")
 		}
@@ -202,4 +204,156 @@ func TestCrossTestCargoTargetBuildsWithoutIncrementalOrDebuginfo(t *testing.T) {
 	if out := run("CARGO_INCREMENTAL=1"); !strings.Contains(out, "CARGO_INCREMENTAL=1\n") {
 		t.Errorf("the caller's CARGO_INCREMENTAL was overridden:\n%s", out)
 	}
+}
+
+// fakeSccache puts an sccache on a new PATH that records each call's
+// arguments and the CARGO_TARGET_DIR it saw, one line a call, in the returned
+// log, and returns that PATH.
+func fakeSccache(t *testing.T) (path, log string) {
+	t.Helper()
+	bin := t.TempDir()
+	log = filepath.Join(t.TempDir(), "sccache.log")
+	script := "#!/usr/bin/env bash\necho \"CARGO_TARGET_DIR=${CARGO_TARGET_DIR-unset} $*\" >>" + log + "\n"
+	if err := os.WriteFile(filepath.Join(bin, "sccache"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin + string(os.PathListSeparator) + os.Getenv("PATH"), log
+}
+
+// cargoTargetEnv sources cross-test/lib/cargo-target.sh with ROOT_DIR root
+// and env, runs script after it, and returns its output.
+func cargoTargetEnv(t *testing.T, root, script string, env ...string) string {
+	t.Helper()
+	lib, err := filepath.Abs("../cross-test/lib/cargo-target.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", "set -euo pipefail; ROOT_DIR="+root+"; source "+lib+"; "+script)
+	cmd.Env = append(os.Environ(), "TACPLUS_CROSS_TEST_CARGO_TARGET="+t.TempDir(),
+		"RUSTC_WRAPPER=", "SCCACHE_DIR=", "TACPLUS_CROSS_TEST_SCCACHE=")
+	cmd.Env = append(cmd.Env, env...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	return string(out)
+}
+
+// Cargo locks a target directory for a whole build, so the job slots of a
+// gate run each build in their own; until tacplus#979 every Rust shard but
+// rust/base started from a copy of the several GB rust/base built. Now every
+// leg's rustc goes through sccache, when it is on PATH, with one cache
+// directory for them all: a dependency compiled in one slot is a cache hit in
+// the next. sccache keys a compile on the CARGO_ variables of its
+// environment, and each slot's CARGO_TARGET_DIR differs, so the wrapper
+// drops it: rustc never reads it.
+func TestCrossTestCargoTargetCompilesThroughSccache(t *testing.T) {
+	root := t.TempDir()
+	path, log := fakeSccache(t)
+	show := `echo "RUSTC_WRAPPER=${RUSTC_WRAPPER-unset}"; echo "SCCACHE_DIR=${SCCACHE_DIR-unset}"`
+
+	out := cargoTargetEnv(t, root, show+`; CARGO_TARGET_DIR=/slot1 "$RUSTC_WRAPPER" rustc --crate-name dep`, "PATH="+path)
+	wrapper, err := filepath.Abs("../cross-test/lib/sccache-rustc.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "RUSTC_WRAPPER="+wrapper+"\n") {
+		t.Errorf("with sccache on PATH, RUSTC_WRAPPER is not %s:\n%s", wrapper, out)
+	}
+	if !strings.Contains(out, "SCCACHE_DIR="+filepath.Join(root, "target", "cross-test", "sccache")+"\n") {
+		t.Errorf("sccache's cache is not the one directory under target/cross-test:\n%s", out)
+	}
+	calls, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(calls), "CARGO_TARGET_DIR=unset rustc --crate-name dep\n") {
+		t.Errorf("the wrapper did not run sccache rustc without the slot's CARGO_TARGET_DIR:\n%s", calls)
+	}
+	// The server starts once, before any cargo: started by a rustc cargo ran,
+	// it would take that cargo's jobserver.
+	if !strings.Contains(string(calls), "--start-server") {
+		t.Errorf("the lib did not start sccache's server:\n%s", calls)
+	}
+
+	// The build's own cache (tacplus-cache env: RUSTC_WRAPPER=sccache and its
+	// SCCACHE_ settings) is kept, through the wrapper.
+	out = cargoTargetEnv(t, root, show, "PATH="+path, "RUSTC_WRAPPER=sccache", "SCCACHE_DIR=/cache/sccache")
+	if !strings.Contains(out, "RUSTC_WRAPPER="+wrapper+"\n") || !strings.Contains(out, "SCCACHE_DIR=/cache/sccache\n") {
+		t.Errorf("the build's sccache configuration was not kept:\n%s", out)
+	}
+	// Another wrapper, no sccache, or TACPLUS_CROSS_TEST_SCCACHE=0: no sccache.
+	if out := cargoTargetEnv(t, root, show, "PATH="+path, "RUSTC_WRAPPER=/bin/other"); !strings.Contains(out, "RUSTC_WRAPPER=/bin/other\n") {
+		t.Errorf("the caller's own RUSTC_WRAPPER was replaced:\n%s", out)
+	}
+	if out := cargoTargetEnv(t, root, show, "PATH="+path, "TACPLUS_CROSS_TEST_SCCACHE=0"); strings.Contains(out, "sccache-rustc.sh") {
+		t.Errorf("TACPLUS_CROSS_TEST_SCCACHE=0 still compiles through sccache:\n%s", out)
+	}
+	if out := cargoTargetEnv(t, root, show, "PATH="+t.TempDir()+string(os.PathListSeparator)+"/usr/bin:/bin"); strings.Contains(out, "sccache-rustc.sh") {
+		t.Errorf("without sccache on PATH, RUSTC_WRAPPER is the wrapper:\n%s", out)
+	}
+}
+
+// The point of the wrapper, with the real sccache: a dependency built in one
+// slot's target directory is a cache hit in another's.
+func TestCrossTestCargoTargetSharesDependenciesAcrossSlots(t *testing.T) {
+	for _, tool := range []string{"cargo", "sccache"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip(tool + " not installed")
+		}
+	}
+	root := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("shared_dep/Cargo.toml", "[package]\nname = \"shared_dep\"\nversion = \"0.1.0\"\nedition = \"2021\"\n")
+	write("shared_dep/src/lib.rs", "pub fn answer() -> u32 { 42 }\n")
+	write("leg/Cargo.toml", "[package]\nname = \"leg_member\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nshared_dep = { path = \"../shared_dep\" }\n")
+	write("leg/src/lib.rs", "pub fn answer() -> u32 { shared_dep::answer() }\n")
+	// A server of this test's own, on a port of its own, stopped after it.
+	port := freePort(t)
+	env := []string{"SCCACHE_SERVER_PORT=" + port, "SCCACHE_DIR=" + filepath.Join(root, "sccache")}
+	t.Cleanup(func() {
+		cmd := exec.Command("sccache", "--stop-server")
+		cmd.Env = append(os.Environ(), env...)
+		_ = cmd.Run()
+	})
+	hits := func(slot string) string {
+		t.Helper()
+		out := cargoTargetEnv(t, root, `cd "$ROOT_DIR/leg" && sccache --zero-stats >/dev/null && cargo build --offline --quiet && sccache --show-stats`,
+			append(env, "TACPLUS_CROSS_TEST_CARGO_TARGET="+filepath.Join(root, slot))...)
+		for _, line := range strings.Split(out, "\n") {
+			if fields := strings.Fields(line); len(fields) == 3 && fields[0] == "Cache" && fields[1] == "hits" {
+				return fields[2]
+			}
+		}
+		t.Fatalf("no cache hits line in sccache's stats:\n%s", out)
+		return ""
+	}
+	hits("cargo-slot1")
+	if got := hits("cargo-slot2"); got == "0" {
+		t.Errorf("the second slot's build had no sccache hits: its dependency was compiled again")
+	}
+}
+
+// freePort returns a TCP port on 127.0.0.1 nothing listens on.
+func freePort(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	_, port, err := net.SplitHostPort(l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
 }

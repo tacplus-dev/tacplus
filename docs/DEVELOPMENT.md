@@ -550,7 +550,8 @@ the total and the pool's use of the machine comes before the verdict. Each job b
 of the CPUs (`CARGO_BUILD_JOBS`, `GOFLAGS -p`), and `go test` runs with a
 40-minute deadline, since a package runs beside the other gates. A gate you
 add runs beside every other: it takes its own work directory, builds Rust in
-`$CARGO_TARGET_DIR` (`cross-test/lib/cargo-target.sh`) and uses the prebuilt
+`$CARGO_TARGET_DIR` (`cross-test/lib/cargo-target.sh`, whose rustc goes
+through the sccache the slots share, #979) and uses the prebuilt
 `$TACPLUS_BIN`. Each gate's rc and wall time also print as it ends
 (`gates: GATE rc=N ...`), and a leg past `GATES_TIMEOUT` seconds (default
 5400) is stopped and fails with rc=124, naming itself (#893). A JVM a gate

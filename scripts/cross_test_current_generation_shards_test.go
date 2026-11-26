@@ -4,7 +4,9 @@
 package scripts
 
 import (
+	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -29,7 +31,7 @@ func currentGeneration(t *testing.T, args ...string) (string, bool) {
 // language of every fixture, each build of a fixture of two (its longest
 // shards when they were one), and the checks across them, for scripts/gates.sh
 // to run each as a leg of its own: rust/base first, since every other Rust
-// shard starts from the dependencies it built, those next, to start as soon
+// shard reuses the chassis self-tests it ran, those next, to start as soon
 // as it passed, and checks last, after every other, since it reads their main
 // fixtures and clears the work root.
 func TestCurrentGenerationListsItsShards(t *testing.T) {
@@ -113,5 +115,25 @@ func TestCurrentGenerationShardRecipes(t *testing.T) {
 	}
 	if !strings.Contains(recipes["current-generation-shard"], "cross-test/current-generation/run.sh --shard {{shard}}") {
 		t.Errorf("no current-generation-shard recipe running one:\n%s", recipes["current-generation-shard"])
+	}
+}
+
+// A Rust shard's dependencies come from the compiler cache the slots share
+// (cross-test/lib/cargo-target.sh), not from a copy of rust/base's cargo
+// directory: each was several GB, copied once for rust/base and once more for
+// each slot's first Rust shard (tacplus#979).
+func TestCurrentGenerationShardsCopyNoCargoDirectory(t *testing.T) {
+	data, err := os.ReadFile("../cross-test/current-generation/run.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copier := regexp.MustCompile(`\bcp\b[^\n]*(cargo_target|cargo_seed|CROSS_TEST_CARGO_TARGET)`)
+	for i, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if copier.MatchString(line) {
+			t.Errorf("run.sh:%d copies a cargo directory: %s", i+1, strings.TrimSpace(line))
+		}
 	}
 }

@@ -33,6 +33,11 @@ export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 export CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}"
 export CARGO_PROFILE_TEST_DEBUG="${CARGO_PROFILE_TEST_DEBUG:-0}"
 
+# Every leg's rustc through the compiler cache the job slots share
+# (tacplus#979), when sccache is on PATH.
+# shellcheck source=sccache.sh
+source "$(dirname "${BASH_SOURCE[0]}")/sccache.sh"
+
 # Once a leg passes, remove its own crates from the shared directory. A
 # generated workspace's members (the model and chassis crates) build under a
 # new path in every leg, so no later leg reuses them, and their test binaries

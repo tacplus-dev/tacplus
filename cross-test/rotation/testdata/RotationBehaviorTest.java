@@ -101,6 +101,13 @@ class RotationBehaviorTest {
      * the stream at exp.
      */
     private static final long TOKEN_LIFETIME_MS = 6_000;
+    /**
+     * How long a handler may take to return once its stream ended: the bound of
+     * a hang, not a timing, which the tests assert on the client's end of the
+     * stream. A fixed 5 s failed on a loaded runner (load average about 50 on
+     * 8 CPUs) with the stream cut on time and the handler cancelled (#977, #979).
+     */
+    private static final long HANDLER_RETURN_MS = 30_000;
     /** How long the transparency tests run a stream: more than two lifetimes. */
     private static final long STREAM_FOR_MS = 14_000;
     /** The transparency tests' ticks at 50 ms: STREAM_FOR_MS of them. */
@@ -595,7 +602,7 @@ class RotationBehaviorTest {
         up.onCompleted();
         assertEquals(Status.Code.OK, rec.await(5_000).getCode(), "the stream's end");
         checkSequence("echoed", rec.got, n);
-        HandlerEnd end = f.handlerEnd(5_000);
+        HandlerEnd end = f.handlerEnd(HANDLER_RETURN_MS);
         checkSequence("received by the handler", end.received, n);
         assertNull(end.status, "handler ended with " + end.status + ", want a clean end");
         assertTrue(end.contextHeld, "the handler's Context was cancelled during the stream");
@@ -615,7 +622,7 @@ class RotationBehaviorTest {
         c.generateTicks(Tick.newBuilder().setSeq(n).build(), rec);
         assertEquals(Status.Code.OK, rec.await(STREAM_FOR_MS + 15_000).getCode(), "the stream's end");
         checkSequence("ticks", rec.got, n);
-        HandlerEnd end = f.handlerEnd(5_000);
+        HandlerEnd end = f.handlerEnd(HANDLER_RETURN_MS);
         assertNull(end.status, "handler ended with " + end.status);
         assertTrue(end.contextHeld, "the handler's Context was cancelled during the stream");
         assertTrue(src.mints.get() >= 3, src.mints.get() + " tokens minted, want at least 3 (the stream did not rotate)");
@@ -665,7 +672,7 @@ class RotationBehaviorTest {
         long took = rec.endedAt - opened;
         assertTrue(took >= TOKEN_LIFETIME_MS - 1_500 && took <= TOKEN_LIFETIME_MS + 3_000,
                 "the stream ended " + took + " ms after open, want about one token lifetime");
-        assertTrue(f.handlerEnd(5_000).cancelled, "the handler's Context was not cancelled when its stream ended");
+        assertTrue(f.handlerEnd(HANDLER_RETURN_MS).cancelled, "the handler's Context was not cancelled when its stream ended");
     }
 
     /** A caller revoked mid-stream, after some rotations, gets no new token and is cut off within one lifetime. */
@@ -688,7 +695,7 @@ class RotationBehaviorTest {
         long after = rec.endedAt - revokedAt;
         assertTrue(after <= TOKEN_LIFETIME_MS + 1_000,
                 "a revoked caller was cut off " + after + " ms after revocation, want within one token lifetime");
-        f.handlerEnd(5_000);
+        f.handlerEnd(HANDLER_RETURN_MS);
     }
 
     /**
@@ -706,7 +713,7 @@ class RotationBehaviorTest {
         src.impersonate.set("other-svc");
         Status st = rec.await(4 * TOKEN_LIFETIME_MS);
         assertEquals(Status.Code.PERMISSION_DENIED, st.getCode(), "the stream's end: " + st);
-        assertTrue(f.handlerEnd(5_000).cancelled, "the handler's Context was not cancelled");
+        assertTrue(f.handlerEnd(HANDLER_RETURN_MS).cancelled, "the handler's Context was not cancelled");
     }
 
     // ---------------------------------------------------------------------
@@ -854,7 +861,7 @@ class RotationBehaviorTest {
             }
         }
         checkSequence("echoed across the cutover", got, 100);
-        HandlerEnd end = f.handlerEnd(5_000);
+        HandlerEnd end = f.handlerEnd(HANDLER_RETURN_MS);
         checkSequence("received across the cutover", end.received, 100);
         assertEquals(1, f.handler.calls.get(), "handler calls");
     }
@@ -951,7 +958,7 @@ class RotationBehaviorTest {
         proxy.cut();
         Status st = rec.await(5_000);
         assertFalse(st.isOk(), "the cut stream ended OK, want a failure status");
-        assertTrue(f.handlerEnd(5_000).cancelled, "the handler's Context was not cancelled by the cut");
+        assertTrue(f.handlerEnd(HANDLER_RETURN_MS).cancelled, "the handler's Context was not cancelled by the cut");
     }
 
     /**

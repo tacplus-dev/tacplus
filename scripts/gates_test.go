@@ -91,6 +91,8 @@ func runGatesOf(t *testing.T, dir, cap string, env []string, gates ...string) (s
 		"GATES_JOBS="+cap,
 		"GATES_WORKDIR="+filepath.Join(dir, "work"),
 		"TACPLUS_BIN=/bin/true",
+		// Not the sccache server a `just gates` running this test shares.
+		"TACPLUS_CROSS_TEST_SCCACHE=0",
 	), env...)
 	start := time.Now()
 	out, err := cmd.CombinedOutput()
@@ -266,5 +268,37 @@ func TestGatesRecipeRunsTheGatesScript(t *testing.T) {
 		if _, ok := recipes[gate]; !ok {
 			t.Errorf("the gates recipe names %s, which is not a recipe", gate)
 		}
+	}
+}
+
+// The legs' Rust goes through one sccache server (tacplus#979), started and
+// zeroed by gates.sh before them, and the table gives what the cache did.
+func TestGatesReportTheCompilerCache(t *testing.T) {
+	bin := t.TempDir()
+	calls := filepath.Join(t.TempDir(), "calls")
+	fake := "#!/usr/bin/env bash\necho \"$*\" >>" + calls + "\n" +
+		"[[ \"$1\" != --show-stats ]] || printf 'Compile requests 9\\nCache hits 7\\nCache misses 1\\nNon-cacheable calls 2\\n'\n"
+	if err := os.WriteFile(filepath.Join(bin, "sccache"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, rc, _ := runGatesOf(t, t.TempDir(), "2", []string{
+		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"TACPLUS_CROSS_TEST_SCCACHE=1", "RUSTC_WRAPPER=", "SCCACHE_DIR=/cache/sccache",
+	}, "alpha", "omega")
+	if rc != 0 {
+		t.Fatalf("exit %d:\n%s", rc, out)
+	}
+	if !strings.Contains(out, "gates: Rust compiles through sccache, its cache /cache/sccache\n") {
+		t.Errorf("the run does not say its Rust compiles through sccache:\n%s", out)
+	}
+	if !regexp.MustCompile(`(?m)^  sccache: 7 hits, 1 misses, 2 not cacheable\n  pool: `).MatchString(out) {
+		t.Errorf("the table does not give the cache's hits before the pool line:\n%s", out)
+	}
+	got, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(got), "--start-server\n--zero-stats\n") {
+		t.Errorf("gates.sh did not start and zero the server before the legs:\n%s", got)
 	}
 }

@@ -1087,17 +1087,11 @@ the looper then marks it `promoted` or `declined` here with the date.
   runs) re-pushes the tag on a second dispatch of the same commit the same day (a manual dispatch, then the
   nightly). Proposed: build-manifest refuses an existing dated tag on a line rebuild, as it refuses an existing
   `X.Y.Z`, shipped with the line's next minor (no backport: rule of the issue flow).
-- **TypeScript W2S: `W2SError.message` carries the error body's message** (2026-11-23, #953): `requestJson` in
-  `w2sm.ts.tmpl` reads the failed response's body for the gRPC code (`w2sResponseCode`) and then throws
-  `gRPC-over-REST error: <status> <statusText>`, dropping the body's `error` text. The Go, Python, Rust and Java W2S
-  clients already use that text as the message. So kernel's refusals (the `DeleteAccount` confirm-to-proceed warning that
-  gateway#2's console shows, `DeleteIdentityLink`'s and the step-up's) reach a web app as an HTTP status line.
-  Proposed: a `w2sResponseMessage` helper beside `w2sResponseCode` uses `error`, then `message`, when either is a
-  non-empty string, and today's text otherwise. It does no percent-decoding, because the gateway already decodes. The
-  change is the unary path only, is small, and is a 2.6 patch candidate. The questions for Jody are on the issue:
-  replace the message or add a field; whether the SSE paths are in scope; a node behaviour test or the template pin test
-  only; the 2.6 backport; and whether the other clients' opposite gap (they ignore `grpc-status` and the body's `code`)
-  gets its own proposal.
+- **W2S clients honour the gateway's carried gRPC code** (2026-11-26, #988, from #953): the Go, Python, Rust and
+  Java W2S clients take a failed call's message from the body's `error` but its code from the HTTP status alone, so
+  a FAILED_PRECONDITION the gateway answers as 500 (with `grpc-status` and the body's `code`, gateway#2) arrives as
+  UNKNOWN. TypeScript's `w2sResponseCode` already reads the header, then the body's `code`, then the HTTP mapping.
+  Proposed: the same order in the four. Swift and C# carry no gRPC code at all (the HTTP status and raw body).
 
 - **A Rust client stream's open stamps a tenant's own tid too** (2026-11-18, #258): the generated S2S client of a
   tenant's own service fills an empty route field with its own `tid` claim on unary, server-streaming and bidi calls

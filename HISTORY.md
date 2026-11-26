@@ -209,3 +209,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-26 looper issue gates.yaml: per-language gate sets for pkg/**, failing closed, so a change runs only the gates it can break (#976)
 - 2026-11-26 looper release v2.7.0 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.7.0)
 - 2026-11-26 looper issue Stop the 2.1-2.5 lines pushing the deprecated tacplus/tacplus image (as root, against VERSIONING.md) (#932)
+- 2026-11-26 looper issue TypeScript W2S client: W2SError carries the error body's message, not only the HTTP status line (#953)

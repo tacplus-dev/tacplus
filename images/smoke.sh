@@ -7,7 +7,8 @@
 set -euo pipefail
 # docker-buildx and gh are built from source with dependencies bumped past
 # advisories their releases have not taken yet (build.Dockerfile, the buildx
-# and gh stages): each must carry every bumped module at least at its floor.
+# and gh stages): each must carry every bumped module at least at its floor,
+# and buildx the modules its release moved past an advisory (containerd, #930).
 # scripts/images_smoke_test.go sources this file for these two functions.
 go_floors() {
   local bin=$1 floor mod min have; shift
@@ -20,9 +21,31 @@ go_floors() {
 }
 go_floors_check() {
   go_floors "${TACPLUS_SMOKE_BUILDX:-/usr/local/libexec/docker/cli-plugins/docker-buildx}" \
-    github.com/moby/go-archive@v0.3.0 golang.org/x/net@v0.62.0 || return 1
+    github.com/containerd/containerd/v2@v2.4.2 github.com/moby/go-archive@v0.3.0 golang.org/x/net@v0.62.0 || return 1
   # CVE-2026-78661 (#350): gh's releases (through 2.103.3) build with x/net 0.60.0.
   go_floors "$(command -v gh)" golang.org/x/net@v0.62.0
+}
+# A Go program copied from upstream must be built with at least the fixed
+# release of its own Go line (floors oldest line first): a line older than
+# every floor is unfixed, a line newer than the oldest floor with none of its
+# own never had the bug.
+go_stdlib_floor() {
+  local bin=$1 floor have min=; shift
+  have=$(go version "$bin" | awk '{ print $NF }')
+  for floor in "$@"; do
+    [[ ${floor%.*} == "${have%.*}" ]] && min=$floor
+  done
+  if [[ -z $min ]]; then
+    [[ "$(printf '%s\n%s\n' "${1#go}" "${have#go}" | sort -V | head -n 1)" == "${1#go}" ]] && return 0
+    min=$1
+  fi
+  [[ "$(printf '%s\n%s\n' "${min#go}" "${have#go}" | sort -V | head -n 1)" == "${min#go}" ]] \
+    || { echo "${bin##*/} is built with ${have:-no Go}, below $min" >&2; return 1; }
+}
+go_stdlib_check() {
+  # CVE-2026-97054 (#901): the docker CLI comes from docker:DOCKER_VERSION-cli
+  # (build.Dockerfile), built with whatever Go upstream used; 29.9.3's was go1.26.10.
+  go_stdlib_floor "${TACPLUS_SMOKE_DOCKER:-$(command -v docker)}" go1.26.11 go1.27.4
 }
 (return 0 2>/dev/null) && return 0
 gen=(protoc protoc-gen-go protoc-gen-go-grpc protoc-gen-grpc-java protoc-gen-es protoc-gen-prost protoc-gen-tonic protoc-gen-prost-serde protoc-gen-prost-crate protoc-gen-swift protoc-gen-grpc-swift-2 git node gofmt python3)
@@ -55,6 +78,8 @@ done
 docker buildx version
 gh --version
 go_floors_check
+# The docker CLI, copied from upstream's image, is built with a fixed Go.
+go_stdlib_check
 # Maven's guava is replaced past its advisories (base.Dockerfile, #222): one
 # guava in Maven's lib/, at least at its floor.
 guava=(/usr/share/maven/lib/guava-*.jar)

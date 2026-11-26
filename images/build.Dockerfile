@@ -22,16 +22,21 @@ ARG GO_VERSION=1.27
 ARG RUST_VERSION=1
 ARG NODE_VERSION=26
 ARG SWIFT_VERSION=6.4.3
+# The docker CLI is copied from docker:DOCKER_VERSION-cli, built with whatever
+# Go upstream used: 29.9.3's go1.26.10 carried CVE-2026-97054 (HIGH), fixed in
+# 29.10.0's go1.27.4 (#901). A rebuild takes the newest 29.x; images/smoke.sh
+# checks its Go against each line's fixed release (go_stdlib_check).
 ARG DOCKER_VERSION=29
 # docker-buildx is built from its release's source rather than copied from
-# the docker CLI image: its releases (through 0.38.1) vendor moby/go-archive
-# 0.2.0 (CVE-2026-17106, HIGH; fixed in 0.3.0) and golang.org/x/net 0.59.0
-# (CVE-2026-78669, HIGH, fixed in 0.60.0; CVE-2026-78661 and CVE-2026-97045,
-# fixed in 0.62.0) (#190). Drop each bump, and then the stage, once a buildx
-# release carries it; images/smoke.sh checks the floors. gh is built from its
-# release's source the same way, with this X_NET_VERSION: its releases
-# (through 2.103.3) build with golang.org/x/net 0.60.0 (CVE-2026-78661) (#350).
-ARG BUILDX_VERSION=0.38.1
+# the docker CLI image: its releases (through 0.39.1) vendor moby/go-archive
+# 0.2.0 (CVE-2026-17106, HIGH; fixed in 0.3.0) (#190). 0.39.0 took
+# golang.org/x/net 0.62.0 (CVE-2026-78669, CVE-2026-78661, CVE-2026-97045) and
+# containerd v2.4.2 (CVE-2026-95839, HIGH, in 0.38.1's v2.4.1) (#930). Drop the
+# bump, and then the stage, once a buildx release carries it; images/smoke.sh
+# checks the floors. gh is built from its release's source the same way, with
+# this X_NET_VERSION: its releases (through 2.103.3) build with golang.org/x/net
+# 0.60.0 (CVE-2026-78661) (#350).
+ARG BUILDX_VERSION=0.39.1
 ARG GO_ARCHIVE_VERSION=0.3.3
 ARG X_NET_VERSION=0.62.0
 ARG PROTOC_VERSION=36.0
@@ -106,10 +111,9 @@ FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS buildx
 ARG TARGETARCH
 ARG BUILDX_VERSION
 ARG GO_ARCHIVE_VERSION
-ARG X_NET_VERSION
 RUN git clone --depth 1 --branch "v${BUILDX_VERSION}" https://github.com/docker/buildx /src/buildx \
     && cd /src/buildx \
-    && go get "github.com/moby/go-archive@v${GO_ARCHIVE_VERSION}" "golang.org/x/net@v${X_NET_VERSION}" && go mod tidy && go mod vendor \
+    && go get "github.com/moby/go-archive@v${GO_ARCHIVE_VERSION}" && go mod tidy && go mod vendor \
     && CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -mod=vendor -trimpath \
        -ldflags "-X github.com/docker/buildx/version.Version=v${BUILDX_VERSION} -X github.com/docker/buildx/version.Package=github.com/docker/buildx" \
        -o /out/docker-buildx ./cmd/buildx

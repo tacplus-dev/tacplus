@@ -62,10 +62,20 @@ const LockFile = "fleet.lock"
 
 // Manifest is fleet.yaml.
 type Manifest struct {
-	Registries []string      `yaml:"registries"`
-	Tacplus    string        `yaml:"tacplus,omitempty"`
-	Services   []ServiceSpec `yaml:"services"`
+	Registries []string `yaml:"registries"`
+	Tacplus    string   `yaml:"tacplus,omitempty"`
+	// Images is where the fleet's service images come from: ImagesRelease
+	// (or empty), each release's published image; ImagesSource, built by the
+	// fleet itself from each release's tag.
+	Images   string        `yaml:"images,omitempty"`
+	Services []ServiceSpec `yaml:"services"`
 }
+
+// The values of Manifest.Images.
+const (
+	ImagesRelease = "release"
+	ImagesSource  = "source"
+)
 
 // ServiceSpec is one fleet service: its registry name, the release line it
 // runs (MAJOR.MINOR, its highest released patch; or an explicit
@@ -78,7 +88,10 @@ type ServiceSpec struct {
 
 // Lock is fleet.lock: what the build resolved, release by release.
 type Lock struct {
-	Tacplus    string          `yaml:"tacplus"`
+	Tacplus string `yaml:"tacplus"`
+	// Images is the manifest's: source when the fleet builds every service's
+	// image from its Commit, and no service records an Image.
+	Images     string          `yaml:"images,omitempty"`
 	Registries []LockedSource  `yaml:"registries"`
 	Services   []LockedService `yaml:"services"`
 	Libraries  []LockedLibrary `yaml:"libraries,omitempty"` // contract-only vservices pulled in by reference
@@ -96,11 +109,12 @@ type LockedService struct {
 	ID   int32  `yaml:"id"`
 	// Version is the exact release the stated version resolved to
 	// (MAJOR.MINOR.PATCH, or the pre-release named), Commit its tag's commit,
-	// and Image the image that release published, by digest.
+	// and Image the image that release published, by digest (none in a
+	// fleet that builds its own images).
 	Version        string   `yaml:"version"`
 	Repo           string   `yaml:"repo"`
 	Commit         string   `yaml:"commit"`
-	Image          string   `yaml:"image"`
+	Image          string   `yaml:"image,omitempty"`
 	Contract       string   `yaml:"contract,omitempty"`
 	ContractCommit string   `yaml:"contract_commit,omitempty"`
 	Depends        []string `yaml:"depends,omitempty"`
@@ -136,6 +150,11 @@ func ReadManifest(dir string) (*Manifest, error) {
 	}
 	if len(m.Services) == 0 {
 		return nil, fmt.Errorf("fleet: %s lists no services", ManifestFile)
+	}
+	switch m.Images {
+	case "", ImagesRelease, ImagesSource:
+	default:
+		return nil, fmt.Errorf("fleet: %s: images %q must be %s (each release's published image, the default) or %s (the fleet builds them from each release's tag)", ManifestFile, m.Images, ImagesRelease, ImagesSource)
 	}
 	seen := map[string]bool{}
 	for i, s := range m.Services {
@@ -191,7 +210,7 @@ func Build(manifestDir, outDir string) (*Result, error) {
 	}()
 
 	// 1. Registries: unioned, disjoint.
-	lock := &Lock{Tacplus: m.Tacplus}
+	lock := &Lock{Tacplus: m.Tacplus, Images: m.Images}
 	union, regCleanup, err := registry.LoadAuthorities(m.Registries, func(ref string) (string, func(), error) {
 		res, err := protosrc.Resolve(ref, "latest")
 		if err != nil {
@@ -237,9 +256,13 @@ func Build(manifestDir, outDir string) (*Result, error) {
 		if err != nil {
 			return nil, fmt.Errorf("fleet: service %q: %s: %w", spec.Name, spec.Repo, err)
 		}
-		image, err := releaseImage(spec.Repo, tag)
-		if err != nil {
-			return nil, fmt.Errorf("fleet: service %q: release v%s: %w", spec.Name, tag, err)
+		// A fleet that builds its own images deploys the tag's commit, which
+		// the lock records below; it needs no published image.
+		var image string
+		if m.Images != ImagesSource {
+			if image, err = releaseImage(spec.Repo, tag); err != nil {
+				return nil, fmt.Errorf("fleet: service %q: release v%s: %w", spec.Name, tag, err)
+			}
 		}
 
 		implDir, _, implCleanup, err := resolveImplementation(spec.Repo, tag)

@@ -207,3 +207,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-26 looper issue Rust generator: generated crates' Cargo.toml declare no license and no publish = false, so every Rust service's cargo-deny fails (22 crates) (#368)
 - 2026-11-26 looper issue Enforce: S2S never crosses tenants (door refuses other tenants' service tokens even on ANY_TENANT; S2S client stamps its own tid) (#258)
 - 2026-11-26 looper issue gates.yaml: per-language gate sets for pkg/**, failing closed, so a change runs only the gates it can break (#976)
+- 2026-11-26 looper release v2.7.0 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.7.0)

@@ -200,3 +200,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-25 looper issue Images: rebuild each supported line's build image nightly from current packages, publishing an immutable dated tag (#966)
 - 2026-11-25 looper issue Published build images: the docker CLI (from docker:29-cli) is built with Go 1.26.10, CVE-2026-97054 HIGH on every build:* tag, failing the nightly sweep on main (#901)
 - 2026-11-25 looper issue Pinned images behind their lines: relock (build.lock: ghcr.io/tacplus-dev/tacplus/build:2.6.13 → ghcr.io/tacplus-dev/tacplus/build:2.6.14) (#956)
+- 2026-11-25 looper issue Generated pyproject.toml build and dev floors setuptools>=61.0 and pytest>=7.0.0 admit 3 HIGH advisories (hardcoded, outside #264) (#309)

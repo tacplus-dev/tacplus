@@ -278,7 +278,16 @@ the looper then marks it `promoted` or `declined` here with the date.
   today, so that `go test ./...` alone is not slowed); (2) each slot copies `rust/base`'s target directory (several
   GB) and compiles the dependency feature sets a fixture adds: one shared directory with sccache (in the build image,
   #315) instead of a copy per slot; (3) `cross-test/consumer-contract/run.sh` still runs a `cargo test -p` per crate
-  (not in `just gates`). `gates.yaml`'s `full: minutes` follows.
+  (not in `just gates`). `gates.yaml`'s `full: minutes` follows. The first sharded run (2026-11-26, #977, a looper VM's
+  local build of 41742e1a, shared with other builds: load average about 50 on 8 CPUs, the gates' own processes 2.5 CPUs
+  on average) took 3770 s, current-generation 2455 s of it with the slots 97% busy: `rust/base` 850 s, then the other
+  Rust shards 365-683 s, Java 245-432 s, Go 68-107 s. Its critical path is `rust/base` and then its slowest
+  dependant, about 1530 s there; the rest was the slots' queue, so the 15 minutes need less work per shard (2 above,
+  and `rust/base` itself), not only more slots.
+- **rotation-java's `mintFailureEndsAtExpiry` fails under load** (2026-11-26, #977): in a full `just gates` on a
+  shared 8-CPU VM (load average about 50) `RotationBehaviorTest.mintFailureEndsAtExpiry` failed with "the handler did
+  not return within 5000 ms" (RotationBehaviorTest.java:668, `handlerEnd`); everything else in the rotation gate passed.
+  A fixed wall-clock wait on a loaded runner: derive it from the stream's expiry the test sets, or wait on the event.
 - **The OS-advisory image fix a looper can run** (2026-11-15, #757, #711): an OS package advisory is fixed by
   rebuilding `base` (docs/VERSIONING.md, Images). That takes a `rebuild: base` dispatch on main and on each
   `release/X.Y`. The looper's token cannot dispatch a workflow (HTTP 403, no `actions: write`). Its only image path is

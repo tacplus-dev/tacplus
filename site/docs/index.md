@@ -195,7 +195,7 @@ produces its client, and nothing is switched on in YAML.
 
 <div class="grid cards tp-two" markdown>
 
--   [:octicons-download-24: **Install**](install.md): release binaries, `tacplus upgrade`, the container image, or from source.
+-   [:octicons-download-24: **Install**](install.md): release binaries, `tacplus upgrade`, or from source.
 -   [:octicons-rocket-24: **Quick start**](quickstart.md): generate and run the example: a Go server and a TypeScript client.
 -   [:octicons-book-24: **User guide**](guide/user-guide.md): annotations, `tacplus.yaml`, and what gets generated.
 -   [:octicons-code-24: **Annotation reference**](reference/annotations/index.md): every `(spec.*)` option, generated from `spec.proto`.

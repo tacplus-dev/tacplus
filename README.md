@@ -76,12 +76,9 @@ Release binaries for Linux, macOS and Windows (amd64 and arm64) are on
 `checksums.txt`. Once installed, `tacplus upgrade` keeps it on the newest
 patch of its MAJOR.MINOR line (`GITHUB_TOKEN` raises the API rate limit).
 
-The container image carries tacplus and every protoc plugin it drives, so a
-build can run it as its own generate step:
-
-```bash
-docker run --rm -v "$PWD:/w" -w /w ghcr.io/tacplus-dev/tacplus/tacplus:2.1 tacplus build
-```
+The `ghcr.io/tacplus-dev/tacplus/tacplus` image is deprecated: its tags stay
+as they are and it is never pushed again, so `tacplus:2.1` stays at `2.1.25`
+and takes none of this line's later patches.
 
 From source, with Go, `just` and `protoc` (`just protoc-check` tells you
 whether your `protoc` is in the supported range):

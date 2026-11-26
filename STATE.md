@@ -76,7 +76,11 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-26 by lo
   a tenant-owned one refuses a product's caller on every rpc, and an instance whose own identity is in another layer
   than its proto declares does not start. The Go, Java and Rust S2S client of a tenant's or a product's service refuses
   a caller whose own token's layer may not call it, before sending; their server wrappers bind `(spec.caller_tid)` to
-  the caller's `tid` claim on every rpc shape (empty stamped, another tenant or none `PERMISSION_DENIED`).
+  the caller's `tid` claim on every rpc shape (empty stamped, another tenant or none `PERMISSION_DENIED`). The record
+  plane is closed to a product: its S2S half (reads, watches, the record write surface) refuses a product's caller on
+  every rpc in Go, Java and Rust, and a product's `(spec.record_read)` or client of it fails generation; a product's
+  members meet over the member port in its own namespace only. `all_grpc_s2s_clients` generates no client for a
+  refused edge, and the MCP tool surface binds `(spec.caller_tid)` like the gRPC wrapper (Go, Java, Rust).
   Deterministic builds (#193): a repository pins the exact release and the build image digest in `tacplus.lock`
   (`tacplus pin` writes it; moving it is a commit); there is no tacplus image (the old tags stay, deprecated, and
   2.6 gets none); `build:X.Y` per line, rebuilt on every release as an immutable `build:X.Y.Z`, carries Kani and
@@ -340,8 +344,7 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-26 by lo
   namespace is `/tenants/<tid>`; kernel#23's `/tenants/<name>` namespaces need #202 first (PROPOSALS.md).
   The record write surface stamps no `(spec.identity_spiffe_subject)` (PROPOSALS.md). A fleet's service images must be on ghcr.io from a
   github.com repo (PROPOSALS.md).
-  The product layer's remaining generated doors (the `caller_tid` binding on the MCP tool surface,
-  `OnTenantDeleted`, every "not `/system`, so a tenant" check) and their cross-tests are not done (#475 steps 2-4),
+  The product layer's remaining generated doors (`OnTenantDeleted`) and its cross-tests are not done (#475 steps 2-4),
   so a server of a product service, or of an rpc binding `caller_tid`, is refused at generation; the kernel mints no
   product token yet (tacplus-dev/kernel#63), nor does the operator deploy one (tacplus-dev/operator#33).
 - **Blocked on:** #195's end-to-end gateway build (`tacplus fleet gateway`: the merged webapp, the clients, the image

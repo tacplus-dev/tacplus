@@ -298,8 +298,8 @@ cpus="$(jobs_cpus)"
 times >"$WORKDIR/times"
 tail -n 1 "$WORKDIR/times" | awk -v cap="$CAP" -v busy="$busy" -v wall="$wall" -v cpus="$cpus" '
   function secs(t,  m) { m = t; sub(/m.*/, "", m); sub(/^[0-9]+m/, "", t); sub(/s$/, "", t); return m * 60 + t }
-  { if (wall < 1) wall = 1; cpu = (secs($1) + secs($2)) / wall
-    printf "  pool: %d slots, %d%% busy; CPU time %.1f of %d CPUs (%d%%)\n", cap, 100 * busy / (cap * wall), cpu, cpus, 100 * cpu / cpus }'
+  { if (wall < 1) wall = 1; used = secs($1) + secs($2); cpu = used / wall
+    printf "  pool: %d slots, %d%% busy; CPU time %.1fs, %.1f of %d CPUs (%d%%)\n", cap, 100 * busy / (cap * wall), used, cpu, cpus, 100 * cpu / cpus }'
 # Each slot's cargo directory holds a dependency build; a failing run keeps
 # them, with the jobs' trees, for diagnosis.
 [[ $fail -eq 0 ]] && rm -rf "$WORKDIR"/cargo-slot*

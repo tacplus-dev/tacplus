@@ -237,7 +237,7 @@ func TestGatesRunAShardedGatesShardsInThePool(t *testing.T) {
 		!regexp.MustCompile(`(?m)^  sharded +\d+s  FAIL$`).MatchString(serial) {
 		t.Errorf("the wall-time table does not give the failing shard and its gate:\n%s", serial)
 	}
-	pool := regexp.MustCompile(`(?m)^  pool: (\d+) slots, \d+% busy; CPU time (\d+\.\d) of \d+ CPUs \(\d+%\)\n=== OVERALL `)
+	pool := regexp.MustCompile(`(?m)^  pool: (\d+) slots, \d+% busy; CPU time (\d+\.\d)s, \d+\.\d of \d+ CPUs \(\d+%\)\n=== OVERALL `)
 	for cap, out := range map[string]string{"1": serial, "4": parallel} {
 		if m := pool.FindStringSubmatch(out); m == nil || m[1] != cap || m[2] == "0.0" {
 			t.Errorf("GATES_JOBS=%s: the table does not end with the pool's use of the machine:\n%s", cap, out)

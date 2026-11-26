@@ -742,3 +742,65 @@ func TestHostsC2DStandaloneOnlyForAClusterFreeC2DOnlyBuild(t *testing.T) {
 		}
 	}
 }
+
+// all_grpc_s2s_clients on a product service generates no client for a refused
+// edge (products-layer-2026-11-08): inference records the refused services and
+// ResolveClientServices drops them.
+func TestInferGrpcClientsRefusesProductLayerEdges(t *testing.T) {
+	dir := t.TempDir()
+	if err := protogen.CopySysProtos(dir); err != nil {
+		t.Fatalf("CopySysProtos: %v", err)
+	}
+	svc := func(pkg, name, option, fileOption string) string {
+		return `syntax = "proto3";
+package ` + pkg + `;
+import "sys/spec.proto";
+option (spec.service) = {name: "` + pkg + `"` + option + `};
+` + fileOption + `
+message PingRequest {}
+message PingResponse {}
+service ` + name + ` {
+  option (spec.service_s2s) = {auth_services: ["*"]};
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+`
+	}
+	for path, body := range map[string]string{
+		"services/billing.proto": svc("billing", "Billing", `, product: "ledger"`, "option (spec.all_grpc_s2s_clients) = true;"),
+		"services/crew.proto":    svc("crew", "Crew", ", tenant_owned: true", ""),
+		"services/core.proto":    svc("core", "Core", "", ""),
+	} {
+		if err := os.MkdirAll(filepath.Join(dir, "services"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, path), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, _, err := protogen.ScanAndGenerateConfigHolder(dir, dir); err != nil {
+		t.Fatalf("ScanAndGenerateConfigHolder: %v", err)
+	}
+	config := &tactype.Config{SelfPackage: "billing"}
+	if err := InferGrpcClientsFromAnnotations(config, dir); err != nil {
+		t.Fatalf("InferGrpcClientsFromAnnotations: %v", err)
+	}
+	if !config.GrpcS2SClientAll {
+		t.Fatal("all_grpc_s2s_clients not inferred")
+	}
+	want := []tactype.GrpcEntry{{ProtoFile: "services/crew.proto", ServiceName: "Crew"}}
+	if len(config.GrpcS2SClientAllRefused) != 1 || config.GrpcS2SClientAllRefused[0] != want[0] {
+		t.Fatalf("GrpcS2SClientAllRefused = %#v, want %#v", config.GrpcS2SClientAllRefused, want)
+	}
+	got := ResolveClientServices(config, []ServiceInfo{
+		{ProtoFile: "services/billing.proto", ServiceName: "Billing", IsGrpc: true},
+		{ProtoFile: "services/crew.proto", ServiceName: "Crew", IsGrpc: true},
+		{ProtoFile: "services/core.proto", ServiceName: "Core", IsGrpc: true},
+	})
+	var names []string
+	for _, s := range got {
+		names = append(names, s.ServiceName)
+	}
+	if len(names) != 2 || names[0] != "Billing" || names[1] != "Core" {
+		t.Fatalf("ResolveClientServices = %v, want [Billing Core]: no client of a tenant's service", names)
+	}
+}

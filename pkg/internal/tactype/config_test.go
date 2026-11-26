@@ -996,3 +996,24 @@ func TestServiceLabelIsTheServicePackage(t *testing.T) {
 		t.Fatalf("ServiceLabel() = %q, want the module directory", got)
 	}
 }
+
+// A refused S2S client is matched by its proto file and service name, so all
+// of a language's resolvers drop the same services.
+func TestS2SClientRefused(t *testing.T) {
+	c := &Config{GrpcS2SClientAllRefused: []GrpcEntry{{ProtoFile: "services/crew.proto", ServiceName: "Crew"}}}
+	for _, tc := range []struct {
+		file, svc string
+		want      bool
+	}{
+		{"services/crew.proto", "Crew", true},
+		{"services/crew.proto", "CrewAdmin", false},
+		{"services/core.proto", "Crew", false},
+	} {
+		if got := c.S2SClientRefused(tc.file, tc.svc); got != tc.want {
+			t.Errorf("S2SClientRefused(%q, %q) = %v, want %v", tc.file, tc.svc, got, tc.want)
+		}
+	}
+	if (&Config{}).S2SClientRefused("services/crew.proto", "Crew") {
+		t.Error("a config refusing nothing refused a client")
+	}
+}

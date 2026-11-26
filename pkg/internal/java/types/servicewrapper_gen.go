@@ -342,7 +342,15 @@ func filterByHostTag(servicesInfo []ServiceInfo, pkg string) []ServiceInfo {
 // Mirrors Go behavior: only explicit gRPC client config enables generation.
 func resolveClientServices(config *tactype.Config, servicesInfo []ServiceInfo) []ServiceInfo {
 	if config.GrpcS2SClientAll {
-		return filterGrpcAnnotated(servicesInfo)
+		// All clients but those the product layer refuses this service
+		// (tactype.Config.S2SClientRefused, products-layer-2026-11-08).
+		var result []ServiceInfo
+		for _, svc := range filterGrpcAnnotated(servicesInfo) {
+			if !config.S2SClientRefused(svc.ProtoFile, svc.ServiceName) {
+				result = append(result, svc)
+			}
+		}
+		return result
 	}
 	if len(config.GrpcS2SClients) > 0 {
 		return filterServicesByGrpcEntries(servicesInfo, config.GrpcS2SClients)

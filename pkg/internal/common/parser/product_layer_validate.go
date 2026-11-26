@@ -490,3 +490,63 @@ func ValidateProductLayerHosting(dp *DescriptorParser, selfPackage, language str
 	return fmt.Errorf("the product layer's generated doors are not in this release yet (#475), so a %s server of it would fail open; not generated:\n  %s",
 		language, strings.Join(errs, "\n  "))
 }
+
+// RefusedS2SClient is an S2S service a declaring service may not call: Ref is
+// "package.Service", ProtoFile the proto that declares it (or the trait's that
+// hosts it), Why the rule.
+type RefusedS2SClient struct {
+	Ref, ProtoFile, Service, Why string
+}
+
+// RefusedS2SClients is every loaded S2S service the service selfPackage names
+// may not call (design section 1, point 3): by the edge table, and, for a
+// product, a record plane's S2S half. all_grpc_s2s_clients generates a client
+// for none of them, so it never generates one for a refused edge. Sorted by
+// Ref; nil when selfPackage names no loaded service.
+func RefusedS2SClients(dp *DescriptorParser, selfPackage string) []RefusedS2SClient {
+	if dp == nil || selfPackage == "" {
+		return nil
+	}
+	ix := newLayerIndex(dp)
+	var self *FileDescriptor
+	for _, fd := range ix.files {
+		if fd.Package == selfPackage && fd.ServiceName != "" {
+			self = fd
+		}
+	}
+	if self == nil {
+		return nil
+	}
+	caller := ix.fileLayer(self)
+	seen := map[string]bool{}
+	var out []RefusedS2SClient
+	consider := func(path, pkg, name string) {
+		ref := pkg + "." + name
+		if seen[ref] {
+			return
+		}
+		seen[ref] = true
+		why := ""
+		if _, target, ok := ix.refLayer(ref); ok {
+			why = S2SEdgeRefusal(caller, target)
+		}
+		if why == "" && caller.Product != "" && ix.recordPlaneRef(ref) {
+			why = "a product never reads or writes the record plane"
+		}
+		if why != "" {
+			out = append(out, RefusedS2SClient{Ref: ref, ProtoFile: path, Service: name, Why: why + " (" + ProductLayerRule + ")"})
+		}
+	}
+	for path, fd := range ix.files {
+		for i := range fd.Services {
+			if fd.Services[i].IsS2S {
+				consider(path, fd.Package, fd.Services[i].Name)
+			}
+		}
+		if t := fd.Trait; t != nil && t.S2SService != "" {
+			consider(path, fd.Package, t.S2SService)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Ref < out[j].Ref })
+	return out
+}

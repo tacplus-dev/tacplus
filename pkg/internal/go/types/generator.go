@@ -1374,12 +1374,26 @@ func resolveServerServices(config *tactype.Config, servicesInfo []ServiceInfo) (
 // resolveClientServices returns the services that should get s2s gRPC client wrappers.
 func resolveClientServices(config *tactype.Config, servicesInfo []ServiceInfo) ([]ServiceInfo, error) {
 	if config.GrpcS2SClientAll {
-		return filterGrpcAnnotated(config, servicesInfo)
+		all, err := filterGrpcAnnotated(config, servicesInfo)
+		return dropRefusedS2SClients(config, all), err
 	}
 	if len(config.GrpcS2SClients) > 0 {
 		return filterServicesByGrpcEntries(servicesInfo, config.GrpcS2SClients), nil
 	}
 	return nil, nil
+}
+
+// dropRefusedS2SClients leaves out of all_grpc_s2s_clients' set the services
+// the product layer refuses this service (tactype.Config.S2SClientRefused):
+// all clients are never a client for a refused edge.
+func dropRefusedS2SClients(config *tactype.Config, servicesInfo []ServiceInfo) []ServiceInfo {
+	var result []ServiceInfo
+	for _, svc := range servicesInfo {
+		if !config.S2SClientRefused(svc.ProtoFile, svc.ServiceName) {
+			result = append(result, svc)
+		}
+	}
+	return result
 }
 
 // resolveC2SClientServices returns the services that should get c2s gRPC client wrappers.

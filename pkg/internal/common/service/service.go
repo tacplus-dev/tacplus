@@ -266,6 +266,18 @@ func InferGrpcClientsFromAnnotations(config *tactype.Config, protoDir string) er
 		zap.L().Info("gRPC S2S clients (all, from proto annotation)")
 	}
 
+	// All clients are never all: none for an edge the product layer refuses
+	// this service (products-layer-2026-11-08).
+	if config.GrpcS2SClientAll {
+		config.GrpcS2SClientAllRefused = nil
+		for _, r := range parser.RefusedS2SClients(dp, config.SelfPackage) {
+			config.GrpcS2SClientAllRefused = append(config.GrpcS2SClientAllRefused,
+				tactype.GrpcEntry{ProtoFile: r.ProtoFile, ServiceName: r.Service})
+			zap.L().Info("gRPC S2S client (all) not generated: the product layer refuses the edge",
+				zap.String("service", r.Ref), zap.String("why", r.Why))
+		}
+	}
+
 	// Augment S2S clients if not already set from yaml or CLI.
 	if len(config.GrpcS2SClients) == 0 && !config.GrpcS2SClientAll {
 		entries, err := resolveGrpcRefs(s2sRefs, allFiles)
@@ -461,12 +473,19 @@ func resolveGrpcRefs(refs []string, allFiles map[string]*parser.FileDescriptor) 
 }
 
 // ResolveClientServices returns the services that should get s2s gRPC client wrappers generated.
-// If GrpcS2SClientAll is set, returns all services with a gRPC annotation.
+// If GrpcS2SClientAll is set, returns all services with a gRPC annotation but
+// those the product layer refuses (GrpcS2SClientAllRefused).
 // If GrpcS2SClients is set, filters to only those services.
 // Otherwise returns nil.
 func ResolveClientServices(config *tactype.Config, servicesInfo []ServiceInfo) []ServiceInfo {
 	if config.GrpcS2SClientAll {
-		return filterGrpcAnnotated(servicesInfo)
+		var result []ServiceInfo
+		for _, svc := range filterGrpcAnnotated(servicesInfo) {
+			if !config.S2SClientRefused(svc.ProtoFile, svc.ServiceName) {
+				result = append(result, svc)
+			}
+		}
+		return result
 	}
 	if len(config.GrpcS2SClients) > 0 {
 		return FilterServicesByGrpcEntries(servicesInfo, config.GrpcS2SClients)

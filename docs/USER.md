@@ -1652,6 +1652,9 @@ fleet's merged protos:
   record plane is hosted at `/system`, but its rows are tenants' and the
   platform's: a product's `(spec.record_read)`, or its client of a record
   plane's S2S half, fails generation too.
+  `all_grpc_s2s_clients` generates no client for a refused edge (on a product
+  service: none for a tenant's, another product's or the record plane's S2S
+  half; on a `/system` service: none for a product's), and
   `auth_services_from_fleet` admits an `all_grpc_s2s_clients` caller only
   where its edge is allowed. User traffic (C2S) is not an edge.
 - **`(spec.caller_tid)`** goes on one plain `string` field of an rpc's

@@ -378,3 +378,41 @@ func TestValidateProductLayer_RecordPlaneEdges(t *testing.T) {
 		})
 	}
 }
+
+// all_grpc_s2s_clients never generates a client for a refused edge: the
+// services a declaring service may not call, by the edge table and, for a
+// product, the record plane.
+func TestRefusedS2SClients(t *testing.T) {
+	dp := writeSurfaceProtoDir(t, layerFleet("", "", "", "", "")[0], layerFleet("", "", "", "", "")[1:]...)
+	for _, tc := range []struct {
+		self string
+		want []string
+	}{
+		{self: "core", want: []string{"audit.Audit", "billing.Billing", "meter.Meter"}},
+		{self: "billing", want: []string{"audit.Audit", "crew.Crew"}},
+		{self: "audit", want: []string{"billing.Billing", "crew.Crew", "meter.Meter"}},
+		{self: "crew"},
+		{self: "unknown"},
+	} {
+		t.Run(tc.self, func(t *testing.T) {
+			var got []string
+			for _, r := range RefusedS2SClients(dp, tc.self) {
+				if r.ProtoFile == "" || r.Why == "" {
+					t.Fatalf("refusal %+v names no proto file or reason", r)
+				}
+				got = append(got, r.Ref)
+			}
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("RefusedS2SClients(%s) = %v, want %v", tc.self, got, tc.want)
+			}
+		})
+	}
+	plane := &DescriptorParser{descriptors: map[string]*FileDescriptor{
+		"store.proto":  {Path: "store.proto", Package: "store", ServiceName: "stratum", RecordStore: true},
+		"query.proto":  {Path: "query.proto", Package: "query", Trait: &TraitDescriptor{Name: "query", Host: "stratum", S2SService: "RecordMap", C2SService: "RecordQuery"}},
+		"reader.proto": {Path: "reader.proto", Package: "reader", ServiceName: "reader", ServiceProduct: "ledger"},
+	}}
+	if got := RefusedS2SClients(plane, "reader"); len(got) != 1 || got[0].Ref != "query.RecordMap" || got[0].ProtoFile != "query.proto" {
+		t.Fatalf("a product's refused clients = %+v, want the record plane's S2S half", got)
+	}
+}

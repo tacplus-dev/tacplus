@@ -81,6 +81,10 @@ type Config struct {
 	GrpcServerAll bool
 	// GrpcS2SClientAll requests all annotated S2S clients from proto options.
 	GrpcS2SClientAll bool
+	// GrpcS2SClientAllRefused are the S2S services GrpcS2SClientAll generates
+	// no client for: the edges the product layer refuses this service
+	// (parser.RefusedS2SClients, products-layer-2026-11-08).
+	GrpcS2SClientAllRefused []GrpcEntry
 	// RestClients is populated from REST-capable proto service annotations.
 	RestClients []GrpcEntry
 	// RestClientAll requests all annotated REST-capable clients.
@@ -233,6 +237,18 @@ type SubscriptionEntry struct {
 
 // GetSmPrefix returns the service-manager directory prefix ("s2sm", "c2sm", "c2dm", or "w2sm").
 // Defaults to "s2sm" if not set.
+// S2SClientRefused reports whether GrpcS2SClientAll generates no client for
+// the S2S service serviceName of protoFile: the product layer refuses the edge
+// (GrpcS2SClientAllRefused).
+func (c *Config) S2SClientRefused(protoFile, serviceName string) bool {
+	for _, e := range c.GrpcS2SClientAllRefused {
+		if e.ProtoFile == protoFile && e.ServiceName == serviceName {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Config) GetSmPrefix() string {
 	if c.SmPrefix == "" {
 		return "s2sm"

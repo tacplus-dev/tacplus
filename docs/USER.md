@@ -529,7 +529,8 @@ The implementer's side:
   generated identity manager. The token authority must allow a service to mint
   that audience for its own label (tacplus-dev/kernel#30).
 - A member admits only a member of the same service in the same namespace (for a
-  tenant-owned service, the same tenant), forwards nothing before a valid token,
+  tenant-owned service, the same tenant; for a product's, the same product),
+  forwards nothing before a valid token,
   and has no plaintext fallback. A connection outlives its tokens: the port
   rotates its stream onto a new token at about 75% of each lifetime
   (make-before-break, no reconnect, no byte lost or reordered), so the black-box
@@ -1647,7 +1648,10 @@ fleet's merged protos:
   `/system` never calls a product. Every edge a service declares
   (`(spec.grpc_s2s_client)`, a hosted surface resolved to its host,
   `(spec.record_read)`, a `state_import`, a literal `auth_services` caller)
-  that the table refuses fails generation, naming both ends and the rule.
+  that the table refuses fails generation, naming both ends and the rule. The
+  record plane is hosted at `/system`, but its rows are tenants' and the
+  platform's: a product's `(spec.record_read)`, or its client of a record
+  plane's S2S half, fails generation too.
   `auth_services_from_fleet` admits an `all_grpc_s2s_clients` caller only
   where its edge is allowed. User traffic (C2S) is not an edge.
 - **`(spec.caller_tid)`** goes on one plain `string` field of an rpc's
@@ -1692,8 +1696,13 @@ passes, and another tenant, or a caller without a `tid` claim (the platform, a
 product), is `PERMISSION_DENIED`. A handler keying its rows by that field
 reaches only the calling tenant's.
 
+The generated Go, Java and Rust servers of a record plane's S2S half (its
+reads, watches and record write surface) refuse a caller whose namespace claim
+is in a product's layer, `PERMISSION_DENIED` on every rpc before any tenant pin
+reads its namespace.
+
 The rest of the generated doors (the `caller_tid` binding on the MCP tool
-surface, tenant deletion and the record plane's checks) are not in this release
+surface and tenant deletion) are not in this release
 yet, so a **server** of a product service, or of an rpc binding
 `(spec.caller_tid)`, is still refused at generation in every server language
 rather than generated without them. Clients of a product service generate as

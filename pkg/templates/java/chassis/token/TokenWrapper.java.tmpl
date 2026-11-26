@@ -478,6 +478,23 @@ public final class TokenWrapper {
         return setPayloadString(CLAIM_TID, tid);
     }
 
+    /**
+     * The fleet product whose layer the namespace claim is in
+     * ({@code /products/<name>}, products-layer-2026-11-08), or "" for the
+     * platform, a tenant, or a claim that names no layer. It reads the layer
+     * through {@link Spiffe#callerLayer}, never a prefix of the claim; the
+     * subject is the layer door's to cross-check.
+     */
+    public String product() {
+        Spiffe.Layer l;
+        try {
+            l = Spiffe.callerLayer(getNamespace(), "", false);
+        } catch (RuntimeException e) {
+            return "";
+        }
+        return l.kind == Spiffe.LayerKind.PRODUCT ? l.product : "";
+    }
+
     public String getServiceName() {
         return getPayloadString(CLAIM_SERVICE_NAME);
     }

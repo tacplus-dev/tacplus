@@ -525,9 +525,9 @@ public final class MemberPort implements AutoCloseable {
 
     /**
      * Checks the receiver's certificate SAN: a service SPIFFE ID of this trust
-     * domain for this service, in this instance's own tenant when it is
-     * tenant-owned, and in the platform (/system) tree otherwise, compared with
-     * the location-agnostic service-path relation.
+     * domain for this service, in this instance's own namespace when it is a
+     * tenant's or a fleet product's, and in the platform (/system) tree
+     * otherwise, compared with the location-agnostic service-path relation.
      */
     void verifyPeerCertificate(X509Certificate[] chain) throws CertificateException {
         String own;
@@ -536,7 +536,15 @@ public final class MemberPort implements AutoCloseable {
         } catch (RefusedException e) {
             throw new CertificateException(e.getMessage());
         }
-        boolean tenantOwned = own.startsWith("/" + Spiffe.TENANTS_SEGMENT + "/");
+        // A tenant's or a fleet product's member is in exactly this namespace
+        // (products-layer-2026-11-08); a platform member anywhere in /system.
+        boolean exact;
+        try {
+            Spiffe.LayerKind kind = Spiffe.callerLayer(own, "", false).kind;
+            exact = kind == Spiffe.LayerKind.TENANT || kind == Spiffe.LayerKind.PRODUCT;
+        } catch (IllegalArgumentException e) {
+            exact = false;
+        }
         try {
             var sans = chain.length == 0 ? null : chain[0].getSubjectAlternativeNames();
             if (sans != null) {
@@ -556,7 +564,7 @@ public final class MemberPort implements AutoCloseable {
                         continue;
                     }
                     String ns = Spiffe.normalizeNamespace(p.namespace);
-                    if (tenantOwned ? own.equals(ns) : Spiffe.isAtOrBelow("/" + Spiffe.SYSTEM_SEGMENT, ns)) {
+                    if (exact ? own.equals(ns) : Spiffe.isAtOrBelow("/" + Spiffe.SYSTEM_SEGMENT, ns)) {
                         return;
                     }
                 }
@@ -567,7 +575,7 @@ public final class MemberPort implements AutoCloseable {
             throw new CertificateException("member port: unreadable peer certificate: " + e.getMessage(), e);
         }
         throw new CertificateException("member port: the peer certificate does not name service "
-                + serviceLabel + " in " + (tenantOwned ? own : "/system") + " of trust domain " + trustDomain);
+                + serviceLabel + " in " + (exact ? own : "/system") + " of trust domain " + trustDomain);
     }
 
     // ---- Streams ----

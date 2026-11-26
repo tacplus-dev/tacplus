@@ -388,6 +388,19 @@ func (token *TokenWrapper) SetNamespace(namespace string) *TokenWrapper {
 	return token
 }
 
+// Product returns the fleet product whose layer the namespace claim is in
+// (/products/<name>, products-layer-2026-11-08), or "" for the platform, a
+// tenant, or a claim that names no layer. It reads the layer through
+// wrapperSpiffe.CallerLayer, never a prefix of the claim; the subject is the
+// layer door's to cross-check.
+func (token *TokenWrapper) Product() string {
+	l, err := wrapperSpiffe.CallerLayer(token.GetNamespace(), "", false)
+	if err != nil || l.Kind != wrapperSpiffe.LayerProduct {
+		return ""
+	}
+	return l.Product
+}
+
 // NamespacePath returns the normalized namespace claim — the authorization-tree
 // path used for level-or-below checks. It fails closed: a missing or malformed
 // namespace is an error, never silently mapped to root or empty.

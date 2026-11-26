@@ -117,9 +117,12 @@ impl MemberVerifier {
             .get()
             .ok_or_else(|| cert_error("this member has no namespace to compare a peer with".to_string()))?;
         let system = format!("/{}", spiffe::SYSTEM_SEGMENT);
-        // Tenant-owned: strictly below /tenants (the namespace tree relation).
-        let tenants = format!("/{}", spiffe::TENANTS_SEGMENT);
-        let tenant_owned = *own != tenants && spiffe::is_at_or_below(&tenants, own);
+        // A tenant's or a fleet product's member is in exactly this namespace
+        // (products-layer-2026-11-08); a platform member anywhere in /system.
+        let exact = matches!(
+            spiffe::caller_layer(own, "", false),
+            Ok(spiffe::Layer { kind: spiffe::LayerKind::Tenant | spiffe::LayerKind::Product, .. })
+        );
         let (_, cert) = x509_parser::certificate::X509Certificate::from_der(end_entity.as_ref())
             .map_err(|e| cert_error(format!("unreadable peer certificate: {}", e)))?;
         for ext in cert.extensions() {
@@ -136,7 +139,7 @@ impl MemberVerifier {
                     continue;
                 }
                 let Ok(ns) = spiffe::normalize_namespace(&parsed.namespace) else { continue };
-                let allowed = if tenant_owned { *own == ns } else { spiffe::is_at_or_below(&system, &ns) };
+                let allowed = if exact { *own == ns } else { spiffe::is_at_or_below(&system, &ns) };
                 if allowed {
                     return Ok(());
                 }
@@ -145,7 +148,7 @@ impl MemberVerifier {
         Err(cert_error(format!(
             "the peer certificate does not name service {} in {} of trust domain {}",
             self.service_label,
-            if tenant_owned { own.as_str() } else { system.as_str() },
+            if exact { own.as_str() } else { system.as_str() },
             self.trust_domain
         )))
     }

@@ -798,6 +798,25 @@ func goRecordPlaneS2S(svc *parser.ServiceInfo) bool {
 	return !svc.IsC2S && svc.SynthesizedKind == parser.SynthesizedKindRecordMap
 }
 
+// goRecordPlaneProductRefusal renders the record plane's product door (#475,
+// products-layer-2026-11-08), "" off the plane's S2S half: its rows are
+// tenants' and the platform's, so a caller whose namespace claim is in a
+// product's layer is PERMISSION_DENIED on every rpc before any pin reads its
+// namespace as a tenant's. A product keeps a tenant's data only as the
+// custodian of what the tenant sends it ((spec.caller_tid)). Twin of Java's
+// and Rust's.
+func goRecordPlaneProductRefusal(svc *parser.ServiceInfo, method, failRet string) string {
+	if !goRecordPlaneS2S(svc) {
+		return ""
+	}
+	return fmt.Sprintf(`
+// The record plane's rows are tenants' and the platform's: never a product's
+// caller's (products-layer-2026-11-08).
+if caller != nil && caller.Token().Product() != "" {
+	%[2]s status.Error(codes.PermissionDenied, "%[1]s is the record plane, whose rows are tenants' and the platform's: a product's caller never reads or writes it (products-layer-2026-11-08)")
+}`, method, failRet)
+}
+
 // goPinnedPrincipalRows is the principal list with the unresolved rows dropped.
 // An unresolved row on a private record is a generation error
 // (goPrivatePinUnenforceable) and never reaches here; on a plain record it is

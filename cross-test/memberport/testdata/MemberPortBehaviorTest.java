@@ -99,6 +99,9 @@ class MemberPortBehaviorTest {
     static final String AUD = MemberPort.audienceFor(SVC);
     static final String X = "/tenants/aaaaaaaa";
     static final String Y = "/tenants/bbbbbbbb";
+    /** Two fleet products' namespaces (products-layer-2026-11-08). */
+    static final String P = "/products/ledger";
+    static final String Q = "/products/books";
     static final int MB = 1024 * 1024;
 
     // ---- The fake fleet ----
@@ -1010,6 +1013,27 @@ class MemberPortBehaviorTest {
         MemberportPeer.Result r2 = MemberportPeer.exchange(member(X).forward(c.listen(loopback0(), echo2.address())), 82, 1000, 82);
         assertTrue(!r2.ok(1000) && r2.received == 0, "another service's certificate: " + r2);
         assertEquals(0, echo2.accepted.get());
+    }
+
+    /**
+     * A product's members are in its own namespace, exactly as a tenant's are
+     * in the tenant's: two members of the product connect, and a receiver
+     * certificate naming the platform or another product is refused.
+     */
+    @Test
+    void productMembersConnectAndOtherLayersAreRefusedBySender() throws Exception {
+        MemberportPeer.Server echo = echo();
+        MemberportPeer.Result ok = MemberportPeer.exchange(member(P).forward(member(P).listen(loopback0(), echo.address())), 83, 1000, 83);
+        assertTrue(ok.ok(1000), "two members of one product: " + ok);
+        int seed = 84;
+        for (String ns : List.of("/system", Q, X)) {
+            MemberPort b = member(new Minter(fleet, P, 300, 60), new AtomicReference<>(fleet.leaf(ns, SVC, "Ed25519")), fleet.jwks::get);
+            MemberportPeer.Server behind = echo();
+            MemberportPeer.Result r = MemberportPeer.exchange(member(P).forward(b.listen(loopback0(), behind.address())), seed, 1000, seed);
+            seed++;
+            assertTrue(!r.ok(1000) && r.received == 0, "a receiver certificate in " + ns + ": refused at the handshake: " + r);
+            assertEquals(0, behind.accepted.get(), "a receiver certificate in " + ns + ": nothing reaches the peer");
+        }
     }
 
     /**

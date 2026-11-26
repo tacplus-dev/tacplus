@@ -54,7 +54,10 @@ const (
 	testSvc = "grid"
 	tenantX = "/tenants/aaaaaaaa"
 	tenantY = "/tenants/bbbbbbbb"
-	mib     = 1024 * 1024
+	// Two fleet products' namespaces (products-layer-2026-11-08).
+	productP = "/products/ledger"
+	productQ = "/products/books"
+	mib      = 1024 * 1024
 )
 
 var testAud = AudienceFor(testSvc)
@@ -1070,6 +1073,28 @@ func TestMemberPortReceiverCertificateOfAnotherTenantIsRefusedBySender(t *testin
 	}
 	if echo2.accepted.Load() != 0 {
 		t.Fatal("nothing may reach the peer behind the port")
+	}
+}
+
+// A product's members (products-layer-2026-11-08) are in its own namespace,
+// /products/<name>, exactly as a tenant's are in the tenant's: two members of
+// the product connect, and a receiver certificate naming the platform or
+// another product is refused at the handshake.
+func TestMemberPortProductMembersConnectAndOtherLayersAreRefusedBySender(t *testing.T) {
+	fx := newFixture(t)
+	echo := fx.echo()
+	if r := exchange(fx.forward(fx.member(productP), fx.listen(fx.member(productP), echo.address())), 83, 1000, 83); !r.ok(1000) {
+		t.Fatalf("two members of one product: %v", r)
+	}
+	for i, ns := range []string{"/system", productQ, tenantX} {
+		b := fx.memberWith(newMinter(fx.fleet, productP, 300, 60).token, certRef(fx.fleet.leaf(t, ns, testSvc, "Ed25519")), fx.fleet.lookup)
+		echo := fx.echo()
+		if r := exchange(fx.forward(fx.member(productP), fx.listen(b, echo.address())), int64(84+i), 1000, int64(84+i)); r.ok(1000) || r.received != 0 {
+			t.Fatalf("a receiver certificate in %s: refused at the handshake: %v", ns, r)
+		}
+		if echo.accepted.Load() != 0 {
+			t.Fatalf("a receiver certificate in %s: nothing may reach the peer behind the port", ns)
+		}
 	}
 }
 

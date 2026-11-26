@@ -379,3 +379,27 @@ func javaPredicateNamespacePin(reqField, namespace string, optional bool, valueE
 %[1]s}
 `, indent, method) + gateOpen + body + gateClose
 }
+
+// javaRecordPlaneProductRefusal renders the record plane's product door (#475,
+// products-layer-2026-11-08), "" off the plane's S2S half: its rows are
+// tenants' and the platform's, so a caller whose verified token's namespace
+// claim is in a product's layer is PERMISSION_DENIED on every rpc, right after
+// the call is authorized and before any pin reads its namespace as a tenant's
+// or the handler runs. A product keeps a tenant's data only as the custodian of
+// what the tenant sends it ((spec.caller_tid)). failStmt renders the shape's
+// failure given the ProtoException expression: a throw inside a unary-request
+// shape's try, an onError and a no-op observer on a request stream. Twin of
+// Go's goRecordPlaneProductRefusal and Rust's.
+func javaRecordPlaneProductRefusal(recordPlaneS2S bool, method, indent string, failStmt func(exc string) string) string {
+	if !recordPlaneS2S {
+		return ""
+	}
+	exc := fmt.Sprintf(`new ProtoException(ProtoException.PERMISSION_DENIED, "%s is the record plane, whose rows are tenants' and the platform's: a product's caller never reads or writes it (products-layer-2026-11-08)")`, method)
+	return fmt.Sprintf(`
+%[1]s// The record plane's rows are tenants' and the platform's: never a product's
+%[1]s// caller's (products-layer-2026-11-08).
+%[1]svar __planeTok = Auth.verifiedTokenFromContext();
+%[1]sif (__planeTok != null && !__planeTok.product().isEmpty()) {
+%[2]s
+%[1]s}`, indent, strings.TrimSuffix(failStmt(exc), "\n"))
+}

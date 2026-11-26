@@ -33,6 +33,9 @@ pub const TD: &str = "example.org";
 pub const SVC: &str = "grid";
 pub const X: &str = "/tenants/aaaaaaaa";
 pub const Y: &str = "/tenants/bbbbbbbb";
+/// Two fleet products' namespaces (products-layer-2026-11-08).
+pub const P: &str = "/products/ledger";
+pub const Q: &str = "/products/books";
 pub const MB: u64 = 1024 * 1024;
 
 pub fn aud() -> String {

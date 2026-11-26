@@ -1036,11 +1036,14 @@ if err != nil {
 	// is disabled").
 	// Logs only non-sensitive token identifiers (sub, aud) at DEBUG — never the
 	// full claims payload, which carries entitlements and custom claims.
-	callerExtractFor := func(ctxExpr string) string {
+	// failRet is the shape's return before an error: "return" on a stream,
+	// "return nil," on a unary or page rpc.
+	callerExtractFor := func(ctxExpr, failRet string) string {
 		recordCaller := ""
 		if hasAccounting {
 			recordCaller = "\n__caller = caller" + stageAccounting("StageRequest")
 		}
+		recordCaller += goRecordPlaneProductRefusal(svc, method.Name, failRet)
 		if skipAuth {
 			return fmt.Sprintf(`
 // No caller identity: auth is disabled for this method, so no token was verified.
@@ -1181,7 +1184,7 @@ if authTok != nil {
 				checks += fmt.Sprintf(authBlock, "stream.Context()", "nil", "err")
 			}
 		}
-		callerExtract := callerExtractFor("stream.Context()")
+		callerExtract := callerExtractFor("stream.Context()", "return")
 
 		// The generated MCP session carrier has no handler method to delegate to:
 		// the whole session is generated (mcp_dispatch_gen.go). It authorizes and
@@ -1224,7 +1227,7 @@ if authTok != nil {
 				checks += fmt.Sprintf(authBlock, "stream.Context()", "req", "err")
 			}
 		}
-		callerExtract := callerExtractFor("stream.Context()")
+		callerExtract := callerExtractFor("stream.Context()", "return")
 		callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return")
 		handlerSlice := fmt.Sprintf("p.handler.%s(caller, req)", method.Name)
 		if handlerEmpty {
@@ -1283,7 +1286,7 @@ if authTok != nil {
 				checks += fmt.Sprintf(authBlock, "stream.Context()", "req", "err")
 			}
 		}
-		callerExtract := callerExtractFor("stream.Context()")
+		callerExtract := callerExtractFor("stream.Context()", "return")
 		callerExtract += goPredicatePins(san, method, servicePackage, "\t", "return", svc.IsC2S, goRecordPlaneS2S(svc))
 		callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return")
 		// Watch<T>Changes (#163): the tenant pin of the record write surface.
@@ -1460,7 +1463,7 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 				checks += fmt.Sprintf(authBlock, "stream.Context()", "req", "err")
 			}
 		}
-		callerExtract := callerExtractFor("stream.Context()")
+		callerExtract := callerExtractFor("stream.Context()", "return")
 		callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return")
 		handlerSeq := fmt.Sprintf("p.handler.%s(caller, req)", method.Name)
 		if handlerEmpty {
@@ -1532,7 +1535,7 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 				checks += fmt.Sprintf(authBlock, "stream.Context()", "req", "err")
 			}
 		}
-		callerExtract := callerExtractFor("stream.Context()")
+		callerExtract := callerExtractFor("stream.Context()", "return")
 		callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return")
 		// Tenant-pinned read (#130): every frame is filtered before validation.
 		if pin, ok := san.tenantPin(servicePackage, svc.Name, method.Name); ok {
@@ -1564,7 +1567,7 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 				checks += fmt.Sprintf(authBlock, "stream.Context()", "nil", "err")
 			}
 		}
-		callerExtract := callerExtractFor("stream.Context()")
+		callerExtract := callerExtractFor("stream.Context()", "return")
 		if hasAccounting {
 			return fmt.Sprintf(`// %s implements %s.%s (client streaming)
 	func (p *{{.ServerName}}) %s(stream grpc.ClientStreamingServer[%s, %s]) (__err error) {%s%s%s%s
@@ -1604,7 +1607,7 @@ func (p *{{.ServerName}}) %s(req *%s, stream grpc.ServerStreamingServer[%s]) err
 			}
 		}
 
-		callerExtract := callerExtractFor("ctx")
+		callerExtract := callerExtractFor("ctx", "return nil,")
 		callerExtract += goPredicatePins(san, method, servicePackage, "\t", "return nil,", svc.IsC2S, goRecordPlaneS2S(svc))
 		callerExtract += goRequestScopeBlocks(san, method, servicePackage, "req", "\t", "return nil,")
 
@@ -1793,7 +1796,7 @@ func (p *{{.ServerName}}) %s(ctx context.Context, req *%s) %s {%s%s%s%s
 		}
 	}
 
-	callerExtract := callerExtractFor("ctx")
+	callerExtract := callerExtractFor("ctx", "return nil,")
 	// (spec.store_epoch): stamp or refuse before the handler sees the request,
 	// and ahead of the pins below — Java's relative ordering on its own unary
 	// seam (storeepoch_gen.go explains why this seam and not inputValidation).

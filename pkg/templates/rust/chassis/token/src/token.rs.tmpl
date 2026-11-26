@@ -499,6 +499,18 @@ impl Token {
         self.payload.custom.get(Self::CLAIM_TID).and_then(|v| v.as_str())
     }
 
+    /// The fleet product whose layer the namespace claim is in
+    /// (`/products/<name>`, products-layer-2026-11-08), or `None` for the
+    /// platform, a tenant, or a claim that names no layer. It reads the layer
+    /// through `spiffe::caller_layer`, never a prefix of the claim; the
+    /// subject is the layer door's to cross-check.
+    pub fn product(&self) -> Option<String> {
+        match spiffe::caller_layer(self.namespace().unwrap_or(""), "", false) {
+            Ok(l) if l.kind == spiffe::LayerKind::Product => Some(l.product),
+            _ => None,
+        }
+    }
+
     /// Sets the tid claim.
     pub fn set_tid(&mut self, tid: impl Into<String>) -> Result<&mut Self> {
         self.set_custom_field(Self::CLAIM_TID, Value::String(tid.into()))
@@ -833,6 +845,32 @@ impl Default for Token {
 mod tests {
     use super::*;
     use key::keys;
+
+    /// `product()` is the product a namespace claim's layer names, and `None`
+    /// for every other layer and for a claim in none
+    /// (products-layer-2026-11-08): a prefix that is not a product's
+    /// namespace is not a product.
+    #[test]
+    fn product_is_the_product_layer_of_the_namespace_claim() {
+        for (ns, want) in [
+            ("/products/ledger", Some("ledger")),
+            ("/products/ledger/", Some("ledger")),
+            ("/system", None),
+            ("/system/us-east", None),
+            ("/tenants/alpha", None),
+            ("/products", None),
+            ("/products/aaaaaaaa", None),
+            ("/productsx/ledger", None),
+            ("/products/ledger/x/y", None),
+            ("/", None),
+            ("", None),
+        ] {
+            let mut token = Token::new();
+            token.set_namespace(ns).unwrap();
+            assert_eq!(token.product().as_deref(), want, "product() of namespace {ns:?}");
+        }
+        assert_eq!(Token::new().product(), None, "product() of no namespace claim");
+    }
 
     #[test]
     fn expires_in_is_the_std_duration_left_until_exp() {

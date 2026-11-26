@@ -368,7 +368,7 @@ func generateServiceWrapper(svc ServiceInfo, info *parser.ProtoInfo, _packageToD
 		if !rustCallerUnverified(targetService, method) {
 			wrapper = strings.ReplaceAll(wrapper,
 				"let caller: Option<servicemanager::auth::Caller> = None;",
-				rustCallerExtraction+rustRequiresDeviceGate(method, targetService, info.Package, svc.ParentDir, info.CrossPackageTypes))
+				rustCallerExtraction+rustRecordPlaneProductRefusal(targetService, method)+rustRequiresDeviceGate(method, targetService, info.Package, svc.ParentDir, info.CrossPackageTypes))
 		}
 		grpcWrappers.WriteString(wrapper)
 		grpcWrappers.WriteString("\n")
@@ -989,6 +989,27 @@ const rustCallerExtraction = `let caller: Option<servicemanager::auth::Caller> =
             .and_then(|v| v.strip_prefix("Bearer "))
             .and_then(|t| token::Token::parse(t).ok())
             .map(|t| servicemanager::auth::Caller::new(t, request_id.clone()));`
+
+// rustRecordPlaneProductRefusal renders the record plane's product door (#475,
+// products-layer-2026-11-08), "" off the plane's S2S half: its rows are
+// tenants' and the platform's, so a caller whose namespace claim is in a
+// product's layer is PERMISSION_DENIED on every rpc before any pin reads its
+// namespace as a tenant's. It is spliced right after rustCallerExtraction,
+// the one place every shape binds the caller, so it precedes every pin and the
+// handler. Every shape's wrapper returns Result<_, tonic::Status> (an
+// accounted one from its async block), so one `return Err(..)` fits them all.
+// Twin of Go's goRecordPlaneProductRefusal, message verbatim.
+func rustRecordPlaneProductRefusal(svc *parser.ServiceInfo, method *parser.MethodInfo) string {
+	if svc.IsC2S || svc.SynthesizedKind != parser.SynthesizedKindRecordMap {
+		return ""
+	}
+	return fmt.Sprintf(`
+        // The record plane's rows are tenants' and the platform's: never a
+        // product's caller's (products-layer-2026-11-08).
+        if caller.as_ref().is_some_and(|c| c.token().product().is_some()) {
+            return Err(tonic::Status::permission_denied("%s is the record plane, whose rows are tenants' and the platform's: a product's caller never reads or writes it (products-layer-2026-11-08)"));
+        }`, method.Name)
+}
 
 // rustCallerUnverified reports whether rustAuthLine emits no authorizer call
 // for this method, so nothing verifies the request's authorization header.

@@ -198,6 +198,42 @@ func (ix *layerIndex) recordPlaneHost() string {
 	return hosts[0]
 }
 
+// recordPlaneRef reports whether a "package.Service" client reference is a
+// record query plane's S2S half (reads, watches and the record write surface):
+// the S2S service of a trait hosted on a record store, or, once injected, a
+// synthesized record map service.
+func (ix *layerIndex) recordPlaneRef(ref string) bool {
+	dot := strings.LastIndex(ref, ".")
+	if dot < 0 {
+		return false
+	}
+	pkg, name := ref[:dot], ref[dot+1:]
+	for _, fd := range ix.files {
+		if fd.Package != pkg {
+			continue
+		}
+		if t := fd.Trait; t != nil && t.Host != "" && name == t.S2SService && ix.recordStore(t.Host) {
+			return true
+		}
+		for i := range fd.Services {
+			if svc := &fd.Services[i]; svc.Name == name && !svc.IsC2S && svc.SynthesizedKind == SynthesizedKindRecordMap {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// recordStore reports whether label is a loaded (spec.record_store).
+func (ix *layerIndex) recordStore(label string) bool {
+	for _, fd := range ix.files {
+		if fd.RecordStore && fd.ServiceName == label {
+			return true
+		}
+	}
+	return false
+}
+
 // ValidateProductLayer enforces the product layer at generation time:
 // (spec.service).product's name and exclusivity, no product in a sys contract,
 // every S2S edge a loaded service declares against the edge table, and
@@ -222,6 +258,15 @@ func ValidateProductLayer(dp *DescriptorParser) error {
 		}
 	}
 	planeHost := ix.recordPlaneHost()
+	// The record plane is hosted at /system, but its rows are tenants' and the
+	// platform's: a product reaches them by no edge (its server refuses a
+	// product's caller too).
+	planeEdge := func(path, callerLabel string, caller ServiceLayer, via string) {
+		if caller.Product != "" {
+			errs = append(errs, fmt.Sprintf("%s: %q (%s) -> %q (the record plane), by %s: a product never reads or writes the record plane, whose rows are tenants' and the platform's (%s)",
+				path, callerLabel, caller, planeHost, via, ProductLayerRule))
+		}
+	}
 
 	for _, path := range paths {
 		fd := ix.files[path]
@@ -241,6 +286,9 @@ func ValidateProductLayer(dp *DescriptorParser) error {
 
 		caller, callerLabel := ix.fileLayer(fd), serviceLabel(fd)
 		for _, ref := range fd.GrpcS2SClients {
+			if ix.recordPlaneRef(ref) {
+				planeEdge(path, callerLabel, caller, "grpc_s2s_client "+ref)
+			}
 			if label, target, ok := ix.refLayer(ref); ok {
 				edge(path, callerLabel, caller, label, target, "grpc_s2s_client "+ref)
 			}
@@ -253,6 +301,7 @@ func ValidateProductLayer(dp *DescriptorParser) error {
 			}
 		}
 		if len(fd.RecordReads) > 0 && planeHost != "" {
+			planeEdge(path, callerLabel, caller, "record_read "+fd.RecordReads[0].Record)
 			edge(path, callerLabel, caller, planeHost, ix.labels[planeHost], "record_read "+fd.RecordReads[0].Record)
 		}
 		for si := range fd.Services {

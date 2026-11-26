@@ -560,6 +560,26 @@ async fn receiver_certificate_of_another_tenant_is_refused_by_sender() {
     assert_eq!(echo2.accepted.load(Ordering::SeqCst), 0);
 }
 
+/// A product's members are in its own namespace, exactly as a tenant's are in
+/// the tenant's: two members of the product connect, and a receiver
+/// certificate naming the platform or another product is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn product_members_connect_and_other_layers_are_refused_by_sender() {
+    let fleet = Fleet::new();
+    let echo = Server::echo();
+    let fwd = member(&fleet, P).forward(member(&fleet, P).listen(loopback0(), echo.addr).await.unwrap()).await.unwrap();
+    let ok = blocking(move || peer::exchange(fwd, 83, 1000, 83)).await;
+    assert!(ok.ok(1000), "two members of one product: {:?}", ok);
+    for (seed, ns) in [(84u64, "/system"), (85, Q), (86, X)] {
+        let b = member_with(&fleet, Minter::new(&fleet, P, 300, 60).source(), &Arc::new(RwLock::new(fleet.leaf(ns, SVC, true))), fleet.jwk_lookup());
+        let behind = Server::echo();
+        let fwd = member(&fleet, P).forward(b.listen(loopback0(), behind.addr).await.unwrap()).await.unwrap();
+        let r = blocking(move || peer::exchange(fwd, seed, 1000, seed)).await;
+        assert!(!r.ok(1000) && r.received == 0, "a receiver certificate in {}: refused at the handshake: {:?}", ns, r);
+        assert_eq!(behind.accepted.load(Ordering::SeqCst), 0, "a receiver certificate in {}: nothing reaches the peer", ns);
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn receiver_token_of_another_tenant_is_refused_by_sender() {
     let fleet = Fleet::new();

@@ -1590,7 +1590,22 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
 		}
 		return indent + "__acct.stage(AccountingManager.Stage." + stage + ");\n"
 	}
+	// The record plane's product door (#475): once per shape, right after the
+	// call is authorized and before any pin or the handler. A unary-request
+	// shape throws inside its try; a request stream fails at open (planeRefusalNoReq).
+	planeThrow := func(indent string) func(string) string {
+		return func(exc string) string { return indent + "    throw " + exc + ";" }
+	}
+	planeRefusalNoReq := javaRecordPlaneProductRefusal(recordPlaneS2S, method.Name, "        ", func(exc string) string {
+		return fmt.Sprintf(`            responseObserver.onError(toGrpcError(%s));
+            return new StreamObserver<%s>() {
+                @Override public void onNext(%s value) {}
+                @Override public void onError(Throwable t) {}
+                @Override public void onCompleted() {}
+            };`, exc, inputType, inputType)
+	})
 	authCheck += acctAuthorized("        ")
+	authCheck += javaRecordPlaneProductRefusal(recordPlaneS2S, method.Name, "        ", planeThrow("        "))
 	if hasAccounting {
 		defer func() {
 			if rendered != "" {
@@ -1654,6 +1669,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
             }`, authMethod)
 		}
 		traceAuthCheck += acctAuthorized("            ")
+		traceAuthCheck += javaRecordPlaneProductRefusal(recordPlaneS2S, method.Name, "            ", planeThrow("            "))
 
 		// Trace: publish trace event, noop returns default response.
 		// Use typed AccountingMethod rpc field when accounting is available.
@@ -2501,7 +2517,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
             };
         }`, authMethod, inputType, inputType)
 		}
-		authCheckNoReq += acctAuthorized("        ")
+		authCheckNoReq += acctAuthorized("        ") + planeRefusalNoReq
 
 		return fmt.Sprintf(`    @Override
     public StreamObserver<%s> %s(StreamObserver<%s> responseObserver) {
@@ -2608,7 +2624,7 @@ func generateJavaGRPCWrapperSurface(method *parser.MethodInfo, serviceName, grpc
             };
         }`, authMethod, inputType, inputType)
 		}
-		authCheckNoReq += acctAuthorized("        ")
+		authCheckNoReq += acctAuthorized("        ") + planeRefusalNoReq
 
 		delegate := fmt.Sprintf("handler.%s(caller, %s)", methodName, streamResponseObserver)
 		callerGuard := ""

@@ -334,3 +334,47 @@ func TestClientTargetLayer(t *testing.T) {
 		t.Errorf("ClientTargetLayer(nil) = %q, want empty", got)
 	}
 }
+
+// The record plane's rows are tenants' and the platform's: a product reaches
+// them by no edge, neither a (spec.record_read) nor a client of the plane's
+// S2S half (which carries the record write surface), even though the plane is
+// hosted at /system. Its generated server refuses a product's caller as well.
+func TestValidateProductLayer_RecordPlaneEdges(t *testing.T) {
+	plane := func(reader *FileDescriptor) *DescriptorParser {
+		return &DescriptorParser{descriptors: map[string]*FileDescriptor{
+			"store.proto": {Path: "store.proto", Package: "store", ServiceName: "stratum", RecordStore: true},
+			"query.proto": {Path: "query.proto", Package: "query", Trait: &TraitDescriptor{
+				Name: "query", Host: "stratum", S2SService: "RecordMap", C2SService: "RecordQuery",
+			}},
+			"reader.proto": reader,
+		}}
+	}
+	reads := []RecordRead{{Record: "owner.Row"}}
+	for _, tc := range []struct {
+		name    string
+		reader  FileDescriptor
+		refusal []string
+	}{
+		{name: "platform record_read", reader: FileDescriptor{ServiceName: "reader", RecordReads: reads}},
+		{name: "tenant record_read", reader: FileDescriptor{ServiceName: "reader", ServiceTenantOwned: true, RecordReads: reads}},
+		{name: "platform client of the plane", reader: FileDescriptor{ServiceName: "reader", GrpcS2SClients: []string{"query.RecordMap"}}},
+		{name: "product record_read refused", reader: FileDescriptor{ServiceName: "reader", ServiceProduct: "ledger", RecordReads: reads},
+			refusal: []string{`"reader" (product "ledger")`, `"stratum"`, "record_read owner.Row", "the record plane", "products-layer-2026-11-08"}},
+		{name: "product client of the plane refused", reader: FileDescriptor{ServiceName: "reader", ServiceProduct: "ledger", GrpcS2SClients: []string{"query.RecordMap"}},
+			refusal: []string{`"reader" (product "ledger")`, `"stratum"`, "grpc_s2s_client query.RecordMap", "the record plane"}},
+		{name: "product client of the plane's c2s half", reader: FileDescriptor{ServiceName: "reader", ServiceProduct: "ledger", GrpcS2SClients: []string{"query.RecordQuery"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := tc.reader
+			r.Path, r.Package = "reader.proto", "reader"
+			err := ValidateProductLayer(plane(&r))
+			if tc.refusal == nil {
+				if err != nil {
+					t.Fatalf("refused an allowed edge: %v", err)
+				}
+				return
+			}
+			wantLayerRefusal(t, err, tc.refusal...)
+		})
+	}
+}

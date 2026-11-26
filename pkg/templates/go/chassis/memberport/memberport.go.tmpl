@@ -554,14 +554,16 @@ func (p *MemberPort) namespace() (string, error) {
 
 // verifyPeerCertificate checks the receiver's certificate SAN: a service
 // SPIFFE ID of this trust domain for this service, in this instance's own
-// tenant when it is tenant-owned, and in the platform (/system) tree
-// otherwise, compared with the location-agnostic service-path relation.
+// namespace when it is a tenant's or a fleet product's
+// (products-layer-2026-11-08), and in the platform (/system) tree otherwise,
+// compared with the location-agnostic service-path relation.
 func (p *MemberPort) verifyPeerCertificate(leaf *x509.Certificate) error {
 	own, err := p.namespace()
 	if err != nil {
 		return fmt.Errorf("member port: %w", err)
 	}
-	tenantOwned := strings.HasPrefix(own, "/"+wrapperSpiffe.TenantsSegment+"/")
+	l, err := wrapperSpiffe.CallerLayer(own, "", false)
+	exact := err == nil && (l.Kind == wrapperSpiffe.LayerTenant || l.Kind == wrapperSpiffe.LayerProduct)
 	for _, uri := range leaf.URIs {
 		if uri == nil || uri.Scheme != wrapperSpiffe.Scheme {
 			continue
@@ -577,12 +579,12 @@ func (p *MemberPort) verifyPeerCertificate(leaf *x509.Certificate) error {
 		if err != nil {
 			continue
 		}
-		if tenantOwned && own == ns || !tenantOwned && wrapperSpiffe.IsAtOrBelow("/"+wrapperSpiffe.SystemSegment, ns) {
+		if exact && own == ns || !exact && wrapperSpiffe.IsAtOrBelow("/"+wrapperSpiffe.SystemSegment, ns) {
 			return nil
 		}
 	}
 	where := "/" + wrapperSpiffe.SystemSegment
-	if tenantOwned {
+	if exact {
 		where = own
 	}
 	return fmt.Errorf("member port: the peer certificate does not name service %s in %s of trust domain %s", p.serviceLabel, where, p.trustDomain)

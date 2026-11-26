@@ -84,7 +84,11 @@ toolchains (tacplus-dev/roadmap: decisions/tacplus-images-2026-10-27.md).
 | `ghcr.io/tacplus-dev/tacplus/build` | `base` plus every tool: protoc and every plugin, grpcio-tools, Kani, JBMC and OpenJML, cargo-fuzz and its nightly Rust, cargo-zigbuild and zig (the fleet builder's `rust:` client recipe), just, the docker CLI, gcloud. Its `tacplus` is `images/tacplus.sh`, which runs the release the repository pins. What a repository's build runs in (generate, compile, test, fuzz, verify), and what tacplus's own gates run in: CI, the nightly gates, `just gates-container` | every release (one image per line, built fresh), nightly for each supported line from its release branch when it has something new, and when a tool pin changes |
 
 `ghcr.io/tacplus-dev/tacplus/tacplus` is deprecated: its tags up to the 2.5
-line stay as they are, and it is never pushed again.
+line stay as they are, and it is never pushed again. The 2.0 to 2.5 lines
+pushed it with each patch until their backports of #932 took the job out of
+their `images.yml`; their last tags are `2.0.32`, `2.1.25`, `2.2.22`,
+`2.3.24`, `2.4.24` and `2.5.25`, and a consumer of those lines takes later
+patches through the release binary (`tacplus upgrade`).
 
 Tags on the `build` image:
 

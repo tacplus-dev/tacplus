@@ -15,7 +15,7 @@
 # only speeds a build up: images/cache-determinism.sh holds a cold and a warm
 # build to the same verdict.
 # Source it with ROOT_DIR set (cross-test/lib/cargo-target.sh and
-# scripts/gates.sh do); sccache_stats prints what the cache did since the
+# scripts/gates.sh do); sccache_active says whether it is on, sccache_stats prints what the cache did since the
 # server started or its stats were zeroed.
 if [[ "${TACPLUS_CROSS_TEST_SCCACHE:-1}" != 0 && "${RUSTC_WRAPPER:-sccache}" == sccache ]] && command -v sccache >/dev/null; then
   RUSTC_WRAPPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sccache-rustc.sh"
@@ -28,11 +28,16 @@ if [[ "${TACPLUS_CROSS_TEST_SCCACHE:-1}" != 0 && "${RUSTC_WRAPPER:-sccache}" == 
   env -u CARGO_MAKEFLAGS -u MAKEFLAGS -u MFLAGS sccache --start-server >/dev/null 2>&1 || true
 fi
 
+# Whether the legs' rustc goes through sccache.
+sccache_active() {
+  [[ "${RUSTC_WRAPPER:-}" == */sccache-rustc.sh ]]
+}
+
 # One line: the compiles sccache answered from its cache, the ones it ran, and
 # the calls it cannot cache (a binary, a proc-macro or a test harness, which
 # link); nothing when the legs do not compile through it.
 sccache_stats() {
-  [[ "${RUSTC_WRAPPER:-}" == */sccache-rustc.sh ]] || return 0
+  sccache_active || return 0
   sccache --show-stats 2>/dev/null | awk '
     /^Cache hits +[0-9]+$/ { hits = $NF }
     /^Cache misses +[0-9]+$/ { misses = $NF }

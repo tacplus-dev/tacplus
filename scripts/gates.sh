@@ -75,7 +75,7 @@ CAP="${GATES_JOBS:-$(jobs_cpus)}"
 started=$(date +%s)
 cd "$ROOT_DIR" || exit 1
 
-if [[ "${RUSTC_WRAPPER:-}" == */sccache-rustc.sh ]]; then
+if sccache_active; then
   sccache --zero-stats >/dev/null 2>&1 || true
   echo "gates: Rust compiles through sccache, its cache ${SCCACHE_DIR:-${SCCACHE_GCS_BUCKET:+gs://$SCCACHE_GCS_BUCKET}}"
 fi

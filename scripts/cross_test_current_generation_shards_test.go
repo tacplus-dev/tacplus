@@ -119,21 +119,29 @@ func TestCurrentGenerationShardRecipes(t *testing.T) {
 }
 
 // A Rust shard's dependencies come from the compiler cache the slots share
-// (cross-test/lib/cargo-target.sh), not from a copy of rust/base's cargo
-// directory: each was several GB, copied once for rust/base and once more for
-// each slot's first Rust shard (tacplus#979).
-func TestCurrentGenerationShardsCopyNoCargoDirectory(t *testing.T) {
+// (cross-test/lib/sccache.sh) when the legs compile through it, not from a
+// copy of rust/base's cargo directory: each was several GB, copied once for
+// rust/base and once more for each slot's first Rust shard (tacplus#979).
+// Without sccache (a build image that has none) the copies stay.
+func TestCurrentGenerationShardsCopyNoCargoDirectoryWithSccache(t *testing.T) {
 	data, err := os.ReadFile("../cross-test/current-generation/run.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
 	copier := regexp.MustCompile(`\bcp\b[^\n]*(cargo_target|cargo_seed|CROSS_TEST_CARGO_TARGET)`)
-	for i, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") || !copier.MatchString(line) {
 			continue
 		}
-		if copier.MatchString(line) {
-			t.Errorf("run.sh:%d copies a cargo directory: %s", i+1, strings.TrimSpace(line))
+		guarded := false
+		for j := i - 1; j >= 0 && j >= i-3; j-- {
+			if strings.Contains(lines[j], "if ! sccache_active") {
+				guarded = true
+			}
+		}
+		if !guarded {
+			t.Errorf("run.sh:%d copies a cargo directory outside an `if ! sccache_active`: %s", i+1, strings.TrimSpace(line))
 		}
 	}
 }

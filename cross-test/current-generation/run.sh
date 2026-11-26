@@ -2754,27 +2754,36 @@ READERS_PY
 # Shard $3 (LANGUAGE/FIXTURE[/SIDE]): this script on that language, fixture and
 # build, its Rust built in the cargo directory $1. separate-cargo-target: cargo
 # locks its target directory for a whole build, so shards running at once
-# sharing one would build Rust one at a time. Their dependencies come from the
-# one compiler cache they share (sccache: cross-test/lib/cargo-target.sh,
-# tacplus#979), not from a copy of the several GB rust/base built, which every
-# other Rust shard started from and waited on (#977). They still start after
-# rust/base: the chassis crates' self-tests it ran are not run again in a
-# fixture that renders them the same (rust_selftest_reused), and which shard
-# runs them, and so names their failure, must not depend on the order the
-# shards ran in. With $2 true a Rust shard waits for rust/base (the pool below
-# runs it beside the others); otherwise `just gates` ran it first.
+# sharing one would build Rust one at a time. A cold one costs a shard about 16
+# CPU-minutes more than a warm one. With sccache (cross-test/lib/sccache.sh,
+# tacplus#979) the shards share their dependencies through its cache, and no
+# directory is copied. Without it only rust/base builds the dependencies: once
+# it passed, its directory is copied to the seed $2, and a cargo directory's
+# first other Rust shard starts from a copy of that (several GB each, #977).
+# Either way the other Rust shards start after rust/base: the chassis crates'
+# self-tests it ran are not run again in a fixture that renders them the same
+# (rust_selftest_reused), and which shard runs them, and so names their
+# failure, must not depend on the order the shards ran in. With $4 true a Rust
+# shard waits for rust/base (the pool below runs it beside the others);
+# otherwise rust/base has passed (`just gates` runs it first).
 current_generation_shard() {
-  local cargo_target="$1" wait="$2" job="$3"
+  local cargo_target="$1" cargo_seed="$2" job="$3" wait="$4"
   local language="${job%%/*}" fixture="${job#*/}" side=()
   if [[ "$fixture" == */* ]]; then
     side=(--side "${fixture#*/}")
     fixture="${fixture%%/*}"
   fi
-  if [[ "$language" == rust && "$fixture" != base && "$wait" == true ]]; then
+  if [[ "$language" == rust && "$fixture" != base ]]; then
     until [[ -e "$WORK_ROOT/rust-base.passed" ]]; do
+      [[ "$wait" == true ]] || { echo "rust/base has not passed: its self-tests are not reused" >&2; return 1; }
       [[ ! -e "$WORK_ROOT/rust-base.failed" ]] || { echo "rust/base failed: its self-tests are not reused" >&2; return 1; }
       sleep 5
     done
+    if ! sccache_active && [[ ! -e "$cargo_target/.seeded" ]]; then
+      echo "==> Copying the Rust dependencies rust/base built"
+      rm -rf "$cargo_target"
+      cp -a "$cargo_seed" "$cargo_target"
+    fi
   fi
   local keep=()
   [[ "$KEEP" != true ]] || keep=(--keep)
@@ -2784,12 +2793,19 @@ current_generation_shard() {
     TACPLUS_CROSS_TEST_CARGO_TARGET="$cargo_target" bash "$0" --language "$language" --fixture "$fixture" "${side[@]}" \
     --workdir "$WORK_ROOT" --tacplus "$TACPLUS_BIN" "${keep[@]}" \
     || { [[ "$job" != rust/base ]] || : >"$WORK_ROOT/rust-base.failed"; return 1; }
-  [[ "$job" != rust/base ]] || : >"$WORK_ROOT/rust-base.passed"
+  [[ "$job" == rust/base ]] || return 0
+  if ! sccache_active; then
+    rm -rf "$cargo_seed"
+    cp -a "$cargo_target" "$cargo_seed"
+    : >"$cargo_target/.seeded"
+    : >"$cargo_seed/.seeded"
+  fi
+  : >"$WORK_ROOT/rust-base.passed"
 }
 
 # A shard of `just gates`, in the cargo directory of its slot.
 if [[ -n "$SHARD" && "$SHARD" != checks ]]; then
-  current_generation_shard "$CROSS_TEST_CARGO_TARGET" false "$SHARD"
+  current_generation_shard "$CROSS_TEST_CARGO_TARGET" "$WORK_ROOT/cargo-seed" "$SHARD" false
   exit 0
 fi
 
@@ -2799,11 +2815,12 @@ fi
 if [[ -z "$FIXTURE_FILTER" && "$JOBS" -gt 1 ]]; then
   # Worker 1 keeps the shared cargo directory, which the gates after this one
   # reuse; worker N its own, -N.
+  cargo_seed="$CROSS_TEST_CARGO_TARGET-seed"
   current_generation_job() {
     local worker="$1" job="$2"
     local cargo_target="$CROSS_TEST_CARGO_TARGET"
     ((worker == 1)) || cargo_target="$CROSS_TEST_CARGO_TARGET-$worker"
-    current_generation_shard "$cargo_target" true "$job"
+    current_generation_shard "$cargo_target" "$cargo_seed" "$job" true
   }
   # rust/base first, the other Rust jobs last: a worker that claims one waits
   # for rust/base, so the workers run Go's and Java's jobs meanwhile.
@@ -2827,6 +2844,7 @@ if [[ -z "$FIXTURE_FILTER" && "$JOBS" -gt 1 ]]; then
   for ((worker = 2; worker <= JOBS; worker++)); do
     rm -rf "$CROSS_TEST_CARGO_TARGET-$worker"
   done
+  rm -rf "$cargo_seed"
   ((pool_rc == 0)) || exit "$pool_rc"
   FIXTURES_BUILT=true
 fi

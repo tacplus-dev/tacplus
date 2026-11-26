@@ -104,8 +104,14 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-26 by lo
   Gates scaled to the diff (#266, tacplus-dev/looper#48): `gates.yaml` maps a land's changed paths to gate sets. A
   change to `*.md` or `docs/**` only runs `just docs` (the planning files check, relative links through
   `go run ./cmd/sitegen -check-links`, gitleaks, `just test`: about a minute); `images/` runs `just test`, `just images`
-  and `just tacplus-script`; `pkg/**`, `cmd/**`, `docs/embed.go`, `docs/*.tmpl`, the justfile, any path the map does
-  not name and a change to the map run `just gates`, as do the nightly gates and every release.
+  and `just tacplus-script`; a change to one language's generator or templates (`pkg/internal/<lang>/**`,
+  `pkg/templates/<lang>/**`) runs that language's set, `just gates-lang <lang>` (#976): the legs of `just gates` that
+  generate it, cross-language edges included, with soundness, test and floors (`scripts/gate-sets.sh` names them,
+  `scripts/gate_sets_test.go` holds them to the justfile); the rest of `pkg/**`, `cmd/**`, `docs/embed.go`,
+  `docs/*.tmpl`, the justfile, any path the map does not name and a change to the map run `just gates`, as do the
+  nightly gates and every release. `just gate-audit [BASE]` prints, for a diff, the sets chosen and why, their legs
+  and their minutes. Gap: a red full check of main does not yet record a miss of the map (tacplus-dev/looper#253),
+  and a language set runs its current-generation language whole, not as #977's shards.
   `just gates` runs its gates, their language legs and current-generation's shards (every language of every fixture,
   each build of a two-build fixture, then the checks across them: #977) concurrently (`scripts/gates.sh`),
   `GATES_JOBS` at once (the CPUs by default); each job slot builds Rust in its own cargo directory with its share of the

@@ -225,6 +225,14 @@ func TestGateSetsFailClosed(t *testing.T) {
 	}
 }
 
+// The VM spec (tacplus#968) is read only outside the repository: a change to
+// it, as the recap's drift fixes, runs the docs set, not full.
+func TestGateSetsLooperYamlRunsDocs(t *testing.T) {
+	if sets, why, _, _, out := auditPaths(t, "looper.yaml"); sets != "docs" {
+		t.Errorf("looper.yaml runs %s (%s), want docs:\n%s", sets, why, out)
+	}
+}
+
 // What the sets rest on: a language's packages change only what tacplus
 // generates for it. They are imported by pkg/builder alone, import no other
 // language's, register nothing at init and read only their own templates; and

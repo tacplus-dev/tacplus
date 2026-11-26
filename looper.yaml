@@ -1,0 +1,11 @@
+# tacplus's looper/builder VM (tacplus-dev/looper#240; tacplus-dev/looper README: The project's VM spec).
+# It sizes the machine only: it never caps the children the VM runs. Sized at what tacplus's VM runs on
+# today, 8 CPU and 32 GB, where its gates are measured (GATES_JOBS=8: #976, #977, #979); Jody approved it
+# so on 2026-11-25 (#968): capacity grows only from measurement, by a change to this file. The nightly
+# recap compares its builds' peak against it and files a change, up or down, when they drift.
+machine: c4a-standard-8
+disk: 200
+spot: true
+# The kicker starts tacplus's VM instead of in-cluster reports once this is true (tacplus-dev/looper#241),
+# with the VM group (tacplus-dev/cloud#108) and the looper-vm image (tacplus-dev/looper#239) in place.
+vm: false

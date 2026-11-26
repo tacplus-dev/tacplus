@@ -63,10 +63,11 @@ swift:
 # Documentation: the planning files, links, secrets and `just test`, which
 # checks README.md against README.src.md and the docs the compiler embeds
 # (see the justfile). docs/embed.go and docs/AGENT.md.tmpl are code: full's.
+# /looper.yaml, the VM spec, is read only outside the repository (tacplus#968).
 docs:
   run: just docs
   minutes: 5
-  paths: ["*.md", docs/**]
+  paths: ["*.md", docs/**, /looper.yaml]
 # The image set. `just test` first: pkg/images and scripts test the files under
 # images/.
 images:

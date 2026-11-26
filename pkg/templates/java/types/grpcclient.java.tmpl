@@ -73,8 +73,14 @@ public class {{.ClientName}} {
     private {{.ClientName}}(Channel channel, Supplier<String> tokenProvider,
             long timeoutMs, int maxRetries, long retryBackoffMs, RetryBudget retries) {
         this.channel = channel;
+{{- if .TargetLayer}}
+        // Its target is a {{.TargetLayer}} service: every call and stream is first
+        // refused, PERMISSION_DENIED and before anything is sent, when the
+        // caller's own token is in a layer that may not call it
+        // (TargetLayer.check, products-layer-2026-11-08).
+{{- end}}
 {{- if .HasUnary}}
-        this.blockingStub = {{.ServiceName}}Grpc.newBlockingStub(channel);
+        this.blockingStub = {{.ServiceName}}Grpc.newBlockingStub({{if .TargetLayer}}TargetLayer.guard(channel, "{{.TargetLayer}}", tokenProvider){{else}}channel{{end}});
 {{- end}}
 {{- if .Rotates}}
         // Its streams outlive their tokens (tacplus#322): each is carried on
@@ -82,9 +88,14 @@ public class {{.ClientName}} {
         // before the current one expires (make-before-break, on the same
         // channel), and returned as one stream. A server without the sibling
         // gets the plain method, whose stream ends at its token's exp.
+{{- if .TargetLayer}}
+        // The layer guard wraps the rotation, so it checks the stream's open.
+        this.asyncStub = {{.ServiceName}}Grpc.newStub(TargetLayer.guard({{.RotationFQN}}.channel(channel, tokenProvider), "{{.TargetLayer}}", tokenProvider));
+{{- else}}
         this.asyncStub = {{.ServiceName}}Grpc.newStub({{.RotationFQN}}.channel(channel, tokenProvider));
+{{- end}}
 {{- else if .HasStreaming}}
-        this.asyncStub = {{.ServiceName}}Grpc.newStub(channel);
+        this.asyncStub = {{.ServiceName}}Grpc.newStub({{if .TargetLayer}}TargetLayer.guard(channel, "{{.TargetLayer}}", tokenProvider){{else}}channel{{end}});
 {{- end}}
         this.tokenProvider = tokenProvider;
         this.timeoutMs = timeoutMs;

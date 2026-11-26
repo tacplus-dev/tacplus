@@ -6,9 +6,12 @@ import {{.TypesBase}}.sys.healthreport.Healthreport.ServiceInstanceHealth;
 import {{.TypesBase}}.sys.host.HostOuterClass;
 import {{.TypesBase}}.sys.errors.ProtoException;
 import io.grpc.CallOptions;
+import io.grpc.Channel;
+import io.grpc.ClientCall;
 import io.grpc.ConnectivityState;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.MethodDescriptor;
 import io.grpc.Server;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
@@ -65,6 +68,8 @@ public class ServiceConnectionTest {
         checkRouteTenantForCaller();
         checkTenantRouting();
         checkPlatformProviderUnaffected();
+        checkTargetLayer();
+        checkTargetLayerGuard();
 
         if (failures > 0) {
             System.err.println(failures + " ServiceConnection check(s) FAILED");
@@ -354,6 +359,163 @@ public class ServiceConnectionTest {
             expectProto(ProtoException.INVALID_ARGUMENT, "without an own token an empty route field",
                     () -> RouteTenant.forCaller("tenant", "", none));
         }
+    }
+
+    // ---- The product layer's S2S client check (products-layer-2026-11-08, #475) ----
+
+    /** An unsigned JWT carrying sub_type, namespace and sub, as {@link #ownToken}. */
+    private static String layerToken(String subType, String namespace, String sub) {
+        String payload = "{\"sub\":\"" + sub + "\",\"sub_type\":\"" + subType + "\",\"namespace\":\"" + namespace + "\"}";
+        java.util.Base64.Encoder enc = java.util.Base64.getUrlEncoder().withoutPadding();
+        return enc.encodeToString("{\"alg\":\"none\"}".getBytes(StandardCharsets.UTF_8)) + "."
+                + enc.encodeToString(payload.getBytes(StandardCharsets.UTF_8)) + ".sig";
+    }
+
+    /**
+     * A service token of each layer, a workload of a product, a user, and two
+     * that name no consistent layer.
+     */
+    private static java.util.Map<String, String> layerTokens() {
+        return java.util.Map.of(
+                "system", layerToken("service", "/system", "spiffe://example.com/system/services/mcp"),
+                "tenant", layerToken("service", "/tenants/alpha", "spiffe://example.com/tenants/aaaaaaaa/services/crew"),
+                "ledger", layerToken("service", "/products/ledger", "spiffe://example.com/products/ledger/services/billing"),
+                "ledger-workload", layerToken("workload", "/products/ledger",
+                        "spiffe://example.com/products/ledger/services/billing/workloads/pigeon-1"),
+                "user", layerToken("user", "/products/ledger", "spiffe://example.com/users/u1"),
+                "mismatched", layerToken("service", "/tenants/alpha", "spiffe://example.com/products/ledger/services/billing"),
+                "no-layer", layerToken("service", "/", "spiffe://example.com/system/services/mcp"));
+    }
+
+    /** -1 when the check passes, and otherwise the ProtoException's code. */
+    private static int targetLayerCode(String target, String ownToken) {
+        try {
+            TargetLayer.check(target, ownToken);
+            return -1;
+        } catch (ProtoException e) {
+            return e.getCode();
+        }
+    }
+
+    /**
+     * Every cell of the S2S edge table, from the caller's own token: a product
+     * never calls a tenant or another product, the platform never calls a
+     * product; everything else passes, as do a user and a call without a token
+     * (no S2S edge). A token in no consistent layer, or one that cannot be
+     * read, is refused.
+     */
+    private static void checkTargetLayer() {
+        java.util.Map<String, String> tok = layerTokens();
+        final int ok = -1;
+        final int denied = ProtoException.PERMISSION_DENIED;
+        Object[][] cells = {
+            {"system", "tenant", ok},
+            {"system", "product:ledger", denied},
+            {"system", "system", ok},
+            {"tenant", "tenant", ok},
+            {"tenant", "product:ledger", ok},
+            {"tenant", "product:books", ok},
+            {"ledger", "tenant", denied},
+            {"ledger", "product:ledger", ok},
+            {"ledger", "product:books", denied},
+            {"ledger", "system", ok},
+            {"ledger", "", ok},
+            {"ledger-workload", "tenant", denied},
+            {"ledger-workload", "product:books", denied},
+            {"ledger-workload", "product:ledger", ok},
+            {"user", "tenant", ok},
+            {"user", "product:books", ok},
+            {"mismatched", "tenant", denied},
+            {"no-layer", "product:ledger", denied},
+            {"no-layer", "system", ok},
+        };
+        for (Object[] cell : cells) {
+            String caller = (String) cell[0];
+            String target = (String) cell[1];
+            int want = (Integer) cell[2];
+            int got = targetLayerCode(target, tok.get(caller));
+            expect(got == want, "TargetLayer.check(\"" + target + "\") by " + caller + " = " + got + ", want " + want);
+        }
+        expect(targetLayerCode("tenant", "not-a-jwt") == denied, "an unreadable own token must be PERMISSION_DENIED");
+        expect(targetLayerCode("product:ledger", "") == ok, "no own token must pass: the target's door decides");
+        expect(targetLayerCode("product:ledger", null) == ok, "a null own token must pass: the target's door decides");
+        expect(targetLayerCode(null, tok.get("ledger")) == ok, "no target layer must pass");
+    }
+
+    private static final MethodDescriptor.Marshaller<byte[]> RAW = new MethodDescriptor.Marshaller<byte[]>() {
+        @Override
+        public java.io.InputStream stream(byte[] value) {
+            return new java.io.ByteArrayInputStream(value);
+        }
+
+        @Override
+        public byte[] parse(java.io.InputStream stream) {
+            return new byte[0];
+        }
+    };
+
+    private static MethodDescriptor<byte[], byte[]> rawMethod(String name, MethodDescriptor.MethodType type) {
+        return MethodDescriptor.<byte[], byte[]>newBuilder()
+                .setType(type)
+                .setFullMethodName(name)
+                .setRequestMarshaller(RAW)
+                .setResponseMarshaller(RAW)
+                .build();
+    }
+
+    /** Counts the calls that reach the network. */
+    private static final class RecordingChannel extends Channel {
+        int calls;
+
+        @Override
+        public <ReqT, RespT> ClientCall<ReqT, RespT> newCall(MethodDescriptor<ReqT, RespT> method, CallOptions options) {
+            calls++;
+            return null;
+        }
+
+        @Override
+        public String authority() {
+            return "recording";
+        }
+    }
+
+    /**
+     * A guarded channel refuses a forbidden edge before anything is sent, on a
+     * unary call and a stream alike, and passes an allowed one through; a
+     * failing token provider is no token, so the call goes on to fail on its
+     * missing token.
+     */
+    private static void checkTargetLayerGuard() {
+        java.util.Map<String, String> tok = layerTokens();
+        MethodDescriptor<byte[], byte[]> unary = rawMethod("crew.Crew/Get", MethodDescriptor.MethodType.UNARY);
+        MethodDescriptor<byte[], byte[]> stream = rawMethod("crew.Crew/Watch", MethodDescriptor.MethodType.BIDI_STREAMING);
+        RecordingChannel inner = new RecordingChannel();
+
+        Channel refused = TargetLayer.guard(inner, "tenant", () -> tok.get("ledger"));
+        for (MethodDescriptor<byte[], byte[]> m : List.of(unary, stream)) {
+            try {
+                refused.newCall(m, CallOptions.DEFAULT);
+                System.err.println("FAIL: product -> tenant " + m.getFullMethodName() + " was opened");
+                failures++;
+            } catch (ProtoException e) {
+                expect(e.getCode() == ProtoException.PERMISSION_DENIED,
+                        "product -> tenant " + m.getFullMethodName() + ": code " + e.getCode() + ", want PERMISSION_DENIED");
+            }
+        }
+        expect(inner.calls == 0, "a refused call reached the channel: " + inner.calls + " calls");
+
+        Channel allowed = TargetLayer.guard(inner, "tenant", () -> tok.get("tenant"));
+        allowed.newCall(unary, CallOptions.DEFAULT);
+        allowed.newCall(stream, CallOptions.DEFAULT);
+        expect(inner.calls == 2, "an allowed call did not reach the channel: " + inner.calls + " calls");
+
+        Channel noToken = TargetLayer.guard(inner, "product:ledger", () -> {
+            throw new IllegalStateException("no identity");
+        });
+        noToken.newCall(unary, CallOptions.DEFAULT);
+        Channel noProvider = TargetLayer.guard(inner, "product:ledger", null);
+        noProvider.newCall(unary, CallOptions.DEFAULT);
+        expect(inner.calls == 4, "a call without a token must go on: " + inner.calls + " calls");
     }
 
     private static void varint(ByteArrayOutputStream out, long v) {

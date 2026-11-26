@@ -367,6 +367,28 @@ func SelfServiceProduct(dp *DescriptorParser, selfPackage string) string {
 	return ""
 }
 
+// ClientTargetLayer is the layer a generated S2S client for ref
+// ("package.Service") checks its caller against before every call
+// (serviceconnection.CheckTargetLayer and its Java and Rust twins): "tenant"
+// for a tenant-owned or tenant-routed target, "product:<name>" for a
+// product's, and "" for a /system target, which every layer may call, or one
+// not loaded. A surface hosted by label is its host's.
+func ClientTargetLayer(dp *DescriptorParser, ref string) string {
+	if dp == nil {
+		return ""
+	}
+	_, l, ok := newLayerIndex(dp).refLayer(ref)
+	switch {
+	case !ok:
+		return ""
+	case l.Tenant:
+		return "tenant"
+	case l.Product != "":
+		return "product:" + l.Product
+	}
+	return ""
+}
+
 // SelfServiceProductIn is SelfServiceProduct over the protos under
 // annotatedProtoDir, "" when there is none.
 func SelfServiceProductIn(annotatedProtoDir, selfPackage string) (string, error) {

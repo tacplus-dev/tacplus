@@ -65,8 +65,16 @@ func generateGrpcClients(config *tactype.Config, servicesInfo []ServiceInfo, inp
 			return nil, fmt.Errorf("failed to parse %s: %w", svc.ProtoFile, err)
 		}
 
+		// An S2S client checks its caller's layer against its target's before
+		// every call (products-layer-2026-11-08); a C2S or C2D client carries
+		// a user's token, which is no S2S edge.
+		targetLayer := ""
+		if config.GetSmPrefix() == "s2sm" {
+			targetLayer = parser.ClientTargetLayer(descriptorParser, protoInfo.Package+"."+svc.ServiceName)
+		}
+
 		// Generate gRPC client wrapper in the grpc_clients output directory
-		if err := generateGrpcClient(svc, protoInfo); err != nil {
+		if err := generateGrpcClient(svc, protoInfo, targetLayer); err != nil {
 			return nil, fmt.Errorf("failed to generate gRPC client for %s: %w", svc.ServiceName, err)
 		}
 
@@ -314,7 +322,9 @@ func generateGrpcClientRoot(config *tactype.Config, clients []generatedGrpcClien
 }
 
 // generateGrpcClient creates the typed gRPC client wrapper file for a service.
-func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
+// targetLayer is the target's layer the client checks its caller against
+// (parser.ClientTargetLayer), "" for none.
+func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, targetLayer string) error {
 	// Output to sm/internal/grpc_clients/{parentDir}/{name}/
 	wrapperOutputDir := filepath.Join(svc.Config.OutputDir, svc.Config.GetSmPrefix(), "grpc", "clients", svc.ParentDir, svc.ImportDirName())
 	if err := os.MkdirAll(wrapperOutputDir, 0755); err != nil {
@@ -523,6 +533,10 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		// Rotates: the client's streams rotate (tacplus#322).
 		Rotates               bool
 		RotationLibImportPath string
+		// TargetLayer: the target is a tenant's or a product's ("tenant",
+		// "product:<name>"), so the client's connection refuses a caller
+		// whose layer may not call it (serviceconnection.NewLayerGuardConn).
+		TargetLayer string
 	}{
 		GrpcPackageName:             grpcPkgName,
 		TypesModulePath:             typesModulePath,
@@ -545,6 +559,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		ServiceConnectionImportPath: svc.Config.ModuleBasePath + "/chassis/serviceconnection",
 		Rotates:                     rotates,
 		RotationLibImportPath:       svc.Config.ModuleBasePath + "/chassis/rotation",
+		TargetLayer:                 targetLayer,
 	}
 
 	tmpl, err := loadTemplate("grpcclient.go.tmpl")

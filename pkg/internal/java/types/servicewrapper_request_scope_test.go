@@ -171,3 +171,51 @@ func TestJavaRequestScope_UnannotatedRequestIsUntouched(t *testing.T) {
 		t.Fatalf("a request with no marker must emit no guard\ngot:\n%s", got)
 	}
 }
+
+// (spec.caller_tid) binds a request field to the caller's token's tid claim
+// (#475, products-layer-2026-11-08): empty is stamped, equal passes, another
+// tenant or no tid claim (the platform, a product) is PERMISSION_DENIED. Every
+// shape, as the other markers; a request stream on every message.
+func TestJavaRequestScope_CallerTid(t *testing.T) {
+	tid := map[string]model.AnnotationValue{"caller_tid": {Type: model.AnnotationTypeBool, BoolValue: true}}
+	san := newJavaEgressSanitizer([]model.ProtoFile{{Package: "mail", Messages: []model.Message{
+		{Name: "MailRequest", Fields: []model.Field{
+			{Name: "tenant", Type: "string", Number: 1, Annotations: tid},
+			{Name: "units", Type: "int64", Number: 2},
+		}},
+		{Name: "MailItem", Fields: []model.Field{{Name: "id", Type: "string", Number: 1}}},
+	}}})
+	for _, tc := range []struct {
+		name           string
+		client, server bool
+		valueExpr      string
+	}{
+		{"unary", false, false, "request"},
+		{"server streaming", false, true, "request"},
+		{"client streaming", true, false, "__scoped"},
+		{"bidi", true, true, "__scoped"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := javaRequestScopeMethod("RecordUsage")
+			m.ClientStreaming, m.ServerStreaming = tc.client, tc.server
+			got := generateJavaGRPCWrapper(
+				m, "Mail", "mail",
+				"MailOuterClass.MailRequest", "MailOuterClass.MailItem",
+				"Helpers", "Helpers",
+				false, false, nil,
+				"mail", "services", nil, proto.SkippedTraceTypes{},
+				san, nil, nil)
+			for _, want := range []string{
+				"final String __reqCallerTid = __reqCallerTidTok == null ? null : __reqCallerTidTok.getTid();",
+				`throw new ProtoException(ProtoException.PERMISSION_DENIED, "RecordUsage requires a caller in a tenant: its token carries no tid claim (products-layer-2026-11-08)");`,
+				"if (" + tc.valueExpr + ".getTenant().isEmpty()) {",
+				tc.valueExpr + " = " + tc.valueExpr + ".toBuilder().setTenant(__reqCallerTid).build();",
+				`throw new ProtoException(ProtoException.PERMISSION_DENIED, "tenant does not match the caller's tenant (its token's tid claim): a call keys only its own tenant's data");`,
+			} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("Java wrapper missing %q\ngot:\n%s", want, got)
+				}
+			}
+		})
+	}
+}

@@ -1675,12 +1675,29 @@ enforcing interceptors), `PERMISSION_DENIED` before the handler runs:
   proto declares: a product's service runs at exactly `/products/<p>`, and a
   service with no `product` never at a product's namespace.
 
-The rest of the generated doors (the S2S client's refusal before sending, the
-`caller_tid` binding, tenant deletion and the record plane's checks) are not in
-this release yet, so a **server** of a product service, or of an rpc binding
+The generated Go, Java and Rust S2S clients check the same table from the
+caller's own token before sending. A client of a tenant's or a product's
+service refuses, `PERMISSION_DENIED` and before anything is sent, a call by a
+service or workload whose own token is in a layer that may not call its target:
+a product's caller to a tenant-owned service or to another product's, a
+`/system` caller to a product's. A user's token and a call without a token
+pass, for the target's door to decide. The build already refuses a client for
+such an edge; this covers a client deployed with another identity than the one
+it was generated for. A client of a `/system` service checks nothing.
+
+The generated Go, Java and Rust server wrappers bind `(spec.caller_tid)` on
+every rpc shape (a request stream, on every message) before the handler runs:
+an empty field is filled with the caller's token's `tid` claim, the same value
+passes, and another tenant, or a caller without a `tid` claim (the platform, a
+product), is `PERMISSION_DENIED`. A handler keying its rows by that field
+reaches only the calling tenant's.
+
+The rest of the generated doors (the `caller_tid` binding on the MCP tool
+surface, tenant deletion and the record plane's checks) are not in this release
+yet, so a **server** of a product service, or of an rpc binding
 `(spec.caller_tid)`, is still refused at generation in every server language
 rather than generated without them. Clients of a product service generate as
-before.
+before, with the check above.
 
 ### Every user RPC is also an MCP tool
 

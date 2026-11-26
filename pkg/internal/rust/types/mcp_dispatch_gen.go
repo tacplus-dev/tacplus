@@ -1257,7 +1257,7 @@ func generateRustMcpCarrierWrapper(svc *parser.ServiceInfo, method *parser.Metho
 	fullMethod := fmt.Sprintf("/%s/%s.%s/%s", parentDir, servicePkg, svc.Name, method.Name)
 	authLine := rustAuthLine(svc, method, fullMethod)
 	requestStreamBlock := rustMcpSessionTenantOpen(svc.Name, method) +
-		rustValidatedRequestStreamBlock(inputType, method.FullInputType, "", "", "", method.Name, fullMethod) +
+		rustValidatedRequestStreamBlock(inputType, method.FullInputType, "", "", "", "", method.Name, fullMethod) +
 		rustMcpStampRequestStreamBlock(svc.Name, method, inputType) +
 		rustRouteRequestStreamBlock(method, inputType)
 	streamType := fmt.Sprintf(responseStreamFmt, outputType)

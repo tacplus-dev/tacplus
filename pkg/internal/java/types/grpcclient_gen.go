@@ -53,7 +53,8 @@ func generateGrpcClients(config *tactype.Config, servicesInfo []ServiceInfo, inp
 			return fmt.Errorf("failed to parse %s: %w", svc.ProtoFile, err)
 		}
 
-		if err := generateGrpcClient(svc, protoInfo); err != nil {
+		targetLayer := javaGrpcClientTargetLayer(config.GetSmPrefix(), descriptorParser, protoInfo.Package+"."+svc.ServiceName)
+		if err := generateGrpcClient(svc, protoInfo, targetLayer); err != nil {
 			return fmt.Errorf("failed to generate gRPC client for %s: %w", svc.ServiceName, err)
 		}
 
@@ -87,8 +88,21 @@ func generateGrpcClients(config *tactype.Config, servicesInfo []ServiceInfo, inp
 	return nil
 }
 
-// generateGrpcClient creates the typed gRPC client wrapper Java file for a service.
-func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
+// javaGrpcClientTargetLayer is the target's layer a generated client checks
+// its caller against before every call (TargetLayer.check,
+// products-layer-2026-11-08): parser.ClientTargetLayer for an S2S client, and
+// "" for a C2S, W2S or C2D one, which carries a user's token, no S2S edge.
+func javaGrpcClientTargetLayer(smPrefix string, dp *parser.DescriptorParser, ref string) string {
+	if smPrefix != "s2sm" {
+		return ""
+	}
+	return parser.ClientTargetLayer(dp, ref)
+}
+
+// generateGrpcClient creates the typed gRPC client wrapper Java file for a
+// service. targetLayer is the target's layer the client checks its caller
+// against (javaGrpcClientTargetLayer), "" for none.
+func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, targetLayer string) error {
 	// Find the target service
 	var targetService *parser.ServiceInfo
 	for i := range info.Services {
@@ -285,6 +299,9 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 	if hasRoute {
 		importLines[fmt.Sprintf("import %s.chassis.serviceconnection.RouteTenant;", svc.Config.JavaPackageBase)] = struct{}{}
 	}
+	if targetLayer != "" {
+		importLines[fmt.Sprintf("import %s.chassis.serviceconnection.TargetLayer;", svc.Config.JavaPackageBase)] = struct{}{}
+	}
 
 	var sortedImportLines []string
 	for importLine := range importLines {
@@ -329,6 +346,10 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		// (tacplus#322) through RotationFQN's channel.
 		Rotates     bool
 		RotationFQN string
+		// TargetLayer: the target is a tenant's or a product's ("tenant",
+		// "product:<name>"), so the client's channel refuses a caller whose
+		// layer may not call it (TargetLayer.guard).
+		TargetLayer string
 	}{
 		Header:       header.GeneratedHeader(consts.LangJava, svc.ProtoFile),
 		FullPackage:  fullPackage,
@@ -348,6 +369,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo) error {
 		// back to the plain method on a server without it.
 		Rotates:     hasStreaming && svc.Config.GetSmPrefix() == "s2sm" && javaServesRotatingSibling(targetService),
 		RotationFQN: svc.Config.JavaPackageBase + ".chassis.rotation.StreamRotation",
+		TargetLayer: targetLayer,
 	}
 
 	tmplStr, err := loadTemplate("grpcclient.java.tmpl")

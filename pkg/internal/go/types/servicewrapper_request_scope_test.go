@@ -164,3 +164,60 @@ func TestGoRequestScope_UnannotatedRequestIsUntouched(t *testing.T) {
 		t.Fatalf("a request with no marker must emit no guard\ngot:\n%s", got)
 	}
 }
+
+// (spec.caller_tid) binds a request field to the caller's token's tid claim
+// (#475, products-layer-2026-11-08): empty is stamped, equal passes, another
+// tenant is PERMISSION_DENIED, and a caller with no tid claim (the platform, a
+// product) is PERMISSION_DENIED. Every shape, as the other markers.
+func callerTidSanitizer() *egressSanitizer {
+	tid := map[string]model.AnnotationValue{"caller_tid": {Type: model.AnnotationTypeBool, BoolValue: true}}
+	return newEgressSanitizer([]model.ProtoFile{{Package: "billing", Messages: []model.Message{
+		{Name: "UsageRequest", Fields: []model.Field{
+			{Name: "tenant", Type: "string", Number: 1, Annotations: tid},
+			{Name: "units", Type: "int64", Number: 2},
+		}},
+		{Name: "UsageResponse", Fields: []model.Field{{Name: "ok", Type: "bool", Number: 1}}},
+	}}})
+}
+
+func TestGoRequestScope_CallerTid(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		client, server     bool
+		failRet, installed string
+	}{
+		{name: "unary", failRet: "return nil,"},
+		{name: "server streaming", server: true, failRet: "return"},
+		{name: "client streaming", client: true, failRet: "return", installed: "scopeReq: func(req *types.UsageRequest) error {"},
+		{name: "bidi", client: true, server: true, failRet: "return", installed: "scopeReq: func(req *types.UsageRequest) error {"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &parser.MethodInfo{
+				Name: "RecordUsage", InputType: "UsageRequest", OutputType: "UsageResponse",
+				FullInputType: "billing.UsageRequest", FullOutputType: "billing.UsageResponse",
+				ClientStreaming: tc.client, ServerStreaming: tc.server,
+			}
+			svc := &parser.ServiceInfo{Name: "Billing", IsS2S: true, Methods: []*parser.MethodInfo{m}}
+			got := generateGRPCWrapper(svc, m, "billing", "services", "",
+				map[string]service.AccountingInfo{}, map[string]string{}, proto.SkippedTraceTypes{}, callerTidSanitizer())
+			for _, want := range []string{
+				"__caller_tid = caller.Token().GetTid()",
+				tc.failRet + ` status.Error(codes.PermissionDenied, "RecordUsage requires a caller in a tenant: its token carries no tid claim (products-layer-2026-11-08)")`,
+				"req.Tenant == \"\" {",
+				"req.Tenant = __caller_tid",
+				tc.failRet + ` status.Error(codes.PermissionDenied, "tenant does not match the caller's tenant (its token's tid claim): a call keys only its own tenant's data")`,
+			} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("wrapper missing %q\ngot:\n%s", want, got)
+				}
+			}
+			if tc.installed != "" && !strings.Contains(got, tc.installed) {
+				t.Fatalf("a request stream must bind every message\ngot:\n%s", got)
+			}
+			// A request stream binds in its Recv() hook, handed to the handler call.
+			if call := strings.Index(got, "p.handler.RecordUsage("); !tc.client && strings.Index(got, "req.Tenant = __caller_tid") > call {
+				t.Fatalf("the binding must precede the handler call\ngot:\n%s", got)
+			}
+		})
+	}
+}

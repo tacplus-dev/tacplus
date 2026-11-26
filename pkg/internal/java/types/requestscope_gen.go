@@ -80,10 +80,37 @@ func javaRequestScopePin(field, valueExpr, method, indent string, isNamespace bo
 `, indent, marker, field, mismatch, tok, local, accessor, method, needs, valueExpr, f)
 }
 
-// javaRequestScopePins renders both markers for one request, or "" when it
-// declares neither.
+// javaCallerTidPin renders the binding of a (spec.caller_tid) request field to
+// the caller's token's tid claim (#475, products-layer-2026-11-08): a product
+// keeps a tenant's data only keyed by the tid of the tenant calling, never by
+// one the request names. Empty is stamped and equal passes; another tenant, or
+// a caller with no tid claim (the platform, a product), is PERMISSION_DENIED.
+// Go's goCallerTidBlock and Rust's twin read the same.
+func javaCallerTidPin(field, valueExpr, method, indent string) string {
+	if field == "" {
+		return ""
+	}
+	f := javaPascalField(field)
+	return fmt.Sprintf(`%[1]s// (spec.caller_tid) %[2]s: bind the field to the caller's tenant.
+%[1]s// Unset -> stamped; equal -> accepted; another tenant, or none -> refused.
+%[1]svar __reqCallerTidTok = Auth.verifiedTokenFromContext();
+%[1]sfinal String __reqCallerTid = __reqCallerTidTok == null ? null : __reqCallerTidTok.getTid();
+%[1]sif (__reqCallerTid == null || __reqCallerTid.isEmpty()) {
+%[1]s    throw new ProtoException(ProtoException.PERMISSION_DENIED, "%[3]s requires a caller in a tenant: its token carries no tid claim (products-layer-2026-11-08)");
+%[1]s}
+%[1]sif (%[4]s.get%[5]s().isEmpty()) {
+%[1]s    %[4]s = %[4]s.toBuilder().set%[5]s(__reqCallerTid).build();
+%[1]s} else if (!__reqCallerTid.equals(%[4]s.get%[5]s())) {
+%[1]s    throw new ProtoException(ProtoException.PERMISSION_DENIED, "%[2]s does not match the caller's tenant (its token's tid claim): a call keys only its own tenant's data");
+%[1]s}
+`, indent, field, method, valueExpr, f)
+}
+
+// javaRequestScopePins renders every marker for one request ((spec.principal),
+// (spec.namespace), (spec.caller_tid)), or "" when it declares none.
 func javaRequestScopePins(san *javaEgressSanitizer, fullInputType, servicePackage, valueExpr, method, indent string) string {
 	out := javaRequestScopePin(san.annotatedStringField(fullInputType, servicePackage, "principal"), valueExpr, method, indent, false)
 	out += javaRequestScopePin(san.annotatedStringField(fullInputType, servicePackage, "namespace"), valueExpr, method, indent, true)
+	out += javaCallerTidPin(san.annotatedStringField(fullInputType, servicePackage, "caller_tid"), valueExpr, method, indent)
 	return out
 }

@@ -313,3 +313,24 @@ func TestSelfServiceProduct(t *testing.T) {
 		t.Errorf("SelfServiceProduct(nil) = %q, want empty", got)
 	}
 }
+
+// A generated S2S client carries its target's layer for the run-time check:
+// tenant, product:<name>, or none for /system and a target not loaded.
+func TestClientTargetLayer(t *testing.T) {
+	dp := writeSurfaceProtoDir(t, layerFleet("", "", "", "", "")[0], layerFleet("", "", "", "", "")[1:]...)
+	for _, tc := range []struct{ ref, want string }{
+		{"core.Core", ""},
+		{"billing.Billing", "product:ledger"},
+		{"audit.Audit", "product:other"},
+		{"crew.Crew", "tenant"},
+		{"absent.Absent", ""},
+		{"nodot", ""},
+	} {
+		if got := ClientTargetLayer(dp, tc.ref); got != tc.want {
+			t.Errorf("ClientTargetLayer(%q) = %q, want %q", tc.ref, got, tc.want)
+		}
+	}
+	if got := ClientTargetLayer(nil, "crew.Crew"); got != "" {
+		t.Errorf("ClientTargetLayer(nil) = %q, want empty", got)
+	}
+}

@@ -42,7 +42,7 @@ import (
 	"{{.ApprovalLibImportPath}}"
 {{- end}}
 	{{.CrossPackageImports}}
-{{- if .HasRoute}}
+{{- if or .HasRoute .TargetLayer}}
 	"{{.ServiceConnectionImportPath}}"
 {{- end}}
 {{- if .Rotates}}
@@ -95,7 +95,17 @@ type {{.ClientName}} struct {
 // returned as one stream. A server without the sibling gets the plain method,
 // whose stream ends at its token's exp.
 {{- end}}
+{{- if .TargetLayer}}
+//
+// Its target is a {{.TargetLayer}} service: every call is first refused,
+// PERMISSION_DENIED and before anything is sent, when the caller's own token is
+// in a layer that may not call it (serviceconnection.CheckTargetLayer,
+// products-layer-2026-11-08).
+{{- end}}
 func New{{.ClientName}}(conn grpc.ClientConnInterface, tokenProvider func() (string, error)) *{{.ClientName}} {
+{{- if .TargetLayer}}
+	conn = serviceconnection.NewLayerGuardConn(conn, "{{.TargetLayer}}", tokenProvider)
+{{- end}}
 	return &{{.ClientName}}{
 {{- if .Rotates}}
 		client:        types.New{{.ServiceName}}Client(rotation.NewConn(conn, tokenProvider)),

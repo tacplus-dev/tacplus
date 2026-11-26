@@ -192,3 +192,51 @@ func rustNamespaceCrash(method, field, indent string) string {
 %[1]sstd::process::abort();
 `, indent, method, field)
 }
+
+// rustCallerTidResolve renders the local that binds the verified caller's tid
+// claim (Caller::tid) for (spec.caller_tid). No caller, or a caller with no tid
+// claim (the platform, a product), is PERMISSION_DENIED: an authenticated
+// caller that may not reach any tenant's rows, not a missing credential.
+func rustCallerTidResolve(method, indent string) string {
+	return fmt.Sprintf(`%[1]slet __caller_tid = caller.as_ref()
+%[1]s    .and_then(|c| c.tid())
+%[1]s    .filter(|s| !s.is_empty())
+%[1]s    .map(|s| s.to_string())
+%[1]s    .ok_or_else(|| tonic::Status::permission_denied("%[2]s requires a caller in a tenant: its token carries no tid claim (products-layer-2026-11-08)"))?;
+`, indent, method)
+}
+
+// rustRequestCallerTidBlock renders the binding of a (spec.caller_tid) request
+// field to the caller's token's tid claim (#475, products-layer-2026-11-08): a
+// product keeps a tenant's data only keyed by the tid of the tenant calling,
+// never by one the request names. Empty is stamped and equal passes; another
+// tenant is PERMISSION_DENIED before the handler runs. Go's goCallerTidBlock
+// and Java's javaCallerTidPin read the same.
+//
+// reqVar and indent carry the same meaning as on rustRequestPrincipalBlock.
+func rustRequestCallerTidBlock(field, method, reqVar, indent string) string {
+	return fmt.Sprintf(`
+%[1]s// (spec.caller_tid) %[2]s: bind the field to the caller's tenant.
+%[4]s%[1]slet mut %[3]s = %[3]s;
+%[1]sif %[3]s.%[2]s.is_empty() {
+%[1]s    %[3]s.%[2]s = __caller_tid;
+%[1]s} else if %[3]s.%[2]s != __caller_tid {
+%[1]s    return Err(tonic::Status::permission_denied(
+%[1]s        "%[2]s does not match the caller's tenant (its token's tid claim): a call keys only its own tenant's data"));
+%[1]s}
+%[1]slet %[3]s = %[3]s;
+`, indent, field, reqVar, rustCallerTidResolve(method, indent))
+}
+
+// rustStreamCallerTidStmts is the per-message half, run on every inbound
+// message of a request stream. See rustStreamPrincipalStmts.
+func rustStreamCallerTidStmts(field, msgVar, indent string) string {
+	return fmt.Sprintf(`%[1]s// (spec.caller_tid) %[2]s: bind the field to the caller's tenant.
+%[1]sif %[3]s.%[2]s.is_empty() {
+%[1]s    %[3]s.%[2]s = __caller_tid.clone();
+%[1]s} else if %[3]s.%[2]s != __caller_tid {
+%[1]s    return Err(tonic::Status::permission_denied(
+%[1]s        "%[2]s does not match the caller's tenant (its token's tid claim): a call keys only its own tenant's data"));
+%[1]s}
+`, indent, field, msgVar)
+}

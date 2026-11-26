@@ -56,8 +56,9 @@ func goRequestScopeBlock(method, field, marker, accessor, needs, mismatch, reqEx
 `, indent, marker, field, mismatch, local, accessor, failRet, method, needs, reqExpr, toGoFieldName(field))
 }
 
-// goRequestScopeBlocks renders both markers for one method's request, or "" when
-// it declares neither. The wording of each refusal is the MCP dispatch's,
+// goRequestScopeBlocks renders every marker for one method's request
+// ((spec.principal), (spec.namespace), (spec.caller_tid)), or "" when it
+// declares none. The wording of each refusal is the MCP dispatch's,
 // verbatim: the same annotation must not read differently depending on which
 // surface served the call.
 func goRequestScopeBlocks(san *egressSanitizer, method *parser.MethodInfo, servicePackage, reqExpr, indent, failRet string) string {
@@ -70,5 +71,33 @@ func goRequestScopeBlocks(san *egressSanitizer, method *parser.MethodInfo, servi
 		out += goRequestScopeBlock(method.Name, f, "namespace", "GetNamespace",
 			"an authenticated caller carrying a namespace claim", "the authenticated caller's namespace", reqExpr, indent, failRet)
 	}
+	if f := san.annotatedStringField(method.FullInputType, servicePackage, "caller_tid"); f != "" {
+		out += goCallerTidBlock(method.Name, f, reqExpr, indent, failRet)
+	}
 	return out
+}
+
+// goCallerTidBlock renders the binding of a (spec.caller_tid) request field to
+// the caller's token's tid claim (#475, products-layer-2026-11-08): a product
+// keeps a tenant's data only keyed by the tid of the tenant calling, never by
+// one the request names. An empty field is stamped and an equal one passes;
+// another tenant, or a caller with no tid claim (the platform, a product), is
+// PERMISSION_DENIED before the handler runs: an authenticated caller that may
+// not reach any tenant's rows, not a missing credential.
+func goCallerTidBlock(method, field, reqExpr, indent, failRet string) string {
+	return fmt.Sprintf(`
+%[1]s// (spec.caller_tid) %[2]s: bind the field to the caller's tenant.
+%[1]s__caller_tid := ""
+%[1]sif caller != nil {
+%[1]s	__caller_tid = caller.Token().GetTid()
+%[1]s}
+%[1]sif __caller_tid == "" {
+%[1]s	%[3]s status.Error(codes.PermissionDenied, "%[4]s requires a caller in a tenant: its token carries no tid claim (products-layer-2026-11-08)")
+%[1]s}
+%[1]sif %[5]s.%[6]s == "" {
+%[1]s	%[5]s.%[6]s = __caller_tid
+%[1]s} else if %[5]s.%[6]s != __caller_tid {
+%[1]s	%[3]s status.Error(codes.PermissionDenied, "%[2]s does not match the caller's tenant (its token's tid claim): a call keys only its own tenant's data")
+%[1]s}
+`, indent, field, failRet, method, reqExpr, toGoFieldName(field))
 }

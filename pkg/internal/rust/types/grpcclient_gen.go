@@ -53,7 +53,7 @@ func generateGrpcClients(servicesInfo []ServiceInfo, inputDir string, packageToD
 			return fmt.Errorf("failed to parse %s: %w", svc.ProtoFile, err)
 		}
 
-		if err := generateGrpcClient(svc, protoInfo, packageToDirMap, san); err != nil {
+		if err := generateGrpcClient(svc, protoInfo, packageToDirMap, descriptorParser, san); err != nil {
 			return fmt.Errorf("failed to generate gRPC client for %s: %w", svc.ServiceName, err)
 		}
 	}
@@ -278,7 +278,8 @@ func generateRustGrpcClientAggregators(servicesInfo []ServiceInfo) error {
 }
 
 // generateGrpcClient creates the typed gRPC client wrapper Rust file for a service.
-func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMap map[string]string, san *rustEgressSanitizer) error {
+// descriptorParser reads the target's layer (parser.ClientTargetLayer).
+func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMap map[string]string, descriptorParser *parser.DescriptorParser, san *rustEgressSanitizer) error {
 	// Output to sm/internal/grpc/clients/{parentDir}/{packageName}/
 	outputDir := filepath.Join(svc.Config.OutputDir, svc.Config.GetSmPrefix(), "internal", "grpc", "clients", svc.ParentDir, svc.PackageName)
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
@@ -338,6 +339,14 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMa
 	// method on a server without it.
 	rotates := svc.Config.GetSmPrefix() == "s2sm" && rustServesRotatingSibling(targetService)
 
+	// An S2S client checks its caller's layer against its target's before
+	// every call (products-layer-2026-11-08); a C2S, C2D or W2S client carries
+	// a user's token, which is no S2S edge.
+	targetLayer := ""
+	if svc.Config.GetSmPrefix() == "s2sm" {
+		targetLayer = parser.ClientTargetLayer(descriptorParser, info.Package+"."+svc.ServiceName)
+	}
+
 	// Build method implementations and extra types (bidi handles go outside impl block)
 	var methods strings.Builder
 	var extraTypes strings.Builder
@@ -345,7 +354,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, _packageToDirMa
 	usesUnaryRetry := false
 	hasRequiresDevice := false
 	for _, method := range targetService.Methods {
-		result, err := generateRustGrpcClientMethodRotating(targetService, method, info.Package, info.CrossPackageTypes, rotates)
+		result, err := generateRustGrpcClientMethodRotating(targetService, method, info.Package, info.CrossPackageTypes, rotates, targetLayer)
 		if err != nil {
 			return fmt.Errorf("failed to generate Rust gRPC client method %s.%s: %w", targetService.Name, method.Name, err)
 		}
@@ -548,20 +557,23 @@ func rustGrpcInitialStreamAuthBlock(authRequired bool) string {
 `
 }
 
-// rustClientRouteTenant reads a routed rpc's (spec.rpc).route_field off the
-// request held by `reqVar` (a mutable tonic::Request) and checks it against
-// the caller's own token, read off `tpExpr` (an Option<TokenProvider>), before
-// any network call (#258, S2S never crosses tenants; see
-// servicemanager::tenant_route::caller_route_tenant): a tenant's service's
-// empty field is filled with its own tid and another tenant's is refused,
-// PERMISSION_DENIED; anyone else's must name a tid, INVALID_ARGUMENT. The
-// request sent carries the tenant routed to. Empty for a platform rpc.
-func rustClientRouteTenant(method *parser.MethodInfo, reqVar, indent string) string {
+// rustClientRouteTenant runs a call's checks against the caller's own token,
+// read off the client's token provider, before any network call: first the
+// product layer's (rustClientTargetLayer), then for a routed rpc its tenant
+// route's. A routed rpc's (spec.rpc).route_field is read off the request held
+// by `reqVar` (a mutable tonic::Request) and checked (#258, S2S never crosses
+// tenants; see servicemanager::tenant_route::caller_route_tenant): a tenant's
+// service's empty field is filled with its own tid and another tenant's is
+// refused, PERMISSION_DENIED; anyone else's must name a tid,
+// INVALID_ARGUMENT. The request sent carries the tenant routed to. Empty for a
+// platform rpc of a client with no target layer.
+func rustClientRouteTenant(method *parser.MethodInfo, reqVar, indent, targetLayer string) string {
 	if method.RouteField == nil {
-		return ""
+		return rustClientTargetLayer(targetLayer, "self.token_provider.as_ref()", indent, false)
 	}
 	ident := rustRequestFieldIdent(method.RouteField.Field)
 	return rustOwnRouteToken("self.token_provider.as_ref()", indent) +
+		rustClientTargetLayer(targetLayer, "", indent, true) +
 		fmt.Sprintf("%slet route_tenant = servicemanager::tenant_route::caller_route_tenant(%s, &%s.get_ref().%s, own_token.as_deref())?;\n",
 			indent, rustQuote(method.RouteField.Field), reqVar, ident) +
 		fmt.Sprintf("%s%s.get_mut().%s = route_tenant.clone();\n", indent, reqVar, ident)
@@ -576,6 +588,31 @@ func rustOwnRouteToken(tpExpr, indent string) string {
 %[1]s    None => None,
 %[1]s};
 `, indent, tpExpr)
+}
+
+// rustClientTargetLayer is the product layer's S2S client check
+// (products-layer-2026-11-08; see
+// servicemanager::target_layer::check_target_layer): a caller whose own token
+// is in a layer that may not call a targetLayer service ("tenant" or
+// "product:<name>", parser.ClientTargetLayer) is refused, PERMISSION_DENIED,
+// before anything is sent. Empty when targetLayer is. With haveOwnToken the
+// route check's `own_token` is reused (its provider failing has refused the
+// call already); otherwise `own_token` is bound from `tpExpr` (an
+// Option<&TokenProvider>), where no provider, or one that fails, is no token,
+// as in Go: the call then fails on its missing token, as it would unchecked.
+func rustClientTargetLayer(targetLayer, tpExpr, indent string, haveOwnToken bool) string {
+	if targetLayer == "" {
+		return ""
+	}
+	own := ""
+	if !haveOwnToken {
+		own = fmt.Sprintf(`%[1]slet own_token = match %[2]s {
+%[1]s    Some(tp) => (tp)().await.ok(),
+%[1]s    None => None,
+%[1]s};
+`, indent, tpExpr)
+	}
+	return own + fmt.Sprintf("%sservicemanager::target_layer::check_target_layer(%s, own_token.as_deref())?;\n", indent, rustQuote(targetLayer))
 }
 
 // rustRouteRequestMut is "mut " for a routed rpc, whose client writes the
@@ -606,15 +643,17 @@ func rustClientStreamRouteCheck(method *parser.MethodInfo) string {
 }
 
 func generateRustGrpcClientMethod(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePkg string, crossPkgTypes map[string]string) (grpcMethodResult, error) {
-	return generateRustGrpcClientMethodRotating(svc, method, servicePkg, crossPkgTypes, false)
+	return generateRustGrpcClientMethodRotating(svc, method, servicePkg, crossPkgTypes, false, "")
 }
 
 // generateRustGrpcClientMethodRotating renders one client method; with
 // rotates (an S2S client of a service that serves its <Svc>Rotating sibling,
 // tacplus#322) a streaming method that carries a token opens its stream on a
 // rotation::RotatingChannel over the channel it resolved, so the stream
-// outlives its tokens.
-func generateRustGrpcClientMethodRotating(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePkg string, crossPkgTypes map[string]string, rotates bool) (grpcMethodResult, error) {
+// outlives its tokens. A non-empty targetLayer (an S2S client of a tenant's or
+// a product's service, parser.ClientTargetLayer) checks the caller's layer
+// before anything is sent (rustClientTargetLayer).
+func generateRustGrpcClientMethodRotating(svc *parser.ServiceInfo, method *parser.MethodInfo, servicePkg string, crossPkgTypes map[string]string, rotates bool, targetLayer string) (grpcMethodResult, error) {
 	methodSnake := prostSnakeName(method.Name)
 	inputType, outputType := resolveRustTypeQualified(method, servicePkg, crossPkgTypes)
 	tonicClientName := tonicServiceTypeName(svc.Name) + "Client"
@@ -668,6 +707,9 @@ func generateRustGrpcClientMethodRotating(svc *parser.ServiceInfo, method *parse
 			Routed             bool
 			// StreamChannel is the channel expression the stream opens on.
 			StreamChannel string
+			// TargetLayer is the target's layer each connect checks the
+			// caller against (rustClientTargetLayer), "" for none.
+			TargetLayer string
 		}{
 			MethodName:         method.Name,
 			MethodSnake:        methodSnake,
@@ -681,6 +723,7 @@ func generateRustGrpcClientMethodRotating(svc *parser.ServiceInfo, method *parse
 			ResponseValidation: rustGrpcBidiResponseValidation("resp", method.FullOutputType),
 			Routed:             routed,
 			StreamChannel:      streamChannel("Some(tp.clone())"),
+			TargetLayer:        targetLayer,
 		}
 
 		tmpl, err := template.New("bidi").Parse(tmplStr)
@@ -738,7 +781,7 @@ func generateRustGrpcClientMethodRotating(svc *parser.ServiceInfo, method *parse
             items.push(item);
         }
         Ok(items)
-    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, reqMut, rustGrpcRequestValidation(method, "req"), rustClientRouteTenant(method, "req", "        "), auth, channelResolve, methodSnake), usesOutboundTimeout: true}, nil
+    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, reqMut, rustGrpcRequestValidation(method, "req"), rustClientRouteTenant(method, "req", "        ", targetLayer), auth, channelResolve, methodSnake), usesOutboundTimeout: true}, nil
 	}
 
 	if method.ServerStreaming && method.IsWatchCollection() {
@@ -756,7 +799,7 @@ func generateRustGrpcClientMethodRotating(svc *parser.ServiceInfo, method *parse
 	        %s
 	        %s
 	        client.%s(req).await
-    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, reqMut, rustGrpcRequestValidation(method, "req"), rustClientRouteTenant(method, "req", "        "), auth, channelResolve, methodSnake)}, nil
+    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, reqMut, rustGrpcRequestValidation(method, "req"), rustClientRouteTenant(method, "req", "        ", targetLayer), auth, channelResolve, methodSnake)}, nil
 	}
 
 	if method.ServerStreaming {
@@ -774,7 +817,7 @@ func generateRustGrpcClientMethodRotating(svc *parser.ServiceInfo, method *parse
 	        %s
 	        %s
 	        client.%s(req).await
-    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, reqMut, rustGrpcRequestValidation(method, "req"), rustClientRouteTenant(method, "req", "        "), auth, channelResolve, methodSnake)}, nil
+    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, reqMut, rustGrpcRequestValidation(method, "req"), rustClientRouteTenant(method, "req", "        ", targetLayer), auth, channelResolve, methodSnake)}, nil
 	}
 
 	if method.ClientStreaming {
@@ -787,11 +830,13 @@ func generateRustGrpcClientMethodRotating(svc *parser.ServiceInfo, method *parse
 		streamChannelExpr := "cp.channel()"
 		handleOpen, handleTenant, handleClose := handleType+" {", "", "        }"
 		tenantField := ""
-		streamRouteCheck := ""
+		// The open is not async: the caller's own token is checked in the
+		// stream's task, before the channel is asked for (#258, and the
+		// product layer's check).
+		streamRouteCheck := rustClientTargetLayer(targetLayer, "token_provider.as_ref()", "                ", false)
 		if routed {
-			// The open is not async: the caller's own token is checked in the
-			// stream's task, before the channel is asked for (#258).
 			streamRouteCheck = rustOwnRouteToken("token_provider.as_ref()", "                ") +
+				rustClientTargetLayer(targetLayer, "", "                ", true) +
 				"                servicemanager::tenant_route::caller_route_tenant(\"tenant\", &stream_tenant, own_token.as_deref())?;\n"
 			openSig = fmt.Sprintf("pub fn %s(&self, tenant: &str) -> Result<%s, tonic::Status> {\n"+
 				"        let tenant = servicemanager::tenant_route::route_tenant(\"tenant\", tenant)?;\n"+
@@ -937,7 +982,7 @@ impl %s {
         })
     }`, method.Name, svc.Name, method.Name,
 			methodSnake, inputType, itemType,
-			rustGrpcRequestValidation(method, "req"), rustClientRouteTenant(method, "req", "        "), auth, channelResolve, methodSnake,
+			rustGrpcRequestValidation(method, "req"), rustClientRouteTenant(method, "req", "        ", targetLayer), auth, channelResolve, methodSnake,
 			totalExpr, itemsField,
 			method.Name, svc.Name, method.Name,
 			methodSnake, inputType, itemType,
@@ -980,5 +1025,5 @@ impl %s {
 %s
                 Ok(response)
             })
-	    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, rustRouteRequestMut(method, ""), rustGrpcRequestValidation(method, "req_base"), rustClientRouteTenant(method, "req_base", "        "), retrySafe, reqMut, routeTenantClone, auth, channelResolve, methodSnake, rustGrpcResponseValidation(method, "response")), usesOutboundTimeout: true, usesUnaryRetry: true}, nil
+	    }`, method.Name, svc.Name, method.Name, methodSnake, inputType, outputType, rustRouteRequestMut(method, ""), rustGrpcRequestValidation(method, "req_base"), rustClientRouteTenant(method, "req_base", "        ", targetLayer), retrySafe, reqMut, routeTenantClone, auth, channelResolve, methodSnake, rustGrpcResponseValidation(method, "response")), usesOutboundTimeout: true, usesUnaryRetry: true}, nil
 }

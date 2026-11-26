@@ -1092,9 +1092,9 @@ func rustServerResponseValidationBlock(varName, fullType string) string {
 `, varName)
 }
 
-func rustValidatedRequestStreamBlock(inputType, fullInputType, targetNamespaceField, principalField, namespaceField, methodName, fullMethod string) string {
-	if principalField != "" || namespaceField != "" {
-		return rustScopedRequestStreamBlock(inputType, fullInputType, targetNamespaceField, principalField, namespaceField, methodName, fullMethod)
+func rustValidatedRequestStreamBlock(inputType, fullInputType, targetNamespaceField, principalField, namespaceField, callerTidField, methodName, fullMethod string) string {
+	if principalField != "" || namespaceField != "" || callerTidField != "" {
+		return rustScopedRequestStreamBlock(inputType, fullInputType, targetNamespaceField, principalField, namespaceField, callerTidField, methodName, fullMethod)
 	}
 	requestStream := fmt.Sprintf(requestStreamFmt, inputType)
 	fieldSnake := ""
@@ -1162,14 +1162,14 @@ func rustValidatedRequestStreamBlock(inputType, fullInputType, targetNamespaceFi
 }
 
 // rustScopedRequestStreamBlock is the request-stream wrapper for a stream whose
-// message type declares (spec.principal)/(spec.namespace).
+// message type declares (spec.principal)/(spec.namespace)/(spec.caller_tid).
 //
 // The caller's claim is resolved ONCE, before the stream is wrapped — it is a
 // property of the call, not of a message, and it cannot change mid-stream. The
 // stamp-or-refuse then runs on EVERY inbound message: a request stream is not
 // one request, and message N naming a principal message N-1 did not is exactly
 // the forgery the unary check refuses.
-func rustScopedRequestStreamBlock(inputType, fullInputType, targetNamespaceField, principalField, namespaceField, methodName, fullMethod string) string {
+func rustScopedRequestStreamBlock(inputType, fullInputType, targetNamespaceField, principalField, namespaceField, callerTidField, methodName, fullMethod string) string {
 	requestStream := fmt.Sprintf(requestStreamFmt, inputType)
 	var resolve string
 	if principalField != "" {
@@ -1177,6 +1177,9 @@ func rustScopedRequestStreamBlock(inputType, fullInputType, targetNamespaceField
 	}
 	if namespaceField != "" {
 		resolve += rustNamespaceResolve("__namespace", methodName, "        ", false)
+	}
+	if callerTidField != "" {
+		resolve += rustCallerTidResolve(methodName, "        ")
 	}
 
 	fieldSnake := ""
@@ -1195,6 +1198,9 @@ func rustScopedRequestStreamBlock(inputType, fullInputType, targetNamespaceField
 		if namespaceField != "" {
 			out += rustStreamNamespaceStmts(namespaceField, "msg", indent)
 		}
+		if callerTidField != "" {
+			out += rustStreamCallerTidStmts(callerTidField, "msg", indent)
+		}
 		if rustW2SCanValidate(fullInputType) {
 			out += fmt.Sprintf(`%[1]smsg.validate()
 %[1]s    .map_err(|e| tonic::Status::invalid_argument(format!("validation failed: {}", e)))?;
@@ -1212,6 +1218,9 @@ func rustScopedRequestStreamBlock(inputType, fullInputType, targetNamespaceField
 		}
 		if namespaceField != "" {
 			claimClones += "            let __namespace = __namespace.clone();\n"
+		}
+		if callerTidField != "" {
+			claimClones += "            let __caller_tid = __caller_tid.clone();\n"
 		}
 		return fmt.Sprintf(`
 %s        let (metadata, extensions, stream) = request.into_parts();
@@ -1368,10 +1377,14 @@ func renderRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, s
 	// because the marker is a property of the request message, not of the RPC
 	// shape: every branch below has to bind the field to the verified caller,
 	// and the contract in spec.proto carves out no shape.
-	reqPrincipal, reqNamespace := "", ""
+	//
+	// (spec.caller_tid) rides the same seam, bound to the caller's tid claim
+	// (#475, products-layer-2026-11-08).
+	reqPrincipal, reqNamespace, reqCallerTid := "", "", ""
 	if !handlerEmpty {
 		reqPrincipal = san.requestPrincipalField(method.FullInputType, servicePackage)
 		reqNamespace = san.requestNamespaceField(method.FullInputType, servicePackage)
+		reqCallerTid = san.annotatedStringField(method.FullInputType, servicePackage, "caller_tid")
 	}
 
 	// (spec.owner_default) rides the REQUEST-VALIDATION seam, immediately after
@@ -1498,13 +1511,16 @@ func renderRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, s
 		// where the handler is called, so the owned binding the check stamps has
 		// to be hoisted out first and the handler handed that instead.
 		serverStreamReqExpr := "request.into_inner()"
-		if !method.ClientStreaming && (reqPrincipal != "" || reqNamespace != "") {
+		if !method.ClientStreaming && (reqPrincipal != "" || reqNamespace != "" || reqCallerTid != "") {
 			serverStreamInputValidation += "\n        let req = request.into_inner();\n"
 			if reqPrincipal != "" {
 				serverStreamInputValidation += rustRequestPrincipalBlock(reqPrincipal, method.Name, "req", "        ")
 			}
 			if reqNamespace != "" {
 				serverStreamInputValidation += rustRequestNamespaceBlock(reqNamespace, method.Name, "req", "        ")
+			}
+			if reqCallerTid != "" {
+				serverStreamInputValidation += rustRequestCallerTidBlock(reqCallerTid, method.Name, "req", "        ")
 			}
 			serverStreamReqExpr = "req"
 		}
@@ -1514,7 +1530,7 @@ func renderRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, s
 			!(method.AuthDisabled || svc.AuthDisabled || svc.IsC2D) {
 			streamTargetNamespaceField = method.TargetNamespaceField
 		}
-		requestStreamBlock := rustValidatedRequestStreamBlock(inputType, method.FullInputType, streamTargetNamespaceField, reqPrincipal, reqNamespace, method.Name, fullMethod) +
+		requestStreamBlock := rustValidatedRequestStreamBlock(inputType, method.FullInputType, streamTargetNamespaceField, reqPrincipal, reqNamespace, reqCallerTid, method.Name, fullMethod) +
 			rustRouteRequestStreamBlock(method, inputType)
 		streamResponseReturn := rustValidatedResponseStreamReturn(method.Name, method.FullOutputType)
 		unaryStreamResponseValidation := rustServerResponseValidationBlock("response.get_ref()", method.FullOutputType)
@@ -1814,6 +1830,10 @@ func renderRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, s
 		if reqNamespace != "" {
 			validationBlock += rustRequestNamespaceBlock(reqNamespace, method.Name, "req", "        ")
 		}
+		// (spec.caller_tid): the same stamp or refuse, bound to the tid claim.
+		if reqCallerTid != "" {
+			validationBlock += rustRequestCallerTidBlock(reqCallerTid, method.Name, "req", "        ")
+		}
 		// (spec.owner_default): refuse the owner's own contradicted access,
 		// after the stamp has bound the request principal to the caller.
 		validationBlock += ownerDefaultGuard
@@ -1846,6 +1866,9 @@ func renderRustGRPCWrapper(svc *parser.ServiceInfo, method *parser.MethodInfo, s
 		}
 		if reqNamespace != "" {
 			pageValidation += rustRequestNamespaceBlock(reqNamespace, method.Name, "req", "        ")
+		}
+		if reqCallerTid != "" {
+			pageValidation += rustRequestCallerTidBlock(reqCallerTid, method.Name, "req", "        ")
 		}
 		totalBlock := ""
 		if method.Resolved.PageHasTotal {

@@ -106,14 +106,14 @@ func TestRustClientStreamsRotate(t *testing.T) {
 		{up, "TickerClient::new(rotation::RotatingChannel::new(channel, token_provider.clone()))"},
 		{both, "TickerClient::new(rotation::RotatingChannel::new(channel, Some(tp.clone())))"},
 	} {
-		res, err := generateRustGrpcClientMethodRotating(svc, c.m, "svc", map[string]string{}, true)
+		res, err := generateRustGrpcClientMethodRotating(svc, c.m, "svc", map[string]string{}, true, "")
 		if err != nil {
 			t.Fatalf("%s: %v", c.m.Name, err)
 		}
 		if !strings.Contains(res.method, c.want) {
 			t.Errorf("%s: rotating client missing %q:\n%s", c.m.Name, c.want, res.method)
 		}
-		plain, err := generateRustGrpcClientMethodRotating(svc, c.m, "svc", map[string]string{}, false)
+		plain, err := generateRustGrpcClientMethodRotating(svc, c.m, "svc", map[string]string{}, false, "")
 		if err != nil {
 			t.Fatalf("%s: %v", c.m.Name, err)
 		}
@@ -121,7 +121,7 @@ func TestRustClientStreamsRotate(t *testing.T) {
 			t.Errorf("%s: a client that does not rotate mentions rotation:\n%s", c.m.Name, plain.method)
 		}
 	}
-	res, err := generateRustGrpcClientMethodRotating(svc, get, "svc", map[string]string{}, true)
+	res, err := generateRustGrpcClientMethodRotating(svc, get, "svc", map[string]string{}, true, "")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}

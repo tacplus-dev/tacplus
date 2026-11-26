@@ -136,6 +136,8 @@ func TestOuterGrpcClientTemplateParses(t *testing.T) {
 		// tacplus#322: an S2S client's streams rotate through chassis/rotation.
 		Rotates               bool
 		RotationLibImportPath string
+		// #475: a product's or a tenant's target guards its connection.
+		TargetLayer string
 	}{
 		GrpcPackageName:             "mysvc",
 		TypesModulePath:             "example.com/types/mysvc",
@@ -156,6 +158,7 @@ func TestOuterGrpcClientTemplateParses(t *testing.T) {
 		ServiceConnectionImportPath: "example.com/chassis/serviceconnection",
 		Rotates:                     true,
 		RotationLibImportPath:       "example.com/chassis/rotation",
+		TargetLayer:                 "product:ledger",
 	}
 	var sb strings.Builder
 	if err := tmpl.Execute(&sb, data); err != nil {
@@ -177,7 +180,7 @@ func TestOuterGrpcClientTemplateParses(t *testing.T) {
 			t.Errorf("bidi-only client should not import %q (would be unused)", banned)
 		}
 	}
-	for _, required := range []string{"go.uber.org/zap", "google.golang.org/grpc/metadata", "example.com/chassis/rotation", "types.NewMyServiceClient(rotation.NewConn(conn, tokenProvider))"} {
+	for _, required := range []string{"go.uber.org/zap", "google.golang.org/grpc/metadata", "example.com/chassis/rotation", "types.NewMyServiceClient(rotation.NewConn(conn, tokenProvider))", "example.com/chassis/serviceconnection", `conn = serviceconnection.NewLayerGuardConn(conn, "product:ledger", tokenProvider)`} {
 		if !strings.Contains(src, required) {
 			t.Errorf("bidi-only client should import %q", required)
 		}

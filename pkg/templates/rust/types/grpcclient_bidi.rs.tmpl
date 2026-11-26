@@ -21,6 +21,14 @@
     /// tenant's service whose stream names another tenant is refused before
     /// anything is dialled, and the stream closes.
 {{- end}}
+{{- if .TargetLayer}}
+    ///
+    /// Its target is a {{.TargetLayer}} service: on each connect, before the
+    /// channel is asked for, a caller whose own token is in a layer that may
+    /// not call it is refused (see
+    /// `servicemanager::target_layer::check_target_layer`,
+    /// products-layer-2026-11-08), and the stream closes.
+{{- end}}
     pub fn {{.MethodSnake}}<F, Fut>(
         &self,
 {{- if .Routed}}
@@ -45,7 +53,7 @@
             tenant,
 {{- end}}
         };
-{{- if or .AuthRequired .Routed}}
+{{- if or .AuthRequired .Routed .TargetLayer}}
         let tp = self.token_provider.clone();
 {{- end}}
 
@@ -80,6 +88,23 @@
                     None => None,
                 };
                 if let Err(e) = servicemanager::tenant_route::caller_route_tenant("tenant", &stream_tenant, own_token.as_deref()) {
+                    tracing::error!(error = %e, "{{.MethodName}}: refused before dialling, stream closed");
+                    return;
+                }
+{{- end}}
+{{- if .TargetLayer}}
+{{- if not .Routed}}
+                // No provider, or one that fails, is no token: the connect
+                // then fails on its missing token, as it would unchecked.
+                let own_token = match &tp {
+                    Some(tp) => match tokio::time::timeout(CONNECT_TIMEOUT, (tp)()).await {
+                        Ok(Ok(token)) => Some(token),
+                        _ => None,
+                    },
+                    None => None,
+                };
+{{- end}}
+                if let Err(e) = servicemanager::target_layer::check_target_layer("{{.TargetLayer}}", own_token.as_deref()) {
                     tracing::error!(error = %e, "{{.MethodName}}: refused before dialling, stream closed");
                     return;
                 }

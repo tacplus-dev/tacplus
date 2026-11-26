@@ -51,6 +51,7 @@ Release lines with branches: 2.0 through 2.4.
 - State export allow-list: an exported service_state root names the services allowed to import it (#928; tacplus-dev/kernel#71). Hub, on its recommendation with Jody's standing agreement (tp-act-on-recommendations), 2026-11-26.
 - TypeScript W2S client: W2SError carries the error body's message (#953). Hub, on its recommendation with Jody's standing agreement (tp-act-on-recommendations), 2026-11-26.
 - fleet build locks a service at a main release: a given commit and its image by digest (#981; tacplus-dev/fleet-seatrials#82). Hub, on its recommendation with Jody's standing agreement (tp-act-on-recommendations), 2026-11-26.
+- looper.yaml: tacplus's looper/builder VM spec, at the size that runs today (#968; tacplus-dev/looper#240). Hub, on its recommendation with Jody's standing agreement (tp-act-on-recommendations), 2026-11-26.
 
 ## Later
 - Generated S2S clients to a peer service in another cluster or deployment (#204): parked (Jody, 2026-11-06). Cross-deployment work is a future item and needs a deeper huddle with Jody before any design or build. (Was: redo site-to-site, redo#1 option A, 2026-10-28; flock gossip.)

@@ -13,6 +13,11 @@ the looper then marks it `promoted` or `declined` here with the date.
   floors are checked against the line `fleet.yaml` states. #950 is on `release/2.6` only, so it needs a forward-port
   to main first, then a 2.6 backport. Design and questions:
   https://github.com/tacplus-dev/tacplus/issues/981#issuecomment-7200159033
+- **A gate that runs the generated Rust model tests of the sys protos** (2026-11-26, #830): the generated
+  `from_str_invalid` test asserted `"invalid"` is refused, which `sys.RpcOutcome` (RPC_OUTCOME_INVALID) accepts.
+  No gate ran it: only images.yml's pipeline smoke (`cargo test -p proto-model-types`, on a build-image rebuild)
+  did, after the build image itself was fixed. A gate running `cargo test` on a generated model with the sys protos
+  would catch a generated test that fails before a release image needs it.
 - **The LLM-rule gate in Java** (2026-11-20, #909): Rust and Go generate the advisor's model port, the core's
   adapter and the gate; Java refuses `advisor:`. The accepted Java gate ("a Maven module with only those
   dependencies") needs the generated Java tree split into Maven modules, which it is not today (one source tree the

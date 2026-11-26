@@ -4,6 +4,15 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **fleet build locks a service at a main release** (2026-11-26, #981): fleet-seatrials#82 rolls dev to each
+  service's green main release, which is tacplus-dev/build's record (a commit and an image by digest), not a tag.
+  Swapping only the image would run main's code against the tag's contracts, so the lock has to be resolved at the
+  commit: contract, `depends`, `contribute`, `inputs_digest`, `build/proto`. Proposed: a `releases.yaml` beside
+  `fleet.yaml` (name, 40-hex commit, image by digest) that pins the named services (`version: main-<12 hex>`,
+  `pinned: true`, `image` set even under `images: source`). `--check` reports these services as pinned, and their
+  floors are checked against the line `fleet.yaml` states. #950 is on `release/2.6` only, so it needs a forward-port
+  to main first, then a 2.6 backport. Design and questions:
+  https://github.com/tacplus-dev/tacplus/issues/981#issuecomment-7200159033
 - **The LLM-rule gate in Java** (2026-11-20, #909): Rust and Go generate the advisor's model port, the core's
   adapter and the gate; Java refuses `advisor:`. The accepted Java gate ("a Maven module with only those
   dependencies") needs the generated Java tree split into Maven modules, which it is not today (one source tree the

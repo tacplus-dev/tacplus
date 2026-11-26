@@ -293,12 +293,14 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-26 by lo
   JWK exponent, the AWS STS region validated) or annotated with its reason (wire two's complement, retry jitter,
   operator-named paths). Backported to release/2.0 through release/2.6 by pull request, each line's next patch.
   On main (2.7): the LLM rule as a generated gate (#909; an LLM may propose, it never holds a token or a write
-  path). tacplus.yaml `advisor: {path}` makes tacplus generate, in Rust and Go, the advisor's model port (typed on
+  path). tacplus.yaml `advisor: {path}` makes tacplus generate, in Rust, Go and Java, the advisor's model port (typed on
   llmproxy's own messages, never its client), the core's adapter over the llmproxy S2S client (the service's token,
   the advisor's `trace_id`) and the gate: in Rust the port's build script, which fails every build of the model
   crate when the advisor's `Cargo.toml` names a generated crate, a path dependency other than the port, git or a
-  patch; in Go a generated test over `go list -deps -test` of the advisor's packages. registry.json marks the
-  service `advisor: true`. `cross-test/llm-rule` (in `just gates`) builds green and red advisors in both.
+  patch; in Go a generated test over `go list -deps -test` of the advisor's packages; in Java the generated
+  `LlmRule` (run by a generated JUnit `LlmRuleTest`), which reads the compiled classes with the JDK's `jdeps` and
+  fails when an advisor class references a class of the service the port does not reach. registry.json marks the
+  service `advisor: true`. `cross-test/llm-rule` (in `just gates`) builds green and red advisors in all three.
   Sign-in config in proto (#224, main, for 2.7): `sys/signin.proto` (package `signin`) declares the deployment's
   account-model switch (`Deployment`), a tenant's providers offered, authorized OIDC IdP (issuer, client, the exact
   tenant id for a multi-tenant IdP, a declared non-reassignable subject claim), registered domains (subdomains by
@@ -311,7 +313,7 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-26 by lo
 - **Released / deployed:** v2.6.0 is the newest release: the binaries and `checksums.txt`, and
   `ghcr.io/tacplus-dev/tacplus/build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c`
   (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.
-- **Known gaps:** Java refuses tacplus.yaml `advisor:` until its LLM-rule gate is decided and built (#909: a Maven module split or a jdeps check, asked on the issue). The member port needs kernel to mint `member:<svc>` (tacplus-dev/kernel#30) before Stratum adopts
+- **Known gaps:** The member port needs kernel to mint `member:<svc>` (tacplus-dev/kernel#30) before Stratum adopts
   it (stratum#17); its ServiceManager wiring is compiled, not run (KNOWN_TEST_GAPS MP-1); no cross-language rotation
   leg yet, and the member ports keep their own rotation code (KNOWN_TEST_GAPS RT-1); the Go, Java and Rust C2S clients and W2S (SSE, WebSocket) streams do not
   rotate, and no gate here runs the gateway (KNOWN_TEST_GAPS RT-2). The redo service and the per-tenant Stratum that implement the redo contract are their repos'

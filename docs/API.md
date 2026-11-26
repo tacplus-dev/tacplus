@@ -23,7 +23,7 @@ targets (`go`, `rust`, `java`):
 | Client managers | Expose typed C2S/W2S/S2S/C2D clients selected by proto annotations and `tacplus.yaml` transport settings, subject to the target language support matrix. |
 | State clients | Expose typed read/write/watch access to proto-declared state roots, with imports restricted to generated read-only accessors. |
 | Typed disk persistence | Exposes typed snapshot and redo-log persistence for generated store/state types when enabled by the generated service/store config. |
-| LLM advisor port | With tacplus.yaml `advisor:`, the advisor's model port, the core's adapter over the llmproxy S2S client, and the build gate keeping the advisor from every other part of the service (see LLM Advisor below). Rust and Go; Java refuses `advisor:` until its gate follows. |
+| LLM advisor port | With tacplus.yaml `advisor:`, the advisor's model port, the core's adapter over the llmproxy S2S client, and the build gate keeping the advisor from every other part of the service (see LLM Advisor below). Rust, Go and Java. |
 | registry.json | Exposes the normalized semantic IR: types, services, auth metadata, RPC verb/pattern metadata, state roots, projections, annotations, and generated surface metadata. |
 
 No full-service language is the reference implementation. The contract is the
@@ -1226,8 +1226,30 @@ In Go, the same three:
   and the advisor's own, or depends there on a package the port does not; or
   when the advisor directory holds no Go package.
 
+In Java, the same three, in the advisor package `<pkg>` that tacplus.yaml's
+`src/main/java/<pkg as directories>` names:
+
+- `<base>.advisor.ModelPort`, an interface with, for the same rpcs,
+  `<Outer>.<Resp> <rpc>(String traceId, <Outer>.<Req> request)`, typed on that
+  proto package's message classes; `<base>.advisor.ModelPortException`, an
+  unchecked exception with `int getCode()`, the failed call's status code.
+- `new <base>.s2sm.ModelPortAdapter(ServiceManager)`, which calls the
+  generated S2S client with a copy of the request whose `trace_id` is the one
+  given (null as empty), and maps its `ProtoException` to `ModelPortException`.
+- The gate: `<base>.advisor.LlmRule`: `check()` throws an `AssertionError`
+  starting `tacplus LLM rule:` when a class of `<pkg>` or below it references a
+  class compiled beside `LlmRule` (or beside it for tests: `test-classes`,
+  Gradle's `test`) that is not of `<pkg>` and not reached from the port
+  package's classes; or when no class of `<pkg>` is there. `violations()` lists
+  them; `main` runs it (exit 1, `LlmRule: all checks passed` on success). It
+  runs `jdeps -verbose:class -filter:none` through `ToolProvider`, so it needs
+  a JDK. `<output>/src/test/java/<base>/advisor/LlmRuleTest.java`, a JUnit
+  Jupiter test, calls `check()`.
+
 Generation refuses an advisor with no S2S client to llmproxy, one inside the
-output directory or containing it, and one on a client-only target.
+output directory or containing it, and one on a client-only target; in Java,
+also a path that names no package under `src/main/java`, or a package inside
+or containing the generated base package.
 
 ## Tracing And Registry
 

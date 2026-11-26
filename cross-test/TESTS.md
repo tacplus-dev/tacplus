@@ -159,7 +159,7 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   reach the peer, and the host must publish no instance health, ask for no
   serving cert and bind no listener. Rust only. Local (`just zero-rpc-s2s`, part
   of `just gates`); not yet in CI.
-- `llm-rule` (`cross-test/llm-rule/run.sh`): the LLM rule as a generated
+- `llm-rule` (`cross-test/llm-rule/run.sh`, needs cargo, go and mvn): the LLM rule as a generated
   build gate (#909). Generates `cross-test/proto-zerorpc` with tacplus.yaml
   `advisor: {path: advisor}`. Green: an advisor depending only on the
   generated model port passes its own test through the port, and a core
@@ -175,8 +175,14 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   `model/advisor/llm_rule_test.go` pass, and an advisor package importing the
   ServiceManager, the token chassis (from a test), the types package, the key
   chassis (from a subpackage) or the core fails that test naming the import.
-  Java refuses `advisor:` until its gate follows. Local (`just llm-rule`, part
-  of `just gates`).
+  Then Java, on `cross-test/proto-advisor`, as one Maven module whose source
+  roots are the generated tree's and the service's own (a core holding
+  `new ModelPortAdapter(sm)`, the advisor package): it compiles with
+  `failOnWarning`, the advisor's JUnit test and the generated `LlmRuleTest`
+  pass, and an advisor class referencing the ServiceManager, the token chassis
+  (from a test), the raw `LlmProxyGrpc` stub, the key chassis (from a
+  subpackage), the core or the adapter fails `LlmRuleTest` naming the
+  reference. Local (`just llm-rule`, part of `just gates`).
 - `jwk-alg` (`cross-test/jwk-alg/run.sh`): JWK alg-selection gate (#179) for
   the generated jwk and token chassis in Go, Java, Python, Rust and
   TypeScript. Every leg verifies the same pre-signed tokens from

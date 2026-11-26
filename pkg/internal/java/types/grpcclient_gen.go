@@ -36,13 +36,23 @@ type generatedGrpcClientJava struct {
 	FullPackage string // e.g. "com.example.wrappers.grpcclients.services.baseball"
 	ProtoFile   string
 	HostLabel   string
+	// TypesPackage is the Java package of the service's messages, and Methods
+	// its rpcs with their resolved Java types (the advisor's model port,
+	// tacplus#909, is typed on them).
+	TypesPackage string
+	Methods      []javaResolvedGrpcMethod
+	// GroupAccessor and ClientAccessor reach the client from the root
+	// GrpcClients: clients.<GroupAccessor>().<ClientAccessor>().
+	GroupAccessor  string
+	ClientAccessor string
 }
 
-// generateGrpcClients generates typed gRPC client wrappers for each gRPC service.
-func generateGrpcClients(config *tactype.Config, servicesInfo []ServiceInfo, inputDir string) error {
+// generateGrpcClients generates typed gRPC client wrappers for each gRPC
+// service, and returns them as the aggregators name them.
+func generateGrpcClients(config *tactype.Config, servicesInfo []ServiceInfo, inputDir string) ([]generatedGrpcClientJava, error) {
 	descriptorParser, err := parser.NewDescriptorParser(inputDir)
 	if err != nil {
-		return fmt.Errorf("failed to create descriptor parser: %w", err)
+		return nil, fmt.Errorf("failed to create descriptor parser: %w", err)
 	}
 
 	var generated []generatedGrpcClientJava
@@ -50,12 +60,13 @@ func generateGrpcClients(config *tactype.Config, servicesInfo []ServiceInfo, inp
 	for _, svc := range servicesInfo {
 		protoInfo, err := descriptorParser.ConvertToProtoInfo(svc.ProtoFile)
 		if err != nil {
-			return fmt.Errorf("failed to parse %s: %w", svc.ProtoFile, err)
+			return nil, fmt.Errorf("failed to parse %s: %w", svc.ProtoFile, err)
 		}
 
 		targetLayer := javaGrpcClientTargetLayer(config.GetSmPrefix(), descriptorParser, protoInfo.Package+"."+svc.ServiceName)
-		if err := generateGrpcClient(svc, protoInfo, targetLayer); err != nil {
-			return fmt.Errorf("failed to generate gRPC client for %s: %w", svc.ServiceName, err)
+		methods, err := generateGrpcClient(svc, protoInfo, targetLayer)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate gRPC client for %s: %w", svc.ServiceName, err)
 		}
 
 		// Determine full package for aggregator — must match the actual client file path
@@ -72,20 +83,35 @@ func generateGrpcClients(config *tactype.Config, servicesInfo []ServiceInfo, inp
 			FullPackage: fullPackage,
 			ProtoFile:   svc.ProtoFile,
 			HostLabel:   svc.HostLabel,
+
+			TypesPackage: fmt.Sprintf("%s.types.%s.%s", config.JavaPackageBase, typeDir, svc.PackageName),
+			Methods:      methods,
 		})
+	}
+	for i := range generated {
+		generated[i].GroupAccessor = javaGrpcClientGroupMethodName(generated[i].ParentDir)
+	}
+	for _, group := range javaGrpcClientGroups(generated) {
+		for i, names := range javaGrpcClientGroupNames(group) {
+			for j := range generated {
+				if generated[j].FullPackage == group[i].FullPackage && generated[j].ClassName == group[i].ClassName {
+					generated[j].ClientAccessor = names.MethodName
+				}
+			}
+		}
 	}
 
 	// Generate group aggregators
 	if err := generateGrpcClientGroupAggregators(config, generated); err != nil {
-		return fmt.Errorf("failed to generate gRPC client group aggregators: %w", err)
+		return nil, fmt.Errorf("failed to generate gRPC client group aggregators: %w", err)
 	}
 
 	// Generate root aggregator
 	if err := generateGrpcClientRootAggregator(config, generated); err != nil {
-		return fmt.Errorf("failed to generate root gRPC client aggregator: %w", err)
+		return nil, fmt.Errorf("failed to generate root gRPC client aggregator: %w", err)
 	}
 
-	return nil
+	return generated, nil
 }
 
 // javaGrpcClientTargetLayer is the target's layer a generated client checks
@@ -100,9 +126,10 @@ func javaGrpcClientTargetLayer(smPrefix string, dp *parser.DescriptorParser, ref
 }
 
 // generateGrpcClient creates the typed gRPC client wrapper Java file for a
-// service. targetLayer is the target's layer the client checks its caller
-// against (javaGrpcClientTargetLayer), "" for none.
-func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, targetLayer string) error {
+// service, and returns its rpcs with their resolved Java types. targetLayer is
+// the target's layer the client checks its caller against
+// (javaGrpcClientTargetLayer), "" for none.
+func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, targetLayer string) ([]javaResolvedGrpcMethod, error) {
 	// Find the target service
 	var targetService *parser.ServiceInfo
 	for i := range info.Services {
@@ -112,7 +139,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, targetLayer str
 		}
 	}
 	if targetService == nil {
-		return fmt.Errorf("service %s not found in proto info for %s", svc.ServiceName, svc.ProtoFile)
+		return nil, fmt.Errorf("service %s not found in proto info for %s", svc.ServiceName, svc.ProtoFile)
 	}
 
 	// Compute output directory and Java package
@@ -133,7 +160,7 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, targetLayer str
 	packagePath := strings.ReplaceAll(fullPackage, ".", string(filepath.Separator))
 	outputDir := filepath.Join(srcDir, packagePath)
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
+		return nil, fmt.Errorf("failed to create output directory: %w", err)
 	}
 
 	// Detect outer class name
@@ -374,25 +401,25 @@ func generateGrpcClient(svc ServiceInfo, info *parser.ProtoInfo, targetLayer str
 
 	tmplStr, err := loadTemplate("grpcclient.java.tmpl")
 	if err != nil {
-		return fmt.Errorf("failed to load grpcclient template: %w", err)
+		return nil, fmt.Errorf("failed to load grpcclient template: %w", err)
 	}
 
 	tmpl, err := template.New("grpcclient").Parse(tmplStr)
 	if err != nil {
-		return fmt.Errorf("failed to parse template: %w", err)
+		return nil, fmt.Errorf("failed to parse template: %w", err)
 	}
 
 	file, err := os.Create(outputPath)
 	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
+		return nil, fmt.Errorf("failed to create file: %w", err)
 	}
 	defer file.Close()
 
 	if err := tmpl.Execute(file, data); err != nil {
-		return fmt.Errorf("failed to execute template: %w", err)
+		return nil, fmt.Errorf("failed to execute template: %w", err)
 	}
 
-	return nil
+	return resolvedMethods, nil
 }
 
 func collectGrpcClientTypeImport(imports map[string]struct{}, fullType, servicePackage, localTypesPackage, resolvedType string, crossPkgJavaPackages map[string]string) {
@@ -1030,30 +1057,9 @@ func generateGrpcClientGroupAggregators(config *tactype.Config, wrappers []gener
 		}
 
 		var entries []grpcClientGroupEntryJava
-		seen := make(map[string]bool)
-		seenFields := make(map[string]bool)
-		for _, w := range groupWrappers {
-			fieldName := strings.ToLower(w.ClassName[:1]) + w.ClassName[1:]
-			// When multiple services share the same ClassName (e.g., both hotdb and colddb
-			// expose a "Query" service → both generate "QueryGrpcClient"), prefix the field
-			// name with the package name to avoid duplicate field declarations.
-			if classNameCount[w.ClassName] > 1 || seenFields[fieldName] {
-				fieldName = w.PackageName + strings.ToUpper(fieldName[:1]) + fieldName[1:]
-			}
-			seenFields[fieldName] = true
-			// Derive method name from service name (strip "Service" suffix, lowercase first letter)
-			// to avoid duplicates when multiple services share the same package name
-			// (e.g., BaseballService → baseball(), BaseballStateService → baseballState())
-			methodName := javaGrpcClientAccessorName(w.ServiceName)
-			// When there's a class-name collision, prefix method name with package too.
-			if classNameCount[w.ClassName] > 1 {
-				methodName = w.PackageName + strings.ToUpper(methodName[:1]) + methodName[1:]
-			}
-			// Fall back to field name if there's still a collision
-			if seen[methodName] {
-				methodName = fieldName
-			}
-			seen[methodName] = true
+		names := javaGrpcClientGroupNames(groupWrappers)
+		for i, w := range groupWrappers {
+			fieldName, methodName := names[i].FieldName, names[i].MethodName
 			// Mesh routing target: use TargetService from the active client surface
 			// when set. Virtual services route to their physical host.
 			targetServiceID := javaResolveGrpcTarget(config, w.ProtoFile, w.PackageName, w.HostLabel)
@@ -1137,6 +1143,73 @@ func generateGrpcClientGroupAggregators(config *tactype.Config, wrappers []gener
 	return nil
 }
 
+// javaGrpcClientGroups groups the clients by their group (ParentDir), in the
+// order the aggregators see them.
+func javaGrpcClientGroups(wrappers []generatedGrpcClientJava) [][]generatedGrpcClientJava {
+	index := map[string]int{}
+	var groups [][]generatedGrpcClientJava
+	for _, w := range wrappers {
+		i, ok := index[w.ParentDir]
+		if !ok {
+			i = len(groups)
+			index[w.ParentDir] = i
+			groups = append(groups, nil)
+		}
+		groups[i] = append(groups[i], w)
+	}
+	return groups
+}
+
+// grpcClientNamesJava is a client's field and accessor in its group's GrpcClients.
+type grpcClientNamesJava struct {
+	FieldName  string
+	MethodName string
+}
+
+// javaGrpcClientGroupNames names each client of one group in its
+// GrpcClients.java, in order: the group aggregator declares them, and the
+// advisor's adapter (tacplus#909) calls the accessor.
+func javaGrpcClientGroupNames(groupWrappers []generatedGrpcClientJava) []grpcClientNamesJava {
+	// Count occurrences of each ClassName so we can detect collisions.
+	classNameCount := make(map[string]int)
+	for _, w := range groupWrappers {
+		classNameCount[w.ClassName]++
+	}
+	names := make([]grpcClientNamesJava, 0, len(groupWrappers))
+	seen := make(map[string]bool)
+	seenFields := make(map[string]bool)
+	for _, w := range groupWrappers {
+		fieldName := strings.ToLower(w.ClassName[:1]) + w.ClassName[1:]
+		// When multiple services share the same ClassName (e.g., both hotdb and colddb
+		// expose a "Query" service → both generate "QueryGrpcClient"), prefix the field
+		// name with the package name to avoid duplicate field declarations.
+		if classNameCount[w.ClassName] > 1 || seenFields[fieldName] {
+			fieldName = w.PackageName + strings.ToUpper(fieldName[:1]) + fieldName[1:]
+		}
+		seenFields[fieldName] = true
+		// Derive method name from service name (strip "Service" suffix, lowercase first letter)
+		// to avoid duplicates when multiple services share the same package name
+		// (e.g., BaseballService → baseball(), BaseballStateService → baseballState())
+		methodName := javaGrpcClientAccessorName(w.ServiceName)
+		// When there's a class-name collision, prefix method name with package too.
+		if classNameCount[w.ClassName] > 1 {
+			methodName = w.PackageName + strings.ToUpper(methodName[:1]) + methodName[1:]
+		}
+		// Fall back to field name if there's still a collision
+		if seen[methodName] {
+			methodName = fieldName
+		}
+		seen[methodName] = true
+		names = append(names, grpcClientNamesJava{FieldName: fieldName, MethodName: methodName})
+	}
+	return names
+}
+
+// javaGrpcClientGroupMethodName is a group's accessor in the root GrpcClients.
+func javaGrpcClientGroupMethodName(group string) string {
+	return strutil.ToLowerCamelCase(strings.ReplaceAll(group, "-", "_"))
+}
+
 // grpcClientRootGroupJava tracks a group for the root aggregator.
 type grpcClientRootGroupJava struct {
 	Name          string
@@ -1193,7 +1266,7 @@ func generateGrpcClientRootAggregator(config *tactype.Config, wrappers []generat
 
 		groups = append(groups, grpcClientRootGroupJava{
 			Name:          w.ParentDir,
-			MethodName:    strutil.ToLowerCamelCase(strings.ReplaceAll(w.ParentDir, "-", "_")),
+			MethodName:    javaGrpcClientGroupMethodName(w.ParentDir),
 			GroupPackage:  fmt.Sprintf("%s."+config.GetSmPrefix()+".internal.grpc.clients.%s", config.JavaPackageBase, w.ParentDir),
 			UniqueTargets: groupTargets,
 		})

@@ -131,7 +131,7 @@ Only `language` and `output-dir` are required. `pkg` is commonly set explicitly,
 | `pkg` | string | No | Canonical package name (Java-style reverse DNS, e.g. `com.example.myservice`). Each segment must be a valid identifier (letters, digits, underscores — no hyphens). Converted to native format per language (see table below). |
 | `kind` | string | No | What this project is: `service` (hosts a surface, has a registry identity; a fleet runs it), `client` (calls services, hosts nothing: a CLI, daemon or app), `library` (contracts only: protos other projects build against). A statement of intent the generator and the fleet build can check against the protos. Unset means not stated. |
 | `depends` | list | No | Services this one calls, by registry name: `llmproxy` or `weather@1.2` (MAJOR.MINOR, the latest patch; never a patch pin). Each is resolved through the global registry named by `global:` in `proto/registry.yaml` to the repo that declares it, fetched at that version, and merged into this generation, so the `(spec.grpc_s2s_client)` declared in proto has a proto to generate from. A dependency's own `depends` are followed too, each name once; a name this project's own proto declares is never fetched, so a dependency that depends back on this project sees this checkout's proto, not the published one. Fetched with the same credentials as `src` (below). |
-| `advisor` | mapping | No | Where this service's LLM advisor lives: `advisor: {path: advisor}`, a directory of this repo (relative, without `..`, not the root, outside `output-dir`). tacplus generates the advisor's model port, the core's adapter over the `llmproxy` S2S client and the build gate that fails the build when the advisor's unit depends on anything else of the service, and marks the service `advisor: true` in `registry.json`. Needs `llmproxy` in `depends`. Refused on `kind: client` and `kind: library`. Rust and Go today; Java refuses it until its gate follows. See [An LLM Advisor](#an-llm-advisor-the-llm-rule). |
+| `advisor` | mapping | No | Where this service's LLM advisor lives: `advisor: {path: advisor}`, a directory of this repo (relative, without `..`, not the root, outside `output-dir`). tacplus generates the advisor's model port, the core's adapter over the `llmproxy` S2S client and the build gate that fails the build when the advisor's unit depends on anything else of the service, and marks the service `advisor: true` in `registry.json`. Needs `llmproxy` in `depends`. Refused on `kind: client` and `kind: library`. Rust, Go and Java; in Java the path is a package directory of the service's sources, `src/main/java/<package>`. See [An LLM Advisor](#an-llm-advisor-the-llm-rule). |
 | `contribute` | mapping | No | What a `kind: service` project contributes to its fleet's gateway: a `webapp` module (`dir`, `title`) and `clients`, each by one fixed recipe key (`rust:`, `go:`, `swift:`, `dotnet:`). Refused on any other kind. See [Contributing to the gateway](#contributing-to-the-gateway). |
 | `tacplus` | string | No | Minimum tacplus `MAJOR.MINOR` this project needs, e.g. `"2.2"`. A floor, not a pin: MAJOR must match and the running MINOR must be at least this. A patch component is rejected: the exact release a build runs is pinned in [`tacplus.lock`](#tacpluslock-the-pinned-release), not here. Unset means no floor. An unstamped local build (`0.0.0`) cannot satisfy a floor. |
 | `header` | string | No | Free-form text stamped as a comment at the top of every generated file, e.g. a copyright line and an `SPDX-License-Identifier:` line. Its first line is the author of generated package manifests; its SPDX expression is the `license` of every generated Rust crate, which also declares `publish = false`, so `cargo-deny check licenses` passes them. Unset: no copyright line, and the Rust crates declare no license. |
@@ -2508,7 +2508,8 @@ unit depends on anything of the service but the one interface tacplus
 generates for it.
 
 Declare where the advisor lives in `tacplus.yaml` (a crate in Rust, a package
-directory of the service's module in Go), and depend on llmproxy, the one
+directory of the service's module in Go, a package of the service's sources in
+Java: `src/main/java/com/example/skipper/advisor`), and depend on llmproxy, the one
 service an advisor reaches a model through:
 
 ```yaml
@@ -2602,10 +2603,53 @@ packages (their raw transport stubs), the core. And it fails when anything the
 advisor depends on there is not something the model port itself depends on.
 An advisor directory with no Go package fails too.
 
+### What tacplus generates (Java)
+
+The advisor is a package of the service's own Maven module, as tacplus.yaml
+names its directory, e.g. `src/main/java/com/example/skipper/advisor`, which is
+`com.example.skipper.advisor`: it and its subpackages are the advisor. It may
+not be the generated tree's package (`<base>`), inside it or contain it.
+
+| Generated | Where | What it is |
+|---|---|---|
+| The model port | `<base>.advisor` in `<output>/src/main/java` | `ModelPort`, one method per unary rpc of llmproxy's service: `Upstreamllm.CompleteResponse generate(String traceId, Upstreamllm.CompleteRequest request)`, typed on llmproxy's own message classes, and never the raw transport stub (`LlmProxyGrpc`) beside them. A failed call throws `ModelPortException`, unchecked, with its status code (`getCode()`). |
+| The gate | `<base>.advisor.LlmRule`, and `<output>/src/test/java/.../advisor/LlmRuleTest.java` | `LlmRule.check()` fails when the advisor's classes could reach the service; `LlmRuleTest`, a JUnit 5 test, runs it in the service's tests. |
+| The core's adapter | `<base>.s2sm.ModelPortAdapter`, `new ModelPortAdapter(serviceManager)` | `ModelPort` over the generated llmproxy S2S client, with a copy of the request carrying the advisor's `trace_id`. |
+
+```java
+import com.example.skipper.advisor.Advisor;               // the advisor: references only <base>.advisor and the messages
+import com.example.skipper.model.advisor.ModelPort;
+import com.example.skipper.model.s2sm.ModelPortAdapter;
+
+ModelPort model = new ModelPortAdapter(serviceManager);
+Advisor advisor = new Advisor(model, reads); // reads: an interface the advisor defines, the core implements
+```
+
+tacplus writes no pom: the service's module compiles the generated tree beside
+its own sources, as every Java service does, and, with an advisor, also takes
+`<output>/src/test/java` as a test source root (with `build-helper-maven-plugin`'s
+`add-test-source`, or `maven-compiler-plugin`'s `compileSourceRoots`) and JUnit
+Jupiter as a test dependency, so its `mvn test` runs `LlmRuleTest`.
+
+The Java gate reads the compiled classes, as the JVM links them, never their
+source: it runs the JDK's `jdeps` in process (`java.util.spi.ToolProvider`), so
+it needs a JDK, not a JRE. The service is every class compiled into the same
+directory as `LlmRule` (`target/classes`) and beside it for the tests
+(`target/test-classes`; Gradle's `build/classes/java/test`). The check fails
+when a class of the advisor's packages, its tests' included, references a class
+of the service other than the port's and what the port itself references (the
+message classes, and what they reference): the ServiceManager and its clients,
+the state clients, the chassis (`TokenWrapper`, the key), the raw transport
+stubs, the core, the adapter. It fails too when there is no class of the
+advisor's package. A class compiled in another module is not seen as the
+service's: keep the advisor in the module that compiles the generated tree.
+
 The gate is about what the advisor can name. It does not stop an advisor that
-depends on a third-party network library (a crates.io crate, a Go module) from
+depends on a third-party network library (a crates.io crate, a Go module, a
+Maven artifact) from
 opening a connection of its own; such a connection carries no token, so a
-tacplus service refuses it.
+tacplus service refuses it. Nor does it see a class loaded by name at run time
+(Java reflection), which names nothing a linker resolves.
 
 ## Distributed Tracing
 

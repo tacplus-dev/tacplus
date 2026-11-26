@@ -576,7 +576,7 @@ zero-rpc-s2s:
 # The LLM rule as a generated build gate (#909): an advisor whose manifest
 # depends only on the generated model port builds; one that reaches a state
 # client, an S2S client, a token, the core or any other crate of the service
-# fails the build (Rust) or the generated gate test (Go) with the gate's
+# fails the build (Rust) or the generated gate test (Go, Java) with the gate's
 # message.
 llm-rule:
   {{lock}} bash cross-test/llm-rule/run.sh

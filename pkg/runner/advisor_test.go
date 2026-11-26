@@ -23,6 +23,10 @@ func TestResolveAdvisorDir(t *testing.T) {
 	if got, err := resolveAdvisorDir(cwd, out, cfg, "go"); err != nil || got != filepath.Join(cwd, "advisor") {
 		t.Fatalf("go: resolveAdvisorDir = %q, %v", got, err)
 	}
+	// Java's gate is the generated LlmRule over jdeps (tacplus#909).
+	if got, err := resolveAdvisorDir(cwd, out, cfg, "java"); err != nil || got != filepath.Join(cwd, "advisor") {
+		t.Fatalf("java: resolveAdvisorDir = %q, %v", got, err)
+	}
 	if got, err := resolveAdvisorDir(cwd, out, &tacplusyaml.Config{}, "go"); got != "" || err != nil {
 		t.Fatalf("no advisor: %q, %v", got, err)
 	}
@@ -42,8 +46,6 @@ func TestResolveAdvisorDirRefuses(t *testing.T) {
 		{"model", "rust", "inside the generated output"},
 		// The generated output inside the advisor would make it the advisor's own code.
 		{".", "rust", "contains the generated output"},
-		// Rust and Go first (tacplus#909); Java follows under the same issue.
-		{"advisor", "java", "not generated for java yet"},
 		// Client-only targets have no service, so no core and no advisor.
 		{"advisor", "python", "client-only"},
 		{"advisor", "typescript", "client-only"},

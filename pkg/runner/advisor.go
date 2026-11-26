@@ -15,17 +15,13 @@ import (
 // (tacplus.yaml advisor.path, tacplus#909), or "" when it declares none. It
 // refuses an advisor tacplus cannot keep apart from the service: one inside
 // the generated output (regenerated away on the next build) or containing it,
-// and one in a language whose advisor gate is not generated.
+// and one of a client-only target, which has no core.
 func resolveAdvisorDir(cwd, outDir string, cfg *tacplusyaml.Config, lang string) (string, error) {
 	if cfg == nil || cfg.Advisor == nil {
 		return "", nil
 	}
 	switch lang {
-	case "rust", "go":
-	case "java":
-		// Parity is staged under tacplus#909: Rust and Go first, and a language
-		// without the gate refuses the advisor rather than build one ungated.
-		return "", fmt.Errorf("%s: advisor: the advisor's model port and gate are not generated for %s yet (tacplus#909: Rust and Go first, Java next); an advisor without its gate is refused", tacplusyaml.Filename, lang)
+	case "rust", "go", "java":
 	default:
 		return "", fmt.Errorf("%s: advisor: %s is a client-only target; an advisor belongs to a service's deterministic core", tacplusyaml.Filename, lang)
 	}

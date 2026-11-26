@@ -1213,11 +1213,19 @@ func Generate(config *tactype.Config) error {
 
 	// Generate gRPC client wrappers — typed client stubs for gRPC client services
 	clientServices := resolveClientServices(config, servicesInfo)
+	var s2sClients []generatedGrpcClientJava
 	if len(clientServices) > 0 {
 		zap.L().Info("Generating Java gRPC client wrappers", zap.Int("count", len(clientServices)))
-		if err := generateGrpcClients(config, clientServices, protoDir); err != nil {
+		generatedClients, err := generateGrpcClients(config, clientServices, protoDir)
+		if err != nil {
 			return fmt.Errorf("failed to generate gRPC clients: %w", err)
 		}
+		s2sClients = generatedClients
+	}
+	// The advisor's model port, its gate and the core's adapter over these
+	// clients (tacplus#909); refused when there is no client to llmproxy.
+	if err := generateJavaAdvisorPort(config, protoDir, s2sClients); err != nil {
+		return err
 	}
 	if err := parser.ValidateTokenMinters(protoDir, s2sGenerationEnabled(config, serverServices)); err != nil {
 		return err
@@ -1235,7 +1243,7 @@ func Generate(config *tactype.Config) error {
 		origPrefix := config.SmPrefix
 		config.SmPrefix = "c2sm"
 		zap.L().Info("Generating Java c2s gRPC client wrappers", zap.Int("count", len(c2sServices)))
-		if err := generateGrpcClients(config, c2sServices, protoDir); err != nil {
+		if _, err := generateGrpcClients(config, c2sServices, protoDir); err != nil {
 			config.SmPrefix = origPrefix
 			return fmt.Errorf("failed to generate c2s gRPC clients: %w", err)
 		}
@@ -1256,7 +1264,7 @@ func Generate(config *tactype.Config) error {
 		origPrefix := config.SmPrefix
 		config.SmPrefix = "c2dm"
 		zap.L().Info("Generating Java c2d gRPC client wrappers", zap.Int("count", len(c2dServices)))
-		if err := generateGrpcClients(config, c2dServices, protoDir); err != nil {
+		if _, err := generateGrpcClients(config, c2dServices, protoDir); err != nil {
 			config.SmPrefix = origPrefix
 			return fmt.Errorf("failed to generate c2d gRPC clients: %w", err)
 		}
@@ -1416,6 +1424,8 @@ func Generate(config *tactype.Config) error {
 		Language:    "java",
 		PackageBase: config.JavaPackageBase,
 		FileLayers:  config.SourceLayers,
+		Advisor:     config.AdvisorDir != "",
+		SelfPackage: config.SelfPackage,
 	}, allParsedFiles, allProtoParser); err != nil {
 		return fmt.Errorf("failed to generate registry.json: %w", err)
 	}

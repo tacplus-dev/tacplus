@@ -19,7 +19,10 @@
 #
 # Then the same for Go, on cross-test/proto-advisor: the gate there is the
 # generated model/advisor/llm_rule_test.go, over what `go list` resolves.
-# Java refuses advisor: until its gate follows (#909).
+# And for Java, on cross-test/proto-advisor: the gate is the generated
+# LlmRule, run by the generated JUnit LlmRuleTest, over what jdeps reads in the
+# compiled classes of one Maven module (the generated tree, the core, the
+# advisor package).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -41,6 +44,7 @@ die() {
 
 command -v cargo >/dev/null || die "cargo is required"
 command -v git >/dev/null || die "git is required"
+command -v mvn >/dev/null || die "mvn is required"
 [[ -d "$PROTO_SRC" ]] || die "proto fixture not found: $PROTO_SRC"
 
 TACPLUS_BIN="${TACPLUS_BIN:-$WORK_ROOT/tacplus-local}"
@@ -329,5 +333,147 @@ echo "==> Go green again"
   die "the restored green Go advisor did not pass the gate"
 }
 
+# ---- Java: the gate is the generated LlmRule (model/src/main/java/.../advisor),
+# which its generated JUnit test runs over the module's compiled classes.
+echo "==> Java: generating the model of proto-advisor with an advisor"
+# shellcheck source=../lib/java-compile.sh
+source "$ROOT_DIR/cross-test/lib/java-compile.sh"
+JAVA_PROJECT="$WORK_ROOT/advised-java"
+J="com/gitlab/example/dummy/advised"
+JP="com.gitlab.example.dummy.advised"
+mkdir -p "$JAVA_PROJECT"
+cat > "$JAVA_PROJECT/tacplus.yaml" <<YAML
+language: "java"
+kind: service
+pkg: "$JP"
+src: "$GO_PROTO_SRC"
+output-dir: "model"
+depends:
+  - llmproxy
+advisor:
+  path: src/main/java/$J/advisor
+YAML
+(cd "$JAVA_PROJECT" && "$TACPLUS_BIN" build --config tacplus.yaml --src "$GO_PROTO_SRC" --tag latest) >"$JAVA_PROJECT/generate.log" 2>&1 || {
+  cat "$JAVA_PROJECT/generate.log" >&2
+  die "java generation failed"
+}
+JM="$JAVA_PROJECT/model"
+for f in "src/main/java/$J/model/advisor/ModelPort.java" "src/main/java/$J/model/advisor/LlmRule.java" \
+  "src/test/java/$J/model/advisor/LlmRuleTest.java" "src/main/java/$J/model/s2sm/ModelPortAdapter.java"; do
+  [[ -f "$JM/$f" ]] || die "java generation wrote no $f"
+done
+grep -q '"advisor": *true' "$JM/registry.json" || die "java registry.json does not mark advised's service advisor: true"
+
+mkdir -p "$JAVA_PROJECT/src/main/java/$J/advisor" "$JAVA_PROJECT/src/test/java/$J/advisor"
+cp "$GATE_DIR/testdata/java/advisor/Advisor.java" "$JAVA_PROJECT/src/main/java/$J/advisor/"
+cp "$GATE_DIR/testdata/java/advisor/AdvisorTest.java" "$JAVA_PROJECT/src/test/java/$J/advisor/"
+cp "$GATE_DIR/testdata/java/core/Core.java" "$JAVA_PROJECT/src/main/java/$J/"
+mkdir -p "$JAVA_PROJECT/src/test/resources"
+cp "$ROOT_DIR/cross-test/lib/logback-test.xml" "$JAVA_PROJECT/src/test/resources/logback-test.xml"
+write_java_compile_pom "$JAVA_PROJECT/pom.xml" "$JM"
+# One Maven module with two source roots, main and test: the generated
+# tree's and the service's own (the core, the advisor), as a Java service
+# with an advisor builds; and JUnit, which runs the generated LlmRuleTest.
+python3 - "$JAVA_PROJECT/pom.xml" "$JM" "$JAVA_PROJECT" <<'PY'
+import sys
+pom, generated, project = sys.argv[1:4]
+text = open(pom).read()
+def once(old, new):
+    global text
+    if text.count(old) != 1:
+        sys.exit("expected exactly one %r in %s" % (old, pom))
+    text = text.replace(old, new)
+def roots(kind):
+    return "".join("\n                <root>%s/src/%s/java</root>" % (d, kind) for d in (generated, project))
+once("""        </configuration>
+      </plugin>
+    </plugins>""", """        </configuration>
+        <executions>
+          <execution>
+            <id>default-compile</id>
+            <configuration>
+              <compileSourceRoots>%s
+              </compileSourceRoots>
+            </configuration>
+          </execution>
+          <execution>
+            <id>default-testCompile</id>
+            <configuration>
+              <compileSourceRoots>%s
+              </compileSourceRoots>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.4</version>
+        <configuration>
+          <useModulePath>false</useModulePath>
+        </configuration>
+      </plugin>
+    </plugins>""" % (roots("main"), roots("test")))
+once("\n  </dependencies>\n", """
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>6.0.2</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+""")
+open(pom, "w").write(text)
+PY
+java_env="$(java_home_env)"
+java_test() { # the surefire -Dtest selection
+  (cd "$JAVA_PROJECT" && env ${java_env:+"$java_env"} mvn -q -Dtest="$1" -Dsurefire.failIfNoSpecifiedTests=false test) >"$WORK_ROOT/java.log" 2>&1
+}
+
+echo "==> Java green: the module builds, the advisor's test passes through the port, the gate passes"
+java_test 'AdvisorTest,LlmRuleTest' || {
+  cat "$WORK_ROOT/java.log" >&2
+  die "the green Java advisor did not pass"
+}
+grep -q "Tests run: 1, Failures: 0, Errors: 0, Skipped: 0" "$JAVA_PROJECT/target/surefire-reports/$JP.model.advisor.LlmRuleTest.txt" ||
+  die "the generated LlmRuleTest did not run"
+
+java_red() { # name, the line the gate must print, file under the project, its class body
+  local name="$1" want="$2" file="$JAVA_PROJECT/$3" pkg="$4" body="$5"
+  mkdir -p "$(dirname "$file")"
+  printf 'package %s;\n\nfinal class %s {\n    %s\n}\n' "$pkg" "$(basename "$file" .java)" "$body" > "$file"
+  if java_test LlmRuleTest; then
+    echo "FAIL java red/$name: the gate passed an advisor that $name" >&2
+    fails=$((fails + 1))
+  elif ! grep -q "tacplus LLM rule" "$WORK_ROOT/java.log" || ! grep -qF -- "$want" "$WORK_ROOT/java.log"; then
+    echo "FAIL java red/$name: the gate failed, but not with '$want':" >&2
+    cat "$WORK_ROOT/java.log" >&2
+    fails=$((fails + 1))
+  else
+    echo "ok   java red/$name"
+  fi
+  rm "$file"
+}
+
+echo "==> Java red: each way out of the port fails the gate"
+java_red "references the ServiceManager (its clients, its state)" "advisor.Sm references $JP.model.s2sm.ServiceManager" \
+  "src/main/java/$J/advisor/Sm.java" "$JP.advisor" "$JP.model.s2sm.ServiceManager sm;"
+java_red "references the token chassis, from a test" "advisor.TokenTest references $JP.model.chassis.token.TokenWrapper" \
+  "src/test/java/$J/advisor/TokenTest.java" "$JP.advisor" "$JP.model.chassis.token.TokenWrapper token;"
+java_red "references the raw transport stub beside the messages" "references $JP.model.types.services.upstreamllm.LlmProxyGrpc" \
+  "src/main/java/$J/advisor/Stub.java" "$JP.advisor" "Object stub = $JP.model.types.services.upstreamllm.LlmProxyGrpc.getServiceDescriptor();"
+java_red "references the key chassis, from a subpackage" "advisor.tools.Tools references $JP.model.chassis.key.ImmutableKey" \
+  "src/main/java/$J/advisor/tools/Tools.java" "$JP.advisor.tools" "$JP.model.chassis.key.ImmutableKey key;"
+java_red "references the core" "advisor.CoreRef references $JP.Core" \
+  "src/main/java/$J/advisor/CoreRef.java" "$JP.advisor" "Object core = $JP.Core.class;"
+java_red "references the core's adapter" "advisor.Adapter references $JP.model.s2sm.ModelPortAdapter" \
+  "src/main/java/$J/advisor/Adapter.java" "$JP.advisor" "$JP.model.s2sm.ModelPortAdapter adapter;"
+
+echo "==> Java green again"
+java_test LlmRuleTest || {
+  cat "$WORK_ROOT/java.log" >&2
+  die "the restored green Java advisor did not pass the gate"
+}
+
 [[ "$fails" -eq 0 ]] || die "$fails red case(s) did not fail with the gate"
-echo "==> llm-rule: green and red pass (Rust, Go)"
+echo "==> llm-rule: green and red pass (Rust, Go, Java)"

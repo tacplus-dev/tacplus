@@ -240,6 +240,9 @@ func TestValidateProductLayer_CallerTid(t *testing.T) {
 		{"non-string refused", ``, `  int64 tenant = 1 [(spec.caller_tid) = true];`, []string{"RecordUsageRequest.tenant", "caller_tid", "string"}},
 		{"repeated refused", ``, `  repeated string tenant = 1 [(spec.caller_tid) = true];`, []string{"RecordUsageRequest.tenant", "caller_tid", "repeated"}},
 		{"optional refused", ``, `  optional string tenant = 1 [(spec.caller_tid) = true];`, []string{"RecordUsageRequest.tenant", "caller_tid", "optional"}},
+		{"required refused", ``, `  string tenant = 1 [(spec.caller_tid) = true, (spec.assert_required) = true];`, []string{"RecordUsageRequest.tenant", "caller_tid", "assert_required"}},
+		{"min size refused", ``, `  string tenant = 1 [(spec.caller_tid) = true, (spec.assert_min_size) = 8];`, []string{"RecordUsageRequest.tenant", "caller_tid", "assert_min_size"}},
+		{"max size kept", ``, `  string tenant = 1 [(spec.caller_tid) = true, (spec.assert_max_size) = 8];`, nil},
 		{"two refused", ``, "  string tenant = 1 [(spec.caller_tid) = true];\n  string tid = 2 [(spec.caller_tid) = true];", []string{"RecordUsageRequest", "caller_tid", "more than one"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -281,23 +284,45 @@ func TestS2SEdgeRefusal(t *testing.T) {
 	}
 }
 
-// Until the doors are generated, a server of a product service is not.
+// A server of a product service generates where its doors are generated (Go,
+// Java, Rust), and nowhere else; a product's custodian rows ((spec.caller_tid)
+// on a product service) wait for OnTenantDeleted, in every language.
 func TestValidateProductLayerHosting(t *testing.T) {
 	dp := writeSurfaceProtoDir(t, layerProto("billing", `, product: "ledger"`, "", `auth_services: ["*"]`),
 		layerProto("crew", `, tenant_owned: true`, "", `auth_services: ["*"]`))
 	for _, lang := range []string{"go", "java", "rust", "python", "typescript"} {
-		wantLayerRefusal(t, ValidateProductLayerHosting(dp, "billing", lang), "billing", "product", "#475", lang)
 		if err := ValidateProductLayerHosting(dp, "crew", lang); err != nil {
 			t.Fatalf("%s: a tenant service of a fleet with a product refused: %v", lang, err)
 		}
+	}
+	for _, lang := range []string{"go", "java", "rust"} {
+		if err := ValidateProductLayerHosting(dp, "billing", lang); err != nil {
+			t.Fatalf("%s: a product server refused, though its doors are generated: %v", lang, err)
+		}
+	}
+	for _, lang := range []string{"python", "typescript"} {
+		wantLayerRefusal(t, ValidateProductLayerHosting(dp, "billing", lang), "billing", "product", "#475", lang)
 	}
 	for _, lang := range []string{"swift", "csharp"} {
 		if err := ValidateProductLayerHosting(dp, "billing", lang); err != nil {
 			t.Fatalf("%s: a client of a product service refused: %v", lang, err)
 		}
 	}
+
 	tid := writeSurfaceProtoDir(t, callerTidProto("", `  string tenant = 1 [(spec.caller_tid) = true];`))
-	wantLayerRefusal(t, ValidateProductLayerHosting(tid, "billing", "go"), "RecordUsageRequest.tenant", "caller_tid")
+	for _, lang := range []string{"go", "java", "rust"} {
+		if err := ValidateProductLayerHosting(tid, "billing", lang); err != nil {
+			t.Fatalf("%s: a (spec.caller_tid) server refused, though its binding is generated: %v", lang, err)
+		}
+	}
+	for _, lang := range []string{"python", "typescript"} {
+		wantLayerRefusal(t, ValidateProductLayerHosting(tid, "billing", lang), "RecordUsageRequest.tenant", "caller_tid", lang)
+	}
+
+	custodian := writeSurfaceProtoDir(t, callerTidProto(`, product: "ledger"`, `  string tenant = 1 [(spec.caller_tid) = true];`))
+	for _, lang := range []string{"go", "java", "rust", "python", "typescript"} {
+		wantLayerRefusal(t, ValidateProductLayerHosting(custodian, "billing", lang), "RecordUsageRequest.tenant", "OnTenantDeleted", lang)
+	}
 }
 
 // The generated authorizer bakes in its own service's product.

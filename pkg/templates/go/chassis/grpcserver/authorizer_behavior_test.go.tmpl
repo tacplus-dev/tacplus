@@ -961,6 +961,11 @@ func TestAuthorizerCheckRouteBackstop(t *testing.T) {
 			t.Fatalf("route value %q: want InvalidArgument, got %v", bad, err)
 		}
 	}
+	// A product's instance starts only with its product's identity, never a
+	// tenant's, so it has no tenant-owned half to check.
+	if serviceProduct != "" {
+		return
+	}
 
 	key := newTestKey(t)
 	owned := authorizerWithKeys(t)

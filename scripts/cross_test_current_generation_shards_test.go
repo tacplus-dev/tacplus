@@ -69,12 +69,12 @@ func TestCurrentGenerationListsItsShards(t *testing.T) {
 		}
 		names = append(names, name)
 	}
-	for _, want := range []string{"go/base", "java/base", "typescript/base", "go/tenantrecord/tstratum", "java/tenantrecord/tmessaging", "rust/tenantroute/harbor", "rust/tenantroute/crew", "rust/redo/redo", "go/c2sonly", "rust/healthonly"} {
+	for _, want := range []string{"go/base", "java/base", "typescript/base", "go/tenantrecord/tstratum", "java/tenantrecord/tmessaging", "rust/tenantroute/harbor", "rust/tenantroute/crew", "rust/productlayer/billing", "java/productlayer/hub", "rust/redo/redo", "go/c2sonly", "rust/healthonly"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("no shard %s:\n%s", want, out)
 		}
 	}
-	for _, unwanted := range []string{"java/c2sonly", "go/healthonly", "rust/eventbus-backpressure", "typescript/tenantrecord", "rust/tenantroute", "typescript/healthonly"} {
+	for _, unwanted := range []string{"java/c2sonly", "go/healthonly", "rust/eventbus-backpressure", "typescript/tenantrecord", "rust/tenantroute", "rust/productlayer", "typescript/productlayer", "typescript/healthonly"} {
 		if slices.Contains(names, unwanted) {
 			t.Errorf("shard %s, a language its fixture does not build or a fixture of two builds whole:\n%s", unwanted, out)
 		}

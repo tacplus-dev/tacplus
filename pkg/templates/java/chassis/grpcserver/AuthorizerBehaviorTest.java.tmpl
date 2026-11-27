@@ -386,7 +386,11 @@ public class AuthorizerBehaviorTest {
                 () -> bareKeyed.authorizeWithToken(bearer(alphaTok), "BetaService/Get", null));
         }
 
-        checkTenantRouting(key);
+        // A product's instance starts only with its product's identity, never
+        // a tenant's, so it has no tenant-owned routing to check.
+        if (Authorizer.SERVICE_PRODUCT.isEmpty()) {
+            checkTenantRouting(key);
+        }
         checkProductLayer(key);
         checkRemoteJwkSourceBackoff(jwkForKey(key));
 

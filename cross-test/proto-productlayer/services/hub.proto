@@ -1,0 +1,31 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// The product-layer fixture's PLATFORM service (#475, products-layer-2026-11-08).
+//
+// hub is /system: tenants and products call it, and it calls a tenant
+// (crew), never a product. Its build carries the generated client of crew's
+// S2S surface, whose layer check the fixture's self-test drives with a
+// platform's, a tenant's and a product's own token.
+
+syntax = "proto3";
+
+package hub;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "hub"};
+option (spec.grpc_s2s_client) = {service: "crew.CrewPeerService"};
+
+service HubService {
+  option (spec.service_s2s) = {};
+
+  rpc GetHubStatus(GetHubStatusRequest) returns (GetHubStatusResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}
+
+message GetHubStatusRequest {}
+
+message GetHubStatusResponse {
+  bool ready = 1;
+}

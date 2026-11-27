@@ -82,13 +82,37 @@ func javaMcpTestCallerNamespace(svc *parser.ServiceInfo) string {
 	return javaMcpTestNamespace
 }
 
+// javaMcpTestCallerHasTid reports whether the gate's caller carries a tid
+// claim: on a tenant-routed service, whose session tenant is that claim, and
+// on any service with a (spec.caller_tid) tool (#475), whose every call a
+// caller with no tid claim is refused.
+func javaMcpTestCallerHasTid(svc *parser.ServiceInfo, tools []javaMcpTool) bool {
+	if javaMcpTestRouted(svc) {
+		return true
+	}
+	for _, t := range tools {
+		if t.CallerTidField != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// javaMcpTestCallerClaimsNoTid is the gate caller's claims without a tid
+// claim, as the body of a Java string literal of a token payload JSON (without
+// the braces): its subject and namespace.
+func javaMcpTestCallerClaimsNoTid(svc *parser.ServiceInfo) string {
+	return fmt.Sprintf(`\"sub\":\"%s\",\"namespace\":\"%s\"`, javaMcpTestSubject, javaMcpTestCallerNamespace(svc))
+}
+
 // javaMcpTestCallerClaims is the claims of the gate's caller as the body of a
 // Java string literal of a token payload JSON (without the braces): its
-// subject and namespace, and on a tenant-routed service the tid claim kernel
-// stamps, javaMcpTestTenant, which is the only source of the session's tenant.
-func javaMcpTestCallerClaims(svc *parser.ServiceInfo) string {
-	claims := fmt.Sprintf(`\"sub\":\"%s\",\"namespace\":\"%s\"`, javaMcpTestSubject, javaMcpTestCallerNamespace(svc))
-	if javaMcpTestRouted(svc) {
+// subject and namespace, and when javaMcpTestCallerHasTid the tid claim kernel
+// stamps, javaMcpTestTenant — the only source of a routed session's tenant and
+// of a (spec.caller_tid) field's value.
+func javaMcpTestCallerClaims(svc *parser.ServiceInfo, tools []javaMcpTool) string {
+	claims := javaMcpTestCallerClaimsNoTid(svc)
+	if javaMcpTestCallerHasTid(svc, tools) {
 		claims += fmt.Sprintf(`,\"tid\":\"%s\"`, javaMcpTestTenant)
 	}
 	return claims
@@ -157,12 +181,12 @@ public final class %[2]s {
     private static boolean isError(McpSchema.CallToolResult result) {
         return Boolean.TRUE.equals(result.isError());
     }
-`, svc.Name, cls, p.JavaPackage, p.ProtoFile, p.Imports, javaMcpTestCallerClaims(svc))
+`, svc.Name, cls, p.JavaPackage, p.ProtoFile, p.Imports, javaMcpTestCallerClaims(svc, tools))
 
 	b.WriteString(javaMcpTestStubHandler(svc, tools, p))
 	b.WriteString(javaMcpTestToolSetCase(svc, tools))
 	for _, t := range tools {
-		b.WriteString(javaMcpTestToolCases(svc, t))
+		b.WriteString(javaMcpTestToolCases(svc, tools, t))
 	}
 	b.WriteString(javaMcpTestSessionCase(svc, tools, p))
 	b.WriteString(javaMcpTestSessionTenantCases(svc, p))
@@ -297,7 +321,7 @@ func javaMcpTestToolSetCase(svc *parser.ServiceInfo, tools []javaMcpTool) string
             check(Boolean.FALSE.equals(byName.get(%[1]s).inputSchema().get("additionalProperties")),
             "%[2]s declares additionalProperties: false");
 `, javaQuote(t.ToolName), t.ToolName, javaQuote(t.Description))
-		for _, f := range []string{t.PrincipalField, t.NamespaceField, javaMcpRouteFieldName(t)} {
+		for _, f := range []string{t.PrincipalField, t.NamespaceField, t.CallerTidField, javaMcpRouteFieldName(t)} {
 			if f == "" {
 				continue
 			}
@@ -324,7 +348,7 @@ func javaMcpTestToolSetCase(svc *parser.ServiceInfo, tools []javaMcpTool) string
 
 // javaMcpTestToolCases renders one tool's two cases: it reaches its typed
 // handler with a server-stamped value, and it refuses a client-supplied one.
-func javaMcpTestToolCases(svc *parser.ServiceInfo, t javaMcpTool) string {
+func javaMcpTestToolCases(svc *parser.ServiceInfo, tools []javaMcpTool, t javaMcpTool) string {
 	cls := javaMcpClassName(svc.Name)
 	var b strings.Builder
 
@@ -338,7 +362,7 @@ func javaMcpTestToolCases(svc *parser.ServiceInfo, t javaMcpTool) string {
     // carries the refusal cases below and no reaches-its-handler case.
 `, t.ToolName)
 	} else if t.OwnerDefaultGuard != "" {
-		b.WriteString(javaMcpTestOwnerDefaultCases(svc, t))
+		b.WriteString(javaMcpTestOwnerDefaultCases(svc, tools, t))
 	} else {
 		args := javaMcpTestArgumentMap(t, "")
 		if t.Page != nil {
@@ -381,6 +405,11 @@ func javaMcpTestToolCases(svc *parser.ServiceInfo, t javaMcpTool) string {
         check(stub.lastRequest.contains(%[1]s), "%[2]s stamped the caller's own value into %[4]s");
 `, javaQuote(f.value), t.ToolName, f.what, f.field)
 		}
+		if t.CallerTidField != "" {
+			fmt.Fprintf(&b, `        // The (spec.caller_tid) binding: %[3]s was never in the arguments above.
+        check(stub.lastRequest.contains(%[1]s), "%[2]s bound %[3]s to the caller's tid claim");
+`, javaQuote(javaMcpTestTenant), t.ToolName, t.CallerTidField)
+		}
 		if t.RouteField != nil {
 			fmt.Fprintf(&b, `        // (spec.rpc).route_field: %[3]s was never in the arguments above either.
         check(stub.lastRequest.contains(%[1]s), "%[2]s took %[3]s from the session's token");
@@ -412,6 +441,7 @@ func javaMcpTestToolCases(svc *parser.ServiceInfo, t javaMcpTool) string {
 	for _, f := range []struct{ field, value, what string }{
 		{t.PrincipalField, "spiffe://example.test/someone-else", "principal"},
 		{t.NamespaceField, "/someone-elses-tenant", "namespace"},
+		{t.CallerTidField, javaMcpTestOtherTenant, "caller_tid"},
 	} {
 		if f.field == "" {
 			continue
@@ -432,7 +462,35 @@ func javaMcpTestToolCases(svc *parser.ServiceInfo, t javaMcpTool) string {
 			javaMcpDispatchMethodName(t), javaQuote(t.ToolName),
 			javaMcpTestArgumentMap(t, fmt.Sprintf("%s, %s", javaQuote(f.field), javaQuote(f.value))))
 	}
+
+	// (spec.caller_tid): a caller whose token carries no tid claim (the
+	// platform, a product) is refused before the handler is reached.
+	if javaMcpTestNoTidCase(t) {
+		fmt.Fprintf(&b, `
+    /** A "%[1]s" call from a caller whose token carries no tid claim is refused before the handler is reached. */
+    private static void %[2]sRefusesACallerWithNoTid() {
+        StubHandler stub = new StubHandler();
+        Caller noTid = new Caller("{%[3]s}", "mcp-test-request");
+        %[4]s.Surface surface = new %[4]s.Surface(stub, noTid);
+        McpSchema.CallToolResult result = surface.%[5]s(
+        new McpSchema.CallToolRequest(%[6]s, %[7]s, null));
+        check(isError(result), "%[1]s refused a caller with no tid claim");
+        check(resultText(result).contains("requires a caller in a tenant"),
+        "%[1]s said why it refused, got: " + resultText(result));
+        check(stub.lastMethod.isEmpty(), "%[1]s never reached the handler, but it saw: " + stub.lastMethod);
+    }
+`, t.ToolName, methodNameLowerCamel(t.Method.Name), javaMcpTestCallerClaimsNoTid(svc), cls,
+			javaMcpDispatchMethodName(t), javaQuote(t.ToolName), javaMcpTestArgumentMap(t, ""))
+	}
 	return b.String()
+}
+
+// javaMcpTestNoTidCase reports whether the gate carries t's no-tid-claim
+// refusal case: t binds a (spec.caller_tid) field, its synthesized call gets
+// as far as the binding, and it has no route field, whose session-tenant
+// refusal would come first and say something else.
+func javaMcpTestNoTidCase(t javaMcpTool) bool {
+	return t.CallerTidField != "" && javaMcpDrivable(t) && t.RouteField == nil
 }
 
 // javaMcpRouteFieldName is a tool's route field, "" when it has none.
@@ -543,7 +601,7 @@ func javaMcpTestSessionTenantCases(svc *parser.ServiceInfo, p javaMcpFileParams)
 // the same call from a caller whose grant carries a wider
 // (spec.principal_scope) — reaches the handler. Without the control a guard that
 // refused every caller would pass.
-func javaMcpTestOwnerDefaultCases(svc *parser.ServiceInfo, t javaMcpTool) string {
+func javaMcpTestOwnerDefaultCases(svc *parser.ServiceInfo, tools []javaMcpTool, t javaMcpTool) string {
 	return fmt.Sprintf(`
     /** The "%[1]s" call from the row's own self-scoped principal is refused by (spec.owner_default). */
     private static void %[2]sRefusesTheRowOwner() {
@@ -569,7 +627,7 @@ func javaMcpTestOwnerDefaultCases(svc *parser.ServiceInfo, t javaMcpTool) string
         check("%[7]s".equals(stub.lastMethod), "%[1]s reached %[7]s, got: " + stub.lastMethod);
     }
 `, t.ToolName, methodNameLowerCamel(t.Method.Name), javaMcpClassName(svc.Name), javaMcpDispatchMethodName(t),
-		javaQuote(t.ToolName), javaMcpTestArgumentMap(t, ""), t.Method.Name, javaMcpTestCallerClaims(svc))
+		javaQuote(t.ToolName), javaMcpTestArgumentMap(t, ""), t.Method.Name, javaMcpTestCallerClaims(svc, tools))
 }
 
 // javaMcpTestArgumentMap renders the arguments map for a generated tool call:
@@ -618,11 +676,14 @@ func javaMcpTestMain(svc *parser.ServiceInfo, tools []javaMcpTool) string {
 		} else if javaMcpDrivable(t) {
 			fmt.Fprintf(&b, "        %sReachesItsTypedHandler();\n", methodNameLowerCamel(t.Method.Name))
 		}
-		for _, f := range []string{t.PrincipalField, t.NamespaceField} {
+		for _, f := range []string{t.PrincipalField, t.NamespaceField, t.CallerTidField} {
 			if f == "" {
 				continue
 			}
 			fmt.Fprintf(&b, "        %sRefusesAClientSupplied%s();\n", methodNameLowerCamel(t.Method.Name), javaPascalField(f))
+		}
+		if javaMcpTestNoTidCase(t) {
+			fmt.Fprintf(&b, "        %sRefusesACallerWithNoTid();\n", methodNameLowerCamel(t.Method.Name))
 		}
 		for _, r := range javaMcpTestRouteRefusals(t) {
 			fmt.Fprintf(&b, "        %s();\n", r.method)
@@ -724,6 +785,11 @@ func javaMcpTestSessionCase(svc *parser.ServiceInfo, tools []javaMcpTool, p java
 			fmt.Fprintf(&b, `        check(stub.lastRequest.contains(%s),
         "the session stamped the caller's own value into %s — a value no frame above carried");
 `, javaQuote(f.value), f.field)
+		}
+		if driven.CallerTidField != "" {
+			fmt.Fprintf(&b, `        check(stub.lastRequest.contains(%s),
+        "the session bound %s to the caller's tid claim — a value no frame above carried");
+`, javaQuote(javaMcpTestTenant), driven.CallerTidField)
 		}
 	} else {
 		b.WriteString(`

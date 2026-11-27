@@ -69,3 +69,61 @@ func TestRustMcpToolBindsCallerTid(t *testing.T) {
 		t.Fatalf("the binding must precede the handler call:\n%s", got)
 	}
 }
+
+// The generated gate meets a (spec.caller_tid) tool (#475): on a service that
+// is not tenant-routed its test caller still carries a tid claim (and no
+// namespace it did not carry before), the tool test asserts the handler got
+// that tid in the field, a call naming the field is refused before the
+// handler, and a caller with no tid claim is refused.
+func TestRustMcpGateDrivesACallerTidTool(t *testing.T) {
+	svc, _, _, _ := rustMcpTestService()
+	san := newRustEgressSanitizer([]model.ProtoFile{{Package: "ticket", Messages: []model.Message{
+		{Name: "GetTicketBriefRequest", Fields: []model.Field{
+			{Name: "tenant", Type: "string", Number: 1,
+				Annotations: map[string]model.AnnotationValue{"caller_tid": {Type: model.AnnotationTypeBool, BoolValue: true}}},
+			{Name: "ticket_id", Type: "string", Number: 2,
+				Annotations: map[string]model.AnnotationValue{"assert_required": {Type: model.AnnotationTypeBool, BoolValue: true}}},
+		}},
+		{Name: "GetTicketBriefResponse", Fields: []model.Field{{Name: "summary", Type: "string", Number: 1}}},
+		{Name: "GetTicketRequest", Fields: []model.Field{{Name: "ticket_id", Type: "string", Number: 1}}},
+		{Name: "GetTicketResponse", Fields: []model.Field{{Name: "body", Type: "string", Number: 1}}},
+	}}})
+	got, err := generateRustMcpDispatch(svc, "ticket", map[string]string{}, san)
+	if err != nil {
+		t.Fatalf("generateRustMcpDispatch: %v", err)
+	}
+	gate := got[strings.Index(got, "#[cfg(test)]"):]
+	for _, want := range []string{
+		`const MCP_TEST_TENANT: &str = "acme0001";`,
+		`.set_tid(MCP_TEST_TENANT)`,
+		// The tool call is driven without the field, and the handler gets it.
+		`serde_json::from_str("{\"ticket_id\": `,
+		`reported.message().contains("tenant: \"acme0001\"")`,
+		// Naming the field is refused before the handler.
+		`async fn get_ticket_brief_refuses_a_client_supplied_tenant()`,
+		// A caller with no tid claim is refused.
+		`async fn get_ticket_brief_refuses_a_caller_with_no_tid_claim()`,
+		`refused.message().contains("no tid claim")`,
+	} {
+		if !strings.Contains(gate, want) {
+			t.Fatalf("generated MCP gate is missing %q\ngot:\n%s", want, gate)
+		}
+	}
+	for _, unwanted := range []string{`.set_namespace(`, `\"tenant\": `} {
+		if strings.Contains(gate, unwanted) {
+			t.Fatalf("generated MCP gate of a non-routed service must not contain %q\ngot:\n%s", unwanted, gate)
+		}
+	}
+}
+
+// A service with neither a routed carrier nor a (spec.caller_tid) tool keeps
+// its tid-less test caller.
+func TestRustMcpGateCallerHasNoTidWithoutCallerTid(t *testing.T) {
+	svc, _, _, _ := rustMcpTestService()
+	got := mustRustMcpDispatch(t, svc)
+	for _, unwanted := range []string{`MCP_TEST_TENANT`, `.set_tid(`, `no_tid_claim`} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("generated MCP gate must not contain %q without a caller_tid tool or a route\ngot:\n%s", unwanted, got)
+		}
+	}
+}

@@ -95,6 +95,10 @@ type rustMcpTool struct {
 	// are all synthesizable, so the generated gate can drive a routed tool call
 	// and read the route field the handler received.
 	RouteArgsSynthesizable bool
+	// ArgsSynthesizable: the request's required arguments (RequiredScalars)
+	// are all synthesizable, so the generated gate can drive the tool call
+	// whatever server-bound fields the request also declares.
+	ArgsSynthesizable bool
 
 	// OwnerDefaultGuard is the (spec.owner_default) refusal rendered by the same
 	// helper the gRPC wrapper calls, "" when nothing is declared or nothing is
@@ -196,6 +200,7 @@ func rustMcpTools(svc *parser.ServiceInfo, servicePkg string, crossPkgTypes map[
 			Page:                   rustMcpPageOf(m, servicePkg, crossPkgTypes),
 			RouteField:             m.RouteField,
 			RouteArgsSynthesizable: m.RouteField != nil && synthesizable,
+			ArgsSynthesizable:      empty || synthesizable,
 		})
 	}
 	return tools, nil
@@ -378,7 +383,8 @@ type rustMcpScalarArg struct {
 // required enum or nested message. The second result is false in that case,
 // and true when every required field has a value (possibly none at all). The
 // route field, when there is one, is skipped: it is not a tool argument, and a
-// call naming it is refused.
+// call naming it is refused. So is a (spec.caller_tid) field (#475), for the
+// same reason: the dispatch binds it to the caller's tid claim.
 func (es *rustEgressSanitizer) mcpRequiredScalarArgs(fullType, servicePkg string, route *parser.RouteFieldDescriptor) ([]rustMcpScalarArg, bool) {
 	pkg, name := splitRustEgressFQN(fullType, servicePkg)
 	msg, ok := es.msgs[pkg+"\x00"+name]
@@ -389,6 +395,9 @@ func (es *rustEgressSanitizer) mcpRequiredScalarArgs(fullType, servicePkg string
 	for i := range msg.Fields {
 		f := &msg.Fields[i]
 		if route != nil && f.Name == route.Field {
+			continue
+		}
+		if _, ok := f.Annotations["caller_tid"]; ok {
 			continue
 		}
 		// An omitted enum decodes to its zero value, which assert_enum_defined
@@ -1351,17 +1360,33 @@ func rustMcpTests(serviceName string, svc *parser.ServiceInfo, tools []rustMcpTo
 	// A routed service's sessions run in the tenant of the caller's tid claim,
 	// so its test caller carries one. Its namespace names the tenant, by a
 	// name that is not a tid: the session tenant is never read from it (#284).
+	// A (spec.caller_tid) tool (#475) refuses a caller with no tid claim, so
+	// the test caller of a service publishing one carries a tid claim too,
+	// routed or not; a non-routed service's caller keeps its namespace-less
+	// token, the tid being all the binding reads.
+	bindsTid := routed
+	for _, t := range tools {
+		if t.CallerTidField != "" {
+			bindsTid = true
+		}
+	}
 	tenantConst, tenantClaim := "", ""
-	if routed {
+	if bindsTid {
 		tenantConst = fmt.Sprintf(`
     /// The test caller's tid claim: the session's tenant, which every routed
-    /// tool call must come out aimed at.
+    /// tool call must come out aimed at, and the tenant every
+    /// (spec.caller_tid) field is bound to.
     const MCP_TEST_TENANT: &str = %s;
 `, rustQuote(rustMcpTestTenant))
+	}
+	if routed {
 		tenantClaim = `        token
             .set_namespace("/tenants/acme/users/alice")
             .expect("a freshly built token is mutable");
-        token
+`
+	}
+	if bindsTid {
+		tenantClaim += `        token
             .set_tid(MCP_TEST_TENANT)
             .expect("a freshly built token is mutable");
 `
@@ -1673,7 +1698,10 @@ func rustMcpToolTests(surface string, t rustMcpTool) string {
 	var b strings.Builder
 
 	// A PAGE tool is always drivable: page_size alone is a valid call.
-	drivable := t.EmptyRequest || t.Page != nil || len(t.RequiredScalars) > 0 || t.PrincipalField != ""
+	// A (spec.caller_tid) tool is drivable when its other required arguments
+	// can be synthesized.
+	callerTidDrivable := t.CallerTidField != "" && t.ArgsSynthesizable
+	drivable := t.EmptyRequest || t.Page != nil || len(t.RequiredScalars) > 0 || t.PrincipalField != "" || callerTidDrivable
 	if drivable {
 		argsJSON := rustMcpTestArgsJSON(t)
 
@@ -1725,12 +1753,55 @@ func rustMcpToolTests(surface string, t rustMcpTool) string {
         );
 `, t.PrincipalField)
 		}
+		if t.CallerTidField != "" {
+			fmt.Fprintf(&b, `        // (spec.caller_tid): bound by the dispatch to the caller's tid claim,
+        // so the handler sees it without the tool call ever carrying it.
+        assert!(
+            reported.message().contains(%[2]s),
+            "%[1]s was not bound to the caller's tid claim: {}",
+            reported.message()
+        );
+`, t.CallerTidField, rustQuote(fmt.Sprintf("%s: %s", t.CallerTidField, rustQuote(rustMcpTestTenant))))
+		}
 		b.WriteString("    }\n")
+	}
+
+	if callerTidDrivable {
+		fmt.Fprintf(&b, `
+    /// (spec.caller_tid) %[4]s binds the caller's tid claim: a caller whose
+    /// token carries none is refused, and the handler is never reached.
+    #[tokio::test]
+    async fn %[1]s_refuses_a_caller_with_no_tid_claim() {
+        let mut token = token::Token::new();
+        token
+            .set_subject(MCP_TEST_SUBJECT)
+            .expect("a freshly built token is mutable");
+        let caller = servicemanager::auth::Caller::new(token, "mcp-test".to_string());
+        let surface = %[2]s::new(Arc::new(McpReportingHandler), caller);
+        let arguments: rmcp::model::JsonObject =
+            serde_json::from_str(%[3]s).expect("generated tool arguments are a JSON object");
+        let refused = surface
+            .%[5]s(arguments)
+            .await
+            .expect_err("a caller with no tid claim was accepted");
+        assert!(
+            !refused.message().starts_with("MCP_CALLED"),
+            "a caller with no tid claim reached the handler: {}",
+            refused.message()
+        );
+        assert!(
+            refused.message().contains("no tid claim"),
+            "unexpected refusal: {}",
+            refused.message()
+        );
+    }
+`, t.ToolName, surface, rustQuote(rustMcpTestArgsJSON(t)), t.CallerTidField, rustMcpDispatchFnName(t))
 	}
 
 	for _, f := range []struct{ marker, field string }{
 		{"spec.principal", t.PrincipalField},
 		{"spec.namespace", t.NamespaceField},
+		{"spec.caller_tid", t.CallerTidField},
 	} {
 		if f.field == "" {
 			continue

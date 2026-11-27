@@ -1769,11 +1769,18 @@ reads, watches and record write surface) refuse a caller whose namespace claim
 is in a product's layer, `PERMISSION_DENIED` on every rpc before any tenant pin
 reads its namespace.
 
-The rest of the generated doors (tenant deletion) are not in this release
-yet, so a **server** of a product service, or of an rpc binding
-`(spec.caller_tid)`, is still refused at generation in every server language
-rather than generated without them. Clients of a product service generate as
-before, with the check above.
+A **server** of a product service, or of an rpc binding `(spec.caller_tid)`,
+generates in Go, Java and Rust, the languages whose servers have these doors;
+Python and TypeScript servers of either are refused at generation rather than
+generated without them. A `(spec.caller_tid)` field may not also be
+`assert_required` or `assert_min_size`: the request is validated before the
+binding fills it, so the client must be free to leave it empty.
+
+A product's custodian rows go with their tenant (tenant-deletion-2026-10-27),
+and the generated `OnTenantDeleted` that deletes them is not in this release
+yet. Until it is, a **product** service binding `(spec.caller_tid)` is refused
+at generation in every language: a product service keeps no tenant's data.
+Clients of a product service generate as before, with the check above.
 
 ### Every user RPC is also an MCP tool
 

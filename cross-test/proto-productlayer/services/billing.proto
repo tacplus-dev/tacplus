@@ -1,0 +1,33 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// The product-layer fixture's PRODUCT service (#475, products-layer-2026-11-08).
+//
+// billing is product ledger's: it runs at /products/ledger, behind the product
+// door (tenants' and ledger's own services in; the platform and other
+// products out). It calls the platform (hub) and its own product (meter), the
+// two edges a product may take, through generated clients whose layer check
+// the fixture's self-test drives.
+
+syntax = "proto3";
+
+package billing;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "billing", product: "ledger"};
+option (spec.grpc_s2s_client) = {service: "hub.HubService"};
+option (spec.grpc_s2s_client) = {service: "meter.MeterService"};
+
+service BillingService {
+  option (spec.service_s2s) = {};
+
+  rpc GetBillingStatus(GetBillingStatusRequest) returns (GetBillingStatusResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}
+
+message GetBillingStatusRequest {}
+
+message GetBillingStatusResponse {
+  bool ready = 1;
+}

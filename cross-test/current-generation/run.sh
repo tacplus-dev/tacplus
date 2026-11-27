@@ -38,6 +38,7 @@ EPOCHLOAD_PROTO_SRC="$ROOT_DIR/cross-test/proto-epochload"
 TENANTROUTE_PROTO_SRC="$ROOT_DIR/cross-test/proto-tenantroute"
 REDO_PROTO_SRC="$ROOT_DIR/cross-test/proto-redo"
 TENANTRECORD_PROTO_SRC="$ROOT_DIR/cross-test/proto-tenantrecord"
+PRODUCTLAYER_PROTO_SRC="$ROOT_DIR/cross-test/proto-productlayer"
 WORK_ROOT="${TACPLUS_CURRENT_GENERATION_WORKDIR:-$ROOT_DIR/target/cross-test/current-generation}"
 TACPLUS_BIN="${TACPLUS_BIN:-}"
 PYTHON_BIN="${TACPLUS_PYTHON:-}"
@@ -60,7 +61,7 @@ Options:
   --fixture NAME    Run one fixture (base, c2sonly, ..., tenantslice-config-owner)
   --side NAME       Run one build of a fixture of two (tenantroute: harbor or
                     crew; redo: stratum or redo; tenantrecord: tstratum or
-                    tmessaging); needs --fixture
+                    tmessaging; productlayer: billing or hub); needs --fixture
   --jobs N          Run N fixture builds at once (default: the CPUs; 1 runs
                     them one after another in this process)
   --list-shards     List the run's shards, one per line: SHARD [DEP...]
@@ -162,7 +163,7 @@ esac
 # and the languages it builds (fixture_builds). A fixture block below builds
 # the languages fixture_languages names for it: those of this run, none if
 # --fixture names another or the run's jobs built it.
-all_fixtures=(base tenantrecord tenantroute redo recordegress recordegress-host
+all_fixtures=(base tenantrecord tenantroute redo productlayer recordegress recordegress-host
   tenantslice tenantslice-owner tenantslice-config-owner accountingsink
   requiresdevice quorumwrite epochload ownerdefault healthonly zerorpc c2sonly
   eventbus-backpressure statequeue)
@@ -197,6 +198,7 @@ fixture_sides() {
     tenantroute) echo harbor crew ;;
     redo) echo stratum redo ;;
     tenantrecord) echo tstratum tmessaging ;;
+    productlayer) echo billing hub ;;
   esac
 }
 # The builds of fixture $1 this run builds: one with --side, else every one.
@@ -484,6 +486,28 @@ EOF
   if [[ "$self" == "harbor" ]]; then
     echo 'depends: ["crew"]' >> "$dir/tacplus.yaml"
   fi
+}
+
+# The product-layer fixture (#475), built as billing (product ledger's
+# service: its server behind the product door, its clients of the platform's
+# hub and of its own product's meter) or as hub (the platform's service: its
+# client of the tenant-owned crew).
+write_productlayer_config() {
+  local dir="$1"
+  local language="$2"
+  local self="$3"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.$self"
+src: "$PRODUCTLAYER_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+  case "$self" in
+    billing) echo 'depends: ["hub", "meter"]' >> "$dir/tacplus.yaml" ;;
+    hub) echo 'depends: ["crew"]' >> "$dir/tacplus.yaml" ;;
+  esac
 }
 
 # The redo-contract fixture (issue #163 D5), built as stratum (the record store,
@@ -897,19 +921,35 @@ run_java_generated_self_tests() {
     grep -q '^TenantRouteClientTest: all checks passed$' "$test_log" \
       || die "tenant-route harbor fixture (java): TenantRouteClientTest did not report its checks passed"
   fi
+  # The product-layer fixture's client self-tests (#475), copied in by
+  # install_productlayer_client_selftest, so each is present exactly in its
+  # side's build.
+  local plcl_test plcl_class plcl_name
+  while IFS= read -r plcl_test; do
+    plcl_name="$(basename "$plcl_test" .java)"
+    plcl_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$plcl_test").$plcl_name"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -Dlogback.configurationFile="$ROOT_DIR/cross-test/lib/logback-test.xml" -cp "$cp" "$plcl_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q "^$plcl_name: all checks passed\$" "$test_log" \
+      || die "product-layer fixture (java): $plcl_name did not report its checks passed"
+  done < <(find "$output/src/main/java" -type f -path '*/s2sm/internal/grpc/clients/services/*/ProductLayer*ClientTest.java')
   # The generated MCP gate of a tenant-routed service (#170, #284): its session
   # tenant is the caller's tid claim, never a tid read off its namespace. Run
-  # for the services whose carrier is routed (the tenant-route fixture's crew).
+  # for the services whose carrier is routed (the tenant-route fixture's crew),
+  # and for those with a tool binding (spec.caller_tid) (#475: the
+  # product-layer fixture's hub), whose field is the caller's tid claim too.
   local mcp_test mcp_class
   while IFS= read -r mcp_test; do
-    grep -qF 'sessionTenant(' "$mcp_test" || continue
+    grep -qF -e 'sessionTenant(' -e 'RefusesACallerWithNoTid(' "$mcp_test" || continue
     mcp_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$mcp_test").$(basename "$mcp_test" .java)"
     "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -Dlogback.configurationFile="$ROOT_DIR/cross-test/lib/logback-test.xml" -cp "$cp" "$mcp_class" >>"$test_log" 2>&1 || {
       dump_step_log "$test_log"
       return 1
     }
     grep -q "^PASS $(basename "$mcp_test" .java)" "$test_log" \
-      || die "java: the tenant-routed MCP gate $(basename "$mcp_test" .java) did not report PASS"
+      || die "java: the MCP gate $(basename "$mcp_test" .java) of a routed or caller_tid service did not report PASS"
   done < <(find "$output/src/main/java" -type f -name '*McpTest.java' | sort)
   # The record-egress fixture's user-and-listed-service self-test, copied in by
   # install_user_and_listed_service_selftest (which dies if it cannot), so it is
@@ -1228,6 +1268,22 @@ run_rust_spiffe_self_tests() {
   if [[ -f "$output/tests/tenant_route_client_test.rs" ]]; then
     grep -qF 'test a_tenants_service_never_routes_to_another_tenant ... ok' "$log_dir/rust-test.log" \
       || die "#258: the tenant-route client self-test did not run (log: $log_dir/rust-test.log)"
+  fi
+  # The product-layer fixture's client self-tests (#475), copied in by
+  # install_productlayer_client_selftest: when one is there it must have run.
+  if [[ -f "$output/tests/product_layer_billing_client_test.rs" ]]; then
+    grep -qF 'test a_product_never_calls_another_product_or_is_called_by_the_platform ... ok' "$log_dir/rust-test.log" \
+      || die "#475: the product-layer billing client self-test did not run (log: $log_dir/rust-test.log)"
+  fi
+  # #475: a tool binding (spec.caller_tid) generates its no-tid refusal
+  # self-test beside the MCP gate; when it does, it must have run.
+  if grep -rqF --include='*.rs' '_refuses_a_caller_with_no_tid_claim()' "$output/s2sm"; then
+    grep -qE '_refuses_a_caller_with_no_tid_claim \.\.\. ok' "$log_dir/rust-test.log" \
+      || die "#475: the generated MCP caller_tid self-tests did not run (log: $log_dir/rust-test.log)"
+  fi
+  if [[ -f "$output/tests/product_layer_hub_client_test.rs" ]]; then
+    grep -qF 'test a_product_never_calls_a_tenant ... ok' "$log_dir/rust-test.log" \
+      || die "#475: the product-layer hub client self-test did not run (log: $log_dir/rust-test.log)"
   fi
 }
 
@@ -2474,6 +2530,58 @@ install_tenantroute_client_selftest() {
   esac
 }
 
+# install_productlayer_client_selftest drops the product-layer fixture's (#475)
+# client self-test into the generated output of its side, next to the
+# generated typed client it drives: the edge table of roadmap/PRODUCTS_LAYER.md
+# at the client, before anything is sent. billing's drives meter's client
+# (product ledger's: its own product and tenants in, another product and the
+# platform refused) and hub's (the platform's: every layer in); hub's drives
+# crew's (tenant-owned: a product refused, whatever tenant it names).
+install_productlayer_client_selftest() {
+  local output="$1"
+  local language="$2"
+  local self="$3"
+  local target client="" guard=""
+
+  case "$self" in
+    billing) target=meter ;;
+    hub) target=crew ;;
+    *) return 0 ;;
+  esac
+  case "$language" in
+    go)
+      client="$(grep -rlF --include='*.go' "func New${target^}" "$output/s2sm/grpc/clients/services/$target" 2>/dev/null | head -1 || true)"
+      guard="serviceconnection.NewLayerGuardConn("
+      ;;
+    java)
+      client="$(find "$output/src/main/java" -type f -path "*/s2sm/internal/grpc/clients/services/$target/*GrpcClient.java" -print -quit)"
+      guard="TargetLayer.guard("
+      ;;
+    rust)
+      client="$(grep -rlF --include='*.rs' "${target^}" "$output/s2sm/internal/grpc/clients/services/$target" 2>/dev/null | grep -v '/mod\.rs$' | head -1 || true)"
+      guard="target_layer::"
+      ;;
+    *) return 0 ;;
+  esac
+  [[ -n "$client" ]] || die "product-layer fixture ($language, $self): generated $target client not found under $output"
+  # The client's package: the check may sit in any of its files.
+  grep -rqF "$guard" "$(dirname "$client")" \
+    || die "product-layer fixture ($language, $self): the generated $target client carries no layer check ($guard)"
+
+  case "$language" in
+    go)
+      cp "$SELFTESTS_SRC/go/product_layer_${self}_client_test.go" "$(dirname "$client")/"
+      ;;
+    java)
+      cp "$SELFTESTS_SRC/java/ProductLayer${self^}ClientTest.java" "$(dirname "$client")/"
+      ;;
+    rust)
+      mkdir -p "$output/tests"
+      cp "$SELFTESTS_SRC/rust/product_layer_${self}_client_test.rs" "$output/tests/"
+      ;;
+  esac
+}
+
 # install_tenant_record_c2s_selftest drops the tenant-record fixture's c2s
 # reader self-test (#284) into the generated WRITER output, next to the
 # generated client-facing record reader it drives in-process: a read goes to the
@@ -3608,6 +3716,39 @@ if [[ -d "$TENANTROUTE_PROTO_SRC" ]]; then
       echo "==> Compiling $language tenant-route fixture ($self)"
       compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
       echo "    PASS $language tenant-route ($self)"
+      prune_fixture "$dir" "$output_root"
+    done
+  done
+fi
+
+# product-layer fixture (#475, roadmap/PRODUCTS_LAYER.md): billing, product
+# ledger's, generates its server behind the product door and its clients of
+# the platform and its own product; hub, the platform's, its client of a
+# tenant. registry.json carries billing's product, and each side's client
+# self-test drives the edge table at the client.
+if [[ -d "$PRODUCTLAYER_PROTO_SRC" ]]; then
+  for language in $(fixture_languages productlayer); do
+    for self in $(fixture_selves productlayer); do
+      dir="$WORK_ROOT/productlayer-$self-$language"
+      log="$WORK_ROOT/productlayer-$self-$language.log"
+      rm -rf "$dir"
+      write_productlayer_config "$dir" "$language" "$self"
+
+      echo "==> Generating $language product-layer fixture ($self)"
+      if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$PRODUCTLAYER_PROTO_SRC" >"$log" 2>&1); then
+        tail -120 "$log" >&2 || true
+        die "$language product-layer generation failed ($self); log: $log"
+      fi
+      output_root="$(resolve_output_root "$dir/tacplus")"
+      assert_spiffe_soundness "$dir/tacplus"
+      if [[ "$self" == "billing" ]]; then
+        grep -Eq '"product": *"ledger"' "$output_root/registry.json" \
+          || die "product-layer fixture ($language, $self): registry.json does not carry billing's product"
+      fi
+      install_productlayer_client_selftest "$output_root" "$language" "$self"
+      echo "==> Compiling $language product-layer fixture ($self)"
+      compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
+      echo "    PASS $language product-layer ($self)"
       prune_fixture "$dir" "$output_root"
     done
   done

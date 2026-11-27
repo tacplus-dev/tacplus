@@ -343,6 +343,14 @@ the looper then marks it `promoted` or `declined` here with the date.
   (C2S, run-time policy within build-time entitlements), its `caller_tid` binding is lifted on that rpc only, and
   every call is audited with the owner user's identity. No service principal ever reads across tenants. Why: a
   product owner's billing view over per-tenant usage. Needs its own design and a ROADMAP.md line; after #475.
+- **Product layer: a surface hosted by an unloaded label has no layer** (2026-11-26, #475): `(spec.service_s2s).label`
+  names the package that hosts a surface; when that package is not in the build, `parser.ClientTargetLayer` and the
+  build's edge check read the target as in no layer, so the generated client carries no layer check and a refused
+  edge is not refused at generation (the target's door still refuses it). The product-layer fixture first declared
+  `label: "MeterService"` on meter's own surface and its client came out unguarded. Either refuse a label nothing in
+  the build serves on a service's own surface (as `ValidateRoutingLabels` does for state roots), or read such a
+  surface's layer as its declaring service's. Why: the client check is the second door, and it should not depend on
+  a label being spelled right.
 - **cmd/soundness reads every file through one os.Root** (2026-11-13, #566): #566 moved the store-vendor walk onto
   `os.OpenRoot` (gosec G122, HIGH). gosec still reports eleven G304 (CWE-22, MEDIUM, not blocking) in
   `cmd/soundness/main.go`: the other checks `os.ReadFile` paths joined under `-root` (the SPIFFE walk among them).

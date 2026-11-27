@@ -65,3 +65,47 @@ func TestJavaMcpToolBindsCallerTid(t *testing.T) {
 		t.Fatalf("the binding must precede the handler call:\n%s", rendered)
 	}
 }
+
+// The generated gate of a service that is NOT tenant-routed but has a
+// (spec.caller_tid) tool dispatches as a caller with a tid claim — else every
+// call of that tool would be refused — keeps its own namespace, and asserts
+// the binding, the refusal of a model-named field and of a caller with no tid.
+func TestJavaMcpGateDrivesACallerTidTool(t *testing.T) {
+	tools, err := javaMcpTools(javaMcpTestService(), "ticket", "Ticket",
+		map[string]string{"mcp": "Mcp"}, map[string]string{}, javaMcpCallerTidSanitizer())
+	if err != nil {
+		t.Fatalf("resolve Java MCP tools: %v", err)
+	}
+	gate := generateJavaMcpDispatchTest(javaMcpTestService(), tools, javaMcpTestFileParams())
+	for _, want := range []string{
+		// The test caller carries a tid on a non-routed service, in its own namespace.
+		`return new Caller("{\"sub\":\"spiffe://example.test/mcp-test-caller\",\"namespace\":\"/mcp-test\",\"tid\":\"mcptest1\"}", "mcp-test-request");`,
+		// The handler received the caller's tid in the field.
+		`check(stub.lastRequest.contains("mcptest1"), "get_ticket_brief bound tenant to the caller's tid claim");`,
+		// A model-named field is refused before the handler.
+		"private static void getTicketBriefRefusesAClientSuppliedTenant() {",
+		`java.util.Map.of("tenant", "othertn1")`,
+		"        getTicketBriefRefusesAClientSuppliedTenant();\n",
+		// A caller with no tid claim is refused before the handler.
+		"private static void getTicketBriefRefusesACallerWithNoTid() {",
+		`new Caller("{\"sub\":\"spiffe://example.test/mcp-test-caller\",\"namespace\":\"/mcp-test\"}", "mcp-test-request")`,
+		`check(resultText(result).contains("requires a caller in a tenant"),`,
+		"        getTicketBriefRefusesACallerWithNoTid();\n",
+		// The session case reads the binding back off the handler, too.
+		`"the session bound tenant to the caller's tid claim — a value no frame above carried");`,
+	} {
+		if !strings.Contains(gate, want) {
+			t.Fatalf("gate missing %q:\n%s", want, gate)
+		}
+	}
+	if strings.Count(gate, "{") != strings.Count(gate, "}") {
+		t.Fatalf("the gate's braces are unbalanced:\n%s", gate)
+	}
+
+	// The control: a service with no (spec.caller_tid) tool and no route keeps
+	// a caller with no tid claim, and no caller_tid cases.
+	plain := generateJavaMcpDispatchTest(javaMcpTestService(), javaMcpResolvedTools(t), javaMcpTestFileParams())
+	if strings.Contains(plain, `\"tid\"`) || strings.Contains(plain, "WithNoTid") {
+		t.Fatalf("a service with no (spec.caller_tid) tool gained a tid caller:\n%s", plain)
+	}
+}

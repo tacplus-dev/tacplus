@@ -1938,6 +1938,11 @@ mod authorizer_behavior_tests {
     #[test]
     fn host_identity_from_own_token() {
         use servicemanager::tenant_route::{check_routed_tenant, route_namespace};
+        // A product's instance starts only with its product's identity, never
+        // a tenant's, so it has no tenant-owned routing to check.
+        if !SERVICE_PRODUCT.is_empty() {
+            return;
+        }
         let key = new_test_key();
         let owned = Authorizer::with_seeded_jwks(vec![jwk_for_key(&key)]);
         let host_token = signed_token(&key, now_plus(3600), SERVICE_NAME, |tok| {

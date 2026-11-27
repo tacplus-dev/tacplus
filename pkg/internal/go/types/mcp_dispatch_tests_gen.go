@@ -90,11 +90,15 @@ func generateGoMcpDispatchTests(svc *parser.ServiceInfo, tools []goMcpTool, p go
 	// A tenant-routed service's session is opened in the caller's tenant, so
 	// its test caller is in one: its namespace names the tenant, as kernel's
 	// do (/tenants/<name>, never the tid), and its tid claim is the tenant's.
+	// A (spec.caller_tid) tool refuses a caller with no tid claim, so a service
+	// with one gives its test caller the tid claim too, keeping its namespace.
 	routed := carrier.RouteField != nil
 	testNamespace := "/example/tenants/acme"
 	testTidConst, testTidSet := "", ""
 	if routed {
 		testNamespace = "/tenants/" + goMcpTestTenantName
+	}
+	if routed || goMcpHasCallerTidTool(tools) {
 		testTidConst = fmt.Sprintf("\n\t%sTestTid       = %q", prefix, goMcpTestTenant)
 		testTidSet = fmt.Sprintf(".\n\t\tSetTid(%sTestTid)", prefix)
 	}
@@ -321,7 +325,47 @@ func Test%[1]sReachesItsTypedHandler(t *testing.T) {
 	}
 `, strconv.Quote(strconv.Quote(goMcpTestTenant)), t.RouteField.Field)
 		}
+		if t.CallerTidField != "" {
+			fmt.Fprintf(&b, `	// (spec.caller_tid): bound by the dispatch to the caller's tid claim.
+	// Matched as the quoted value alone: the text rendering's spacing is
+	// randomized.
+	if !strings.Contains(reported, %[1]s) {
+		t.Fatalf("%[2]s was not bound to the caller's tid claim: %%s", reported)
+	}
+`, strconv.Quote(strconv.Quote(goMcpTestTenant)), t.CallerTidField)
+		}
 		b.WriteString("}\n")
+	}
+
+	if t.CallerTidField != "" && goMcpDrivable(t) {
+		// The platform, a product: a caller in no tenant keys no tenant's data.
+		why := `
+	if !strings.Contains(refused, "requires a caller in a tenant") {
+		t.Fatalf("unexpected refusal: %s", refused)
+	}`
+		if t.RouteField != nil {
+			// The session's tenant is resolved first, and refuses it on its own.
+			why = ""
+		}
+		fmt.Fprintf(&b, `
+// Test%[1]sRefusesACallerWithNoTid: (spec.caller_tid) %[2]s is the caller's
+// tid claim, so a caller whose token carries none is refused, and the handler
+// is never reached.
+func Test%[1]sRefusesACallerWithNoTid(t *testing.T) {
+	noTid := servicemanager.NewCaller(wrapperToken.NewImmutableToken(nil).
+		SetSubject(%[4]sTestSubject).SetNamespace(%[4]sTestNamespace), "mcp-test")
+	surface := New%[3]s(&%[4]sReportingHandler{}, noTid)
+	result, err := surface.%[5]s(context.Background(), json.RawMessage(%[6]s))
+	if err != nil {
+		t.Fatalf("the dispatch failed as a protocol error rather than a tool result: %%v", err)
+	}
+	refused := %[4]sResultText(t, result)
+	if !result.IsError || strings.HasPrefix(refused, "MCP_CALLED") {
+		t.Fatalf("a caller with no tid claim reached the handler: %%s", refused)
+	}%[7]s
+}
+`, testName, t.CallerTidField, surface, prefix, goMcpDispatchFnName(t),
+			strconv.Quote(goMcpTestArgsJSON(t)), why)
 	}
 
 	if t.RouteField != nil {
@@ -356,6 +400,8 @@ func Test%[1]sRefusesAModelSuppliedTenant(t *testing.T) {
 	for _, f := range []struct{ marker, field, value string }{
 		{"spec.principal", t.PrincipalField, "spiffe://example/tenants/acme/users/mallory"},
 		{"spec.namespace", t.NamespaceField, "/example/tenants/rival"},
+		// The caller's own tid: naming the field is refused whatever it says.
+		{"spec.caller_tid", t.CallerTidField, goMcpTestTenant},
 	} {
 		if f.field == "" {
 			continue
@@ -391,11 +437,22 @@ func Test%[1]sRefusesAClientSupplied%[2]s(t *testing.T) {
 // goMcpDrivable reports whether the generated gate can synthesize a valid call
 // for this tool. A PAGE tool always is: page_size alone is a valid call.
 func goMcpDrivable(t goMcpTool) bool {
-	return t.EmptyRequest || t.Page != nil || len(t.RequiredScalars) > 0 || t.PrincipalField != "" || t.NamespaceField != "" || t.RouteField != nil
+	return t.EmptyRequest || t.Page != nil || len(t.RequiredScalars) > 0 || t.PrincipalField != "" || t.NamespaceField != "" || t.CallerTidField != "" || t.RouteField != nil
 }
 
-// goMcpTestTenant is the test caller's tid claim on a tenant-routed service:
-// the tenant its sessions are opened in. goMcpTestTenantName is that tenant's
+// goMcpHasCallerTidTool reports whether any tool binds a (spec.caller_tid)
+// field, which needs a test caller carrying a tid claim.
+func goMcpHasCallerTidTool(tools []goMcpTool) bool {
+	for _, t := range tools {
+		if t.CallerTidField != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// goMcpTestTenant is the test caller's tid claim on a tenant-routed service
+// (the tenant its sessions are opened in) or one with a (spec.caller_tid) tool. goMcpTestTenantName is that tenant's
 // name, which its namespace claim carries (/tenants/<name>): not a tid, so a
 // session can only find its tenant in the tid claim (#284).
 // goMcpTestLookalikeTenant is another tenant's tid, which a caller's tenant

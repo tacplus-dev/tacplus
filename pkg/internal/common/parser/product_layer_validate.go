@@ -388,6 +388,14 @@ func validateCallerTid(ix *layerIndex, paths []string) []string {
 				case f.IsOptional:
 					errs = append(errs, where+": (spec.caller_tid) on a proto3 optional field; the binding is a plain string, filled when empty")
 				}
+				// The request is validated before the binding fills it, so a
+				// field that must be non-empty refuses the empty value the
+				// binding exists to fill.
+				for _, a := range []string{"assert_required", "assert_min_size"} {
+					if _, ok := f.Annotations[a]; ok {
+						errs = append(errs, fmt.Sprintf("%s: (spec.caller_tid) with (spec.%s); the field is filled from the token when empty, so the client may leave it so", where, a))
+					}
+				}
 				if !requests[full] {
 					errs = append(errs, where+": (spec.caller_tid) on a message no rpc takes as its request; the binding is the wrapper's, on a request")
 				}
@@ -452,19 +460,24 @@ func SelfServiceProductIn(annotatedProtoDir, selfPackage string) (string, error)
 }
 
 // productLayerServerLanguages are the languages that generate servers (each
-// has a generated door, #258).
-var productLayerServerLanguages = map[string]bool{"go": true, "java": true, "rust": true, "python": true, "typescript": true}
+// has a generated door, #258), true for those whose server also has the
+// product layer's doors: the product door, the S2S client's layer check and
+// the (spec.caller_tid) binding (Go, Java, Rust; roadmap/PRODUCTS_LAYER.md
+// section 3).
+var productLayerServerLanguages = map[string]bool{"go": true, "java": true, "rust": true, "python": false, "typescript": false}
 
-// ValidateProductLayerHosting refuses to generate the server of a product
-// service, or of one binding (spec.caller_tid), until the generated doors
-// exist: the product door, the S2S client check and the caller_tid binding
-// are step 2 of roadmap/PRODUCTS_LAYER.md's order. A server generated before
-// them would run a product's code as a /system service and serve a
-// caller_tid field the client wrote, which is failing open. Clients of a
-// product service generate as before: an edge into a product is the door's to
-// check, and a caller_tid field is the server's to bind.
+// ValidateProductLayerHosting refuses to generate a server the product layer's
+// doors do not cover yet, which would fail open: in Python and TypeScript, the
+// server of a product service (it would run a product's code behind no product
+// door) or of one binding (spec.caller_tid) (it would serve the field the
+// client wrote); in every language, a product service binding
+// (spec.caller_tid), whose custodian rows must go with their tenant and have
+// no generated OnTenantDeleted yet. Clients of a product service generate as
+// before: an edge into a product is the door's to check, and a caller_tid
+// field is the server's to bind.
 func ValidateProductLayerHosting(dp *DescriptorParser, selfPackage, language string) error {
-	if dp == nil || !productLayerServerLanguages[language] {
+	doors, server := productLayerServerLanguages[language]
+	if dp == nil || !server {
 		return nil
 	}
 	var errs []string
@@ -472,13 +485,20 @@ func ValidateProductLayerHosting(dp *DescriptorParser, selfPackage, language str
 		if selfPackage != "" && fd.Package != selfPackage {
 			continue
 		}
-		if fd.ServiceProduct != "" {
-			errs = append(errs, fmt.Sprintf("%s: %s: (spec.service).product %q", path, fd.Package, fd.ServiceProduct))
+		if fd.ServiceProduct != "" && !doors {
+			errs = append(errs, fmt.Sprintf("%s: %s: (spec.service).product %q: no %s product door", path, fd.Package, fd.ServiceProduct, language))
 		}
 		for mi := range fd.Messages {
 			for fi := range fd.Messages[mi].Fields {
-				if fd.Messages[mi].Fields[fi].Annotations["caller_tid"].BoolValue {
-					errs = append(errs, fmt.Sprintf("%s: %s.%s (spec.caller_tid)", path, fd.Messages[mi].Name, fd.Messages[mi].Fields[fi].Name))
+				if !fd.Messages[mi].Fields[fi].Annotations["caller_tid"].BoolValue {
+					continue
+				}
+				switch {
+				case fd.ServiceProduct != "":
+					errs = append(errs, fmt.Sprintf("%s: %s.%s (spec.caller_tid) on product %q: a product's custodian rows go with their tenant, and OnTenantDeleted is not generated yet",
+						path, fd.Messages[mi].Name, fd.Messages[mi].Fields[fi].Name, fd.ServiceProduct))
+				case !doors:
+					errs = append(errs, fmt.Sprintf("%s: %s.%s (spec.caller_tid): no %s binding", path, fd.Messages[mi].Name, fd.Messages[mi].Fields[fi].Name, language))
 				}
 			}
 		}
@@ -487,7 +507,7 @@ func ValidateProductLayerHosting(dp *DescriptorParser, selfPackage, language str
 		return nil
 	}
 	sort.Strings(errs)
-	return fmt.Errorf("the product layer's generated doors are not in this release yet (#475), so a %s server of it would fail open; not generated:\n  %s",
+	return fmt.Errorf("the product layer's generated doors are not all in this release yet (#475), so a %s server of it would fail open; not generated:\n  %s",
 		language, strings.Join(errs, "\n  "))
 }
 

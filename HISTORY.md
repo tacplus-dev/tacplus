@@ -211,3 +211,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-26 looper issue Stop the 2.1-2.5 lines pushing the deprecated tacplus/tacplus image (as root, against VERSIONING.md) (#932)
 - 2026-11-26 looper issue TypeScript W2S client: W2SError carries the error body's message, not only the HTTP status line (#953)
 - 2026-11-27 looper issue The LLM rule as a generated build gate: an agent's advisor module gets no state client and no token handle (#909)
+- 2026-11-27 looper issue current-generation takes 2h26m because it runs its languages one after another: run them in parallel (#812)

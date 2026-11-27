@@ -284,32 +284,64 @@ func (w *ImmutableCertChain) TLSConfig(serviceName, trustDomain string) (*tls.Co
 		caPool.AddCert(ic.x509Certificate)
 	}
 
-	verifyPeer := func(rawCerts [][]byte, _ [][]*stdx509.Certificate) error {
-		if len(rawCerts) == 0 {
+	// VerifyConnection rather than VerifyPeerCertificate, which crypto/tls skips
+	// on a resumed session: a session resumed from a ticket or a client session
+	// cache would never pin the peer's identity. VerifyConnection runs on every
+	// handshake, resumed or not (#359, gosec G123).
+	verifyPeer := func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
 			return fmt.Errorf("no certificates presented")
 		}
 		// Only verify the leaf certificate (index 0)
-		cert, err := stdx509.ParseCertificate(rawCerts[0])
-		if err != nil {
-			return fmt.Errorf("failed to parse leaf certificate: %w", err)
-		}
-		return verifyPeerServiceIdentity(cert, serviceName, trustDomain)
+		return verifyPeerServiceIdentity(cs.PeerCertificates[0], serviceName, trustDomain)
 	}
 
 	clientTLS := &tls.Config{
-		Certificates:          []tls.Certificate{*w.tlsCert},
-		RootCAs:               caPool,
-		MinVersion:            tls.VersionTLS13,
-		VerifyPeerCertificate: verifyPeer,
+		Certificates:     []tls.Certificate{*w.tlsCert},
+		RootCAs:          caPool,
+		MinVersion:       tls.VersionTLS13,
+		VerifyConnection: verifyPeer,
 	}
 	serverTLS := &tls.Config{
-		Certificates:          []tls.Certificate{*w.tlsCert},
-		ClientCAs:             caPool,
-		ClientAuth:            tls.RequireAndVerifyClientCert,
-		MinVersion:            tls.VersionTLS13,
-		VerifyPeerCertificate: verifyPeer,
+		Certificates:     []tls.Certificate{*w.tlsCert},
+		ClientCAs:        caPool,
+		ClientAuth:       tls.RequireAndVerifyClientCert,
+		MinVersion:       tls.VersionTLS13,
+		VerifyConnection: verifyPeer,
 	}
 	return clientTLS, serverTLS
+}
+
+// SpiffeClientTLSConfig returns the client *tls.Config of a SPIFFE mesh
+// channel: on every handshake, resumed or not, VerifyConnection validates the
+// peer chain against roots and then pins the peer's SPIFFE identity with
+// peerVerify (VerifyPeerInTrustDomain, VerifyPeerServiceIdentity). Chain
+// validity alone is CA-only trust (fail-open): it would accept any CA-issued
+// cert as any peer, so peerVerify is required.
+func SpiffeClientTLSConfig(roots *stdx509.CertPool, peerVerify func(*stdx509.Certificate) error) *tls.Config {
+	return &tls.Config{
+		// #nosec G402 -- crypto/tls's own verification checks the server name
+		// against DNS SANs, and service certs carry URI (SPIFFE) SANs only. Its
+		// chain validation is done in full by VerifyConnection below, which
+		// crypto/tls runs on every handshake including a resumed one, and fails
+		// the handshake when it returns an error (TestSpiffeClientTLSConfigResumption).
+		InsecureSkipVerify: true,
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return fmt.Errorf("peer certificate is required for SPIFFE TLS verification")
+			}
+			// 1. Validate the peer cert chain against the trusted CA pool.
+			opts := stdx509.VerifyOptions{Roots: roots, Intermediates: stdx509.NewCertPool()}
+			for _, cert := range cs.PeerCertificates[1:] {
+				opts.Intermediates.AddCert(cert)
+			}
+			if _, err := cs.PeerCertificates[0].Verify(opts); err != nil {
+				return err
+			}
+			// 2. Pin the peer's SPIFFE identity.
+			return peerVerify(cs.PeerCertificates[0])
+		},
+	}
 }
 
 // Sign creates and signs a new X.509 certificate using this chain's leaf as the issuer.

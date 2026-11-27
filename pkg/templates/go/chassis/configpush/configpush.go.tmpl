@@ -51,9 +51,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Publisher is the service label of a tenant's record store, the only caller
+// PublisherService is the service label of a tenant's record store, the only caller
 // a Receiver admits.
-const Publisher = "stratum"
+const PublisherService = "stratum"
 
 // TenantRegistry is the owner's: it reports whether tid is a tenant the owner
 // holds (for the kernel, its tenant registry, tacplus-dev/kernel#69). The
@@ -251,7 +251,7 @@ func PublisherTenant(subject, td string) (string, bool) {
 	}
 	segs := p.PathSegments
 	if p.SubjectKind != wrapperSpiffe.KindService || len(segs) != 4 ||
-		segs[0] != wrapperSpiffe.TenantsSegment || segs[2] != wrapperSpiffe.ServicesSegment || segs[3] != Publisher {
+		segs[0] != wrapperSpiffe.TenantsSegment || segs[2] != wrapperSpiffe.ServicesSegment || segs[3] != PublisherService {
 		return "", false
 	}
 	if !validTenantID(segs[1]) {

@@ -30,6 +30,13 @@
 //! for a tenant until that tenant's first snapshot is accepted, and after a
 //! restart every tenant's publisher sends its snapshot again. A slice it holds
 //! stays when its stream ends, until a newer version or a restart.
+//!
+//! The tenant's end, the [`Publisher`] a tenant's record store runs, is in
+//! [`publisher`].
+
+pub mod publisher;
+
+pub use publisher::Publisher;
 
 use std::any::Any;
 use std::collections::{HashMap, HashSet};

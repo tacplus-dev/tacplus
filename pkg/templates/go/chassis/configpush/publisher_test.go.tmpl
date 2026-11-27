@@ -1,0 +1,327 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+package configpush
+
+import (
+	"context"
+	"net"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	configpush_pb "{{.ModuleBasePath}}/types/sys/configpush"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+)
+
+const (
+	kernelField = int32(7)
+	auditField  = int32(9)
+)
+
+// pushClock is the reconnect clock, run by hand: each wait is asked on
+// asked and returns once released.
+type pushClock struct {
+	asked   chan time.Duration
+	release chan struct{}
+}
+
+func newPushClock() *pushClock {
+	return &pushClock{asked: make(chan time.Duration, 16), release: make(chan struct{})}
+}
+
+func (c *pushClock) sleep(ctx context.Context, d time.Duration) bool {
+	c.asked <- d
+	select {
+	case <-c.release:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// next waits for the one reconnect the publisher schedules, and returns its
+// delay without running it.
+func (c *pushClock) next(t *testing.T) time.Duration {
+	t.Helper()
+	select {
+	case d := <-c.asked:
+		return d
+	case <-time.After(5 * time.Second):
+		t.Fatal("no reconnect was scheduled")
+		return 0
+	}
+}
+
+// run runs the reconnect next scheduled.
+func (c *pushClock) run(t *testing.T) {
+	t.Helper()
+	c.next(t)
+	c.release <- struct{}{}
+}
+
+// none checks that no reconnect is scheduled.
+func (c *pushClock) none(t *testing.T, why string) {
+	t.Helper()
+	select {
+	case d := <-c.asked:
+		t.Fatalf("%s: a reconnect after %v", why, d)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// pushFleet holds the owners, each a receiver served over an in-process
+// connection; a stream to one can be broken.
+type pushFleet struct {
+	t    *testing.T
+	down atomic.Bool
+	held atomic.Bool
+
+	mu     sync.Mutex
+	owners map[string]*Receiver
+	lis    map[string]*bufconn.Listener
+	cuts   map[string]context.CancelFunc
+	opens  int
+}
+
+func newPushFleet(t *testing.T) *pushFleet {
+	f := &pushFleet{t: t, owners: map[string]*Receiver{}, lis: map[string]*bufconn.Listener{}, cuts: map[string]context.CancelFunc{}}
+	f.held.Store(true)
+	return f
+}
+
+type heldIf struct{ f *pushFleet }
+
+func (h heldIf) HoldsTenant(_ context.Context, tid string) (bool, error) {
+	return h.f.held.Load() && tid == testTid, nil
+}
+
+// start serves a new receiver of field at label: a restarted owner, if label
+// had one.
+func (f *pushFleet) start(label string, field int32) *Receiver {
+	r := NewReceiver([]Slice{ {Field: field, Decode: decodeString} },
+		func(context.Context) (string, error) { return stratum(testTid), nil }, nil)
+	r.SetTrustDomain(testTD)
+	r.SetTenantRegistry(heldIf{f})
+	lis := bufconn.Listen(1 << 20)
+	s := grpc.NewServer()
+	_ = r.RegisterServices(s)
+	go func() { _ = s.Serve(lis) }()
+	f.t.Cleanup(s.Stop)
+	f.mu.Lock()
+	f.owners[label], f.lis[label] = r, lis
+	f.mu.Unlock()
+	return r
+}
+
+func (f *pushFleet) open(ctx context.Context, owner string) (configpush_pb.ConfigPush_PushClient, error) {
+	f.mu.Lock()
+	f.opens++
+	lis := f.lis[owner]
+	f.mu.Unlock()
+	if f.down.Load() {
+		return nil, status.Error(codes.Unavailable, "connection refused")
+	}
+	conn, err := grpc.NewClient("passthrough:///"+owner,
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, err
+	}
+	ctx, cut := context.WithCancel(ctx)
+	go func() { <-ctx.Done(); _ = conn.Close() }()
+	f.mu.Lock()
+	f.cuts[owner] = cut
+	f.mu.Unlock()
+	return configpush_pb.NewConfigPushClient(conn).Push(ctx)
+}
+
+// cut breaks the stream to owner, as a lost connection does.
+func (f *pushFleet) cut(owner string) {
+	f.mu.Lock()
+	cut := f.cuts[owner]
+	f.mu.Unlock()
+	cut()
+}
+
+func (f *pushFleet) openCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.opens
+}
+
+func pushValue(s string) []byte {
+	b, _ := proto.Marshal(wrapperspb.String(s))
+	return b
+}
+
+// heldAt is what r holds of field for the tenant: "value@version", or "".
+func heldAt(r *Receiver, field int32) string {
+	m, v, ok := r.Get(testTid, field)
+	if !ok {
+		return ""
+	}
+	return m.(*wrapperspb.StringValue).GetValue() + "@" + strconv.FormatInt(v, 10)
+}
+
+// eventually waits for r to hold want of field.
+func eventually(t *testing.T, r *Receiver, field int32, want, why string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for heldAt(r, field) != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: holds %q, want %q", why, heldAt(r, field), want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func newTestPublisher(f *pushFleet, c *pushClock) *Publisher {
+	p := NewPublisher(map[int32]string{kernelField: "kernel", auditField: "audit"}, f.open, nil)
+	p.sleep = c.sleep
+	return p
+}
+
+// The snapshot on open, then only newer versions, one stream to each owner.
+func TestPublisherSnapshotThenVersions(t *testing.T) {
+	f := newPushFleet(t)
+	kernel := f.start("kernel", kernelField)
+	audit := f.start("audit", auditField)
+	c := newPushClock()
+	p := newTestPublisher(f, c)
+	defer p.Close()
+	if f.openCount() != 0 {
+		t.Fatal("no stream opens before the store holds a slice")
+	}
+
+	if !p.Put(kernelField, 2, pushValue("a")) {
+		t.Fatal("the put of a registered slice is refused")
+	}
+	eventually(t, kernel, kernelField, "a@2", "the snapshot")
+	if heldAt(audit, auditField) != "" || f.openCount() != 1 {
+		t.Fatalf("only the slice's owner gets a stream: %d opens", f.openCount())
+	}
+
+	p.Put(kernelField, 3, pushValue("b"))
+	p.Put(kernelField, 3, pushValue("c"))
+	p.Put(kernelField, 1, pushValue("d"))
+	eventually(t, kernel, kernelField, "b@3", "a version, then no older one")
+
+	p.Put(auditField, 5, pushValue("x"))
+	eventually(t, audit, auditField, "x@5", "the other owner's snapshot")
+	if f.openCount() != 2 {
+		t.Fatalf("one stream for each owner: %d opens", f.openCount())
+	}
+
+	p.Remove(kernelField, 4)
+	eventually(t, kernel, kernelField, "", "a removed slice reads as none at its owner")
+
+	if p.Put(99, 1, pushValue("z")) {
+		t.Fatal("a slice no owner registers must be refused")
+	}
+	if p.Put(auditField, 0, pushValue("z")) {
+		t.Fatal("a version not above 0 must be refused")
+	}
+	c.none(t, "no stream broke")
+	if f.openCount() != 2 {
+		t.Fatalf("no stream broke: %d opens", f.openCount())
+	}
+}
+
+// The snapshot again after a break and after the owner's restart.
+func TestPublisherSnapshotAgainAfterABreakAndARestart(t *testing.T) {
+	f := newPushFleet(t)
+	kernel := f.start("kernel", kernelField)
+	c := newPushClock()
+	p := newTestPublisher(f, c)
+	p.Put(kernelField, 2, pushValue("a"))
+	eventually(t, kernel, kernelField, "a@2", "the snapshot")
+
+	// The owner restarts: a new receiver holds nothing until the snapshot.
+	restarted := f.start("kernel", kernelField)
+	f.cut("kernel")
+	if heldAt(restarted, kernelField) != "" {
+		t.Fatal("a restarted owner fails closed until the snapshot")
+	}
+	c.next(t)
+	// A change while the stream is down is held and goes in the snapshot.
+	p.Put(kernelField, 3, pushValue("b"))
+	if f.openCount() != 1 {
+		t.Fatalf("no open before the reconnect's delay: %d opens", f.openCount())
+	}
+	c.release <- struct{}{}
+	eventually(t, restarted, kernelField, "b@3", "the snapshot after a restart")
+
+	// A break with the owner still up: the snapshot again is acked STALE, and changes nothing.
+	f.cut("kernel")
+	c.run(t)
+	p.Put(kernelField, 4, pushValue("c"))
+	eventually(t, restarted, kernelField, "c@4", "versions after the snapshot again")
+	if f.openCount() != 3 {
+		t.Fatalf("the snapshot again after a break: %d opens", f.openCount())
+	}
+
+	f.cut("kernel")
+	c.next(t)
+	p.Close()
+	c.none(t, "a closed publisher")
+	if f.openCount() != 3 {
+		t.Fatalf("a closed publisher opens no stream: %d opens", f.openCount())
+	}
+	if p.Put(kernelField, 5, pushValue("d")) {
+		t.Fatal("a closed publisher takes no slice")
+	}
+}
+
+// The reconnect schedule: growing, jittered, capped, and reset by an answered stream.
+func TestPublisherReconnectSchedule(t *testing.T) {
+	f := newPushFleet(t)
+	kernel := f.start("kernel", kernelField)
+	c := newPushClock()
+	p := newTestPublisher(f, c)
+	defer p.Close()
+
+	// The owner unreachable: the schedule grows, jittered, to its cap.
+	f.down.Store(true)
+	p.Put(kernelField, 1, pushValue("a"))
+	var delays []time.Duration
+	for i := 0; i < 9; i++ {
+		d := c.next(t)
+		delays = append(delays, d)
+		c.release <- struct{}{}
+	}
+	if first := delays[0]; first < 500*time.Millisecond || first > 625*time.Millisecond {
+		t.Fatalf("the first reconnect is the schedule's first step, jittered: %v", first)
+	}
+	if last := delays[len(delays)-1]; last < 30*time.Second || last > 37500*time.Millisecond {
+		t.Fatalf("the schedule is capped at 30s, jittered: %v", last)
+	}
+
+	// Refused (the registry does not hold the tenant yet): retried the same way.
+	f.down.Store(false)
+	f.held.Store(false)
+	c.run(t)
+	if d := c.next(t); d < 30*time.Second {
+		t.Fatalf("an unanswered stream keeps the schedule: %v", d)
+	}
+	if heldAt(kernel, kernelField) != "" {
+		t.Fatal("a refused stream delivers nothing")
+	}
+
+	// Admitted: the snapshot, and an answered stream starts the schedule over.
+	f.held.Store(true)
+	c.release <- struct{}{}
+	eventually(t, kernel, kernelField, "a@1", "the snapshot once admitted")
+	f.cut("kernel")
+	if again := c.next(t); again > 625*time.Millisecond {
+		t.Fatalf("an answered stream resets the schedule: %v", again)
+	}
+}

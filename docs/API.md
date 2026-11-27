@@ -307,22 +307,30 @@ holds each tenant's slice in memory only, in Go, Java and Rust:
   acked `STALE` and changes nothing. A slice a snapshot does not name keeps what
   is held; a slice the tenant no longer holds comes `absent`, at a new version.
 
-The tenant's end is `ConfigPushPublisher` (Java, `chassis/configpush`; Go and Rust
-to come), which a tenant's record store runs:
+The tenant's end is the publisher (`chassis/configpush`), which a tenant's
+record store runs:
 
-- `new ConfigPushPublisher(owners, opener, scheduler)`: `owners` maps each
+- Java: `new ConfigPushPublisher(owners, opener, scheduler)`: `owners` maps each
   registered `tenant_slice_field` to its owner's routing label; `opener` opens a
   `Push` stream to a label (the store's ConfigPush client); `scheduler` runs a
   reconnect after its delay.
-- `put(field, version, value)` and `remove(field, version)` feed it a slice's
-  change at the store's revision. A field no owner registers, or a version not
-  above 0, is refused (`false`); a version not greater than the one held is
-  dropped.
+- Go: `configpush.NewPublisher(owners, open, logger)`, `open` a
+  `configpush.Opener`, `func(ctx, owner string) (ConfigPush_PushClient, error)`;
+  each owner's stream runs on a goroutine of its own.
+- Rust: `configpush::Publisher::new(owners, opener)`, `opener` a
+  `configpush::publisher::Opener`, which sends the stream's `Frames` to a label
+  and returns its `Acks`; each owner's stream runs on a task of the tokio
+  runtime it is fed on.
+- `put(field, version, value)` and `remove(field, version)` (Go: `Put`,
+  `Remove`) feed it a slice's change at the store's revision. A field no owner
+  registers, a version not above 0, or a closed publisher is refused (`false`);
+  a version not greater than the one held is dropped.
 - It opens an owner's stream on the first slice it holds for that owner, sends a
   snapshot of that owner's slices first and then each newer version. Any end of
   the stream reopens it on the chassis reconnect schedule (0.5s doubling to 30s,
   jittered, reset by an ack) and sends the snapshot again. A `STALE` ack is no
-  error. `close()` ends every stream.
+  error. `close()` ends every stream (Go: `Close()`; Rust: `close().await`,
+  which returns once every stream's task has).
 
 ## Handler And Wrappers
 

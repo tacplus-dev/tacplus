@@ -6,10 +6,11 @@ edition = "2021"
 license = "{{.License}}"
 {{- end}}
 publish = false
-description = "The owner's receiver of a pushed tenant config slice (sys/configpush.proto, tacplus#927)"
+description = "The owner's receiver and the tenant's publisher of a pushed tenant config slice (sys/configpush.proto, tacplus#927)"
 
 [dependencies]
 {{.CrateBasePath}}-types = { path = "../../types" }
+servicemanager = { path = "../servicemanager" }
 spiffe = { path = "../spiffe" }
 async-trait = { workspace = true }
 prost = { workspace = true }

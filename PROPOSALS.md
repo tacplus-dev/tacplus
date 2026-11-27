@@ -1108,11 +1108,11 @@ the looper then marks it `promoted` or `declined` here with the date.
   separate from `TenantConfig`, and an owner declares at most one pushed slice. Two pushed slices per owner would
   need a second registered number (`--pushed-slice`, say). The owner's receiver is generated in Go, Java and
   Rust, and `cross-test/proto-tenantslice`'s tenancy owns a pushed slice (`TenancyTenantSettings`), whose receiver
-  every language's tenancy build asserts and compiles. The publisher's engine is generated in Java
-  (`ConfigPushPublisher`), and its self-test runs it against the generated receiver in process. Left: feeding it
+  every language's tenancy build asserts and compiles. The publisher's engine is generated in Go, Java and
+  Rust, and each language's self-test runs it against that language's generated receiver in process. Left: feeding it
   from a tenant's record store (a sys record, `configpush.TenantSliceRecord {slice_field, value}`, that the store
   hosts and watches, with the record revision as the version, plus a ConfigPush client per owner label from the
-  registry), the Go and Rust engines, the `codegen-config.json` ConfigPush audience, and a cross-test of a
+  registry), the `codegen-config.json` ConfigPush audience, and a cross-test of a
   store's publisher against an owner over the wire.
 - **Rebuild the build images when an upstream stage image moves** (2026-11-20, #901): `docker:29-cli` moved to
   29.10.0 (go1.27.4, fixing CVE-2026-97054) on 2026-11-16 22:07Z. Every `build:*` had been built that morning, so the

@@ -1,0 +1,534 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+//
+// CODE GENERATED - DO NOT EDIT
+//! The tenant's end of a pushed tenant config slice: the publisher a tenant's
+//! record store runs, which holds one Push stream to each owner it holds a
+//! slice for (the same engine as the Go and Java publishers). The store feeds
+//! it every change of a slice, at the revision the store gave it; the
+//! publisher keeps the newest version of each slice, and:
+//!
+//! - opens an owner's stream once it holds a slice of that owner, and sends a
+//!   snapshot of every slice of that owner it holds first;
+//! - then sends each newer version of one slice as a version frame, and never
+//!   an older or equal one;
+//! - after any end of the stream (a break, the owner's restart, a refusal),
+//!   opens it again on the reconnect schedule, jittered, and sends the
+//!   snapshot again: the owner holds slices in memory only, so a restarted
+//!   owner has none until it does;
+//! - takes a STALE ack as the owner already holding that version or a newer
+//!   one, which is no error.
+//!
+//! A slice is its owner's registered tenant_slice_field: the store's run knows
+//! an owner only through the registry, the field and the owner's routing
+//! label. The publisher holds nothing durable: the store is the slices'
+//! source, and it feeds every slice it holds again after its own restart.
+
+use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use servicemanager::backoff::{jitter_reconnect_backoff, next_reconnect_backoff, RECONNECT_INITIAL_BACKOFF};
+use tokio::sync::{mpsc, watch, Notify};
+use tokio::task::JoinHandle;
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_stream::{Stream, StreamExt};
+use tonic::Status;
+use tracing::{debug, info, warn};
+
+use {{.CrateBasePathUnderscore}}_types::sys::configpush::configpush::{
+    config_push_frame, ConfigPushAck, ConfigPushFrame, ConfigPushOutcome, ConfigPushSlice, ConfigPushSnapshot,
+    ConfigPushVersion,
+};
+
+/// A boxed future, as an [`Opener`] and the reconnect clock return.
+pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+
+/// The frames of one Push stream, the publisher's side of it.
+pub type Frames = UnboundedReceiverStream<ConfigPushFrame>;
+
+/// The acks of one Push stream, the owner's side of it.
+pub type Acks = Pin<Box<dyn Stream<Item = Result<ConfigPushAck, Status>> + Send>>;
+
+/// Opens one Push stream to the owner at a routing label, sending it frames:
+/// for a record store, its ConfigPush client's push on that owner's channel.
+pub type Opener = Arc<dyn Fn(String, Frames) -> BoxFuture<Result<Acks, Status>> + Send + Sync>;
+
+/// Waits a delay: the reconnect clock.
+type Sleep = Arc<dyn Fn(Duration) -> BoxFuture<()> + Send + Sync>;
+
+/// One owner's stream and the slices held for it.
+struct Owner {
+    label: String,
+    held: Mutex<BTreeMap<i32, ConfigPushSlice>>,
+    /// Signalled after every change of held.
+    changed: Notify,
+}
+
+struct Inner {
+    owners: HashMap<i32, String>,
+    opener: Opener,
+    sleep: Sleep,
+    closed: watch::Sender<bool>,
+    streams: Mutex<Streams>,
+}
+
+#[derive(Default)]
+struct Streams {
+    closed: bool,
+    owners: HashMap<String, Arc<Owner>>,
+    tasks: Vec<JoinHandle<()>>,
+}
+
+/// The tenant's end of pushed slices. Clones share one publisher; it runs
+/// its streams on the tokio runtime it is fed on.
+#[derive(Clone)]
+pub struct Publisher {
+    inner: Arc<Inner>,
+}
+
+impl Publisher {
+    /// A publisher. owners maps every registered tenant_slice_field the store
+    /// may hold to the routing label of the slice's owner; opener opens an
+    /// owner's Push stream.
+    pub fn new(owners: HashMap<i32, String>, opener: Opener) -> Self {
+        Self::with_sleep(owners, opener, Arc::new(|d| Box::pin(tokio::time::sleep(d))))
+    }
+
+    fn with_sleep(owners: HashMap<i32, String>, opener: Opener, sleep: Sleep) -> Self {
+        let (closed, _) = watch::channel(false);
+        Self { inner: Arc::new(Inner { owners, opener, sleep, closed, streams: Mutex::new(Streams::default()) }) }
+    }
+
+    /// Holds the slice field's value at version, the revision the store gave
+    /// the write, and sends it to the slice's owner. A version not greater than
+    /// the one held changes nothing. False for a field no owner registers, a
+    /// version not above 0, or a closed publisher.
+    pub fn put(&self, field: i32, version: i64, value: Vec<u8>) -> bool {
+        self.change(ConfigPushSlice { slice_field: field, version, value, ..Default::default() })
+    }
+
+    /// Holds the slice field as absent at version: the tenant no longer holds
+    /// it, and its owner then reads none. As put otherwise.
+    pub fn remove(&self, field: i32, version: i64) -> bool {
+        self.change(ConfigPushSlice { slice_field: field, version, absent: true, ..Default::default() })
+    }
+
+    fn change(&self, s: ConfigPushSlice) -> bool {
+        let Some(label) = self.inner.owners.get(&s.slice_field) else {
+            warn!(slice_field = s.slice_field, "configpush: a slice_field no registered owner's: not pushed");
+            return false;
+        };
+        if s.version <= 0 {
+            warn!(slice_field = s.slice_field, version = s.version, "configpush: a version is greater than 0");
+            return false;
+        }
+        let mut streams = self.inner.streams.lock().unwrap_or_else(|e| e.into_inner());
+        if streams.closed {
+            return false;
+        }
+        let (owner, new) = match streams.owners.get(label) {
+            Some(o) => (o.clone(), false),
+            None => {
+                let o = Arc::new(Owner { label: label.clone(), held: Mutex::new(BTreeMap::new()), changed: Notify::new() });
+                streams.owners.insert(label.clone(), o.clone());
+                (o, true)
+            }
+        };
+        {
+            let mut held = owner.held.lock().unwrap_or_else(|e| e.into_inner());
+            if held.get(&s.slice_field).map_or(true, |prev| s.version > prev.version) {
+                held.insert(s.slice_field, s);
+            }
+        }
+        owner.changed.notify_one();
+        if new {
+            streams.tasks.push(tokio::spawn(run(self.inner.clone(), owner)));
+        }
+        true
+    }
+
+    /// Ends every stream, opens none again, and returns once every stream's
+    /// task has.
+    pub async fn close(&self) {
+        let tasks = {
+            let mut streams = self.inner.streams.lock().unwrap_or_else(|e| e.into_inner());
+            streams.closed = true;
+            std::mem::take(&mut streams.tasks)
+        };
+        self.inner.closed.send_replace(true);
+        for t in tasks {
+            let _ = t.await;
+        }
+    }
+}
+
+/// Resolves once the publisher is closed.
+async fn until_closed(closed: &mut watch::Receiver<bool>) {
+    let _ = closed.wait_for(|c| *c).await;
+}
+
+/// Holds o's stream open: each end of it opens it again on the reconnect
+/// schedule, which an answered stream starts over.
+async fn run(inner: Arc<Inner>, o: Arc<Owner>) {
+    let mut closed = inner.closed.subscribe();
+    let mut delay = RECONNECT_INITIAL_BACKOFF;
+    loop {
+        let answered = serve(&inner, &o, &mut closed).await;
+        if *closed.borrow() {
+            return;
+        }
+        if answered {
+            delay = RECONNECT_INITIAL_BACKOFF;
+        }
+        tokio::select! {
+            _ = (inner.sleep)(jitter_reconnect_backoff(delay)) => {}
+            _ = until_closed(&mut closed) => return,
+        }
+        delay = next_reconnect_backoff(delay);
+    }
+}
+
+/// Opens one stream to o, sends the snapshot and then each newer version,
+/// until the stream ends. Whether the owner answered it with an ack: it
+/// admitted it.
+async fn serve(inner: &Inner, o: &Owner, closed: &mut watch::Receiver<bool>) -> bool {
+    let (tx, rx) = mpsc::unbounded_channel();
+    // sent is the version of each slice the stream has carried.
+    let mut sent: HashMap<i32, i64> = HashMap::new();
+    let slices: Vec<ConfigPushSlice> = {
+        let held = o.held.lock().unwrap_or_else(|e| e.into_inner());
+        held.values().cloned().collect()
+    };
+    for s in &slices {
+        sent.insert(s.slice_field, s.version);
+    }
+    let snapshot = ConfigPushFrame {
+        frame: Some(config_push_frame::Frame::Snapshot(ConfigPushSnapshot { slices, ..Default::default() })),
+        ..Default::default()
+    };
+    let _ = tx.send(snapshot);
+    // trace: unrelated: the store's own background push, caused by no inbound request
+    let opened = tokio::select! {
+        r = (inner.opener)(o.label.clone(), UnboundedReceiverStream::new(rx)) => r,
+        _ = until_closed(closed) => return false,
+    };
+    let mut acks = match opened {
+        Ok(acks) => acks,
+        Err(status) => {
+            warn!(owner = %o.label, code = ?status.code(), "configpush: opening the stream failed: {}", status.message());
+            return false;
+        }
+    };
+    let mut answered = false;
+    loop {
+        tokio::select! {
+            ack = acks.next() => match ack {
+                Some(Ok(ack)) => {
+                    answered = true;
+                    if ack.outcome == ConfigPushOutcome::Stale as i32 {
+                        debug!(owner = %o.label, slice_field = ack.slice_field, version = ack.version,
+                            "configpush: the owner already holds this version or a newer one");
+                    }
+                }
+                Some(Err(status)) => {
+                    warn!(owner = %o.label, code = ?status.code(), "configpush: the stream ended: {}", status.message());
+                    return answered;
+                }
+                None => {
+                    info!(owner = %o.label, "configpush: the owner ended the stream");
+                    return answered;
+                }
+            },
+            _ = o.changed.notified() => {
+                let versions: Vec<ConfigPushSlice> = {
+                    let held = o.held.lock().unwrap_or_else(|e| e.into_inner());
+                    held.values().filter(|s| s.version > sent.get(&s.slice_field).copied().unwrap_or(0)).cloned().collect()
+                };
+                for s in versions {
+                    sent.insert(s.slice_field, s.version);
+                    // A failed send is an ended stream: its status comes in the acks.
+                    let _ = tx.send(ConfigPushFrame {
+                        frame: Some(config_push_frame::Frame::Version(ConfigPushVersion { slice: Some(s), ..Default::default() })),
+                        ..Default::default()
+                    });
+                }
+            }
+            // Dropping the frames' sender ends the stream from this side.
+            _ = until_closed(closed) => return answered,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Message, Receiver, Slice, TenantRegistry};
+    use async_trait::async_trait;
+    use prost::Message as _;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use tokio::sync::oneshot;
+    use tokio_stream::wrappers::ReceiverStream;
+    use tonic::metadata::MetadataMap;
+
+    const TD: &str = "example.org";
+    const TID: &str = "t0000001";
+    const KERNEL: i32 = 7;
+    const AUDIT: i32 = 9;
+
+    /// A slice's message for the test: a ConfigPushSlice carrying a string.
+    fn decode(value: &[u8]) -> Result<Message, String> {
+        Ok(Arc::new(ConfigPushSlice::decode(value).map_err(|e| e.to_string())?))
+    }
+
+    fn value(s: &str) -> Vec<u8> {
+        ConfigPushSlice { value: s.as_bytes().to_vec(), ..Default::default() }.encode_to_vec()
+    }
+
+    fn held(r: &Receiver, field: i32) -> Option<String> {
+        let (m, v) = r.get(TID, field)?;
+        let m = m.downcast::<ConfigPushSlice>().expect("the slice's message");
+        Some(format!("{}@{}", String::from_utf8(m.value.clone()).unwrap(), v))
+    }
+
+    async fn eventually(r: &Receiver, field: i32, want: Option<&str>, why: &str) {
+        for _ in 0..500 {
+            if held(r, field).as_deref() == want {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("{why}: holds {:?}, want {want:?}", held(r, field));
+    }
+
+    /// The reconnect clock, run by hand: each wait is asked, with its release.
+    struct Clock {
+        asked: tokio::sync::Mutex<mpsc::UnboundedReceiver<(Duration, oneshot::Sender<()>)>>,
+    }
+
+    impl Clock {
+        fn new() -> (Arc<Self>, Sleep) {
+            let (tx, rx) = mpsc::unbounded_channel();
+            let sleep: Sleep = Arc::new(move |d| {
+                let (release, wait) = oneshot::channel();
+                let _ = tx.send((d, release));
+                Box::pin(async move {
+                    if wait.await.is_err() {
+                        std::future::pending::<()>().await;
+                    }
+                })
+            });
+            (Arc::new(Self { asked: tokio::sync::Mutex::new(rx) }), sleep)
+        }
+
+        /// The one reconnect the publisher schedules: its delay and release.
+        async fn next(&self) -> (Duration, oneshot::Sender<()>) {
+            tokio::time::timeout(Duration::from_secs(5), self.asked.lock().await.recv())
+                .await
+                .expect("no reconnect was scheduled")
+                .expect("the clock is held")
+        }
+
+        /// Runs the reconnect next scheduled.
+        async fn run(&self) {
+            let (_, release) = self.next().await;
+            let _ = release.send(());
+        }
+
+        async fn none(&self, why: &str) {
+            if let Ok(Some((d, _))) = tokio::time::timeout(Duration::from_millis(100), self.asked.lock().await.recv()).await {
+                panic!("{why}: a reconnect after {d:?}");
+            }
+        }
+    }
+
+    struct Held(Arc<AtomicBool>);
+
+    #[async_trait]
+    impl TenantRegistry for Held {
+        async fn holds_tenant(&self, tid: &str) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+            Ok(self.0.load(Ordering::SeqCst) && tid == TID)
+        }
+    }
+
+    /// The owners, each a receiver reached in process; a stream to one can
+    /// be broken.
+    #[derive(Clone, Default)]
+    struct Fleet {
+        owners: Arc<Mutex<HashMap<String, Receiver>>>,
+        cuts: Arc<Mutex<HashMap<String, mpsc::Sender<Result<ConfigPushAck, Status>>>>>,
+        down: Arc<AtomicBool>,
+        held: Arc<AtomicBool>,
+        opens: Arc<AtomicUsize>,
+    }
+
+    impl Fleet {
+        fn new() -> Self {
+            let f = Self::default();
+            f.held.store(true, Ordering::SeqCst);
+            f
+        }
+
+        /// A new receiver of field at label: a restarted owner, if label had one.
+        fn start(&self, label: &str, field: i32) -> Receiver {
+            let subject: crate::Subject = Arc::new(|_: &MetadataMap| Ok(format!("spiffe://{TD}/tenants/{TID}/services/stratum")));
+            let r = Receiver::new(&[Slice { field, decode }], Some(subject));
+            r.set_trust_domain(TD);
+            r.set_tenant_registry(Arc::new(Held(self.held.clone())));
+            self.owners.lock().unwrap().insert(label.to_string(), r.clone());
+            r
+        }
+
+        fn opener(&self) -> Opener {
+            let f = self.clone();
+            Arc::new(move |label: String, frames: Frames| {
+                let f = f.clone();
+                Box::pin(async move {
+                    f.opens.fetch_add(1, Ordering::SeqCst);
+                    if f.down.load(Ordering::SeqCst) {
+                        return Err(Status::unavailable("connection refused"));
+                    }
+                    let r = f.owners.lock().unwrap().get(&label).cloned().expect("an owner");
+                    // As the receiver's push: admit, then serve the frames.
+                    let tid = r.admit(&MetadataMap::new()).await?;
+                    let (tx, rx) = mpsc::channel(64);
+                    let (cut, cuts) = mpsc::channel(1);
+                    f.cuts.lock().unwrap().insert(label, cut);
+                    tokio::spawn(async move {
+                        if let Err(status) = r.serve(&tid, frames.map(Ok), &tx).await {
+                            let _ = tx.send(Err(status)).await;
+                        }
+                    });
+                    let acks: Acks = Box::pin(ReceiverStream::new(rx).merge(ReceiverStream::new(cuts)));
+                    Ok(acks)
+                })
+            })
+        }
+
+        /// Breaks the stream to label, as a lost connection does.
+        async fn cut(&self, label: &str) {
+            let cut = self.cuts.lock().unwrap().get(label).cloned().expect("a stream");
+            let _ = cut.send(Err(Status::unavailable("connection lost"))).await;
+        }
+
+        fn opens(&self) -> usize {
+            self.opens.load(Ordering::SeqCst)
+        }
+    }
+
+    fn publisher(f: &Fleet, sleep: Sleep) -> Publisher {
+        let owners = HashMap::from([(KERNEL, "kernel".to_string()), (AUDIT, "audit".to_string())]);
+        Publisher::with_sleep(owners, f.opener(), sleep)
+    }
+
+    /// The snapshot on open, then only newer versions, one stream to each owner.
+    #[tokio::test]
+    async fn snapshot_then_versions() {
+        let f = Fleet::new();
+        let kernel = f.start("kernel", KERNEL);
+        let audit = f.start("audit", AUDIT);
+        let (clock, sleep) = Clock::new();
+        let p = publisher(&f, sleep);
+        assert_eq!(f.opens(), 0, "no stream opens before the store holds a slice");
+
+        assert!(p.put(KERNEL, 2, value("a")), "the put of a registered slice");
+        eventually(&kernel, KERNEL, Some("a@2"), "the snapshot").await;
+        assert!(held(&audit, AUDIT).is_none() && f.opens() == 1, "only the slice's owner gets a stream");
+
+        p.put(KERNEL, 3, value("b"));
+        p.put(KERNEL, 3, value("c"));
+        p.put(KERNEL, 1, value("d"));
+        eventually(&kernel, KERNEL, Some("b@3"), "a version, then no older one").await;
+
+        p.put(AUDIT, 5, value("x"));
+        eventually(&audit, AUDIT, Some("x@5"), "the other owner's snapshot").await;
+        assert_eq!(f.opens(), 2, "one stream for each owner");
+
+        p.remove(KERNEL, 4);
+        eventually(&kernel, KERNEL, None, "a removed slice reads as none at its owner").await;
+
+        assert!(!p.put(99, 1, value("z")), "a slice no owner registers is refused");
+        assert!(!p.put(AUDIT, 0, value("z")), "a version not above 0 is refused");
+        clock.none("no stream broke").await;
+        assert_eq!(f.opens(), 2, "no stream broke");
+        p.close().await;
+    }
+
+    /// The snapshot again after a break and after the owner's restart.
+    #[tokio::test]
+    async fn snapshot_again_after_a_break_and_a_restart() {
+        let f = Fleet::new();
+        let kernel = f.start("kernel", KERNEL);
+        let (clock, sleep) = Clock::new();
+        let p = publisher(&f, sleep);
+        p.put(KERNEL, 2, value("a"));
+        eventually(&kernel, KERNEL, Some("a@2"), "the snapshot").await;
+
+        // The owner restarts: a new receiver holds nothing until the snapshot.
+        let restarted = f.start("kernel", KERNEL);
+        f.cut("kernel").await;
+        assert!(held(&restarted, KERNEL).is_none(), "a restarted owner fails closed until the snapshot");
+        let (_, release) = clock.next().await;
+        // A change while the stream is down is held and goes in the snapshot.
+        p.put(KERNEL, 3, value("b"));
+        assert_eq!(f.opens(), 1, "no open before the reconnect's delay");
+        let _ = release.send(());
+        eventually(&restarted, KERNEL, Some("b@3"), "the snapshot after a restart").await;
+
+        // A break with the owner still up: the snapshot again is acked STALE, and changes nothing.
+        f.cut("kernel").await;
+        clock.run().await;
+        p.put(KERNEL, 4, value("c"));
+        eventually(&restarted, KERNEL, Some("c@4"), "versions after the snapshot again").await;
+        assert_eq!(f.opens(), 3, "the snapshot again after a break");
+
+        f.cut("kernel").await;
+        let _pending = clock.next().await;
+        p.close().await;
+        clock.none("a closed publisher").await;
+        assert_eq!(f.opens(), 3, "a closed publisher opens no stream");
+        assert!(!p.put(KERNEL, 5, value("d")), "a closed publisher takes no slice");
+    }
+
+    /// The reconnect schedule: growing, jittered, capped, and reset by an
+    /// answered stream.
+    #[tokio::test]
+    async fn reconnect_schedule() {
+        let f = Fleet::new();
+        let kernel = f.start("kernel", KERNEL);
+        let (clock, sleep) = Clock::new();
+        let p = publisher(&f, sleep);
+
+        // The owner unreachable: the schedule grows, jittered, to its cap.
+        f.down.store(true, Ordering::SeqCst);
+        p.put(KERNEL, 1, value("a"));
+        let mut delays = Vec::new();
+        for _ in 0..9 {
+            let (d, release) = clock.next().await;
+            delays.push(d);
+            let _ = release.send(());
+        }
+        let (first, last) = (delays[0], delays[8]);
+        assert!(first >= Duration::from_millis(500) && first <= Duration::from_millis(625), "the first step, jittered: {first:?}");
+        assert!(last >= Duration::from_secs(30) && last <= Duration::from_millis(37_500), "capped at 30s, jittered: {last:?}");
+
+        // Refused (the registry does not hold the tenant yet): retried the same way.
+        f.down.store(false, Ordering::SeqCst);
+        f.held.store(false, Ordering::SeqCst);
+        clock.run().await;
+        let (d, release) = clock.next().await;
+        assert!(d >= Duration::from_secs(30), "an unanswered stream keeps the schedule: {d:?}");
+        assert!(held(&kernel, KERNEL).is_none(), "a refused stream delivers nothing");
+
+        // Admitted: the snapshot, and an answered stream starts the schedule over.
+        f.held.store(true, Ordering::SeqCst);
+        let _ = release.send(());
+        eventually(&kernel, KERNEL, Some("a@1"), "the snapshot once admitted").await;
+        f.cut("kernel").await;
+        let (again, _) = clock.next().await;
+        assert!(again <= Duration::from_millis(625), "an answered stream resets the schedule: {again:?}");
+        p.close().await;
+    }
+}

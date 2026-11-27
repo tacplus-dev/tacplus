@@ -189,6 +189,10 @@ type javaSmTemplateData struct {
 	AutoTlsKeyType        string
 	HasSmb                bool // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
 	HasMemberPort         bool // true when this service declares (spec.member_port): the ServiceManager owns its member port (tacplus#212)
+	// ConfigPushSlices are the pushed tenant slices this service owns
+	// (tacplus#927): the ServiceManager serves configpush.ConfigPush, holds
+	// them, and its Handler is their TenantRegistry.
+	ConfigPushSlices      []javaConfigPushSlice
 	SmbAuthorityServiceID string
 	HasSubscriptions      bool
 	// HasRecordSubscriptions is true when any subscription sets
@@ -431,6 +435,14 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 	}
 
 	hasSmb := false
+	var configPushSlices []javaConfigPushSlice
+	if hasTlsGrpc {
+		// The receiver is served beside the service's TLS gRPC services.
+		var err error
+		if configPushSlices, err = javaConfigPushSlices(config, protoDir); err != nil {
+			return javaSmTemplateData{}, err
+		}
+	}
 	hasMemberPort := false
 	smbAuthorityServiceID := ""
 	hasTypedHealth := false
@@ -721,6 +733,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		AutoTlsKeyType:         config.AutoTlsKeyType(),
 		HasSmb:                 hasSmb,
 		HasMemberPort:          hasMemberPort,
+		ConfigPushSlices:       configPushSlices,
 		SmbAuthorityServiceID:  smbAuthorityServiceID,
 		HasSubscriptions:       len(subs) > 0,
 		HasRecordSubscriptions: hasRecordSubscriptions,

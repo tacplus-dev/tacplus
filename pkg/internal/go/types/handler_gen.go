@@ -84,6 +84,35 @@ func generateHandlerInterfaces(config *tactype.Config, svcs []ServiceInfo, allFi
 	}
 
 	zap.L().Info("Generated handler interface", zap.String("path", outputPath))
+	if len(data.ConfigPushSlices) > 0 {
+		return generateConfigPushFile(outputDir, data)
+	}
+	return nil
+}
+
+// generateConfigPushFile writes sm/configpush.go: the receiver of the pushed
+// tenant slices this service owns and their typed accessors (tacplus#927).
+func generateConfigPushFile(outputDir string, data serviceManagerTemplateData) error {
+	tmplContent, err := loadTemplate("configpush.go.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to load configpush template: %w", err)
+	}
+	tmpl, err := template.New("configpush").Funcs(header.Funcs()).Parse(tmplContent)
+	if err != nil {
+		return fmt.Errorf("failed to parse configpush template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to execute configpush template: %w", err)
+	}
+	formatted, err := format.Source(buf.Bytes())
+	if err != nil {
+		return fmt.Errorf("failed to format configpush.go: %w", err)
+	}
+	outputPath := filepath.Join(outputDir, "configpush.go")
+	if err := os.WriteFile(outputPath, formatted, 0644); err != nil {
+		return fmt.Errorf("failed to write configpush.go: %w", err)
+	}
 	return nil
 }
 
@@ -342,6 +371,10 @@ type serviceManagerTemplateData struct {
 	// and wires it into those wrappers.
 	HasApprovalBroker bool
 	ApprovalBroker    ApprovalBrokerTemplateEntry
+	// ConfigPushSlices are the pushed tenant slices this service owns
+	// (tacplus#927): the ServiceManager serves configpush.ConfigPush, holds
+	// them, and its Handler is their TenantRegistry.
+	ConfigPushSlices []goConfigPushSlice
 }
 
 // ApprovalBrokerTemplateEntry names the approval-broker RPC the generated
@@ -475,6 +508,16 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 	diskStores, err := collectDiskStoreRuntimeEntries(config, grpcSvcs)
 	if err != nil {
 		return serviceManagerTemplateData{}, err
+	}
+
+	var configPushSlices []goConfigPushSlice
+	if hasTlsGrpc {
+		// The receiver is served beside the service's TLS gRPC services: a
+		// service that hosts none serves no pushed slice.
+		configPushSlices, err = goConfigPushSlices(config)
+		if err != nil {
+			return serviceManagerTemplateData{}, err
+		}
 	}
 
 	hasServiceHealthState := false
@@ -941,6 +984,7 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		HasDiskStores:            len(diskStores) > 0,
 		HasApprovalBroker:        hasApprovalBroker,
 		ApprovalBroker:           approvalBroker,
+		ConfigPushSlices:         configPushSlices,
 		HostsC2DStandalone: service.HostsC2DStandalone(service.C2DHostShape{
 			HostsC2D:       len(c2dSockets) > 0,
 			HostsNonC2D:    hasTlsGrpc,

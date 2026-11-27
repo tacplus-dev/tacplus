@@ -77,6 +77,14 @@ NewTlsCert(certChain *x509_pb.X509CertChain, privateKeyDER []byte) error
 NewSmbCert(memberChain *x509_pb.X509CertChain, privateKeyDER []byte, ca *x509_pb.X509Cert) error
 {{- end}}
 
+{{- if .ConfigPushSlices}}
+// HoldsTenant reports whether tid is a tenant this service holds (its tenant
+// registry). Each tenant's record store pushes this service's pushed config
+// slices (sm.ConfigPush(), tacplus#927); a stream is admitted only for a
+// tenant HoldsTenant holds, and refused PERMISSION_DENIED on false or an error.
+HoldsTenant(ctx context.Context, tid string) (bool, error)
+{{- end}}
+
 // Shutdown is called during graceful shutdown. Drain in-flight work and
 // release resources. The context carries the deadline from
 // shutdown_timeout_seconds. On forced shutdown (second signal or timeout)

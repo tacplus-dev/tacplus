@@ -1,0 +1,231 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+package configpush
+
+import (
+	"context"
+	"errors"
+	"io"
+	"testing"
+
+	configpush_pb "{{.ModuleBasePath}}/types/sys/configpush"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+)
+
+const (
+	testTD    = "example.org"
+	testTid   = "t0000001"
+	testField = int32(7)
+)
+
+type fakeRegistry map[string]bool
+
+func (f fakeRegistry) HoldsTenant(_ context.Context, tid string) (bool, error) { return f[tid], nil }
+
+// fakeStream feeds frames to Push and records its acks.
+type fakeStream struct {
+	grpc.ServerStream
+	ctx    context.Context
+	frames []*configpush_pb.ConfigPushFrame
+	acks   []*configpush_pb.ConfigPushAck
+}
+
+func (s *fakeStream) Context() context.Context { return s.ctx }
+func (s *fakeStream) SetHeader(metadata.MD) error  { return nil }
+func (s *fakeStream) SendHeader(metadata.MD) error { return nil }
+func (s *fakeStream) SetTrailer(metadata.MD)       {}
+
+func (s *fakeStream) Recv() (*configpush_pb.ConfigPushFrame, error) {
+	if len(s.frames) == 0 {
+		return nil, io.EOF
+	}
+	f := s.frames[0]
+	s.frames = s.frames[1:]
+	return f, nil
+}
+
+func (s *fakeStream) Send(a *configpush_pb.ConfigPushAck) error {
+	s.acks = append(s.acks, a)
+	return nil
+}
+
+// decodeString is a slice's decoder: a StringValue, refused when it is "bad"
+// (its generated validation).
+func decodeString(b []byte) (proto.Message, error) {
+	m := &wrapperspb.StringValue{}
+	if err := proto.Unmarshal(b, m); err != nil {
+		return nil, err
+	}
+	if m.GetValue() == "bad" {
+		return nil, errors.New("validation failed")
+	}
+	return m, nil
+}
+
+func newTestReceiver(subject string) *Receiver {
+	r := NewReceiver([]Slice{ {Field: testField, Decode: decodeString} },
+		func(context.Context) (string, error) { return subject, nil }, nil)
+	r.SetTrustDomain(testTD)
+	r.SetTenantRegistry(fakeRegistry{testTid: true})
+	return r
+}
+
+func stratum(tid string) string { return "spiffe://" + testTD + "/tenants/" + tid + "/services/stratum" }
+
+func slice(field int32, version int64, value string) *configpush_pb.ConfigPushSlice {
+	b, _ := proto.Marshal(wrapperspb.String(value))
+	return &configpush_pb.ConfigPushSlice{SliceField: field, Version: version, Value: b}
+}
+
+func snapshot(slices ...*configpush_pb.ConfigPushSlice) *configpush_pb.ConfigPushFrame {
+	return &configpush_pb.ConfigPushFrame{Frame: &configpush_pb.ConfigPushFrame_Snapshot{Snapshot: &configpush_pb.ConfigPushSnapshot{Slices: slices}}}
+}
+
+func version(s *configpush_pb.ConfigPushSlice) *configpush_pb.ConfigPushFrame {
+	return &configpush_pb.ConfigPushFrame{Frame: &configpush_pb.ConfigPushFrame_Version{Version: &configpush_pb.ConfigPushVersion{Slice: s}}}
+}
+
+func push(t *testing.T, r *Receiver, frames ...*configpush_pb.ConfigPushFrame) (*fakeStream, error) {
+	t.Helper()
+	s := &fakeStream{ctx: context.Background(), frames: frames}
+	return s, r.Push(s)
+}
+
+func heldValue(t *testing.T, r *Receiver) (string, int64, bool) {
+	t.Helper()
+	m, v, ok := r.Get(testTid, testField)
+	if !ok {
+		return "", 0, false
+	}
+	return m.(*wrapperspb.StringValue).GetValue(), v, true
+}
+
+// The owner sees nothing for a tenant until its snapshot arrives, then the
+// newest version; an equal or lower version is acked STALE and changes nothing.
+func TestReceiverFailsClosedThenHoldsNewestVersion(t *testing.T) {
+	r := newTestReceiver(stratum(testTid))
+	if _, _, ok := heldValue(t, r); ok {
+		t.Fatal("a tenant with no snapshot must have no slice")
+	}
+	var changes int
+	r.Watch(func(tid string, field int32) {
+		if tid == testTid && field == testField {
+			changes++
+		}
+	})
+	s, err := push(t, r, snapshot(slice(testField, 2, "a")), version(slice(testField, 3, "b")),
+		version(slice(testField, 3, "c")), version(slice(testField, 1, "d")))
+	if err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	if got, v, ok := heldValue(t, r); !ok || got != "b" || v != 3 {
+		t.Fatalf("held = %q@%d ok=%v, want b@3", got, v, ok)
+	}
+	want := []configpush_pb.ConfigPushOutcome{
+		configpush_pb.ConfigPushOutcome_CONFIG_PUSH_OUTCOME_ACCEPTED,
+		configpush_pb.ConfigPushOutcome_CONFIG_PUSH_OUTCOME_ACCEPTED,
+		configpush_pb.ConfigPushOutcome_CONFIG_PUSH_OUTCOME_STALE,
+		configpush_pb.ConfigPushOutcome_CONFIG_PUSH_OUTCOME_STALE,
+	}
+	if len(s.acks) != len(want) {
+		t.Fatalf("acks = %v", s.acks)
+	}
+	for i, a := range s.acks {
+		if a.GetOutcome() != want[i] || a.GetSliceField() != testField {
+			t.Fatalf("ack %d = %v, want %v", i, a, want[i])
+		}
+	}
+	if changes != 2 {
+		t.Fatalf("watch saw %d changes, want 2", changes)
+	}
+
+	// A new stream (the publisher reconnected) replays an older snapshot: the
+	// held version stays.
+	if _, err := push(t, r, snapshot(slice(testField, 2, "a"))); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	if got, v, _ := heldValue(t, r); got != "b" || v != 3 {
+		t.Fatalf("a stale snapshot replaced the slice: %q@%d", got, v)
+	}
+
+	// An absent slice at a newer version drops it.
+	absent := &configpush_pb.ConfigPushSlice{SliceField: testField, Version: 4, Absent: true}
+	if _, err := push(t, r, snapshot(absent)); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	if _, _, ok := heldValue(t, r); ok {
+		t.Fatal("an absent slice must read as none")
+	}
+}
+
+// Only a held tenant's own record store, in the owner's trust domain, is admitted.
+func TestReceiverAdmitsOnlyTheTenantsRecordStore(t *testing.T) {
+	for name, subject := range map[string]string{
+		"another service":      "spiffe://" + testTD + "/tenants/" + testTid + "/services/crew",
+		"a system service":     "spiffe://" + testTD + "/system/services/stratum",
+		"another trust domain": "spiffe://other.org/tenants/" + testTid + "/services/stratum",
+		"an unheld tenant":     stratum("t0000002"),
+		"a workload":           stratum(testTid) + "/workloads/x",
+		"not a tenant id":      stratum("T0000001"),
+	} {
+		r := newTestReceiver(subject)
+		_, err := push(t, r, snapshot(slice(testField, 1, "a")))
+		if status.Code(err) != codes.PermissionDenied || status.Convert(err).Message() != "" {
+			t.Fatalf("%s: want a bare PERMISSION_DENIED, got %v", name, err)
+		}
+	}
+
+	r := NewReceiver([]Slice{ {Field: testField, Decode: decodeString} },
+		func(context.Context) (string, error) { return stratum(testTid), nil }, nil)
+	r.SetTrustDomain(testTD)
+	if _, err := push(t, r, snapshot(slice(testField, 1, "a"))); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("a receiver with no tenant registry must admit nobody, got %v", err)
+	}
+
+	r = newTestReceiver(stratum(testTid))
+	r.subject = func(context.Context) (string, error) { return "", status.Error(codes.Unauthenticated, "token expired") }
+	if _, err := push(t, r, snapshot(slice(testField, 1, "a"))); status.Code(err) != codes.Unauthenticated || status.Convert(err).Message() != "" {
+		t.Fatalf("an unauthenticated stream must end with a bare UNAUTHENTICATED, got %v", err)
+	}
+}
+
+// The first frame is a snapshot; an unknown slice or a value that fails its
+// decode or validation ends the stream, and nothing of that frame is applied.
+func TestReceiverRefusals(t *testing.T) {
+	r := newTestReceiver(stratum(testTid))
+	if _, err := push(t, r, version(slice(testField, 1, "a"))); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("a first version frame: want FAILED_PRECONDITION, got %v", err)
+	}
+	if _, _, ok := heldValue(t, r); ok {
+		t.Fatal("a refused stream must not make the tenant known")
+	}
+	for name, frame := range map[string]*configpush_pb.ConfigPushFrame{
+		"unknown slice": snapshot(slice(testField, 1, "a"), slice(99, 1, "a")),
+		"invalid value": snapshot(slice(testField, 1, "bad")),
+		"undecodable":   snapshot(&configpush_pb.ConfigPushSlice{SliceField: testField, Version: 1, Value: []byte{0xff}}),
+		"twice":         snapshot(slice(testField, 1, "a"), slice(testField, 2, "b")),
+		"no version":    snapshot(slice(testField, 0, "a")),
+	} {
+		if _, err := push(t, r, frame); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("%s: want INVALID_ARGUMENT, got %v", name, err)
+		}
+		if _, _, ok := heldValue(t, r); ok {
+			t.Fatalf("%s: nothing of a refused frame may be applied", name)
+		}
+	}
+}
+
+func TestPublisherTenant(t *testing.T) {
+	if tid, ok := PublisherTenant(stratum(testTid), testTD); !ok || tid != testTid {
+		t.Fatalf("PublisherTenant = %q, %v", tid, ok)
+	}
+	if _, ok := PublisherTenant(stratum(testTid), ""); ok {
+		t.Fatal("an owner with no trust domain must admit nobody")
+	}
+}

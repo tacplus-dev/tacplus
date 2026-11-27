@@ -24,6 +24,9 @@ import (
 "net"
 "{{.ModuleBasePath}}/chassis/memberport"
 {{- end}}
+{{- if .ConfigPushSlices}}
+"{{.ModuleBasePath}}/chassis/configpush"
+{{- end}}
 {{if or .HasAutoTls .HasSmb}}
 "bytes"
 {{- if eq .AutoTlsKeyType "ecdsa"}}
@@ -169,6 +172,10 @@ auth             grpcserver.Authorizer
 authorizeFunc    func(ctx context.Context, fullMethod string, req any) (*wrapperToken.TokenWrapper, error)
 authenticateFunc func(ctx context.Context) (*wrapperToken.TokenWrapper, error)
 authenticateAtOrBelowFunc func(ctx context.Context, targetNamespace string) (*wrapperToken.TokenWrapper, error)
+{{- if .ConfigPushSlices}}
+// configPush receives and holds this service's pushed tenant slices (tacplus#927).
+configPush *configpush.Receiver
+{{- end}}
 {{range .TimeseriesInserts}}
 {{.FieldName}} func(ctx context.Context, row *{{.TypePkgAlias}}.{{.TypeName}}) error
 {{end}}
@@ -635,6 +642,9 @@ authorizeFunc:    auth.Authorize,
 authenticateFunc: auth.Authenticate,
 authenticateAtOrBelowFunc: auth.AuthenticateAtOrBelow,
 }
+{{- if .ConfigPushSlices}}
+sm.configPush = newConfigPushReceiver(sm)
+{{- end}}
 {{- if .HasMemberPort}}
 // The member port serves the X509Mint certificate obtained above, so it
 // starts only now; a failure fails startup closed.
@@ -1511,6 +1521,12 @@ auth: sm.auth,
 if asr, ok := h.(AdditionalServiceRegistrar); ok {
 mw.additionalRegistrar = asr
 }
+{{- if .ConfigPushSlices}}
+// The pushed tenant slices (tacplus#927): served beside the services, each
+// stream admitted only for a tenant the Handler holds.
+sm.configPush.SetTenantRegistry(h)
+mw.impls = append(mw.impls, sm.configPush)
+{{- end}}
 srv, err := grpcserver.New(sm.ctx, sm.cfg, sm.sc.Conn(),
 sm.sc.TLSCertChain(), sm.sc.TLSPrivateKey(),
 mw, sm.healthServer)

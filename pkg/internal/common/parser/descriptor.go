@@ -2118,6 +2118,9 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 			if val.ServiceName != "" {
 				annotations["config_slice_service"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringValue: val.ServiceName}
 			}
+			if val.Delivery != spec.ConfigSliceDelivery_CONFIG_SLICE_DELIVERY_UNSPECIFIED {
+				annotations["config_slice_delivery"] = model.AnnotationValue{Type: model.AnnotationTypeEnum, EnumValue: val.Delivery.String()}
+			}
 		}
 	}
 

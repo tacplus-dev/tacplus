@@ -289,6 +289,15 @@ func (r *Registry) AssignTenantSliceField(name string) (int32, error) {
 	return e.TenantSliceField, nil
 }
 
+// TenantSliceFieldIfPresent returns name's registered tenant_slice_field and
+// true if it has one. It never assigns one, in a lock or not.
+func (r *Registry) TenantSliceFieldIfPresent(name string) (int32, bool) {
+	if e, ok := r.byName[name]; ok && e.TenantSliceField != 0 {
+		return e.TenantSliceField, true
+	}
+	return 0, false
+}
+
 // TenantSlices returns entries with tenant_slice_field set, sorted by field number.
 func (r *Registry) TenantSlices() []*ServiceEntry {
 	var out []*ServiceEntry

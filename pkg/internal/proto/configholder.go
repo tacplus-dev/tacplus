@@ -1162,6 +1162,13 @@ func GenerateTenantConfig(sourceProtoDir, flatProtoDir string, dirs ...string) e
 		return fmt.Errorf("failed to create descriptor parser: %w", err)
 	}
 
+	// A pushed slice is no TenantConfig field (the owner holds it in memory,
+	// tacplus#927), but its refusals are the build's, before any field is
+	// assigned below.
+	if _, err := PushedConfigSlices(dp, reg); err != nil {
+		return err
+	}
+
 	// Collect all messages with tenant config-slice annotations.
 	type sliceEntry struct {
 		pkg        string // proto package, e.g. "identity_tenant" (used for type qualifier)
@@ -1184,7 +1191,7 @@ func GenerateTenantConfig(sourceProtoDir, flatProtoDir string, dirs ...string) e
 			if err != nil {
 				return err
 			}
-			if !ok {
+			if !ok || isPushedSlice(msg) {
 				continue
 			}
 			// Ensure service is in the registry (should already be from ScanAndGenerateConfigHolder).
@@ -1406,6 +1413,9 @@ func configSliceOwner(relPath string, fileDesc *parser.FileDescriptor, msg parse
 	serviceAnn, ok := msg.Annotations["config_slice_service"]
 	if !ok || serviceAnn.StringValue == "" {
 		return "", false, fmt.Errorf("%s: %s.%s (spec.config_slice).service_name is required", relPath, fileDesc.Package, msg.Name)
+	}
+	if wantScope != configSliceScopeTenant && isPushedSlice(msg) {
+		return "", false, fmt.Errorf("%s: %s.%s (spec.config_slice) is %s with CONFIG_SLICE_DELIVERY_PUSH: CONFIG_SLICE_DELIVERY_PUSH is for a tenant-scope slice only", relPath, fileDesc.Package, msg.Name, wantScope)
 	}
 	return serviceAnn.StringValue, true, nil
 }

@@ -1,0 +1,117 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+// Package configpush is the wire of a pushed tenant config slice (tacplus#927;
+// tacplus-dev/roadmap decisions/skipper-and-admiral-2026-11-01.md, addendum
+// 2026-11-19, "Tenant config reaches the kernel by push, tenant to system"). A
+// tenant-scope (spec.config_slice) with delivery CONFIG_SLICE_DELIVERY_PUSH
+// lives in each tenant's record store, and the store pushes it to the slice's
+// owner, a /system service. It is part of the sys contract: tacplus generates
+// both ends, the publisher in the record store and the receiver in the owner,
+// so neither hand-writes it. Field numbers are frozen.
+//
+// The record store generates alone against its own proto and sys/, and the
+// owner's proto is never in its run, so the contract is not typed per slice: a
+// slice is its registered tenant_slice_field (its TenantConfig field number in
+// the global registry, `tacplus registry register NAME --tenant-slice`) and
+// its value is the slice message, protobuf binary encoded.
+//
+// The tenant is never a request field: it is the caller's. The receiver admits
+// a stream only from a tenant's record store, the subject
+// spiffe://<td>/tenants/<tid>/services/stratum, and only for a tenant its
+// tenant registry holds; any other caller is refused with PERMISSION_DENIED
+// (UNAUTHENTICATED for a bad, missing or expired token), with no description.
+//
+// The owner's registered number names one pushed slice, so an owner has at
+// most one (tacplus refuses a second at generation); an owner's durable
+// TenantConfig slice, if it has one, is under the same number in TenantConfig,
+// a different contract. One stream per (tenant, owner) carries the owner's
+// pushed slices:
+//
+//   - Open. The publisher's first frame is a snapshot: every pushed slice of
+//     this owner, each at its version, one the tenant no longer holds as
+//     absent. A stream whose first frame is not a snapshot ends with
+//     FAILED_PRECONDITION.
+//   - Versions. Then each change of one slice, as it happens, is a version
+//     frame. A later snapshot on the same stream is allowed. Only a version
+//     changes a slice: a slice a snapshot does not name keeps what the
+//     receiver holds, so a stale replay can not take it back.
+//   - Acks. The receiver answers each slice it reads, of a snapshot or a
+//     version, with one ConfigPushAck: ACCEPTED when the slice's version is
+//     greater than the version it holds for (tenant, slice), STALE otherwise.
+//     A stale slice changes nothing, and the stream stays open: a replay can
+//     not take a tenant's slice back, nor its stream down.
+//   - Refusals. A slice_field that is not one of this owner's pushed slices, a
+//     value that does not decode as the slice's message or fails its
+//     generated validation, ends the stream with INVALID_ARGUMENT: the
+//     publisher and the owner disagree on the contract, and nothing of that
+//     frame is applied.
+//
+// The receiver holds the slices in memory only and never persists them. It
+// has none for a tenant until that tenant's first snapshot is accepted (it
+// fails closed), and a slice it accepted stays until a newer version replaces
+// it or the owner restarts, whether or not its stream is still open. After a
+// restart every tenant's publisher reconnects, with jittered backoff, and
+// sends its snapshot again; it does the same after any break of its stream.
+syntax = "proto3";
+
+package configpush;
+
+import "sys/spec.proto";
+
+// ConfigPush is served by every owner of a pushed slice, at the owner's own
+// routing label. It carries no (spec.service_s2s): the host is each owner,
+// not one label, and the generated receiver admits its callers itself, as the
+// comment of this package says.
+service ConfigPush {
+  // Push is one tenant's stream to one owner.
+  rpc Push(stream ConfigPushFrame) returns (stream ConfigPushAck);
+}
+
+// ConfigPushFrame is one frame of a push stream: a snapshot, or one version.
+message ConfigPushFrame {
+  oneof frame {
+    ConfigPushSnapshot snapshot = 1;
+    ConfigPushVersion version = 2;
+  }
+}
+
+// ConfigPushSnapshot is every pushed slice the tenant holds for this owner.
+message ConfigPushSnapshot {
+  repeated ConfigPushSlice slices = 1 [(spec.assert_max_size) = 1024];
+}
+
+// ConfigPushVersion is one new version of one slice.
+message ConfigPushVersion {
+  ConfigPushSlice slice = 1 [(spec.assert_required) = true];
+}
+
+// ConfigPushSlice is one slice at one version.
+message ConfigPushSlice {
+  // slice_field is the slice's registered tenant_slice_field.
+  int32 slice_field = 1 [(spec.assert_gt) = 0];
+  // version increases with every change of the slice in the tenant's record
+  // store: the store-assigned revision of the record that holds it.
+  int64 version = 2 [(spec.assert_gt) = 0];
+  // value is the slice message, protobuf binary encoded. Empty when absent.
+  bytes value = 3 [(spec.assert_max_size) = 4000000];
+  // absent is set when the tenant no longer holds the slice: the receiver
+  // drops it at this version, and the owner then reads none for the tenant.
+  bool absent = 4;
+}
+
+// ConfigPushOutcome is what the receiver did with one slice.
+enum ConfigPushOutcome {
+  CONFIG_PUSH_OUTCOME_UNSPECIFIED = 0;
+  // ACCEPTED: the receiver holds the slice at this version.
+  CONFIG_PUSH_OUTCOME_ACCEPTED = 1;
+  // STALE: the receiver already holds this version or a newer one, and kept it.
+  CONFIG_PUSH_OUTCOME_STALE = 2;
+}
+
+// ConfigPushAck answers one slice of a frame, in the order the stream sent them.
+message ConfigPushAck {
+  int32 slice_field = 1;
+  int64 version = 2;
+  ConfigPushOutcome outcome = 3;
+}

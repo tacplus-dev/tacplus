@@ -170,6 +170,9 @@ func Generate(config *tactype.Config) error {
 	if err := proto.GenerateTenantConfig(config.InputDir, config.FlatProtoDir, protoDir); err != nil {
 		return fmt.Errorf("failed to generate tenant_config.proto: %w", err)
 	}
+	if err := proto.RefuseUnservedPushedSlices(config.InputDir, config.FlatProtoDir, config.SelfPackage, "rust"); err != nil {
+		return err
+	}
 	if err := proto.GenerateProjectConfig(config.InputDir, config.FlatProtoDir, protoDir); err != nil {
 		return fmt.Errorf("failed to generate project_config.proto: %w", err)
 	}

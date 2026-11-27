@@ -19,6 +19,9 @@ import {{.ChassisBase}}.grpcserver.C2DServer;
 {{- end}}
 import {{.ChassisBase}}.grpcserver.ServiceImplementation;
 import {{.ChassisBase}}.service_im.IdentityManager;
+{{- if .ConfigPushSlices}}
+import {{.ChassisBase}}.configpush.ConfigPushReceiver;
+{{- end}}
 {{- if .HasDiskStores}}
 import {{.ChassisBase}}.diskstore.ArchiveShipper;
 import {{.ChassisBase}}.diskstore.ArchiveSink;
@@ -160,6 +163,31 @@ public class ServiceManager implements AutoCloseable {
     private volatile boolean closing = false;
     /** The mandatory Authorizer, built in start(). Null before then. */
     private volatile Authorizer authorizer;
+{{- if .ConfigPushSlices}}
+    /**
+     * Receives and holds this service's pushed tenant slices (tacplus#927). It
+     * authenticates a stream with the Authorizer, and admits nobody before run()
+     * gives it the trust domain and the Handler as its tenant registry.
+     */
+    private final ConfigPushReceiver configPush = new ConfigPushReceiver(java.util.List.of(
+{{- range $i, $s := .ConfigPushSlices}}{{if $i}},{{end}}
+            new ConfigPushReceiver.Slice({{$s.Field}}, value -> {
+                {{$s.JavaType}} m = {{$s.JavaType}}.parseFrom(value);
+                {{$s.Helpers}}.validate{{$s.MessageName}}(m);
+                return m;
+            })
+{{- end}}), () -> {
+        Authorizer a = authorizer;
+        if (a == null) {
+            return null;
+        }
+        try {
+            return a.authenticateWithToken(Authorizer.AUTH_HEADER_CTX_KEY.get()).getSubject();
+        } catch ({{.TypesBase}}.sys.errors.ProtoException e) {
+            throw io.grpc.Status.fromCodeValue(e.getCode()).asException();
+        }
+    });
+{{- end}}
 {{- range .TimeseriesInserts}}
     private volatile {{.InterfaceType}} {{.FieldName}};
 {{- end}}
@@ -563,6 +591,41 @@ public class ServiceManager implements AutoCloseable {
 
     /** Returns the server-assigned instance ID. */
     public String getInstanceId() { return identity.getInstanceId(); }
+{{- if .ConfigPushSlices}}
+
+    /**
+     * Returns the tenant config slices this service owns that each tenant's
+     * record store pushes to it (tacplus#927). They are held in memory only: a
+     * tenant has none until its record store's first snapshot arrives (after
+     * every restart too), so a caller handles null as "no settings for this
+     * tenant yet" and fails closed.
+     */
+    public ConfigPushSlices configPush() { return new ConfigPushSlices(configPush); }
+
+    /** The typed accessors of this service's pushed tenant slices. */
+    public static final class ConfigPushSlices {
+        private final ConfigPushReceiver r;
+
+        private ConfigPushSlices(ConfigPushReceiver r) { this.r = r; }
+{{- range .ConfigPushSlices}}
+
+        /** tid's {{.MessageName}} and its version, or null while this service holds none for tid. */
+        public ConfigPushReceiver.Pushed<{{.JavaType}}> {{.Accessor}}(String tid) {
+            ConfigPushReceiver.Value v = r.get(tid, {{.Field}});
+            return v == null ? null : new ConfigPushReceiver.Pushed<>(({{.JavaType}}) v.message(), v.version());
+        }
+
+        /** Calls f with the tenant after every change of its {{.MessageName}}. */
+        public void watch{{.MessageName}}(java.util.function.Consumer<String> f) {
+            r.watch((tid, field) -> {
+                if (field == {{.Field}}) {
+                    f.accept(tid);
+                }
+            });
+        }
+{{- end}}
+    }
+{{- end}}
 {{- if .HasMemberPort}}
 
     /**
@@ -1303,6 +1366,13 @@ public class ServiceManager implements AutoCloseable {
                 // The service, and its <Svc>Rotating sibling when it has one (tacplus#322).
                 {{.WrapperVarName}}.registerServices(grpcServerBuilder);
 {{- end}}
+{{- end}}
+{{- if .ConfigPushSlices}}
+                // The pushed tenant slices (tacplus#927): served beside the
+                // services, each stream admitted only for a tenant the Handler holds.
+                configPush.setTrustDomain(config.getSpiffeTrustDomain());
+                configPush.setTenantRegistry(handler::holdsTenant);
+                grpcServerBuilder.addService(configPush);
 {{- end}}
                 for (io.grpc.ServerServiceDefinition svc : handler.additionalServices()) {
                     grpcServerBuilder.addService(io.grpc.ServerInterceptors.intercept(

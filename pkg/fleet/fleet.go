@@ -659,6 +659,8 @@ func isSysPackage(pkg string) bool {
 		return true
 	case "signin": // tacplus#224
 		return true
+	case "configpush": // tacplus#927
+		return true
 	}
 	return false
 }

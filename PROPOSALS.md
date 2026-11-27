@@ -1085,7 +1085,14 @@ the looper then marks it `promoted` or `declined` here with the date.
   the kernel by push, from tenant to system. Generating the contract keeps the kernel from setting a hand-written
   one that tacplus would then have to follow. Depends on #352 (registered slice field numbers). Open questions are
   on the issue: which Stratum record holds a slice, the version's source, whether the owner keeps a slice after its
-  stream breaks, the slice's identity, and Java-first parity.
+  stream breaks, the slice's identity, and Java-first parity. Approved as designed (2026-11-26) and on ROADMAP.md.
+  The first part has landed: the `delivery` annotation, its generation refusals and `sys/configpush.proto`. One
+  finding from building it: the registry gives each service one `tenant_slice_field`, and the kernel keeps its
+  durable `KernelTenantConfig` under it. So a pushed slice uses its owner's number in `configpush`, a contract
+  separate from `TenantConfig`, and an owner declares at most one pushed slice. Two pushed slices per owner would
+  need a second registered number (`--pushed-slice`, say). The owner's receiver is generated in Go and Java; Rust
+  refuses an owner until it generates it. Left: the receiver in Rust, the record store's publisher, and a
+  cross-test fixture.
 - **Rebuild the build images when an upstream stage image moves** (2026-11-20, #901): `docker:29-cli` moved to
   29.10.0 (go1.27.4, fixing CVE-2026-97054) on 2026-11-16 22:07Z. Every `build:*` had been built that morning, so the
   nightly sweep failed for days on a fix that was already published. `build:latest` is rebuilt only when its files

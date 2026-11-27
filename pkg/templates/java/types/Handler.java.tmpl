@@ -98,6 +98,17 @@ public interface Handler {
     void handleEventStreamMessage(String topic, Message event, SubscriptionMeta meta) throws Exception;
 {{- end}}
 
+{{- if .ConfigPushSlices}}
+    /**
+     * Reports whether tid is a tenant this service holds (its tenant registry).
+     * Each tenant's record store pushes this service's pushed config slices
+     * (configPush() on the ServiceManager, tacplus#927); a stream is admitted
+     * only for a tenant holdsTenant holds, and refused PERMISSION_DENIED on
+     * false or an exception.
+     */
+    boolean holdsTenant(String tid) throws Exception;
+{{- end}}
+
 {{- if .HasAutoTls}}
     /**
      * Called when the certificate stream delivers a new TLS certificate (initial + renewals).

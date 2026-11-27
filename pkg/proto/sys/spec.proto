@@ -571,6 +571,8 @@ extend google.protobuf.MessageOptions {
   // config_slice marks a message as one per-service configuration slice with an
   // explicit owner and scope.
   // Example: option (spec.config_slice) = {scope: CONFIG_SLICE_SCOPE_TENANT, service_name: "identity"};
+  // A tenant slice pushed to its owner by each tenant's record store:
+  // option (spec.config_slice) = {scope: CONFIG_SLICE_SCOPE_TENANT, service_name: "kernel", delivery: CONFIG_SLICE_DELIVERY_PUSH};
   ConfigSliceAnnotation config_slice = 60075;
   // Field numbers 60069-60072 retired: the legacy tenant_config_slice/
   // tenant_config_service/project_config_slice/project_config_service aliases
@@ -2981,10 +2983,27 @@ enum ConfigSliceScope {
   CONFIG_SLICE_SCOPE_PROJECT = 2;
 }
 
+// ConfigSliceDelivery is how a config slice reaches its owner (tacplus#927).
+enum ConfigSliceDelivery {
+  // UNSPECIFIED: the slice is a field of the generated TenantConfig /
+  // ProjectConfig, read from a state root.
+  CONFIG_SLICE_DELIVERY_UNSPECIFIED = 0;
+  // PUSH: a tenant-scope slice only. Each tenant's record store pushes the
+  // slice to its owner over sys/configpush.proto (configpush.ConfigPush): a
+  // snapshot when its stream opens, then each new version. The owner holds it
+  // in memory only, per tenant, version-monotonic, and has none for a tenant
+  // until that tenant's snapshot arrives. The slice is not a TenantConfig
+  // field: its registered tenant_slice_field (tacplus registry register NAME
+  // --tenant-slice) is its identity on the wire, and its owner is a /system
+  // service, never a tenant-owned one.
+  CONFIG_SLICE_DELIVERY_PUSH = 1;
+}
+
 // ConfigSliceAnnotation declares one per-service config slice and its owner.
 message ConfigSliceAnnotation {
   ConfigSliceScope scope = 1;
   string service_name = 2;
+  ConfigSliceDelivery delivery = 3;
 }
 
 // StateImport is the legacy file-level mirror for field-level state_import

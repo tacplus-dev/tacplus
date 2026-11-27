@@ -277,6 +277,34 @@ the service's black-box member traffic, and it fails closed.
 
 The behaviour is pinned by `cross-test/memberport` (`just memberport`).
 
+### Pushed Tenant Config Slices
+
+A service that owns a tenant-scope `(spec.config_slice)` with
+`delivery: CONFIG_SLICE_DELIVERY_PUSH` (tacplus#927) serves
+`configpush.ConfigPush` (`sys/configpush.proto`) beside its own services, and
+holds each tenant's slice in memory only. In Go and Java (Rust refuses such an
+owner at generation until it generates the receiver):
+
+- Go: `sm.ConfigPush().<Slice>(tid)` returns `(*<Slice>, version, ok)`;
+  `ok` is false until the tenant's record store's first snapshot is accepted,
+  after every restart too. The caller fails closed on false.
+  `sm.ConfigPush().Watch<Slice>(func(tid string))` is called after each change.
+  Java: `sm.configPush().<slice>(tid)` returns a `ConfigPushReceiver.Pushed<Slice>`
+  (`value()`, `version()`), null while none is held; `watch<Slice>(Consumer<String>)`.
+- The `Handler` must implement `HoldsTenant(ctx, tid) (bool, error)` (Go) or
+  `boolean holdsTenant(String tid) throws Exception` (Java), the owner's tenant
+  registry. A stream is admitted only from
+  `spiffe://<td>/tenants/<tid>/services/stratum` in the owner's own trust domain
+  for a tenant `HoldsTenant` holds; anything else is `PERMISSION_DENIED`, with no
+  description (`UNAUTHENTICATED` for a bad token).
+- The receiver enforces the contract's rules before the owner sees anything: a
+  first frame that is not a snapshot ends the stream `FAILED_PRECONDITION`; an
+  unknown slice, a slice twice in one frame, a version not above 0, or a value
+  that fails to decode or its generated validation ends it `INVALID_ARGUMENT`,
+  applying nothing of that frame; a version not greater than the one held is
+  acked `STALE` and changes nothing. A slice a snapshot does not name keeps what
+  is held; a slice the tenant no longer holds comes `absent`, at a new version.
+
 ## Handler And Wrappers
 
 Handlers are the only generated seam intended for handwritten business logic.

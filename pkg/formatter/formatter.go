@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tacplus-dev/tacplus/pkg/codefile"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 )
 
 // The deadline of an external formatter scales with the files it formats: a
@@ -69,15 +71,22 @@ func indentFiles(dir, ext string, lang codefile.Language) error {
 		zap.String("ext", ext),
 		zap.Int("count", len(files)))
 
-	for _, path := range files {
-		content, err := os.ReadFile(path)
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("collecting %s files: %w", ext, err)
+	}
+	defer r.Close()
+
+	for _, rel := range files {
+		path := filepath.Join(dir, rel)
+		content, err := r.ReadFile(rel)
 		if err != nil {
 			return fmt.Errorf("reading %s: %w", path, err)
 		}
 
 		indented := codefile.IndentCode(lang, string(content))
 
-		if err := os.WriteFile(path, []byte(indented), 0644); err != nil {
+		if err := r.WriteFile(rel, []byte(indented), 0644); err != nil {
 			return fmt.Errorf("writing %s: %w", path, err)
 		}
 	}
@@ -103,15 +112,16 @@ func formatPython(dir string) error {
 	return run(tool, []string{"."}, dir, files)
 }
 
-// collectFiles walks dir and returns absolute paths of files with the given extension.
+// collectFiles walks dir and returns the paths, relative to dir, of files with
+// the given extension.
 func collectFiles(dir, ext string) ([]string, error) {
 	var files []string
-	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+	err := fsroot.Walk(dir, func(_ *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() && filepath.Ext(path) == ext {
-			files = append(files, path)
+		if !d.IsDir() && filepath.Ext(rel) == ext {
+			files = append(files, rel)
 		}
 		return nil
 	})

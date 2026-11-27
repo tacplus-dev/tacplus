@@ -6,6 +6,7 @@ package builder
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/tacplus-dev/tacplus/pkg/formatter"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/collection"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/metadata"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/model"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/packages"
@@ -289,13 +291,14 @@ func (b *Builder) validateSemanticAnnotations() error {
 
 func parsedProtoFilesForValidation(dp *parser.DescriptorParser, protoDir string) ([]model.ProtoFile, error) {
 	var result []model.ProtoFile
-	err := filepath.Walk(protoDir, func(path string, info os.FileInfo, err error) error {
+	err := fsroot.Walk(protoDir, func(_ *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() || !strings.HasSuffix(info.Name(), ".proto") {
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".proto") {
 			return nil
 		}
+		path := filepath.Join(protoDir, rel)
 		pf, err := dp.ConvertToProtoFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to parse %s for semantic validation: %w", path, err)
@@ -365,16 +368,12 @@ func (b *Builder) validatePaths() error {
 // (e.g. `import "sys/spec.proto"`) but must never author files there.
 func validateReservedNamespaces(inputDir string) error {
 	var offenders []string
-	walkErr := filepath.Walk(inputDir, func(path string, info os.FileInfo, err error) error {
+	walkErr := fsroot.Walk(inputDir, func(_ *os.Root, rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".proto") {
+		if d.IsDir() || !strings.HasSuffix(rel, ".proto") {
 			return nil
-		}
-		rel, relErr := filepath.Rel(inputDir, path)
-		if relErr != nil {
-			return relErr
 		}
 		if seg := strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]; seg == "sys" || seg == "chassis" {
 			offenders = append(offenders, filepath.ToSlash(rel))
@@ -658,7 +657,7 @@ func (b *Builder) cleanProtocOutputDirs(outputDir string) error {
 func containsProtocOutput(dir string) bool {
 	protocSuffixes := []string{".pb.go", "_pb2.py", "_pb.ts", "_pb.rs", ".pb.java", ".pb.swift", ".grpc.swift"}
 	found := false
-	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+	fsroot.Walk(dir, func(_ *os.Root, _ string, d fs.DirEntry, err error) error {
 		if err != nil || found {
 			return filepath.SkipDir
 		}

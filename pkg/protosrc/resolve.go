@@ -37,6 +37,7 @@ type Result struct {
 //   - "latest" or "" → fetch and checkout origin/HEAD
 //   - "X.Y.Z" or "X.Y.Z-pre" → fetch tags and checkout vX.Y.Z(-pre)
 //   - "X.Y" → fetch tags, find latest vX.Y.* tag, checkout
+//   - a full commit (40 hex) → fetch it unless cached, checkout detached
 //
 // The caller should call Result.Cleanup when done (currently a no-op for cached repos).
 func Resolve(src string, tag string) (*Result, error) {
@@ -294,6 +295,20 @@ func fetchAndCheckout(dir string, tag string, auth []string) error {
 		return nil
 	}
 
+	if commitRe.MatchString(tag) {
+		// A full commit, fetched by its id unless the cache has it: forges
+		// serve any commit reachable from a ref.
+		if exec.Command("git", "-C", dir, "cat-file", "-e", tag+"^{commit}").Run() != nil {
+			if err := gitIn(dir, auth, "fetch", "origin", tag); err != nil {
+				return fmt.Errorf("git fetch origin %s failed (no such commit?): %w", tag, err)
+			}
+		}
+		if err := gitIn(dir, auth, "checkout", "--detach", tag); err != nil {
+			return fmt.Errorf("git checkout %s failed: %w", tag, err)
+		}
+		return nil
+	}
+
 	if exactVersionRe.MatchString(tag) {
 		// Exact version X.Y.Z, or a pre-release X.Y.Z-pre
 		gitTag := "v" + tag
@@ -333,8 +348,11 @@ func fetchAndCheckout(dir string, tag string, auth []string) error {
 		return nil
 	}
 
-	return fmt.Errorf("invalid tag format %q: expected 'latest', 'X.Y', 'X.Y.Z', 'X.Y.Z-pre', or 'X.Y.latest'", tag)
+	return fmt.Errorf("invalid tag format %q: expected 'latest', 'X.Y', 'X.Y.Z', 'X.Y.Z-pre', 'X.Y.latest', or a full commit", tag)
 }
+
+// commitRe is a full commit id.
+var commitRe = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // exactVersionRe is an exact version: vX.Y.Z, optionally with a semver
 // pre-release suffix.

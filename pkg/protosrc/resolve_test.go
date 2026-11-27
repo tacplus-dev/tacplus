@@ -715,3 +715,33 @@ func TestListTags(t *testing.T) {
 		t.Fatal("a local directory has no remote tags to list")
 	}
 }
+
+// A full commit is checked out as it is, fetched by its id when the cache
+// does not have it yet: a fleet locks a service at a main release (#981). A
+// commit the remote does not have is refused by name.
+func TestCachedRepoChecksOutACommit(t *testing.T) {
+	origin, commits := gitRepo(t, "v1.0.0")
+	t.Setenv("HOME", t.TempDir())
+	if _, err := Resolve("file://"+origin, "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "on main")
+	cmd.Dir = origin
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	onMain := revParse(t, origin, "HEAD")
+	for _, want := range []string{onMain, commits["v1.0.0"]} {
+		res, err := Resolve("file://"+origin, want)
+		if err != nil {
+			t.Fatalf("Resolve(%s): %v", want, err)
+		}
+		if got := revParse(t, res.Dir, "HEAD"); got != want {
+			t.Fatalf("Resolve(%s): HEAD %s", want, got)
+		}
+	}
+	unknown := strings.Repeat("0123456789", 4)
+	if _, err := Resolve("file://"+origin, unknown); err == nil || !strings.Contains(err.Error(), unknown) {
+		t.Fatalf("Resolve(%s) err = %v, want a refusal naming it", unknown, err)
+	}
+}

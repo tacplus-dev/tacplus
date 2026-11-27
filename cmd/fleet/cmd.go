@@ -37,10 +37,14 @@ version), merge the protos into <out>/proto with the deployment repo's own
 dependencies.yaml as the pins, run the whole-fleet checks, and write fleet.lock:
 each service's exact version, commit and image digest.
 
+A service releases.yaml (beside fleet.yaml) names is locked at that main
+release instead: the commit it gives, 40 hex, with the image it gives, by
+digest; fleet.lock records its version as main-<12 hex> and pinned: true.
+
 Re-running it re-locks: a new patch of a stated line is taken; a new minor is a
 fleet.yaml change. --check changes nothing: it lists, per service, a newer patch
-(which re-locking takes) and a newer minor, and fails when re-locking would
-change fleet.lock.
+(which re-locking takes) and a newer minor, or that it is pinned at a main
+release, and fails when re-locking would change fleet.lock.
 
 The merged tree is what the fleet-side services (the state host, the gateway,
 the operator) are generated from: tacplus build --src <out>/proto.`,
@@ -74,11 +78,17 @@ func runCheck() error {
 			locked = "(not locked)"
 		}
 		var notes []string
+		if a.Pinned != "" {
+			notes = append(notes, "pinned "+a.Pinned+" ("+fleet.ReleasesFile+")")
+		}
 		if a.Patch != "" {
 			notes = append(notes, "newer patch "+a.Patch)
 		}
 		if a.Minor != "" {
 			notes = append(notes, "newer minor "+a.Minor)
+		}
+		if a.Pinned != "" && a.Stale() {
+			notes = append(notes, "not locked there")
 		}
 		if len(notes) == 0 {
 			notes = append(notes, "up to date")

@@ -9,15 +9,6 @@ the looper then marks it `promoted` or `declined` here with the date.
   another module than the generated tree, would let the advisor reference the core's classes unseen (jdeps reports
   them "not found", as a library's). Every Java service is one module today; a multi-module service would need the
   gate to take the other modules' class directories too (a system property, or the surefire classpath).
-- **fleet build locks a service at a main release** (2026-11-26, #981): fleet-seatrials#82 rolls dev to each
-  service's green main release, which is tacplus-dev/build's record (a commit and an image by digest), not a tag.
-  Swapping only the image would run main's code against the tag's contracts, so the lock has to be resolved at the
-  commit: contract, `depends`, `contribute`, `inputs_digest`, `build/proto`. Proposed: a `releases.yaml` beside
-  `fleet.yaml` (name, 40-hex commit, image by digest) that pins the named services (`version: main-<12 hex>`,
-  `pinned: true`, `image` set even under `images: source`). `--check` reports these services as pinned, and their
-  floors are checked against the line `fleet.yaml` states. #950 is on `release/2.6` only, so it needs a forward-port
-  to main first, then a 2.6 backport. Design and questions:
-  https://github.com/tacplus-dev/tacplus/issues/981#issuecomment-7200159033
 - **A gate that runs the generated Rust model tests of the sys protos** (2026-11-26, #830): the generated
   `from_str_invalid` test asserted `"invalid"` is refused, which `sys.RpcOutcome` (RPC_OUTCOME_INVALID) accepts.
   No gate ran it: only images.yml's pipeline smoke (`cargo test -p proto-model-types`, on a build-image rebuild)
@@ -1129,6 +1120,11 @@ the looper then marks it `promoted` or `declined` here with the date.
   the issue's `c4a-standard-32`, with `/looper.yaml` in `docs`' paths in `gates.yaml`. Its key names (`machine`, as
   the issue; the approval wrote `machine_type`) and whether `vm:` or `LOOPER_VM_REPOS` switches the kicker are
   tacplus-dev/looper#240's and #241's to settle: a change there is a change to this file.
+- **fleet build locks a service at a main release** (2026-11-26, #981): promoted 2026-11-26, ROADMAP.md's line for
+  #981 (Jody's standing agreement, hub: "approved as designed"). Built by #981 on main, with #950's `images: source`
+  forward-ported first (it was on `release/2.6` only): `releases.yaml` beside `fleet.yaml`, `pinned: true` lock
+  entries at `main-<12 hex>`, `--check` and `fleet gateway` following them. Main only (a feature ships in the next
+  minor, no backport): fleet-seatrials gets it with v2.7.0, not a v2.6.x.
 - **A floor check over every version tacplus emits, and template manifests that take versions from one place**
   (2026-11-06, #338) and **`just generated`: a resolved Python lock, and the C# and Swift trees** (2026-11-18, #854):
   promoted 2026-11-22, ROADMAP.md's line for #949 (Jody's standing authority, hub). Built by #949: `just floors`,

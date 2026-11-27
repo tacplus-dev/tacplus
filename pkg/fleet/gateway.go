@@ -249,7 +249,7 @@ func Gateway(manifestDir, outDir string, opts GatewayOptions) (*LockedGateway, e
 // image builds every part into the context, then the image from it.
 func (b *gatewayBuild) image(gw *LockedService, buildImage string) (*LockedGateway, error) {
 	gwDir := filepath.Join(b.work, "src", GatewayService)
-	if err := checkout(gw.Repo, gw.Version, gw.Commit, gwDir); err != nil {
+	if err := checkout(gw.Repo, gw.ref(), gw.Commit, gwDir); err != nil {
 		return nil, fmt.Errorf("fleet: gateway: %w", err)
 	}
 	epoch, err := commitTime(gwDir)
@@ -354,7 +354,7 @@ func (b *gatewayBuild) contributions(webapps bool) error {
 			continue
 		}
 		dir := filepath.Join(b.work, "src", s.Name)
-		if err := checkout(s.Repo, s.Version, s.Commit, dir); err != nil {
+		if err := checkout(s.Repo, s.ref(), s.Commit, dir); err != nil {
 			return fmt.Errorf("fleet: service %q: %w", s.Name, err)
 		}
 		epoch, err := commitTime(dir)
@@ -608,16 +608,17 @@ func diffGateway(locked, built *LockedGateway) []string {
 	return diffs
 }
 
-// checkout clones repo at the locked commit into dst, refusing a tag that no
-// longer points at it.
-func checkout(repo, version, commit, dst string) error {
-	res, err := protosrc.Resolve(repo, version)
+// checkout clones repo at the locked commit into dst, resolving ref (a
+// release's version, or a main release's commit: LockedService.ref) and
+// refusing a tag that no longer points at it.
+func checkout(repo, ref, commit, dst string) error {
+	res, err := protosrc.Resolve(repo, ref)
 	if err != nil {
 		return err
 	}
 	defer res.Cleanup()
 	if got := commitOf(res.Dir); got != commit {
-		return fmt.Errorf("%s v%s is commit %s, but %s locked %s: the tag moved; re-lock with tacplus fleet build", repo, version, got, LockFile, commit)
+		return fmt.Errorf("%s v%s is commit %s, but %s locked %s: the tag moved; re-lock with tacplus fleet build", repo, ref, got, LockFile, commit)
 	}
 	for _, args := range [][]string{{"clone", "-q", "--no-hardlinks", res.Dir, dst}, {"-C", dst, "checkout", "-q", "--detach", commit}} {
 		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {

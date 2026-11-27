@@ -2890,6 +2890,7 @@ registries:
   - https://github.com/tacplus-dev/registry.git     # ordered; disjoint; unioned
   - https://gitlab.com/acme/registry.git            # a private one, if any
 tacplus: "2.2"                                      # floor, MAJOR.MINOR
+images: release                                     # optional: release (default) or source, below
 services:
   - name: kernel
     version: "0.1"                                  # release line, MAJOR.MINOR -> its highest released patch; required
@@ -2926,12 +2927,25 @@ refused. The one exception is the `gateway`: its image is the one the fleet buil
 `GITHUB_TOKEN`) with `read:packages`, the token the fetch layer already sends to
 github.com.
 
+**A fleet that builds its own images says `images: source`.** Then the fleet build asks
+for no published image: it locks each service's release by its tag's commit, which is
+what the fleet's own image build (`images/build.sh` in a deployment repo, say) builds
+from, with `build/proto`. `fleet.lock` reads `images: source` and records no `image` for
+any service; everything else (the version resolution, the floors, the dependency closure,
+the proto merge and the whole-fleet checks) is unchanged. The build makes no request to
+ghcr.io and needs no `read:packages` token. It is the bridge for services whose release
+images are not published yet (tacplus-dev/roadmap `decisions/ci-on-gitlab-2026-10-27.md`,
+2026-11-22 addendum): a published image proves the service's own release built it, a
+source lock only the commit. Deleting the line returns the fleet to published images.
+Any other value of `images` is refused.
+
 `dependencies.yaml` beside it holds the language and tool pins for everything
 generated from the fleet's merged protos (its `tools.node` is the `engines.node` of every
 generated TypeScript chassis package, `>=22.0.0` when it has none). `tacplus fleet build` then:
 
 1. unions the registries, refusing a name or id that appears in two;
-2. resolves each service's version to its exact release and that release's image (above),
+2. resolves each service's version to its exact release and, unless `images: source`,
+   that release's image (above),
    fetches the implementation at its tag (for its commit and its `depends`) and gathers its **contract** from the registry's home for it: the proto
    whose file-level identity is the name, plus everything it imports, so a proto repo
    shared by many services contributes only this service's files. The contract's
@@ -2945,10 +2959,10 @@ generated TypeScript chassis package, `>=22.0.0` when it has none). `tacplus fle
    runs the whole-fleet checks: routing and C2S host labels served, one SMB authority,
    exactly one minter, a complete and collision-free registry;
 5. writes `fleet.lock`: the commit of every registry and, for every service, the exact
-   version, its tag's commit, its release image by digest, its `inputs_digest`, and what it
-   contributes to the gateway ([below](#contributing-to-the-gateway)); and the launcher's
-   version and commit. A re-lock that moves nothing keeps the `gateway:` section
-   `tacplus fleet gateway` wrote.
+   version, its tag's commit, its release image by digest (none under `images: source`),
+   its `inputs_digest`, and what it contributes to the gateway
+   ([below](#contributing-to-the-gateway)); and the launcher's version and commit. A
+   re-lock that moves nothing keeps the `gateway:` section `tacplus fleet gateway` wrote.
 
 ```yaml
 # fleet.lock (excerpt)
@@ -2970,10 +2984,42 @@ version, a newer patch of its line (which re-locking takes) and a newer minor, a
 non-zero when re-locking would change `fleet.lock`. For a pre-release pin it reports the
 line's release once one is out, so the fleet can return to the line.
 
+**A service can run its main release instead of its line's (#981).** A deployment that
+rolls a service to the commit its `main` was last green at names it in `releases.yaml`,
+beside `fleet.yaml`, with the commit and the image built from it, as the release record
+tacplus-dev/build publishes (`release-<repo>`, version `main`) gives them:
+
+```yaml
+# releases.yaml: written by the deployment (a job, from the records), not by hand
+releases:
+  - name: kernel
+    commit: 0123456789abcdef0123456789abcdef01234567                    # the full commit, 40 hex
+    image: us-docker.pkg.dev/acme/tacplus/kernel:main-0123456789ab@sha256:9b2e…   # by digest
+```
+
+The service is locked at that commit exactly as it would be at a tag's: its `tacplus.yaml`
+(`depends`, `contribute`) and, when the contract lives in its own repo, its contract are
+read there, so `build/proto`, the whole-fleet checks and its `inputs_digest` are the
+commit's; swapping only the image would run main's code against the tag's contracts. Its
+lock entry records `version: main-<12 hex>`, the commit, the image given (even under
+`images: source`; the gateway's stays the one the fleet builds) and `pinned: true`, which
+a reader of the lock checks before taking `version` for a release. `fleet.yaml` still
+states its line: a dependent's floor on it is checked against that line, a main release
+being taken to be at or past it. A service `releases.yaml` does not name resolves its
+line as before; without the file nothing changes. The build refuses a name the fleet does
+not run or one given twice, a commit that is not 40 lower-case hex or that the repo does
+not have, an image not by digest (`<name>@sha256:<64 hex>`), and an image tagged other than
+the commit's `main-<12 hex>`. The commit is trusted to be a release the deployment chose:
+the build checks that it exists, not that it is on `main`. `--check` reports such a service
+as `pinned main-<12 hex> (releases.yaml)`, never behind its line, and stale only when
+`fleet.lock` holds another commit or image than `releases.yaml` names; `tacplus fleet
+gateway` checks a pinned service, and a pinned gateway, out at its commit.
+
 The merged tree is what the fleet-side services, the state host, the gateway and the
 operator, are generated from: `tacplus build --src build/proto` in their repos at the
-locked commits. Service binaries and images are not built here; each is built and
-published by its own repo's release, and the shared registry locks guarantee the two agree.
+locked commits. Service binaries and images are not built here: each is built and
+published by its own repo's release or, under `images: source`, by the fleet from the
+locked commit, and the shared registry locks guarantee the two agree.
 The gateway's is the exception: the fleet builds it ([below](#the-gateway-image)).
 
 ### Contributing to the gateway

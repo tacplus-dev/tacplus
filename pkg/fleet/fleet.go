@@ -66,13 +66,23 @@ const LockFile = "fleet.lock"
 
 // Manifest is fleet.yaml.
 type Manifest struct {
-	Registries []string      `yaml:"registries"`
-	Tacplus    string        `yaml:"tacplus,omitempty"`
-	Services   []ServiceSpec `yaml:"services"`
+	Registries []string `yaml:"registries"`
+	Tacplus    string   `yaml:"tacplus,omitempty"`
+	// Images is where the fleet's service images come from: ImagesRelease
+	// (or empty), each release's published image; ImagesSource, built by the
+	// fleet itself from each release's tag.
+	Images   string        `yaml:"images,omitempty"`
+	Services []ServiceSpec `yaml:"services"`
 	// Launcher is the launcher release line the gateway's image runs under
 	// (gateway.go): required when the fleet runs a gateway.
 	Launcher *ServiceSpec `yaml:"launcher,omitempty"`
 }
+
+// The values of Manifest.Images.
+const (
+	ImagesRelease = "release"
+	ImagesSource  = "source"
+)
 
 // ServiceSpec is one fleet service: its registry name, the release line it
 // runs (MAJOR.MINOR, its highest released patch; or an explicit
@@ -85,7 +95,10 @@ type ServiceSpec struct {
 
 // Lock is fleet.lock: what the build resolved, release by release.
 type Lock struct {
-	Tacplus    string          `yaml:"tacplus"`
+	Tacplus string `yaml:"tacplus"`
+	// Images is the manifest's: source when the fleet builds every service's
+	// image from its Commit, and no service records an Image.
+	Images     string          `yaml:"images,omitempty"`
 	Registries []LockedSource  `yaml:"registries"`
 	Services   []LockedService `yaml:"services"`
 	Libraries  []LockedLibrary `yaml:"libraries,omitempty"` // contract-only vservices pulled in by reference
@@ -109,11 +122,12 @@ type LockedService struct {
 	ID   int32  `yaml:"id"`
 	// Version is the exact release the stated version resolved to
 	// (MAJOR.MINOR.PATCH, or the pre-release named), Commit its tag's commit,
-	// and Image the image that release published, by digest.
+	// and Image the image that release published, by digest (none in a
+	// fleet that builds its own images).
 	Version        string   `yaml:"version"`
 	Repo           string   `yaml:"repo"`
 	Commit         string   `yaml:"commit"`
-	Image          string   `yaml:"image"`
+	Image          string   `yaml:"image,omitempty"`
 	Contract       string   `yaml:"contract,omitempty"`
 	ContractCommit string   `yaml:"contract_commit,omitempty"`
 	Depends        []string `yaml:"depends,omitempty"`
@@ -128,6 +142,19 @@ type LockedService struct {
 	// Contribute is what the service contributes to the fleet's gateway
 	// (contribute.go), read at Commit.
 	Contribute *LockedContribution `yaml:"contribute,omitempty"`
+	// Pinned is a service locked at the main release releases.yaml names
+	// (release.go): Version is main-<12 hex>, not a release, Commit the
+	// record's commit and Image its image, even under images: source.
+	Pinned bool `yaml:"pinned,omitempty"`
+}
+
+// ref is what a checkout of s resolves: its release's version, or the commit
+// of the main release it is pinned at.
+func (s LockedService) ref() string {
+	if s.Pinned {
+		return s.Commit
+	}
+	return s.Version
 }
 
 var (
@@ -152,6 +179,11 @@ func ReadManifest(dir string) (*Manifest, error) {
 	}
 	if len(m.Services) == 0 {
 		return nil, fmt.Errorf("fleet: %s lists no services", ManifestFile)
+	}
+	switch m.Images {
+	case "", ImagesRelease, ImagesSource:
+	default:
+		return nil, fmt.Errorf("fleet: %s: images %q must be %s (each release's published image, the default) or %s (the fleet builds them from each release's tag)", ManifestFile, m.Images, ImagesRelease, ImagesSource)
 	}
 	seen := map[string]bool{}
 	for i, s := range m.Services {
@@ -215,6 +247,10 @@ func Build(manifestDir, outDir string) (*Result, error) {
 	if _, err := os.Stat(pins); err != nil {
 		return nil, fmt.Errorf("fleet: %s/dependencies.yaml is required: it holds the language and tool pins for everything generated from the fleet's merged protos", manifestDir)
 	}
+	mainReleases, err := ReadReleases(manifestDir, m)
+	if err != nil {
+		return nil, err
+	}
 
 	var cleanups []func()
 	defer func() {
@@ -224,7 +260,7 @@ func Build(manifestDir, outDir string) (*Result, error) {
 	}()
 
 	// 1. Registries: unioned, disjoint.
-	lock := &Lock{Tacplus: m.Tacplus}
+	lock := &Lock{Tacplus: m.Tacplus, Images: m.Images}
 	union, regCleanup, err := registry.LoadAuthorities(m.Registries, func(ref string) (string, func(), error) {
 		res, err := protosrc.Resolve(ref, "latest")
 		if err != nil {
@@ -262,24 +298,37 @@ func Build(manifestDir, outDir string) (*Result, error) {
 		if contract == "" {
 			return nil, fmt.Errorf("fleet: service %q is registered without a contract; the registry must say where its proto lives", spec.Name)
 		}
-		tags, err := serviceTags(spec.Repo)
-		if err != nil {
-			return nil, fmt.Errorf("fleet: service %q: %w", spec.Name, err)
-		}
-		tag, err := resolveVersion(tags, spec.Version)
-		if err != nil {
-			return nil, fmt.Errorf("fleet: service %q: %s: %w", spec.Name, spec.Repo, err)
-		}
-		// The gateway's image is the one the fleet builds (tacplus fleet
-		// gateway), never its release's.
-		var image string
-		if spec.Name != GatewayService {
-			if image, err = releaseImage(spec.Repo, tag); err != nil {
-				return nil, fmt.Errorf("fleet: service %q: release v%s: %w", spec.Name, tag, err)
+		// version is what the lock records; ref, what is checked out: the
+		// line's release, or the main release releases.yaml names, at its
+		// commit and with its image.
+		var version, ref, image string
+		mainRelease, pinned := mainReleases[spec.Name]
+		if pinned {
+			version, ref = mainRelease.Version(), mainRelease.Commit
+			// The gateway's image is the one the fleet builds (tacplus
+			// fleet gateway), never a release's.
+			if spec.Name != GatewayService {
+				image = mainRelease.Image
+			}
+		} else {
+			tags, err := serviceTags(spec.Repo)
+			if err != nil {
+				return nil, fmt.Errorf("fleet: service %q: %w", spec.Name, err)
+			}
+			if version, err = resolveVersion(tags, spec.Version); err != nil {
+				return nil, fmt.Errorf("fleet: service %q: %s: %w", spec.Name, spec.Repo, err)
+			}
+			ref = version
+			// A fleet that builds its own images deploys the tag's commit,
+			// which the lock records below; it needs no published image.
+			if spec.Name != GatewayService && m.Images != ImagesSource {
+				if image, err = releaseImage(spec.Repo, version); err != nil {
+					return nil, fmt.Errorf("fleet: service %q: release v%s: %w", spec.Name, version, err)
+				}
 			}
 		}
 
-		implDir, _, implCleanup, err := resolveImplementation(spec.Repo, tag)
+		implDir, _, implCleanup, err := resolveImplementation(spec.Repo, ref)
 		if err != nil {
 			return nil, fmt.Errorf("fleet: service %q: implementation %s: %w", spec.Name, spec.Repo, err)
 		}
@@ -307,7 +356,7 @@ func Build(manifestDir, outDir string) (*Result, error) {
 		// is taken at its head.
 		contractTag := "latest"
 		if sameRepo(contract, spec.Repo) {
-			contractTag = tag
+			contractTag = ref
 		}
 		contractRepoDir, contractProtoDir, contractCleanup, err := resolveImplementation(contract, contractTag)
 		if err != nil {
@@ -341,13 +390,13 @@ func Build(manifestDir, outDir string) (*Result, error) {
 			return nil, fmt.Errorf("fleet: service %q: %s declares id %d but the registry says %d; an implementation keeps the registry's id", spec.Name, contract, lockID, id)
 		}
 
-		r := resolved{spec: spec, version: tag, id: id, protoDir: staged, depends: depends, whole: whole}
+		r := resolved{spec: spec, version: version, id: id, protoDir: staged, depends: depends, whole: whole}
 		services = append(services, r)
 		byName[spec.Name] = &services[len(services)-1]
 		lock.Services = append(lock.Services, LockedService{
-			Name: spec.Name, ID: id, Version: tag, Repo: spec.Repo,
+			Name: spec.Name, ID: id, Version: version, Repo: spec.Repo,
 			Commit: commitOf(implDir), Image: image, Contract: contract, ContractCommit: commitOf(contractRepoDir), Depends: depends,
-			Contribute: contribution,
+			Contribute: contribution, Pinned: pinned,
 		})
 	}
 
@@ -401,7 +450,9 @@ func Build(manifestDir, outDir string) (*Result, error) {
 				errs = append(errs, fmt.Sprintf("%q depends on %q, which the fleet does not run; add it to %s", r.spec.Name, depName, ManifestFile))
 				continue
 			}
-			if floor != "" && !satisfies(lineOf(dep.version), floor) {
+			// A main release is taken to be at or past the line fleet.yaml
+			// states for it.
+			if floor != "" && !satisfies(lineOf(dep.spec.Version), floor) {
 				errs = append(errs, fmt.Sprintf("%q needs %q at %s or a later minor; the fleet runs %s", r.spec.Name, depName, floor, dep.version))
 			}
 		}

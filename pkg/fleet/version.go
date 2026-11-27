@@ -219,10 +219,18 @@ type Available struct {
 	// Minor is the highest release of a later line than the stated one: a
 	// one-line fleet.yaml change away.
 	Minor string
+	// Pinned is the main release releases.yaml locks the service at
+	// (main-<12 hex>): its line's releases are not looked at.
+	Pinned string
+	// pinMoved: fleet.lock holds another commit or image than releases.yaml.
+	pinMoved bool
 }
 
 // Stale reports whether re-locking would change the service's lock entry.
 func (a Available) Stale() bool {
+	if a.Pinned != "" {
+		return a.pinMoved
+	}
 	if preReleaseRe.MatchString(a.Version) {
 		return a.Locked != a.Version
 	}
@@ -235,16 +243,24 @@ const launcherName = "(launcher)"
 // Check reports, for every service in the manifest in manifestDir, the
 // releases newer than its lock: a newer patch of its line, which re-locking
 // takes, and a newer minor, which needs a fleet.yaml change; and the same for
-// the launcher. It reads the repos' tags and changes nothing.
+// the launcher. A service at a main release (releases.yaml) is reported
+// pinned, and stale only when fleet.lock holds another. It reads the repos'
+// tags and changes nothing.
 func Check(manifestDir string) ([]Available, error) {
 	m, err := ReadManifest(manifestDir)
 	if err != nil {
 		return nil, err
 	}
+	mainReleases, err := ReadReleases(manifestDir, m)
+	if err != nil {
+		return nil, err
+	}
 	locked := map[string]string{}
+	lockedAt := map[string]LockedService{}
 	if lock, err := ReadLock(manifestDir); err == nil {
 		for _, s := range lock.Services {
 			locked[s.Name] = s.Version
+			lockedAt[s.Name] = s
 		}
 		if lock.Launcher != nil {
 			locked[launcherName] = lock.Launcher.Version
@@ -258,6 +274,17 @@ func Check(manifestDir string) ([]Available, error) {
 	}
 	var out []Available
 	for _, spec := range specs {
+		if r, ok := mainReleases[spec.Name]; ok {
+			was := lockedAt[spec.Name]
+			// The gateway's image is the fleet's own build, never recorded here.
+			image := r.Image
+			if spec.Name == GatewayService {
+				image = ""
+			}
+			out = append(out, Available{Name: spec.Name, Version: spec.Version, Locked: locked[spec.Name], Pinned: r.Version(),
+				pinMoved: !was.Pinned || was.Commit != r.Commit || was.Image != image})
+			continue
+		}
 		tags, err := serviceTags(spec.Repo)
 		if err != nil {
 			return nil, fmt.Errorf("fleet: service %q: %w", spec.Name, err)

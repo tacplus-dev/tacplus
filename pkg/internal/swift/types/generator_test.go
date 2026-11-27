@@ -252,6 +252,51 @@ func TestRenderC2DClientRequiresSocketPathWithoutOneDefault(t *testing.T) {
 	}
 }
 
+// TestRenderGRPCClientsRunOnAPlainTaskGroup pins the fix of issue #803: the
+// Swift C2D and C2S clients run each call's GRPCClient on a plain task group,
+// not through grpc-swift's withGRPCClient. That helper runs the client on a
+// discarding task group whose teardown, on Swift toolchains before 6.3.1,
+// intermittently aborts the consumer process with "freed pointer was not the
+// last allocation" (swiftlang/swift#75501). The behaviour itself is checked by
+// the swift leg of cross-test/c2d-server, which cycles the client thousands of
+// times.
+func TestRenderGRPCClientsRunOnAPlainTaskGroup(t *testing.T) {
+	services := []c2dServiceTemplateData{{MethodName: "withProductApi", ClientType: "Product_ProductApi"}}
+	renders := map[string][]byte{}
+	var err error
+	renders["C2DClient.swift.tmpl"], err = executeSwiftTemplate("C2DClient.swift.tmpl", c2dClientTemplateData{
+		PackageName: "MyTacplus", DefaultSocketPath: "/run/gateway.sock", Services: services,
+	})
+	if err != nil {
+		t.Fatalf("render C2DClient: %v", err)
+	}
+	renders["C2SClient.swift.tmpl"], err = executeSwiftTemplate("C2SClient.swift.tmpl", c2sClientTemplateData{
+		PackageName: "MyTacplus", Services: services,
+	})
+	if err != nil {
+		t.Fatalf("render C2SClient: %v", err)
+	}
+	for name, out := range renders {
+		s := string(out)
+		for _, unwanted := range []string{"withGRPCClient(", "DiscardingTaskGroup"} {
+			if strings.Contains(s, unwanted) {
+				t.Errorf("%s runs the client through %s, whose teardown aborts on Swift < 6.3.1 (#803)\n%s", name, unwanted, s)
+			}
+		}
+		for _, want := range []string{
+			"try await self.withClient { client in",
+			"return try await withThrowingTaskGroup(of: Void.self) { group in",
+			"group.addTask { try await client.runConnections() }",
+			"client.beginGracefulShutdown()",
+			"try await group.waitForAll()",
+		} {
+			if !strings.Contains(s, want) {
+				t.Errorf("%s missing %q\n%s", name, want, s)
+			}
+		}
+	}
+}
+
 // TestRenderC2SClientRejectsBearerTokenOverPlaintext pins the loopback restriction
 // on the C2S bearer token: a token provider combined with useTLS=false is only
 // allowed for a loopback host. There is no C#/Swift execution harness in this repo

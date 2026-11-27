@@ -707,11 +707,11 @@ func inMethod(ctx context.Context, fullMethod string) context.Context {
 	return grpc.NewContextWithServerTransportStream(ctx, methodStream{method: fullMethod})
 }
 
-// RPC_FLAG_ANY_TENANT opens a tenant-owned instance's door for that rpc only:
-// a caller of any tenant passes it on every door (Authorize, Authenticate,
-// AuthenticateAtOrBelow), while every other rpc keeps the default "members of
-// the instance's tenant only". Nothing else is widened: auth_services still
-// applies.
+// RPC_FLAG_ANY_TENANT opens a tenant-owned instance's door for that rpc only,
+// and to other tenants' USERS only (C2S): a user of any tenant passes it, on
+// every door that knows the rpc (Authorize, Authenticate), while every other rpc
+// keeps the default "members of the instance's tenant only". Nothing else is
+// widened: auth_services still applies.
 func TestAuthorizerAnyTenantOpensTheDoorForThatRpcOnly(t *testing.T) {
 	const openMethod = "/demo.DemoService/Visit"
 	const openKey = "demo.DemoService/Visit"
@@ -723,16 +723,10 @@ func TestAuthorizerAnyTenantOpensTheDoorForThatRpcOnly(t *testing.T) {
 	a.SetHostNamespace("/tenants/beta")
 
 	acme := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
-		tok.SetSubType("service").SetSubject("caller-svc").SetNamespace("/tenants/acme")
+		tok.SetSubType("user").SetSubject("someone@example.com").SetNamespace("/tenants/acme/users/u1")
 	})
-	if _, err := a.Authorize(bearerCtx(acme), openMethod, nil); err != nil {
-		t.Fatalf("ANY_TENANT rpc must admit another tenant's caller, got: %v", err)
-	}
 	if _, err := a.Authenticate(inMethod(bearerCtx(acme), openMethod)); err != nil {
-		t.Fatalf("ANY_TENANT rpc must admit another tenant's caller on Authenticate, got: %v", err)
-	}
-	if _, err := a.Authorize(bearerCtx(acme), testMethod, nil); status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("an rpc without ANY_TENANT must keep the door shut, got: %v", err)
+		t.Fatalf("ANY_TENANT rpc must admit another tenant's user on Authenticate, got: %v", err)
 	}
 	if _, err := a.Authenticate(inMethod(bearerCtx(acme), testMethod)); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("Authenticate on an rpc without ANY_TENANT must keep the door shut, got: %v", err)
@@ -743,11 +737,54 @@ func TestAuthorizerAnyTenantOpensTheDoorForThatRpcOnly(t *testing.T) {
 	}
 
 	// The token's other checks are untouched: auth_services still applies.
-	stranger := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
-		tok.SetSubType("service").SetSubject("other-svc").SetNamespace("/tenants/acme")
+	beta := signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
+		tok.SetSubType("service").SetSubject("other-svc").SetNamespace("/tenants/beta")
 	})
-	if _, err := a.Authorize(bearerCtx(stranger), openMethod, nil); status.Code(err) != codes.PermissionDenied {
+	if _, err := a.Authorize(bearerCtx(beta), openMethod, nil); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("ANY_TENANT must not widen auth_services, got: %v", err)
+	}
+}
+
+// S2S never crosses tenants (tacplus-dev/roadmap
+// decisions/s2s-never-crosses-tenants-2026-10-31.md): RPC_FLAG_ANY_TENANT opens
+// the door to other tenants' users only. Another tenant's service or workload
+// is refused at a tenant-owned instance's door on every rpc, the ANY_TENANT
+// one included, on every door; the instance's own tenant and /system pass.
+func TestAuthorizerAnyTenantNeverAdmitsAnotherTenantsService(t *testing.T) {
+	const openMethod = "/demo.DemoService/Visit"
+	const openKey = "demo.DemoService/Visit"
+	key := newTestKey(t)
+	a := authorizerWithKeys(t, jwkForKey(t, key))
+	a.SetMethodAuth(openKey, []string{"caller-svc", "caller-svc/workloads/.*"})
+	a.SetMethodAnyTenant(openKey)
+	a.SetHostIdentity("/tenants/beta", "spiffe://example.com/tenants/bbbbbbbb/services/demo")
+
+	principal := func(subType, sub, ns string) string {
+		return signedToken(t, key, func(tok *tokenlib.TokenWrapper) {
+			tok.SetSubType(subType).SetSubject(sub).SetNamespace(ns)
+		})
+	}
+	for _, tok := range []string{
+		principal("service", "spiffe://example.com/tenants/aaaaaaaa/services/caller-svc", "/tenants/alpha"),
+		principal("workload", "spiffe://example.com/tenants/aaaaaaaa/services/caller-svc/workloads/pigeon-1", "/tenants/alpha"),
+	} {
+		if _, err := a.Authorize(bearerCtx(tok), openMethod, nil); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("ANY_TENANT: tenant alpha's service must be refused at beta's door, got: %v", err)
+		}
+		if _, err := a.Authenticate(inMethod(bearerCtx(tok), openMethod)); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("ANY_TENANT: Authenticate must refuse tenant alpha's service at beta's door, got: %v", err)
+		}
+		if _, err := a.AuthenticateAtOrBelow(inMethod(bearerCtx(tok), openMethod), "/tenants/alpha"); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("ANY_TENANT: AuthenticateAtOrBelow must refuse tenant alpha's service at beta's door, got: %v", err)
+		}
+	}
+	for _, tok := range []string{
+		principal("service", "spiffe://example.com/tenants/bbbbbbbb/services/caller-svc", "/tenants/beta"),
+		principal("service", "spiffe://example.com/system/services/caller-svc", "/system"),
+	} {
+		if _, err := a.Authorize(bearerCtx(tok), openMethod, nil); err != nil {
+			t.Fatalf("ANY_TENANT: beta's own and /system services must pass beta's door, got: %v", err)
+		}
 	}
 }
 

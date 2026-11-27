@@ -620,6 +620,19 @@ run_java_generated_self_tests() {
     grep -q '^TenantRecordC2STest: all checks passed$' "$test_log" \
       || die "tenant-record writer fixture (java): TenantRecordC2STest did not report its checks passed"
   fi
+  # The tenant-route fixture's harbor client self-test (#258), copied in by
+  # install_tenantroute_client_selftest, so it is present exactly in that build.
+  local trcl_test trcl_class
+  trcl_test="$(find "$output/src/main/java" -type f -path '*/s2sm/internal/grpc/clients/services/crew/TenantRouteClientTest.java' -print -quit)"
+  if [[ -n "$trcl_test" ]]; then
+    trcl_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$trcl_test").$(basename "$trcl_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$trcl_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q '^TenantRouteClientTest: all checks passed$' "$test_log" \
+      || die "tenant-route harbor fixture (java): TenantRouteClientTest did not report its checks passed"
+  fi
   # The generated MCP gate of a tenant-routed service (#170, #284): its session
   # tenant is the caller's tid claim, never a tid read off its namespace. Run
   # for the services whose carrier is routed (the tenant-route fixture's crew).
@@ -918,6 +931,16 @@ run_rust_spiffe_self_tests() {
         return 1
       }
     assert_clean_log "$log_dir/rust-tenant-record-route-test.log"
+  fi
+
+  # The tenant-route fixture's harbor client self-test (#258), copied in by
+  # install_tenantroute_client_selftest.
+  if [[ -f "$output/tests/tenant_route_client_test.rs" ]]; then
+    (cd "$output" && cargo test --test tenant_route_client_test) >"$log_dir/rust-tenant-route-client-test.log" 2>&1 || {
+        dump_step_log "$log_dir/rust-tenant-route-client-test.log"
+        return 1
+      }
+    assert_clean_log "$log_dir/rust-tenant-route-client-test.log"
   fi
 
   # The quorum-write fixture's hosted store service + roll scheduler self-test,
@@ -2087,6 +2110,50 @@ install_tenant_record_route_selftest() {
   esac
 }
 
+# install_tenantroute_client_selftest drops the tenant-route fixture's (#170)
+# client self-test (#258) into harbor's generated output, next to the generated
+# typed CrewPeerService client it drives: S2S never crosses tenants, so a
+# tenant's service calling with its own token is refused PERMISSION_DENIED,
+# before anything is sent, when the call names another tenant, and a call
+# naming none goes to its own tid; a /system service names the tenant it calls.
+install_tenantroute_client_selftest() {
+  local output="$1"
+  local language="$2"
+  local client="" routes_by_caller=""
+
+  case "$language" in
+    go)
+      client="$(find "$output" -type f -path '*/s2sm/grpc/clients/services/crew/peer_service.go' -print -quit)"
+      routes_by_caller="serviceconnection.CallerRouteTenant("
+      ;;
+    java)
+      client="$(find "$output/src/main/java" -type f -path '*/s2sm/internal/grpc/clients/services/crew/CrewPeerServiceGrpcClient.java' -print -quit)"
+      routes_by_caller="RouteTenant.forCaller("
+      ;;
+    rust)
+      client="$(find "$output" -type f -path '*/s2sm/internal/grpc/clients/services/crew/peer_service.rs' -print -quit)"
+      routes_by_caller="tenant_route::caller_route_tenant("
+      ;;
+    *) return 0 ;;
+  esac
+  [[ -n "$client" ]] || die "tenant-route fixture ($language): generated CrewPeerService client not found under $output"
+  grep -qF "$routes_by_caller" "$client" \
+    || die "tenant-route fixture ($language): the generated CrewPeerService client does not route by the caller's own tenant"
+
+  case "$language" in
+    go)
+      cp "$SELFTESTS_SRC/go/tenant_route_client_test.go" "$(dirname "$client")/"
+      ;;
+    java)
+      cp "$SELFTESTS_SRC/java/TenantRouteClientTest.java" "$(dirname "$client")/"
+      ;;
+    rust)
+      mkdir -p "$output/tests"
+      cp "$SELFTESTS_SRC/rust/tenant_route_client_test.rs" "$output/tests/"
+      ;;
+  esac
+}
+
 # install_tenant_record_c2s_selftest drops the tenant-record fixture's c2s
 # reader self-test (#284) into the generated WRITER output, next to the
 # generated client-facing record reader it drives in-process: a read goes to the
@@ -3057,6 +3124,9 @@ if [[ -d "$TENANTROUTE_PROTO_SRC" ]]; then
       assert_spiffe_soundness "$dir/tacplus"
       grep -Eq '"route_field": *"target_tenant"' "$output_root/registry.json" \
         || die "tenant-route fixture ($language, $self): registry.json does not carry crew's route_field"
+      if [[ "$self" == "harbor" ]]; then
+        install_tenantroute_client_selftest "$output_root" "$language"
+      fi
       echo "==> Compiling $language tenant-route fixture ($self)"
       compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
       echo "    PASS $language tenant-route ($self)"
@@ -3066,10 +3136,10 @@ if [[ -d "$TENANTROUTE_PROTO_SRC" ]]; then
 fi
 
 # redo-contract fixture (issue #163 D5): the sys contract redolog.Redo is
-# tenant-routed by its host_tenant_owned, so stratum, generated without the
-# host's proto, carries its route field in registry.json and the routed client;
-# redo, which hosts it by label, gets its server wrapper (a sys contract's
-# wrapper was never written in Go) with the route check and the any-tenant door.
+# hosted by the /system service redo (#258: stratum -> redo is tenant ->
+# /system), so neither side's registry.json routes it by tenant nor opens it to
+# any tenant; redo, which hosts it by label, gets its server wrapper (a sys
+# contract's wrapper was never written in Go).
 if [[ -d "$REDO_PROTO_SRC" ]]; then
   for language in "${languages[@]}"; do
     for self in stratum redo; do
@@ -3087,14 +3157,14 @@ if [[ -d "$REDO_PROTO_SRC" ]]; then
       fi
       output_root="$(resolve_output_root "$dir/tacplus")"
       assert_spiffe_soundness "$dir/tacplus"
-      python3 - "$output_root/registry.json" <<'REDO_PY' || die "redo-contract fixture ($language, $self): registry.json does not route redolog.Redo by tenant"
+      python3 - "$output_root/registry.json" <<'REDO_PY' || die "redo-contract fixture ($language, $self): registry.json routes redolog.Redo by tenant or opens it to any tenant"
 import json, sys
 want = {"/redolog.Redo/Append", "/redolog.Redo/Replay"}
 seen = set()
 def walk(o):
     if isinstance(o, dict):
         if o.get("grpc_path") in want and "rpc_verb" in o:  # an rpc entry, not one of its surfaces
-            if o.get("route_field") != "tenant" or o.get("any_tenant") is not True:
+            if o.get("route_field") or o.get("any_tenant"):
                 sys.exit("%s: route_field=%r any_tenant=%r" % (o["grpc_path"], o.get("route_field"), o.get("any_tenant")))
             seen.add(o["grpc_path"])
         for v in o.values():

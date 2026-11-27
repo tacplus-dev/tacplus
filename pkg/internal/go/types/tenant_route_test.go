@@ -168,18 +168,21 @@ func readWrapper(t *testing.T, svc ServiceInfo) string {
 
 // The typed client of a routed unary rpc reads the route field, refuses a
 // missing or malformed tid before any network call, and sends to that
-// tenant's instance; a platform rpc's client is unchanged.
+// tenant's instance; a tenant's own service routes by its own token
+// (CallerRouteTenant), which stamps an empty route field and refuses another
+// tenant (#258); a platform rpc's client is unchanged.
 func TestGoClientRoutedUnaryRoutesByTheField(t *testing.T) {
 	src, err := generateGrpcClientMethod(&parser.ServiceInfo{Name: "Crew"}, crewMethod("Hail", false, false), "crew", "services")
 	if err != nil {
 		t.Fatal(err)
 	}
 	validate := strings.Index(src, "ValidateHailRequest(req)")
-	route := strings.Index(src, `serviceconnection.RouteTenant("target_tenant", req.GetTargetTenant())`)
+	route := strings.Index(src, `serviceconnection.CallerRouteTenant("target_tenant", req.GetTargetTenant(), c.ownToken())`)
+	stamp := strings.Index(src, `req.TargetTenant = tenant`)
 	with := strings.Index(src, "ctx = serviceconnection.WithRouteTenant(ctx, tenant)")
 	call := strings.Index(src, "c.client.Hail(")
-	if validate < 0 || route < 0 || with < 0 || call < 0 || !(validate < route && route < with && with < call) {
-		t.Fatalf("routed unary client must validate, route, then call (validate=%d route=%d with=%d call=%d):\n%s", validate, route, with, call, src)
+	if validate < 0 || route < 0 || stamp < 0 || with < 0 || call < 0 || !(validate < route && route < stamp && stamp < with && with < call) {
+		t.Fatalf("routed unary client must validate, route, stamp, then call (validate=%d route=%d stamp=%d with=%d call=%d):\n%s", validate, route, stamp, with, call, src)
 	}
 
 	platform := crewMethod("Hail", false, false)
@@ -200,7 +203,7 @@ func TestGoClientRoutedServerStreamRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	route := strings.Index(src, `serviceconnection.RouteTenant("target_tenant", req.GetTargetTenant())`)
+	route := strings.Index(src, `serviceconnection.CallerRouteTenant("target_tenant", req.GetTargetTenant(), c.ownToken())`)
 	call := strings.Index(src, "c.client.Watch(")
 	if route < 0 || call < 0 || route > call {
 		t.Fatalf("routed server stream client must route before the call:\n%s", src)
@@ -217,7 +220,7 @@ func TestGoClientRoutedClientStreamFixesTenantAtOpen(t *testing.T) {
 	}
 	for _, want := range []string{
 		"func (c *{{.ClientName}}) Upload(ctx context.Context, tenant string, opts ...grpc.CallOption)",
-		`serviceconnection.RouteTenant("tenant", tenant)`,
+		`serviceconnection.CallerRouteTenant("tenant", tenant, c.ownToken())`,
 		"ctx = serviceconnection.WithRouteTenant(ctx, tenant)",
 		"routeReq:",
 		"req.GetTargetTenant() != tenant",
@@ -226,7 +229,7 @@ func TestGoClientRoutedClientStreamFixesTenantAtOpen(t *testing.T) {
 			t.Fatalf("client-streaming routed open is missing %q:\n%s", want, src)
 		}
 	}
-	if route, open := strings.Index(src, `serviceconnection.RouteTenant("tenant", tenant)`), strings.Index(src, "c.client.Upload("); route > open {
+	if route, open := strings.Index(src, `serviceconnection.CallerRouteTenant("tenant", tenant, c.ownToken())`), strings.Index(src, "c.client.Upload("); route > open {
 		t.Fatalf("the tenant must be checked before the stream opens:\n%s", src)
 	}
 }
@@ -239,7 +242,7 @@ func TestGoClientRoutedBidiFixesTenantAtOpen(t *testing.T) {
 	}
 	for _, want := range []string{
 		"tenant string,",
-		`serviceconnection.RouteTenant("tenant", tenant)`,
+		`serviceconnection.CallerRouteTenant("tenant", tenant, c.ownToken())`,
 		"callCtx = serviceconnection.WithRouteTenant(callCtx, h.tenant)",
 		"msg.GetTargetTenant() != h.tenant",
 	} {

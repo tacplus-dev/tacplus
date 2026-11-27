@@ -72,6 +72,7 @@ case "$LANGUAGE" in
     WRAPPER_DIR="$OUT/s2sm/grpc/servers/svc/streamexpiry"
     [[ -f "$WRAPPER_DIR/streamer_service.go" ]] || die "go StreamerService wrapper missing"
     cp "$TESTDATA/stream_expiry_behavior_test.go" "$WRAPPER_DIR/stream_expiry_behavior_test.go"
+    cp "$TESTDATA/grpcserver_serve_on.go" "$OUT/chassis/grpcserver/serve_on_fixture.go"
 
     cat > "$OUT/go.mod" <<'EOF'
 module example.com/streamexpiry/tacplus/model

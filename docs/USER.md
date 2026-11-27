@@ -1138,8 +1138,16 @@ each tenant's slice in memory, read through `sm.ConfigPush().KernelTenantSetting
 (Java: `sm.configPush().kernelTenantSettings(tid)`; Rust: `sm.config_push().kernel_tenant_settings(tid)`),
 which is false (null, None) until the tenant's first snapshot arrives. The `Handler` then
 implements `HoldsTenant(ctx, tid)` (Java: `holdsTenant(tid)`; Rust: `holds_tenant(tid)`), the
-owner's tenant registry, which admits a tenant's record store. The generated publisher in
-the record store is still to come, so nothing sends a pushed slice yet.
+owner's tenant registry, which admits a tenant's record store.
+
+The publisher's engine is generated in Java (`chassis/configpush/ConfigPushPublisher`, API.md,
+Pushed Tenant Config Slices). The record store feeds it each change of a slice at the revision
+the store gave the write. It holds one stream to each owner it holds a slice of. It sends a
+snapshot when the stream opens and then each newer version, never an older one. After any end
+of the stream (a break, the owner's restart, a refusal) it opens the stream again on the
+jittered reconnect schedule and sends the snapshot again. No record store runs it yet: feeding
+it from the store and the Go and Rust engines are still to come, so nothing sends a pushed
+slice yet.
 
 ### Views Across Boundaries
 

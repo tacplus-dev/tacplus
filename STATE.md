@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-26 by looper (#981).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-27 by looper (#927).
 
 - **Version / line:** v2.6.13 (latest release, 2026-11-15, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -314,6 +314,15 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-26 by lo
   `assert_not_address` and `assert_enum_not_in`; so generated validation refuses a registered public suffix, a SAML
   IdP and an address-shaped subject (`cross-test/current-generation` self-tests). Kernel holding it in its tenant
   config slice and enforcing the flow is kernel's; the single-account mode's shape is still to be designed.
+  Tenant-to-owner config push, part one (#927, main, for 2.7): `(spec.config_slice).delivery:
+  CONFIG_SLICE_DELIVERY_PUSH` and its wire, `sys/configpush.proto` (`configpush.ConfigPush`: one bidi stream for
+  each tenant and owner, a snapshot and then versions, a per-slice ack, `STALE` for a version that is not newer). A
+  pushed slice is no `TenantConfig` field and goes on the wire under its owner's registered `tenant_slice_field`.
+  Generation refuses it on a project slice, without a registered field, for a tenant-owned owner, and twice for one
+  owner. Part two: the owner's receiver in Go, Java and Rust (`chassis/configpush`; `sm.ConfigPush().<Slice>(tid)` /
+  `sm.configPush().<slice>(tid)` / `sm.config_push().<slice>(tid)`, memory only, fail-closed, version-monotonic; the
+  `Handler`'s `HoldsTenant` admits only `/tenants/<tid>/services/stratum`). `cross-test/proto-tenantslice`'s tenancy
+  owns a pushed slice, whose receiver each language's tenancy build asserts and compiles.
 - **Released / deployed:** v2.6.0 is the newest release: the binaries and `checksums.txt`, and
   `ghcr.io/tacplus-dev/tacplus/build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c`
   (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.
@@ -350,6 +359,8 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-26 by lo
   namespace is `/tenants/<tid>`; kernel#23's `/tenants/<name>` namespaces need #202 first (PROPOSALS.md).
   The record write surface stamps no `(spec.identity_spiffe_subject)` (PROPOSALS.md). A fleet's service images must be on ghcr.io from a
   github.com repo (PROPOSALS.md).
+  The config push (#927) has its annotation, wire and receivers in Go, Java and Rust, but no record-store publisher
+  sends a pushed slice yet; kernel#70 waits on it.
   The product layer's remaining generated doors (`OnTenantDeleted`) and its cross-tests are not done (#475 steps 2-4),
   so a server of a product service, or of an rpc binding `caller_tid`, is refused at generation; the kernel mints no
   product token yet (tacplus-dev/kernel#63), nor does the operator deploy one (tacplus-dev/operator#33).

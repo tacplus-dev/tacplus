@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	stateproto "github.com/tacplus-dev/tacplus/pkg/internal/proto"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 	"github.com/tacplus-dev/tacplus/templates"
 )
@@ -73,7 +74,7 @@ func TestGoConfigPushSlicesAreTheOwners(t *testing.T) {
 	}
 
 	out := t.TempDir()
-	if err := generateConfigPushFile(out, serviceManagerTemplateData{ModuleBasePath: "example.com/m/model", ConfigPushSlices: kernel}); err != nil {
+	if err := generateConfigPushFile(out, serviceManagerTemplateData{ModuleBasePath: "example.com/m/model", ConfigPushSlices: kernel}, "configpush"); err != nil {
 		t.Fatalf("generateConfigPushFile: %v", err)
 	}
 	src, err := os.ReadFile(filepath.Join(out, "configpush.go"))
@@ -139,6 +140,37 @@ func TestGoConfigPushChassisRenders(t *testing.T) {
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("chassis/configpush is missing %q", want)
+		}
+	}
+}
+
+// A tenant's record store holds a publisher of every owner its registry gives
+// a tenant_slice_field, each stream on its owner's connection with a token for
+// that owner (tacplus#927).
+func TestRecordStoreConfigPushPublisherFile(t *testing.T) {
+	out := t.TempDir()
+	data := serviceManagerTemplateData{ModuleBasePath: "example.com/m/model", ConfigPushOwners: []stateproto.ConfigPushOwner{
+		{SliceField: 1, Owner: "kernel"}, {SliceField: 2, Owner: "audit"},
+	}}
+	if err := generateConfigPushFile(out, data, "configpush_publisher"); err != nil {
+		t.Fatalf("generateConfigPushFile: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(out, "configpush_publisher.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "configpush_publisher.go", src, 0); err != nil {
+		t.Fatalf("sm/configpush_publisher.go does not parse: %v\n%s", err, src)
+	}
+	for _, want := range []string{
+		"func (sm *ServiceManager) ConfigPushPublisher() *configpush.Publisher",
+		`1: "kernel",`,
+		`2: "audit",`,
+		"sm.identity.GetTokenFor(owner)",
+		"serviceconnection.NewChannelProvider(conn)",
+	} {
+		if !strings.Contains(string(src), want) {
+			t.Fatalf("sm/configpush_publisher.go is missing %q:\n%s", want, src)
 		}
 	}
 }

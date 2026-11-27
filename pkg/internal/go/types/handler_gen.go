@@ -85,15 +85,22 @@ func generateHandlerInterfaces(config *tactype.Config, svcs []ServiceInfo, allFi
 
 	zap.L().Info("Generated handler interface", zap.String("path", outputPath))
 	if len(data.ConfigPushSlices) > 0 {
-		return generateConfigPushFile(outputDir, data)
+		if err := generateConfigPushFile(outputDir, data, "configpush"); err != nil {
+			return err
+		}
+	}
+	if len(data.ConfigPushOwners) > 0 {
+		return generateConfigPushFile(outputDir, data, "configpush_publisher")
 	}
 	return nil
 }
 
-// generateConfigPushFile writes sm/configpush.go: the receiver of the pushed
-// tenant slices this service owns and their typed accessors (tacplus#927).
-func generateConfigPushFile(outputDir string, data serviceManagerTemplateData) error {
-	tmplContent, err := loadTemplate("configpush.go.tmpl")
+// generateConfigPushFile writes sm/<name>.go from <name>.go.tmpl
+// (tacplus#927): configpush, the receiver of the pushed tenant slices this
+// service owns and their typed accessors, or configpush_publisher, a tenant's
+// record store's publisher of its slices.
+func generateConfigPushFile(outputDir string, data serviceManagerTemplateData, name string) error {
+	tmplContent, err := loadTemplate(name + ".go.tmpl")
 	if err != nil {
 		return fmt.Errorf("failed to load configpush template: %w", err)
 	}
@@ -107,11 +114,11 @@ func generateConfigPushFile(outputDir string, data serviceManagerTemplateData) e
 	}
 	formatted, err := format.Source(buf.Bytes())
 	if err != nil {
-		return fmt.Errorf("failed to format configpush.go: %w", err)
+		return fmt.Errorf("failed to format %s.go: %w", name, err)
 	}
-	outputPath := filepath.Join(outputDir, "configpush.go")
+	outputPath := filepath.Join(outputDir, name+".go")
 	if err := os.WriteFile(outputPath, formatted, 0644); err != nil {
-		return fmt.Errorf("failed to write configpush.go: %w", err)
+		return fmt.Errorf("failed to write %s.go: %w", name, err)
 	}
 	return nil
 }
@@ -375,6 +382,10 @@ type serviceManagerTemplateData struct {
 	// (tacplus#927): the ServiceManager serves configpush.ConfigPush, holds
 	// them, and its Handler is their TenantRegistry.
 	ConfigPushSlices []goConfigPushSlice
+	// ConfigPushOwners are the owners a tenant's record store pushes slices
+	// to (tacplus#927): the ServiceManager holds a configpush.Publisher of
+	// them.
+	ConfigPushOwners []stateproto.ConfigPushOwner
 }
 
 // ApprovalBrokerTemplateEntry names the approval-broker RPC the generated
@@ -518,6 +529,10 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		if err != nil {
 			return serviceManagerTemplateData{}, err
 		}
+	}
+	configPushOwners, err := stateproto.RecordStorePushOwners(config.InputDir, config.FlatProtoDir, config.SelfPackage, config.ServiceLabel())
+	if err != nil {
+		return serviceManagerTemplateData{}, err
 	}
 
 	hasServiceHealthState := false
@@ -985,6 +1000,7 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		HasApprovalBroker:        hasApprovalBroker,
 		ApprovalBroker:           approvalBroker,
 		ConfigPushSlices:         configPushSlices,
+		ConfigPushOwners:         configPushOwners,
 		HostsC2DStandalone: service.HostsC2DStandalone(service.C2DHostShape{
 			HostsC2D:       len(c2dSockets) > 0,
 			HostsNonC2D:    hasTlsGrpc,

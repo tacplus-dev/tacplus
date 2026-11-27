@@ -106,3 +106,52 @@ func OwnedPushedConfigSlices(inputDir, flatProtoDir, owner string) ([]PushedConf
 	}
 	return out, nil
 }
+
+// ConfigPushOwner is one owner a tenant's record store may push a slice to:
+// its registered tenant_slice_field and its routing label.
+type ConfigPushOwner struct {
+	SliceField int32
+	Owner      string
+}
+
+// ConfigPushOwners returns every owner the registry read from inputDir gives
+// a tenant_slice_field, self aside, in field order: the publisher's owners in
+// a build of the record store self. The store's run never holds an owner's
+// proto, so it cannot tell a pushed slice from a TenantConfig one: what the
+// tenant writes for a field is what it pushes, and an owner that serves no
+// ConfigPush refuses the stream.
+func ConfigPushOwners(inputDir, self string) ([]ConfigPushOwner, error) {
+	reg, err := LoadServiceRegistry(inputDir)
+	if err != nil {
+		return nil, fmt.Errorf("config push owners: loading registry: %w", err)
+	}
+	var out []ConfigPushOwner
+	for _, e := range reg.TenantSlices() {
+		if e.Name != self {
+			out = append(out, ConfigPushOwner{SliceField: e.TenantSliceField, Owner: e.Name})
+		}
+	}
+	return out, nil
+}
+
+// RecordStorePushOwners returns the publisher's owners for a build of the
+// service self (its label; selfPackage its package), or none when self is no
+// tenant's record store: a tenant-owned (spec.record_store), whose instance is
+// one tenant's store, the only publisher a receiver admits.
+func RecordStorePushOwners(inputDir, flatProtoDir, selfPackage, self string) ([]ConfigPushOwner, error) {
+	if inputDir == "" || flatProtoDir == "" || selfPackage == "" || self == "" {
+		return nil, nil
+	}
+	store, err := IsRecordStore(flatProtoDir, selfPackage)
+	if err != nil || !store {
+		return nil, err
+	}
+	dp, err := parser.NewDescriptorParser(flatProtoDir)
+	if err != nil {
+		return nil, fmt.Errorf("config push owners: %w", err)
+	}
+	if !parser.TenantOwnedServices(dp)[self] {
+		return nil, nil
+	}
+	return ConfigPushOwners(inputDir, self)
+}

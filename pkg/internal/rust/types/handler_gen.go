@@ -185,7 +185,11 @@ type smTemplateData struct {
 	// ConfigPushSlices are the pushed tenant slices this service owns
 	// (tacplus#927): the ServiceManager serves configpush.ConfigPush, holds
 	// them, and its Handler is their TenantRegistry.
-	ConfigPushSlices      []rustConfigPushSlice
+	ConfigPushSlices []rustConfigPushSlice
+	// ConfigPushOwners are the owners a tenant's record store pushes slices
+	// to (tacplus#927): the ServiceManager holds a configpush::Publisher of
+	// them.
+	ConfigPushOwners      []stateproto.ConfigPushOwner
 	SmbAuthorityServiceID string
 	IsGateway             bool
 	HasSubscriptions      bool
@@ -446,6 +450,10 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		if configPushSlices, err = rustConfigPushSlices(config); err != nil {
 			return smTemplateData{}, err
 		}
+	}
+	configPushOwners, err := stateproto.RecordStorePushOwners(config.InputDir, config.FlatProtoDir, config.SelfPackage, config.ServiceLabel())
+	if err != nil {
+		return smTemplateData{}, err
 	}
 
 	hasServiceHealthState := false
@@ -752,6 +760,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		HasSmb:                     hasSmb,
 		HasMemberPort:              hasMemberPort,
 		ConfigPushSlices:           configPushSlices,
+		ConfigPushOwners:           configPushOwners,
 		SmbAuthorityServiceID:      smbAuthorityServiceID,
 		IsGateway:                  config.IsGateway,
 		HasSubscriptions:           len(config.Subscriptions) > 0,

@@ -23,6 +23,9 @@ pub mod record_c2s;
 {{- if .ConfigPushSlices}}
 pub mod config_push;
 {{- end}}
+{{- if .ConfigPushOwners}}
+pub mod config_push_publisher;
+{{- end}}
 
 use std::sync::Arc;
 use tokio::signal;
@@ -488,6 +491,12 @@ pub struct ServiceManager {
     /// Receives and holds this service's pushed tenant slices (tacplus#927).
     config_push: configpush::Receiver,
 {{- end}}
+{{- if .ConfigPushOwners}}
+    /// Pushes this tenant's config slices to their owners (tacplus#927), each
+    /// on its connection in config_push_conns.
+    config_push_publisher: configpush::Publisher,
+    config_push_conns: std::collections::HashMap<String, Arc<ServiceConnection>>,
+{{- end}}
 {{- if .HasStates}}
     state_clients: StateClients,
 {{- end}}
@@ -807,6 +816,9 @@ impl ServiceManager {
         let spiffe_verifier_base = servicemanager::SpiffeServerCertVerifier::new(trust_domain, roots)
             .map_err(|e| -> Box<dyn std::error::Error> { format!("building SPIFFE verifier (trust domain {:?}): {}", trust_domain, e).into() })?;
         info!(trust_domain = %trust_domain, roots = root_count, "SPIFFE verifier ready");
+{{- if .ConfigPushOwners}}
+        let config_push_conns = config_push_publisher::new_conns(&spiffe_verifier_base);
+{{- end}}
 
         // State-store ServiceConnection — trust-domain-pinned verifier (SEC-1 /
         // H1). This is the bootstrap connection that carries the workload's
@@ -1122,6 +1134,9 @@ impl ServiceManager {
 {{- if .ConfigPushSlices}}
         let config_push = config_push::new_receiver(&cfg, authorizer.clone());
 {{- end}}
+{{- if .ConfigPushOwners}}
+        let config_push_publisher = config_push_publisher::new_publisher(config_push_conns.clone(), identity.clone());
+{{- end}}
 
         Ok(Self {
             cfg,
@@ -1139,6 +1154,10 @@ impl ServiceManager {
 {{- end}}
 {{- if .ConfigPushSlices}}
             config_push,
+{{- end}}
+{{- if .ConfigPushOwners}}
+            config_push_publisher,
+            config_push_conns,
 {{- end}}
 {{- if .HasStates}}
             state_clients,
@@ -1570,6 +1589,16 @@ impl ServiceManager {
     /// The pushed tenant slices this service holds (tacplus#927).
     pub fn config_push(&self) -> config_push::ConfigPushSlices {
         config_push::ConfigPushSlices::new(self.config_push.clone())
+    }
+{{- end}}
+{{- if .ConfigPushOwners}}
+
+    /// The publisher of this tenant's pushed config slices (tacplus#927): the
+    /// store feeds it each acked write of a slice, at the revision the write
+    /// was given, and it keeps every owner's stream. It holds nothing durable,
+    /// so after a restart the store feeds it every slice it holds again.
+    pub fn config_push_publisher(&self) -> &configpush::Publisher {
+        &self.config_push_publisher
     }
 {{- end}}
 
@@ -2221,7 +2250,7 @@ impl ServiceManager {
             Err(_) => return Err("health reporter stopped before first successful publish".into()),
         }
 {{- end}}
-	{{- if and .HasServiceHealthState (or .HasS2SClients .HasSmb)}}
+	{{- if and .HasServiceHealthState (or .HasS2SClients .HasSmb .ConfigPushOwners)}}
 
 	        // Start health poller — polls ServiceHealthState every 5s to reconcile
 	        // dynamic ServiceConnection endpoints for S2S and SMB-authority communication.
@@ -2242,6 +2271,10 @@ impl ServiceManager {
 	                self.smb_authority_conn.clone(),
 	{{- end}}
 	            ];
+{{- if .ConfigPushOwners}}
+            let service_conns: Vec<Arc<ServiceConnection>> =
+                service_conns.into_iter().chain(self.config_push_conns.values().cloned()).collect();
+{{- end}}
             if !service_conns.is_empty() {
                 self.spawn_owned(async move {
                     let interval = std::time::Duration::from_secs(5);

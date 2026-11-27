@@ -331,6 +331,12 @@ record store runs:
   jittered, reset by an ack) and sends the snapshot again. A `STALE` ack is no
   error. `close()` ends every stream (Go: `Close()`; Rust: `close().await`,
   which returns once every stream's task has).
+- A tenant-owned `(spec.record_store)` holds one in its ServiceManager:
+  `sm.ConfigPushPublisher()` (Java: `sm.configPushPublisher()`; Rust:
+  `sm.config_push_publisher()`). Its owners are every service the registry gives
+  a `tenant_slice_field`; each stream goes on a connection to the owner's label
+  with a token for that owner. The ServiceManager closes it with itself. The
+  store's code feeds it.
 
 ## Handler And Wrappers
 

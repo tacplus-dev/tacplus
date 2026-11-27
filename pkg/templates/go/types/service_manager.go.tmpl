@@ -24,7 +24,7 @@ import (
 "net"
 "{{.ModuleBasePath}}/chassis/memberport"
 {{- end}}
-{{- if .ConfigPushSlices}}
+{{- if or .ConfigPushSlices .ConfigPushOwners}}
 "{{.ModuleBasePath}}/chassis/configpush"
 {{- end}}
 {{if or .HasAutoTls .HasSmb}}
@@ -175,6 +175,12 @@ authenticateAtOrBelowFunc func(ctx context.Context, targetNamespace string) (*wr
 {{- if .ConfigPushSlices}}
 // configPush receives and holds this service's pushed tenant slices (tacplus#927).
 configPush *configpush.Receiver
+{{- end}}
+{{- if .ConfigPushOwners}}
+// configPushPublisher pushes this tenant's config slices to their owners
+// (tacplus#927), each on its connection in configPushConns.
+configPushPublisher *configpush.Publisher
+configPushConns     map[string]*serviceconnection.ServiceConnection
 {{- end}}
 {{range .TimeseriesInserts}}
 {{.FieldName}} func(ctx context.Context, row *{{.TypePkgAlias}}.{{.TypeName}}) error
@@ -521,7 +527,10 @@ s2sTenantConnections["{{.}}"] = serviceconnection.NewTenantDynamic("{{.}}", sc.S
 s2sChannels["{{.}}"] = serviceconnection.NewTenantChannelProvider(s2sTenantConnections["{{.}}"])
 {{- end}}
 {{end}}
-{{if or .HasGrpcS2SClients .HasSmb}}
+{{if .ConfigPushOwners}}
+configPushConns := newConfigPushConns(sc.ServiceDialOpts)
+{{end}}
+{{if or .HasGrpcS2SClients .HasSmb .ConfigPushOwners}}
 {{if .HasServiceHealthState}}
 // Wire ServiceHealthState Watch updates to each ServiceConnection for real-time endpoint reconciliation.
 bc.{{.HealthStateGroupAccessor}}().ServiceHealth().OnInstancesChange(func(instances []*healthreport_pb.ServiceInstanceHealth) {
@@ -542,6 +551,11 @@ bc.{{.HealthStateGroupAccessor}}().ServiceHealth().OnInstancesChange(func(instan
 	{{- end}}
 	{{- if .HasSmb}}
 	smbAuthorityConn.ReconcileFromHealth(byService["{{.SmbAuthorityServiceID}}"])
+	{{- end}}
+	{{- if .ConfigPushOwners}}
+	for owner, conn := range configPushConns {
+		conn.ReconcileFromHealth(byService[owner])
+	}
 	{{- end}}
 })
 {{end}}
@@ -644,6 +658,10 @@ authenticateAtOrBelowFunc: auth.AuthenticateAtOrBelow,
 }
 {{- if .ConfigPushSlices}}
 sm.configPush = newConfigPushReceiver(sm)
+{{- end}}
+{{- if .ConfigPushOwners}}
+sm.configPushConns = configPushConns
+sm.configPushPublisher = newConfigPushPublisher(sm)
 {{- end}}
 {{- if .HasMemberPort}}
 // The member port serves the X509Mint certificate obtained above, so it
@@ -1015,6 +1033,14 @@ if sm.memberPort != nil {
 	sm.tasks.Cancel()
 	sm.tasks.Wait()
 	}
+{{- if .ConfigPushOwners}}
+	if sm.configPushPublisher != nil {
+		sm.configPushPublisher.Close()
+	}
+	for _, conn := range sm.configPushConns {
+		conn.Close()
+	}
+{{- end}}
 	{{if .HasDiskStores}}
 	if sm.diskStoreLogs != nil {
 	_ = sm.diskStoreLogs.Close()

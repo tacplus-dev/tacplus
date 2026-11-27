@@ -51,33 +51,45 @@ func rustConfigPushSlices(config *tactype.Config) ([]rustConfigPushSlice, error)
 	return out, nil
 }
 
-// generateConfigPush writes s2sm/config_push.rs: the receiver of the pushed
-// tenant slices this service owns and their typed accessors (tacplus#927).
-// The ServiceManager declares `pub mod config_push;` only when there are some.
+// generateConfigPush writes s2sm/config_push.rs, the receiver of the pushed
+// tenant slices this service owns and their typed accessors, and
+// s2sm/config_push_publisher.rs, a tenant's record store's publisher of its
+// slices (tacplus#927). The ServiceManager declares `pub mod config_push;` and
+// `pub mod config_push_publisher;` only when there are some.
 func generateConfigPush(config *tactype.Config, data smTemplateData) error {
-	if len(data.ConfigPushSlices) == 0 {
-		return nil
+	if len(data.ConfigPushSlices) > 0 {
+		if err := writeConfigPushModule(config, data, "config_push"); err != nil {
+			return err
+		}
 	}
-	tmplContent, err := loadTemplate("config_push.rs.tmpl")
-	if err != nil {
-		return fmt.Errorf("failed to load config_push template: %w", err)
+	if len(data.ConfigPushOwners) > 0 {
+		return writeConfigPushModule(config, data, "config_push_publisher")
 	}
-	tmpl, err := template.New("configpush").Funcs(header.Funcs()).Parse(tmplContent)
+	return nil
+}
+
+// writeConfigPushModule writes s2sm/<name>.rs from <name>.rs.tmpl.
+func writeConfigPushModule(config *tactype.Config, data smTemplateData, name string) error {
+	tmplContent, err := loadTemplate(name + ".rs.tmpl")
 	if err != nil {
-		return fmt.Errorf("failed to parse config_push template: %w", err)
+		return fmt.Errorf("failed to load %s template: %w", name, err)
+	}
+	tmpl, err := template.New(name).Funcs(header.Funcs()).Parse(tmplContent)
+	if err != nil {
+		return fmt.Errorf("failed to parse %s template: %w", name, err)
 	}
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to execute config_push template: %w", err)
+		return fmt.Errorf("failed to execute %s template: %w", name, err)
 	}
 	outputDir := filepath.Join(config.OutputDir, config.GetSmPrefix())
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config_push dir: %w", err)
+		return fmt.Errorf("failed to create %s dir: %w", name, err)
 	}
-	outputPath := filepath.Join(outputDir, "config_push.rs")
+	outputPath := filepath.Join(outputDir, name+".rs")
 	if err := os.WriteFile(outputPath, buf.Bytes(), 0644); err != nil {
-		return fmt.Errorf("failed to write config_push.rs: %w", err)
+		return fmt.Errorf("failed to write %s.rs: %w", name, err)
 	}
-	zap.L().Info("Generated Rust config push receiver", zap.String("path", outputPath))
+	zap.L().Info("Generated Rust config push module", zap.String("path", outputPath))
 	return nil
 }

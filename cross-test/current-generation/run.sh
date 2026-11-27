@@ -2628,6 +2628,41 @@ install_tenant_record_c2s_selftest() {
   esac
 }
 
+# assert_tenantrecord_config_push checks that the tenant-record fixture's
+# tenant-owned record store (tstratum) holds a config push publisher of every
+# owner its registry gives a tenant_slice_field (tmessaging, field 1; #927),
+# and that the writer, no record store, holds none.
+assert_tenantrecord_config_push() {
+  local output="$1"
+  local language="$2"
+  local self="$3"
+  local file="" want owner
+  case "$language" in
+    java)
+      file="$(find "$output" -type f -path '*/s2sm/ServiceManager.java' -print -quit)"
+      want='new ConfigPushPublisher(configPushOwners,'
+      owner='configPushOwners.put(1, "tmessaging");'
+      ;;
+    go)
+      file="$(find "$output" -type f -path '*/s2sm/configpush_publisher.go' -print -quit)"
+      want='func (sm *ServiceManager) ConfigPushPublisher() *configpush.Publisher'
+      owner='1: "tmessaging",'
+      ;;
+    rust)
+      file="$(find "$output" -type f -path '*/s2sm/config_push_publisher.rs' -print -quit)"
+      want='configpush::Publisher::new(owners(), opener)'
+      owner='(1, "tmessaging".to_string()),'
+      ;;
+    *) return 0 ;;
+  esac
+  if [[ "$self" == "tstratum" ]]; then
+    [[ -n "$file" ]] && grep -qF "$want" "$file" && grep -qF "$owner" "$file" \
+      || die "tenant-record fixture ($language): the record store holds no config push publisher of tmessaging's slice 1"
+  elif [[ -n "$file" ]] && grep -qF "$want" "$file"; then
+    die "tenant-record fixture ($language): $self is no record store but holds a config push publisher"
+  fi
+}
+
 # assert_tenantrecord_client_routed checks that the tenant-record fixture's
 # WRITER (tmessaging) pools the record store per tenant: before #207 its plane
 # client was one pool over every tenant's instance and sent each call to
@@ -3851,6 +3886,7 @@ walk(json.load(open(sys.argv[1])))
 if seen != want:
     sys.exit("missing rpcs: %s" % sorted(want - seen))
 TENANTRECORD_PY
+      assert_tenantrecord_config_push "$output_root" "$language" "$self"
       if [[ "$self" == "tstratum" ]]; then
         install_tenant_record_route_selftest "$output_root" "$language"
       else

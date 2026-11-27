@@ -2,6 +2,7 @@
 services:
     - name: tmessaging
       id: 1
+      tenant_slice_field: 1
     - name: eventbus
       id: 2
     - name: tstratum

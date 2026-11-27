@@ -22,6 +22,9 @@ import {{.ChassisBase}}.service_im.IdentityManager;
 {{- if .ConfigPushSlices}}
 import {{.ChassisBase}}.configpush.ConfigPushReceiver;
 {{- end}}
+{{- if .ConfigPushOwners}}
+import {{.ChassisBase}}.configpush.ConfigPushPublisher;
+{{- end}}
 {{- if .HasDiskStores}}
 import {{.ChassisBase}}.diskstore.ArchiveShipper;
 import {{.ChassisBase}}.diskstore.ArchiveSink;
@@ -163,6 +166,22 @@ public class ServiceManager implements AutoCloseable {
     private volatile boolean closing = false;
     /** The mandatory Authorizer, built in start(). Null before then. */
     private volatile Authorizer authorizer;
+{{- if .ConfigPushOwners}}
+    /**
+     * Pushes this tenant's config slices to their owners (tacplus#927): one
+     * Push stream to each owner it holds a slice of, on a connection of its
+     * own to the owner's label, with a token for that owner.
+     */
+    private final ConfigPushPublisher configPushPublisher;
+    /** A connection to each owner's label, its endpoints from service health. */
+    private final java.util.Map<String, ServiceConnection> configPushConns;
+    private final java.util.concurrent.ScheduledExecutorService configPushClock =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "configpush-reconnect");
+                t.setDaemon(true);
+                return t;
+            });
+{{- end}}
 {{- if .ConfigPushSlices}}
     /**
      * Receives and holds this service's pushed tenant slices (tacplus#927). It
@@ -412,6 +431,23 @@ public class ServiceManager implements AutoCloseable {
 	{{- if .HasSmb}}
 	        this.smbAuthorityConn = new ServiceConnection("{{.SmbAuthorityServiceID}}", channelFactory);
 	{{- end}}
+{{- if .ConfigPushOwners}}
+        // Every owner the registry gives a tenant_slice_field: this store's
+        // run never holds their protos, so the registry is all it knows of them.
+        java.util.Map<Integer, String> configPushOwners = new java.util.HashMap<>();
+        java.util.Map<String, ServiceConnection> configPushOwnerConns = new java.util.HashMap<>();
+{{- range .ConfigPushOwners}}
+        configPushOwners.put({{.SliceField}}, "{{.Owner}}");
+        configPushOwnerConns.put("{{.Owner}}", new ServiceConnection("{{.Owner}}", channelFactory));
+{{- end}}
+        this.configPushConns = java.util.Map.copyOf(configPushOwnerConns);
+        this.configPushPublisher = new ConfigPushPublisher(configPushOwners,
+                // trace: unrelated: the store's own background push, caused by no inbound request
+                (owner, acks) -> {{.TypesBase}}.sys.configpush.ConfigPushGrpc.newStub(configPushConns.get(owner).conn())
+                        .withCallCredentials(identity.callCredentialsForAudience(owner))
+                        .push(acks),
+                (task, delay) -> configPushClock.schedule(task, delay.toMillis(), TimeUnit.MILLISECONDS));
+{{- end}}
 	    }
 
     /**
@@ -591,6 +627,17 @@ public class ServiceManager implements AutoCloseable {
 
     /** Returns the server-assigned instance ID. */
     public String getInstanceId() { return identity.getInstanceId(); }
+{{- if .ConfigPushOwners}}
+
+    /**
+     * Returns the publisher of this tenant's pushed config slices
+     * (tacplus#927): the store feeds it each acked write of a slice, at the
+     * revision the write was given, and it keeps every owner's stream. It holds
+     * nothing durable, so after a restart the store feeds it every slice it
+     * holds again.
+     */
+    public ConfigPushPublisher configPushPublisher() { return configPushPublisher; }
+{{- end}}
 {{- if .ConfigPushSlices}}
 
     /**
@@ -890,6 +937,11 @@ public class ServiceManager implements AutoCloseable {
 	{{- if .HasSmb}}
 	        smbAuthorityConn.close();
 	{{- end}}
+{{- if .ConfigPushOwners}}
+        configPushPublisher.close();
+        configPushClock.shutdownNow();
+        configPushConns.values().forEach(ServiceConnection::close);
+{{- end}}
 {{- if .HasMemberPort}}
         if (memberPort != null) {
             memberPort.close();
@@ -1477,7 +1529,7 @@ public class ServiceManager implements AutoCloseable {
         if (healthReporter.firstPublishFailure() != null) {
             throw new RuntimeException("first health publish failed", healthReporter.firstPublishFailure());
         }
-	{{- if or .HasGrpcS2SClients .HasSmb}}
+	{{- if or .HasGrpcS2SClients .HasSmb .ConfigPushOwners}}
 
 	        // Start ServiceConnection health poller — polls ServiceHealthState every 5s to
 	        // discover and route to target service endpoints for S2S and SMB-authority communication.
@@ -1519,6 +1571,17 @@ public class ServiceManager implements AutoCloseable {
 	                            smbAuthorityConn.reconcileFromHealth(filtered);
 	                        }
 	{{- end}}
+{{- if .ConfigPushOwners}}
+                        for (var owner : configPushConns.entrySet()) {
+                            java.util.List<ServiceInstanceHealth> filtered = new java.util.ArrayList<>();
+                            for (ServiceInstanceHealth inst : allInstances) {
+                                if (owner.getKey().equals(inst.getServiceId())) {
+                                    filtered.add(inst);
+                                }
+                            }
+                            owner.getValue().reconcileFromHealth(filtered);
+                        }
+{{- end}}
 	                    } catch (Exception e) {
                         LOG.warning("ServiceConnection health poll failed: " + e.getMessage());
                     }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	stateproto "github.com/tacplus-dev/tacplus/pkg/internal/proto"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 	"github.com/tacplus-dev/tacplus/templates"
 )
@@ -156,6 +157,38 @@ func TestRustConfigPushChassisKeepsItsRules(t *testing.T) {
 	} {
 		if !strings.Contains(string(src), want) {
 			t.Fatalf("chassis/configpush is missing %q", want)
+		}
+	}
+}
+
+// A tenant's record store holds a publisher of every owner its registry gives
+// a tenant_slice_field, each stream on its owner's connection with a token for
+// that owner (tacplus#927).
+func TestRecordStoreConfigPushPublisherModule(t *testing.T) {
+	out := t.TempDir()
+	cfg := &tactype.Config{OutputDir: out}
+	data := smTemplateData{ConfigPushOwners: []stateproto.ConfigPushOwner{
+		{SliceField: 1, Owner: "kernel"}, {SliceField: 2, Owner: "audit"},
+	}}
+	if err := generateConfigPush(cfg, data); err != nil {
+		t.Fatalf("generateConfigPush: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, cfg.GetSmPrefix(), "config_push.rs")); err == nil {
+		t.Fatal("a record store that owns no pushed slice must get no receiver module")
+	}
+	src, err := os.ReadFile(filepath.Join(out, cfg.GetSmPrefix(), "config_push_publisher.rs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`(1, "kernel".to_string()),`,
+		`(2, "audit".to_string()),`,
+		".get_token_for(&owner)",
+		"ConfigPushClient::new(channel).push(req)",
+		"configpush::Publisher::new(owners(), opener)",
+	} {
+		if !strings.Contains(string(src), want) {
+			t.Fatalf("s2sm/config_push_publisher.rs is missing %q:\n%s", want, src)
 		}
 	}
 }

@@ -192,7 +192,10 @@ type javaSmTemplateData struct {
 	// ConfigPushSlices are the pushed tenant slices this service owns
 	// (tacplus#927): the ServiceManager serves configpush.ConfigPush, holds
 	// them, and its Handler is their TenantRegistry.
-	ConfigPushSlices      []javaConfigPushSlice
+	ConfigPushSlices []javaConfigPushSlice
+	// ConfigPushOwners are the owners a tenant's record store pushes slices
+	// to (tacplus#927): the ServiceManager holds a ConfigPushPublisher of them.
+	ConfigPushOwners      []stateproto.ConfigPushOwner
 	SmbAuthorityServiceID string
 	HasSubscriptions      bool
 	// HasRecordSubscriptions is true when any subscription sets
@@ -442,6 +445,10 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		if configPushSlices, err = javaConfigPushSlices(config, protoDir); err != nil {
 			return javaSmTemplateData{}, err
 		}
+	}
+	configPushOwners, err := stateproto.RecordStorePushOwners(config.InputDir, config.FlatProtoDir, config.SelfPackage, config.ServiceLabel())
+	if err != nil {
+		return javaSmTemplateData{}, err
 	}
 	hasMemberPort := false
 	smbAuthorityServiceID := ""
@@ -734,6 +741,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		HasSmb:                 hasSmb,
 		HasMemberPort:          hasMemberPort,
 		ConfigPushSlices:       configPushSlices,
+		ConfigPushOwners:       configPushOwners,
 		SmbAuthorityServiceID:  smbAuthorityServiceID,
 		HasSubscriptions:       len(subs) > 0,
 		HasRecordSubscriptions: hasRecordSubscriptions,

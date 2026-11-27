@@ -134,3 +134,25 @@ func TestPushedSliceRefusals(t *testing.T) {
 		}
 	}
 }
+
+// A tenant's record store may push a slice to any owner the registry gives a
+// tenant_slice_field (its run never holds the owner's proto): its publisher's
+// owners are every registered field but its own, in field order.
+func TestConfigPushOwnersAreTheRegisteredTenantSlices(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "registry.yaml"), []byte("registries: [g]\nservices:\n"+
+		"    - {name: stratum, id: 34, tenant_slice_field: 4}\n"+
+		"    - {name: audit, id: 9, tenant_slice_field: 2}\n"+
+		"    - {name: crew, id: 12}\n"+
+		"    - {name: kernel, id: 8, tenant_slice_field: 1}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ConfigPushOwners(dir, "stratum")
+	if err != nil {
+		t.Fatalf("ConfigPushOwners: %v", err)
+	}
+	want := []ConfigPushOwner{{SliceField: 1, Owner: "kernel"}, {SliceField: 2, Owner: "audit"}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("owners = %+v, want %+v", got, want)
+	}
+}

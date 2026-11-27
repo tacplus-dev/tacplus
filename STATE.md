@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-26 by looper (#475).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-26 by looper (#981).
 
 - **Version / line:** v2.6.13 (latest release, 2026-11-15, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -240,7 +240,10 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-26 by lo
   an explicit `MAJOR.MINOR.PATCH-pre`), and `tacplus fleet build` resolves it to the line's highest released tag,
   pre-releases excluded, and to that release's image on ghcr.io by digest; `fleet.lock` records version, commit and
   image; `--check` reports newer patches and minors. A service without a version, a plain-directory repo, an
-  unresolvable line and a release without its image are refused.
+  unresolvable line and a release without its image are refused. `images: source` (#950, forward-ported from
+  `release/2.6`) locks a source-built fleet by tag commit with no image. A service `releases.yaml` names is locked at
+  its main release (#981): the commit (40 hex) and image (by digest) given, everything read at the commit,
+  `version: main-<12 hex>`, `pinned: true`; `--check` and `fleet gateway` follow it.
   Gateway contributions, part 1 (#195): a `kind: service` project's `tacplus.yaml` may declare `contribute:` (a
   `webapp` module and `clients`, each by one fixed recipe key: `rust:`, `go:`, `swift:`, `dotnet:`), validated on
   read; `tacplus fleet build` checks each recipe's inputs at the locked commit and records the contribution under

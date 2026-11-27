@@ -213,3 +213,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-27 looper issue The LLM rule as a generated build gate: an agent's advisor module gets no state client and no token handle (#909)
 - 2026-11-27 looper issue current-generation takes 2h26m because it runs its languages one after another: run them in parallel (#812)
 - 2026-11-27 looper issue looper.yaml: tacplus's looper/builder VM spec (the pilot's first version) (#968)
+- 2026-11-27 looper issue fleet build: lock a service at a main release (a given commit and image by digest), not only its line's newest tag (#981)

@@ -1,0 +1,51 @@
+= init
+= thinking_tokens
+= thinking_tokens
+> Bash cd /var/lib/looper-cache/work/tacplus/issues/830; /usr/local/bin/repo-looper --repo tacplus --issue-text 830 | tail -40; git fetch -q origin; git log --oneline -8 origin/main; git tag --sort=-v:refname | head -5
+= task_started
+= task_notification
+< <</issue-text nonce=[redacted]>>  <<issue-text nonce=[redacted] author=tacplus-looper[bot] association=NONE role=data>> The looper VM of tacplus stopped this run: the VM is stopping (SIGTERM: a spot reclaim, or its shutdown). Its work in progress is checkp...
+= thinking_tokens
+= thinking_tokens
+> Bash cd /var/lib/looper-cache/work/tacplus/issues/830; gh pr list --repo tacplus-dev/tacplus --search "830 in:body" --state all --json number,state,baseRefName,title,mergedAt,statusCheckRollup --jq '.[]|[.number,.state,.baseRefName,.mergedAt,([.statusCheckRollup[]?.conclusion]|join(","))]|@tsv'; git log ...
+< 998	OPEN	release/2.7		SUCCESS,SUCCESS,SUCCESS,SUCCESS,SUCCESS,SUCCESS 997	OPEN	release/2.6		FAILURE,SUCCESS,SUCCESS,SUCCESS,SUCCESS,SUCCESS 996	OPEN	release/2.5		FAILURE,SUCCESS,SUCCESS,SUCCESS,SUCCESS,SUCCESS 995	OPEN	release/2.4		FAILURE,SUCCESS,SUCCESS,SUCCESS,SUCCESS 994	OPEN	release/2.3		FAILUR...
+> Bash cd /var/lib/looper-cache/work/tacplus/issues/830; for n in 997 991; do gh pr view $n --repo tacplus-dev/tacplus --json statusCheckRollup --jq '.statusCheckRollup[]|select(.conclusion=="FAILURE")|[.name,.detailsUrl]|@tsv'; done; git log --oneline -3 origin/release/2.7
+< hint: if you need to wait for this pull request to be reviewed, merged, or closed before continuing, use this instead of polling:     gh event listen --resource https://github.com/tacplus-dev/tacplus/pull/997 --event com.github.pull_request.review.submitted.v1,com.github.pull_request.state.changed.v...
+> Bash cd /var/lib/looper-cache/work/tacplus/issues/830; gh run view 45901850600 --repo tacplus-dev/tacplus --log-failed 2>&1 | grep -iE 'fail|error|panic' | head -30
+< Unit tests and soundness	UNKNOWN STEP	2026-11-26T22:07:47.7319258Z A `·` is a build-failing gap; runtime and consumer-contract tests still prove behavior. Unit tests and soundness	UNKNOWN STEP	2026-11-26T22:07:47.7427279Z A `·` is a build-failing gap. Runtime tests still prove behavior; this gate ch...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /var/lib/looper-cache/work/tacplus/issues/830; gh run list --repo tacplus-dev/tacplus --branch release/2.6 --limit 5 --json workflowName,conclusion,headSha,createdAt --jq '.[]|[.workflowName,.conclusion,.headSha[:8],.createdAt]|@tsv'; gh issue view 829 --repo tacplus-dev/tacplus --json state,titl...
+< Images	success	57a6521e	2026-11-26T15:30:55Z Images	success	57a6521e	2026-11-23T16:13:07Z Images	success	ef62327e	2026-11-23T02:53:48Z CI	success	ef62327e	2026-11-22T23:49:04Z Images	success	2ffadddf	2026-11-16T13:49:52Z CLOSED	Rust 1.100 on the runner turns main's gates red: unused-dependency lints...
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+= thinking_tokens
+> Bash cd /var/lib/looper-cache/work/tacplus/issues/830; body="$(gh pr view 998 --repo tacplus-dev/tacplus --json body --jq .body)" new="$(printf '%s' "$body" | python3 -I -c 'import sys b=sys.stdin.read() old=b[b.index("**Once this merges"):b.index("\n\n🤖")] b=b.replace(old,"**Once this merges, cut the pa...
+= task_started
+= task_notification
+= code_change_published
+< hint: if you need to wait for this pull request to be reviewed, merged, or closed before continuing, use this instead of polling:     gh event listen --resource https://github.com/tacplus-dev/tacplus/pull/998 --event com.github.pull_request.review.submitted.v1,com.github.pull_request.state.changed.v...
+> Bash cd /var/lib/looper-cache/work/tacplus/issues/830; gh issue comment 830 --repo tacplus-dev/tacplus --body "The enum-test fix is merged on main: ce2ec609 (rust+docs gates, green, https://gitlab.com/tacplus-dev/build/-/pipelines/3121263751). It follows 34cf450b, 02712e94 and 39d2e83d.  **The patch is n...

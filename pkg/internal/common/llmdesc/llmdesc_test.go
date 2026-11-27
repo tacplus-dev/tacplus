@@ -351,3 +351,35 @@ func TestBuildTypeDescriptorMarksStoreBoundaryRoles(t *testing.T) {
 			byName["body"].StorePrincipal, byName["body"].StoreNamespace)
 	}
 }
+
+func TestBuildTypeDescriptorBoundsTimeseriesOrderKey(t *testing.T) {
+	for _, tc := range []struct {
+		key  int64
+		want int32
+	}{
+		{key: 1, want: 1},
+		{key: math.MaxInt32, want: math.MaxInt32},
+		// Past int32, a narrowing cast would wrap (2^31 to a negative, 2^32+1
+		// to 1): the key is not emitted rather than emitted as another position.
+		// ValidateTimeseriesAnnotations refuses such a key by name.
+		{key: math.MaxInt32 + 1, want: 0},
+		{key: 1<<32 + 1, want: 0},
+	} {
+		msg := model.Message{
+			Name: "Sample",
+			Fields: []model.Field{{
+				Name: "ts",
+				Type: "int64",
+				Annotations: map[string]model.AnnotationValue{
+					"timeseries_column":    {Type: model.AnnotationTypeBool, BoolValue: true},
+					"timeseries_order_key": {Type: model.AnnotationTypeInt, IntValue: tc.key},
+				},
+			}},
+		}
+		got := BuildTypeDescriptor(msg, "metrics", nil, nil, map[string]bool{})
+		if got.Fields[0].TimeseriesOrderKey != tc.want {
+			t.Errorf("order_key %d: TimeseriesOrderKey = %d, want %d",
+				tc.key, got.Fields[0].TimeseriesOrderKey, tc.want)
+		}
+	}
+}

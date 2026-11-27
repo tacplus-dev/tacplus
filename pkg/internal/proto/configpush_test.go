@@ -4,6 +4,7 @@
 package proto
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,5 +155,34 @@ func TestConfigPushOwnersAreTheRegisteredTenantSlices(t *testing.T) {
 	want := []ConfigPushOwner{{SliceField: 1, Owner: "kernel"}, {SliceField: 2, Owner: "audit"}}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("owners = %+v, want %+v", got, want)
+	}
+}
+
+// A record store implemented outside tacplus reads the owners it pushes to,
+// and so the audiences it mints their tokens for, from codegen-config.json;
+// a build that pushes to none writes no key.
+func TestCodegenConfigListsTheConfigPushOwners(t *testing.T) {
+	read := func(owners []ConfigPushOwner) map[string]any {
+		t.Helper()
+		dir := t.TempDir()
+		if err := WriteCodegenConfig(dir, "com.example", "com.example.graphs", nil, nil, nil, owners); err != nil {
+			t.Fatalf("WriteCodegenConfig: %v", err)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, "proto-annotated", "codegen-config.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg map[string]any
+		if err := json.Unmarshal(b, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	got, _ := json.Marshal(read([]ConfigPushOwner{{SliceField: 1, Owner: "kernel"}})["configPushOwners"])
+	if string(got) != `[{"owner":"kernel","sliceField":1}]` {
+		t.Fatalf("configPushOwners = %s", got)
+	}
+	if _, ok := read(nil)["configPushOwners"]; ok {
+		t.Fatal("a build that pushes to no owner must write no configPushOwners")
 	}
 }

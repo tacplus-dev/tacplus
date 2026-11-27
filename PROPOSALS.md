@@ -1115,7 +1115,7 @@ the looper then marks it `promoted` or `declined` here with the date.
   each on a connection to the owner's label with a token for it; the store's own code feeds it. Left: a generated
   feed (a sys record, `configpush.TenantSliceRecord {slice_field, value}`, that the store hosts and watches, with
   the record revision as the version; note a record type added to every store adds handler methods every store
-  must implement, so it likely wants an opt-in on `(spec.record_store)`), the `codegen-config.json` ConfigPush audience, and a cross-test of a
+  must implement, so it likely wants an opt-in on `(spec.record_store)`), and a cross-test of a
   store's publisher against an owner over the wire.
 - **Rebuild the build images when an upstream stage image moves** (2026-11-20, #901): `docker:29-cli` moved to
   29.10.0 (go1.27.4, fixing CVE-2026-97054) on 2026-11-16 22:07Z. Every `build:*` had been built that morning, so the

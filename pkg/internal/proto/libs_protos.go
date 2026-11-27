@@ -471,12 +471,15 @@ type codegenConfig struct {
 	AcceptedAudiences  []string            `json:"acceptedAudiences,omitempty"`
 	SecurityPolicies   []SecurityPolicy    `json:"securityPolicies,omitempty"`
 	ServiceRPCMappings []ServiceRPCMapping `json:"serviceRPCMappings,omitempty"`
+	// ConfigPushOwners are the owners a tenant's record store pushes its
+	// config slices to (tacplus#927): each stream's token is for its owner.
+	ConfigPushOwners []ConfigPushOwner `json:"configPushOwners,omitempty"`
 }
 
 // WriteCodegenConfig writes a codegen-config.json file into targetDir/proto-annotated/
 // containing package configuration that downstream codegen plugins (e.g., the Maven
 // StateServerMojo) can read instead of requiring hardcoded Maven parameters.
-func WriteCodegenConfig(targetDir, javaPackageBase, interfacesPackage string, acceptedAudiences []string, policies []SecurityPolicy, svcRPCs []ServiceRPCEntry) error {
+func WriteCodegenConfig(targetDir, javaPackageBase, interfacesPackage string, acceptedAudiences []string, policies []SecurityPolicy, svcRPCs []ServiceRPCEntry, pushOwners []ConfigPushOwner) error {
 	annotatedDir := filepath.Join(targetDir, "proto-annotated")
 	if err := os.MkdirAll(annotatedDir, 0755); err != nil {
 		return fmt.Errorf("failed to create annotated proto directory: %w", err)
@@ -497,6 +500,7 @@ func WriteCodegenConfig(targetDir, javaPackageBase, interfacesPackage string, ac
 		AcceptedAudiences:  acceptedAudiences,
 		SecurityPolicies:   policies,
 		ServiceRPCMappings: mappings,
+		ConfigPushOwners:   pushOwners,
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")

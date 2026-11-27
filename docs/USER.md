@@ -1194,7 +1194,9 @@ that serves no `configpush.ConfigPush` refuses the stream, which the publisher r
 schedule. Each owner's stream goes on a connection to the owner's label, its endpoints from
 service health, with a token for that owner. The store's own code feeds it each acked write of
 a slice, `Put(field, revision, value)` or `Remove(field, revision)`, and every slice it holds
-again after a restart. A generated feed from a sys record the store hosts is still to come.
+again after a restart. A store implemented outside tacplus reads the same owners from its
+`codegen-config.json` (`configPushOwners[]`, `{sliceField, owner}`): each stream's token is for
+its owner. A generated feed from a sys record the store hosts is still to come.
 
 ### Views Across Boundaries
 

@@ -1488,7 +1488,11 @@ func Generate(config *tactype.Config) error {
 		return err
 	}
 	acceptedAudiences := proto.AcceptedAudiencesForHost(config.ServiceLabel(), vsEntries, declaredAuds)
-	if err := proto.WriteCodegenConfig(parentDir, config.JavaPackageBase, config.Lang.Java.JavaImportBase()+".graphs", acceptedAudiences, securityPolicies, svcRPCs); err != nil {
+	pushOwners, err := proto.RecordStorePushOwners(config.InputDir, config.FlatProtoDir, config.SelfPackage, config.ServiceLabel())
+	if err != nil {
+		return err
+	}
+	if err := proto.WriteCodegenConfig(parentDir, config.JavaPackageBase, config.Lang.Java.JavaImportBase()+".graphs", acceptedAudiences, securityPolicies, svcRPCs, pushOwners); err != nil {
 		return fmt.Errorf("failed to write codegen config: %w", err)
 	}
 

@@ -110,8 +110,8 @@ func OwnedPushedConfigSlices(inputDir, flatProtoDir, owner string) ([]PushedConf
 // ConfigPushOwner is one owner a tenant's record store may push a slice to:
 // its registered tenant_slice_field and its routing label.
 type ConfigPushOwner struct {
-	SliceField int32
-	Owner      string
+	SliceField int32  `json:"sliceField"`
+	Owner      string `json:"owner"`
 }
 
 // ConfigPushOwners returns every owner the registry read from inputDir gives

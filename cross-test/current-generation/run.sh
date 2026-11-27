@@ -2658,6 +2658,12 @@ assert_tenantrecord_config_push() {
   if [[ "$self" == "tstratum" ]]; then
     [[ -n "$file" ]] && grep -qF "$want" "$file" && grep -qF "$owner" "$file" \
       || die "tenant-record fixture ($language): the record store holds no config push publisher of tmessaging's slice 1"
+    # A store implemented outside tacplus reads its owners from codegen-config.json.
+    if [[ "$language" == "java" ]]; then
+      python3 -I -c 'import json, sys; sys.exit(json.load(open(sys.argv[1])).get("configPushOwners") != [{"sliceField": 1, "owner": "tmessaging"}])' \
+        "$output/proto-annotated/codegen-config.json" \
+        || die "tenant-record fixture (java): codegen-config.json lists no configPushOwners of tmessaging's slice 1"
+    fi
   elif [[ -n "$file" ]] && grep -qF "$want" "$file"; then
     die "tenant-record fixture ($language): $self is no record store but holds a config push publisher"
   fi

@@ -1397,6 +1397,10 @@ impl ServiceManager {
     }
 
 	    async fn shutdown_owned_tasks(&self) {
+{{- if .ConfigPushOwners}}
+        // The publisher's streams end before the tasks they serve the store for.
+        self.config_push_publisher.close().await;
+{{- end}}
         let handles: Vec<_> = {
             let mut tasks = self.tasks.lock().unwrap();
             tasks.drain(..).collect()

@@ -1090,9 +1090,10 @@ the looper then marks it `promoted` or `declined` here with the date.
   finding from building it: the registry gives each service one `tenant_slice_field`, and the kernel keeps its
   durable `KernelTenantConfig` under it. So a pushed slice uses its owner's number in `configpush`, a contract
   separate from `TenantConfig`, and an owner declares at most one pushed slice. Two pushed slices per owner would
-  need a second registered number (`--pushed-slice`, say). The owner's receiver is generated in Go and Java; Rust
-  refuses an owner until it generates it. Left: the receiver in Rust, the record store's publisher, and a
-  cross-test fixture.
+  need a second registered number (`--pushed-slice`, say). The owner's receiver is generated in Go, Java and
+  Rust, and `cross-test/proto-tenantslice`'s tenancy owns a pushed slice (`TenancyTenantSettings`), whose receiver
+  every language's tenancy build asserts and compiles. Left: the record store's publisher (Java first, then Go
+  and Rust), the `codegen-config.json` ConfigPush audience, and a cross-test of a publisher against a receiver.
 - **Rebuild the build images when an upstream stage image moves** (2026-11-20, #901): `docker:29-cli` moved to
   29.10.0 (go1.27.4, fixing CVE-2026-97054) on 2026-11-16 22:07Z. Every `build:*` had been built that morning, so the
   nightly sweep failed for days on a fix that was already published. `build:latest` is rebuilt only when its files

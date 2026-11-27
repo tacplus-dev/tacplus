@@ -1,0 +1,523 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+//
+// CODE GENERATED - DO NOT EDIT
+//! The owner's end of a pushed tenant config slice (tacplus#927,
+//! sys/configpush.proto): the receiver a service that owns a tenant-scope
+//! (spec.config_slice) with delivery CONFIG_SLICE_DELIVERY_PUSH serves, and
+//! the holder its code reads the slice from.
+//!
+//! The generated ServiceManager builds a [`Receiver`] with the service's pushed
+//! slices and serves it beside the service; the owner's code reads a slice
+//! through the ServiceManager's typed accessor, never this crate. Every rule is
+//! the receiver's, before the owner sees anything (the same rules as the Go and
+//! Java receivers):
+//!
+//! - The caller is a tenant's record store, the subject
+//!   spiffe://<td>/tenants/<tid>/services/stratum in this owner's own trust
+//!   domain, and the owner's [`TenantRegistry`] holds <tid>. Anything else is
+//!   PERMISSION_DENIED with no description, the reason in the log. A receiver
+//!   with no TenantRegistry admits nobody (it fails closed).
+//! - The first frame is a snapshot, or the stream ends FAILED_PRECONDITION.
+//! - Every slice of a frame names one of the owner's pushed slices and its value
+//!   decodes as the slice's message and passes its generated validation, or the
+//!   stream ends INVALID_ARGUMENT and nothing of that frame is applied.
+//! - A slice is held only at a version greater than the one held for (tenant,
+//!   slice): an equal or lower one is acked STALE and changes nothing, and the
+//!   stream stays open.
+//!
+//! It holds slices in memory only and never persists them: the owner has none
+//! for a tenant until that tenant's first snapshot is accepted, and after a
+//! restart every tenant's publisher sends its snapshot again. A slice it holds
+//! stays when its stream ends, until a newer version or a restart.
+
+use std::any::Any;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
+
+use async_trait::async_trait;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::{Stream, StreamExt};
+use tonic::metadata::MetadataMap;
+use tonic::{Code, Request, Response, Status, Streaming};
+use tracing::{error, warn};
+
+pub use {{.CrateBasePathUnderscore}}_types::sys::configpush::config_push_server::{ConfigPush, ConfigPushServer};
+use {{.CrateBasePathUnderscore}}_types::sys::configpush::configpush::{
+    config_push_frame, ConfigPushAck, ConfigPushFrame, ConfigPushOutcome, ConfigPushSlice,
+};
+
+/// The service label of a tenant's record store, the only caller a Receiver
+/// admits.
+pub const PUBLISHER: &str = "stratum";
+
+/// The full gRPC path of the push stream: the ServiceManager ends it at its
+/// opening token's exp, as every stream it serves.
+pub const PUSH_PATH: &str = "/configpush.ConfigPush/Push";
+
+/// The owner's: it reports whether tid is a tenant the owner holds (for the
+/// kernel, its tenant registry, tacplus-dev/kernel#69). The receiver admits a
+/// tenant's record store only for a tenant it holds. An error refuses the
+/// stream.
+#[async_trait]
+pub trait TenantRegistry: Send + Sync + 'static {
+    async fn holds_tenant(&self, tid: &str) -> Result<bool, Box<dyn std::error::Error + Send + Sync>>;
+}
+
+/// A held slice's message, read back by the typed accessor's downcast.
+pub type Message = Arc<dyn Any + Send + Sync>;
+
+/// Reads a slice's value as its message and runs its generated validation.
+pub type Decode = fn(value: &[u8]) -> Result<Message, String>;
+
+/// Authenticates a stream's token (signature, audience, expiry) and returns
+/// its subject, the caller's SPIFFE ID. An UNAUTHENTICATED status ends the
+/// stream UNAUTHENTICATED; any other refuses it PERMISSION_DENIED.
+pub type Subject = Arc<dyn Fn(&MetadataMap) -> Result<String, Status> + Send + Sync>;
+
+/// A watcher of the slices a receiver holds: told the tenant and slice field
+/// of every change.
+pub type Watcher = Arc<dyn Fn(&str, i32) + Send + Sync>;
+
+/// One pushed slice the owner holds: its registered tenant_slice_field and how
+/// its value is read, decoded and validated.
+#[derive(Clone, Copy)]
+pub struct Slice {
+    pub field: i32,
+    pub decode: Decode,
+}
+
+/// One slice held for one tenant.
+#[derive(Clone)]
+struct Value {
+    message: Option<Message>, // None when absent
+    version: i64,
+}
+
+#[derive(Default)]
+struct State {
+    trust_domain: String,
+    registry: Option<Arc<dyn TenantRegistry>>,
+    /// Per tenant: none until the tenant's first snapshot is accepted.
+    held: HashMap<String, HashMap<i32, Value>>,
+    /// Told every (tenant, slice) the receiver changes.
+    watchers: Vec<Watcher>,
+}
+
+/// Serves configpush.ConfigPush and holds what it accepts. Clones share one
+/// holder.
+#[derive(Clone)]
+pub struct Receiver {
+    slices: Arc<HashMap<i32, Slice>>,
+    subject: Option<Subject>,
+    state: Arc<RwLock<State>>,
+}
+
+impl Receiver {
+    /// A receiver of slices, authenticating each stream with subject.
+    pub fn new(slices: &[Slice], subject: Option<Subject>) -> Self {
+        Self {
+            slices: Arc::new(slices.iter().map(|s| (s.field, *s)).collect()),
+            subject,
+            state: Arc::new(RwLock::new(State::default())),
+        }
+    }
+
+    /// Sets the owner's own trust domain: a publisher must be in it.
+    pub fn set_trust_domain(&self, td: &str) {
+        self.state.write().unwrap_or_else(|e| e.into_inner()).trust_domain = td.to_string();
+    }
+
+    /// Sets the owner's TenantRegistry. Until it is set the receiver admits no
+    /// stream.
+    pub fn set_tenant_registry(&self, registry: Arc<dyn TenantRegistry>) {
+        self.state.write().unwrap_or_else(|e| e.into_inner()).registry = Some(registry);
+    }
+
+    /// The slice field held for tid and its version; None when the receiver
+    /// holds none: before the tenant's first snapshot, or when the tenant holds
+    /// no such slice.
+    pub fn get(&self, tid: &str, field: i32) -> Option<(Message, i64)> {
+        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let v = state.held.get(tid)?.get(&field)?;
+        Some((v.message.clone()?, v.version))
+    }
+
+    /// Calls f, outside the receiver's lock, after every change of a slice it
+    /// holds for a tenant (an accepted version, or a slice that became absent).
+    /// It reports what changed, not its value: f reads it with get.
+    pub fn watch(&self, f: Watcher) {
+        self.state.write().unwrap_or_else(|e| e.into_inner()).watchers.push(f);
+    }
+
+    /// The tenant of the stream's caller: a tenant's record store in this
+    /// owner's trust domain whose tenant the TenantRegistry holds.
+    async fn admit(&self, metadata: &MetadataMap) -> Result<String, Status> {
+        let (td, registry) = {
+            let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+            (state.trust_domain.clone(), state.registry.clone())
+        };
+        let Some(subject) = self.subject.as_ref() else {
+            error!("configpush: no authenticator: refusing every stream");
+            return Err(Status::permission_denied(""));
+        };
+        let subject = match subject(metadata) {
+            Ok(s) => s,
+            Err(status) if status.code() == Code::Unauthenticated => {
+                return Err(Status::unauthenticated(""));
+            }
+            Err(status) => {
+                warn!(error = %status.message(), "configpush: stream not authenticated");
+                return Err(Status::permission_denied(""));
+            }
+        };
+        let Some(tid) = publisher_tenant(&subject, &td) else {
+            warn!(subject = %subject, "configpush: refused a caller that is not a tenant's record store");
+            return Err(Status::permission_denied(""));
+        };
+        let Some(registry) = registry else {
+            error!(tid = %tid, "configpush: no tenant registry: refusing every stream");
+            return Err(Status::permission_denied(""));
+        };
+        match registry.holds_tenant(&tid).await {
+            Ok(true) => Ok(tid),
+            Ok(false) => {
+                warn!(tid = %tid, "configpush: refused a tenant the registry does not hold");
+                Err(Status::permission_denied(""))
+            }
+            Err(e) => {
+                warn!(tid = %tid, error = %e, "configpush: refused a tenant the registry does not hold");
+                Err(Status::permission_denied(""))
+            }
+        }
+    }
+
+    /// Reads tid's frames until the stream ends, sending one ack per slice.
+    /// An error is the status the stream ends with.
+    async fn serve<S>(&self, tid: &str, mut inbound: S, acks: &mpsc::Sender<Result<ConfigPushAck, Status>>) -> Result<(), Status>
+    where
+        S: Stream<Item = Result<ConfigPushFrame, Status>> + Unpin,
+    {
+        let mut first = true;
+        while let Some(frame) = inbound.next().await {
+            let frame = frame?;
+            let (slices, snapshot) = match frame.frame {
+                Some(config_push_frame::Frame::Snapshot(s)) => (s.slices, true),
+                Some(config_push_frame::Frame::Version(v)) => match v.slice {
+                    Some(slice) => (vec![slice], false),
+                    None => {
+                        warn!(tid = %tid, "configpush: a version frame with no slice");
+                        return Err(Status::invalid_argument("a version frame carries one slice"));
+                    }
+                },
+                None => return Err(Status::invalid_argument("a frame is a snapshot or a version")),
+            };
+            if first && !snapshot {
+                warn!(tid = %tid, "configpush: the first frame is not a snapshot");
+                return Err(Status::failed_precondition("the first frame is a snapshot"));
+            }
+            first = false;
+            let values = self.decode(&slices).inspect_err(|status| {
+                warn!(tid = %tid, error = %status.message(), "configpush: frame refused");
+            })?;
+            for ack in self.apply(tid, &slices, values) {
+                if acks.send(Ok(ack)).await.is_err() {
+                    return Ok(()); // the caller is gone
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Reads every slice of a frame, or refuses the frame as a whole.
+    fn decode(&self, slices: &[ConfigPushSlice]) -> Result<Vec<Option<Message>>, Status> {
+        let mut out = Vec::with_capacity(slices.len());
+        let mut seen = HashSet::with_capacity(slices.len());
+        for s in slices {
+            let field = s.slice_field;
+            let Some(def) = self.slices.get(&field) else {
+                return Err(Status::invalid_argument(format!("slice_field {field} is not a pushed slice of this owner")));
+            };
+            if !seen.insert(field) {
+                return Err(Status::invalid_argument(format!("slice_field {field} twice in one frame")));
+            }
+            if s.version <= 0 {
+                return Err(Status::invalid_argument(format!("slice_field {field}: version must be greater than 0")));
+            }
+            if s.absent {
+                if !s.value.is_empty() {
+                    return Err(Status::invalid_argument(format!("slice_field {field}: an absent slice carries no value")));
+                }
+                out.push(None);
+                continue;
+            }
+            let msg = (def.decode)(&s.value).map_err(|e| Status::invalid_argument(format!("slice_field {field}: {e}")))?;
+            out.push(Some(msg));
+        }
+        Ok(out)
+    }
+
+    /// Holds each slice at its version when it is newer, and returns one ack
+    /// per slice, in order. A snapshot makes the tenant known: the receiver
+    /// fails closed until then. A slice a snapshot does not name keeps what is
+    /// held for it: only a version can change a slice, so a stale replay of a
+    /// snapshot cannot take one back (a slice the tenant no longer holds comes
+    /// as absent, at a new version).
+    fn apply(&self, tid: &str, slices: &[ConfigPushSlice], values: Vec<Option<Message>>) -> Vec<ConfigPushAck> {
+        let mut changed = Vec::new();
+        let mut acks = Vec::with_capacity(slices.len());
+        let watchers = {
+            let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+            // Only a snapshot reaches here for an unknown tenant: it is every
+            // stream's first frame.
+            let held = state.held.entry(tid.to_string()).or_default();
+            for (s, message) in slices.iter().zip(values) {
+                let (field, version) = (s.slice_field, s.version);
+                let mut outcome = ConfigPushOutcome::Stale;
+                if held.get(&field).is_none_or(|prev| version > prev.version) {
+                    held.insert(field, Value { message, version });
+                    outcome = ConfigPushOutcome::Accepted;
+                    changed.push(field);
+                }
+                acks.push(ConfigPushAck { slice_field: field, version, outcome: outcome as i32, ..Default::default() });
+            }
+            state.watchers.clone()
+        };
+        for field in changed {
+            for w in &watchers {
+                w(tid, field);
+            }
+        }
+        acks
+    }
+}
+
+#[async_trait]
+impl ConfigPush for Receiver {
+    type PushStream = ReceiverStream<Result<ConfigPushAck, Status>>;
+
+    /// One tenant's stream.
+    async fn push(&self, request: Request<Streaming<ConfigPushFrame>>) -> Result<Response<Self::PushStream>, Status> {
+        let tid = self.admit(request.metadata()).await?;
+        let inbound = request.into_inner();
+        let (tx, rx) = mpsc::channel(16);
+        let receiver = self.clone();
+        tokio::spawn(async move {
+            if let Err(status) = receiver.serve(&tid, inbound, &tx).await {
+                let _ = tx.send(Err(status)).await;
+            }
+        });
+        Ok(Response::new(ReceiverStream::new(rx)))
+    }
+}
+
+/// <tid> when subject is exactly a tenant's record store,
+/// spiffe://<td>/tenants/<tid>/services/stratum, in trust domain td (never
+/// empty), with tid a tenant id: 8 characters of [0-9a-z]. A workload under
+/// it, or any other subject, is not.
+pub fn publisher_tenant(subject: &str, td: &str) -> Option<String> {
+    let own = spiffe::normalize_trust_domain(td).ok()?;
+    if own.is_empty() {
+        return None;
+    }
+    let p = spiffe::parse_spiffe_id(subject).ok()?;
+    if p.reconstruct() != subject || p.trust_domain != own || p.subject_kind != spiffe::SubjectKind::Service {
+        return None;
+    }
+    match p.path_segments.as_slice() {
+        [tenants, tid, services, label]
+            if tenants == spiffe::TENANTS_SEGMENT
+                && services == spiffe::SERVICES_SEGMENT
+                && label == PUBLISHER
+                && valid_tenant_id(tid) =>
+        {
+            Some(tid.clone())
+        }
+        _ => None,
+    }
+}
+
+fn valid_tenant_id(s: &str) -> bool {
+    s.len() == 8 && s.bytes().all(|c| c.is_ascii_digit() || c.is_ascii_lowercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prost::Message as _;
+    use {{.CrateBasePathUnderscore}}_types::sys::configpush::configpush::{ConfigPushSnapshot, ConfigPushVersion};
+
+    const TD: &str = "example.org";
+    const TID: &str = "t0000001";
+    const FIELD: i32 = 7;
+
+    struct Registry(&'static [&'static str]);
+
+    #[async_trait]
+    impl TenantRegistry for Registry {
+        async fn holds_tenant(&self, tid: &str) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+            Ok(self.0.contains(&tid))
+        }
+    }
+
+    /// A slice's decoder: its message is a ConfigPushSlice whose value is
+    /// refused when it is "bad" (its generated validation).
+    fn decode_test(value: &[u8]) -> Result<Message, String> {
+        let m = ConfigPushSlice::decode(value).map_err(|e| e.to_string())?;
+        if m.value == b"bad" {
+            return Err("validation failed".to_string());
+        }
+        Ok(Arc::new(m))
+    }
+
+    fn subject_of(s: &'static str) -> Option<Subject> {
+        Some(Arc::new(move |_: &MetadataMap| Ok(s.to_string())))
+    }
+
+    fn receiver(subject: Option<Subject>) -> Receiver {
+        let r = Receiver::new(&[Slice { field: FIELD, decode: decode_test }], subject);
+        r.set_trust_domain(TD);
+        r.set_tenant_registry(Arc::new(Registry(&[TID])));
+        r
+    }
+
+    /// TID's record store.
+    const STRATUM: &str = "spiffe://example.org/tenants/t0000001/services/stratum";
+
+    fn slice(field: i32, version: i64, value: &str) -> ConfigPushSlice {
+        let inner = ConfigPushSlice { value: value.as_bytes().to_vec(), ..Default::default() };
+        ConfigPushSlice { slice_field: field, version, value: inner.encode_to_vec(), ..Default::default() }
+    }
+
+    fn snapshot(slices: Vec<ConfigPushSlice>) -> ConfigPushFrame {
+        ConfigPushFrame { frame: Some(config_push_frame::Frame::Snapshot(ConfigPushSnapshot { slices, ..Default::default() })), ..Default::default() }
+    }
+
+    fn version(s: ConfigPushSlice) -> ConfigPushFrame {
+        ConfigPushFrame { frame: Some(config_push_frame::Frame::Version(ConfigPushVersion { slice: Some(s), ..Default::default() })), ..Default::default() }
+    }
+
+    /// Admits the stream and serves frames: the acks, and the status the
+    /// stream ends with.
+    async fn push(r: &Receiver, frames: Vec<ConfigPushFrame>) -> (Vec<ConfigPushAck>, Result<(), Status>) {
+        let tid = match r.admit(&MetadataMap::new()).await {
+            Ok(tid) => tid,
+            Err(status) => return (Vec::new(), Err(status)),
+        };
+        let (tx, mut rx) = mpsc::channel(64);
+        let end = r.serve(&tid, tokio_stream::iter(frames.into_iter().map(Ok)), &tx).await;
+        drop(tx);
+        let mut acks = Vec::new();
+        while let Some(ack) = rx.recv().await {
+            acks.push(ack.expect("serve sends only acks"));
+        }
+        (acks, end)
+    }
+
+    fn held(r: &Receiver) -> Option<(String, i64)> {
+        let (m, v) = r.get(TID, FIELD)?;
+        let m = m.downcast::<ConfigPushSlice>().expect("the slice's message");
+        Some((String::from_utf8(m.value.clone()).unwrap(), v))
+    }
+
+    /// The owner sees nothing for a tenant until its snapshot arrives, then the
+    /// newest version; an equal or lower version is acked STALE and changes
+    /// nothing.
+    #[tokio::test]
+    async fn fails_closed_then_holds_the_newest_version() {
+        let r = receiver(subject_of(STRATUM));
+        assert!(held(&r).is_none(), "a tenant with no snapshot must have no slice");
+        let changes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = changes.clone();
+        r.watch(Arc::new(move |tid: &str, field: i32| {
+            if tid == TID && field == FIELD {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }));
+        let (acks, end) = push(&r, vec![
+            snapshot(vec![slice(FIELD, 2, "a")]),
+            version(slice(FIELD, 3, "b")),
+            version(slice(FIELD, 3, "c")),
+            version(slice(FIELD, 1, "d")),
+        ]).await;
+        end.expect("push");
+        assert_eq!(held(&r), Some(("b".to_string(), 3)));
+        let want = [ConfigPushOutcome::Accepted, ConfigPushOutcome::Accepted, ConfigPushOutcome::Stale, ConfigPushOutcome::Stale];
+        assert_eq!(acks.len(), want.len(), "acks = {acks:?}");
+        for (ack, want) in acks.iter().zip(want) {
+            assert_eq!((ack.outcome, ack.slice_field), (want as i32, FIELD), "ack {ack:?}");
+        }
+        assert_eq!(changes.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+        // A new stream (the publisher reconnected) replays an older snapshot:
+        // the held version stays.
+        push(&r, vec![snapshot(vec![slice(FIELD, 2, "a")])]).await.1.expect("push");
+        assert_eq!(held(&r), Some(("b".to_string(), 3)), "a stale snapshot replaced the slice");
+
+        // An absent slice at a newer version drops it.
+        let absent = ConfigPushSlice { slice_field: FIELD, version: 4, absent: true, ..Default::default() };
+        push(&r, vec![snapshot(vec![absent])]).await.1.expect("push");
+        assert!(held(&r).is_none(), "an absent slice must read as none");
+    }
+
+    /// Only a held tenant's own record store, in the owner's trust domain, is
+    /// admitted.
+    #[tokio::test]
+    async fn admits_only_the_tenants_record_store() {
+        for (name, subject) in [
+            ("another service", "spiffe://example.org/tenants/t0000001/services/crew"),
+            ("a system service", "spiffe://example.org/system/services/stratum"),
+            ("another trust domain", "spiffe://other.org/tenants/t0000001/services/stratum"),
+            ("an unheld tenant", "spiffe://example.org/tenants/t0000002/services/stratum"),
+            ("a workload", "spiffe://example.org/tenants/t0000001/services/stratum/workloads/x"),
+            ("not a tenant id", "spiffe://example.org/tenants/T0000001/services/stratum"),
+        ] {
+            let (_, end) = push(&receiver(subject_of(subject)), vec![snapshot(vec![slice(FIELD, 1, "a")])]).await;
+            let status = end.expect_err(name);
+            assert_eq!((status.code(), status.message()), (Code::PermissionDenied, ""), "{name}: want a bare PERMISSION_DENIED");
+        }
+
+        let r = Receiver::new(&[Slice { field: FIELD, decode: decode_test }], subject_of(STRATUM));
+        r.set_trust_domain(TD);
+        let (_, end) = push(&r, vec![snapshot(vec![slice(FIELD, 1, "a")])]).await;
+        assert_eq!(end.expect_err("no registry").code(), Code::PermissionDenied, "a receiver with no tenant registry must admit nobody");
+
+        let (_, end) = push(&receiver(None), vec![snapshot(vec![slice(FIELD, 1, "a")])]).await;
+        assert_eq!(end.expect_err("no authenticator").code(), Code::PermissionDenied);
+
+        let expired: Subject = Arc::new(|_: &MetadataMap| Err(Status::unauthenticated("token expired")));
+        let (_, end) = push(&receiver(Some(expired)), vec![snapshot(vec![slice(FIELD, 1, "a")])]).await;
+        let status = end.expect_err("unauthenticated");
+        assert_eq!((status.code(), status.message()), (Code::Unauthenticated, ""), "an unauthenticated stream must end with a bare UNAUTHENTICATED");
+    }
+
+    /// The first frame is a snapshot; an unknown slice or a value that fails
+    /// its decode or validation ends the stream, and nothing of that frame is
+    /// applied.
+    #[tokio::test]
+    async fn refusals() {
+        let r = receiver(subject_of(STRATUM));
+        let (_, end) = push(&r, vec![version(slice(FIELD, 1, "a"))]).await;
+        assert_eq!(end.expect_err("first version").code(), Code::FailedPrecondition);
+        assert!(r.get(TID, FIELD).is_none(), "a refused stream must not make the tenant known");
+        let undecodable = ConfigPushSlice { slice_field: FIELD, version: 1, value: vec![0xff], ..Default::default() };
+        for (name, frame) in [
+            ("unknown slice", snapshot(vec![slice(FIELD, 1, "a"), slice(99, 1, "a")])),
+            ("invalid value", snapshot(vec![slice(FIELD, 1, "bad")])),
+            ("undecodable", snapshot(vec![undecodable])),
+            ("twice", snapshot(vec![slice(FIELD, 1, "a"), slice(FIELD, 2, "b")])),
+            ("no version", snapshot(vec![slice(FIELD, 0, "a")])),
+        ] {
+            let (_, end) = push(&r, vec![frame]).await;
+            assert_eq!(end.expect_err(name).code(), Code::InvalidArgument, "{name}: want INVALID_ARGUMENT");
+            assert!(r.get(TID, FIELD).is_none(), "{name}: nothing of a refused frame may be applied");
+        }
+    }
+
+    #[test]
+    fn publisher_tenant_is_exactly_the_tenants_record_store() {
+        assert_eq!(publisher_tenant(STRATUM, TD), Some(TID.to_string()));
+        assert_eq!(publisher_tenant(STRATUM, ""), None, "an owner with no trust domain must admit nobody");
+    }
+}

@@ -41,3 +41,15 @@ message Config {
   // tenants is each tenant's aggregate configuration, keyed by tenant id.
   map<string, tenant_config.TenantConfig> tenants = 1 [(spec.assert_max_size) = 1000];
 }
+
+// TenancyTenantSettings is tenancy's PUSHED slice of each tenant's
+// configuration (tacplus#927): each tenant's record store pushes it to tenancy
+// over configpush.ConfigPush under tenancy's registered tenant_slice_field, so
+// it is no TenantConfig field and no other build sees it. The tenancy build
+// generates its receiver and typed accessor, in every language.
+message TenancyTenantSettings {
+  option (spec.config_slice) = {scope: CONFIG_SLICE_SCOPE_TENANT, service_name: "tenancy", delivery: CONFIG_SLICE_DELIVERY_PUSH};
+
+  // join_mode is how a new member joins the tenant.
+  string join_mode = 1 [(spec.assert_max_size) = 64];
+}

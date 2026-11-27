@@ -83,7 +83,7 @@ func generatedRustWorkspace(t *testing.T, extra ...string) string {
 	}
 	write("Cargo.toml", "[workspace]\nmembers = [\".\"]\n\n[package]\nname = \"proto-model\"\nversion = \"1.0.0\"\n")
 	for _, crate := range []string{"key", "jwk", "token", "spiffe", "httpclient", "wkt", "service_im", "x509", "servicemanager",
-		"grpcconfig", "grpcserver", "collection", "approval", "diskstore", "logger", "am"} {
+		"grpcconfig", "grpcserver", "collection", "approval", "diskstore", "logger", "configpush", "am"} {
 		write("chassis/"+crate+"/Cargo.toml", "[package]\nname = \""+crate+"\"\n")
 	}
 	for _, rel := range extra {
@@ -127,7 +127,7 @@ func TestRustSelfTestsBuildTheWorkspaceOnce(t *testing.T) {
 	if len(tests) != 1 || len(docs) != 1 {
 		t.Fatalf("want one cargo test call for the tests and one for the doc tests, got:\n%s", strings.Join(calls, "\n"))
 	}
-	want := []string{"approval", "collection", "diskstore", "grpcconfig", "grpcserver", "httpclient", "jwk", "key",
+	want := []string{"approval", "collection", "configpush", "diskstore", "grpcconfig", "grpcserver", "httpclient", "jwk", "key",
 		"logger", "proto-model", "service_im", "servicemanager", "spiffe", "token", "wkt", "x509"}
 	if got := selection(tests[0]); strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("the test call selects %v, want %v: %s", got, want, tests[0])

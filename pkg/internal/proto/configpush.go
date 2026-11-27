@@ -106,19 +106,3 @@ func OwnedPushedConfigSlices(inputDir, flatProtoDir, owner string) ([]PushedConf
 	}
 	return out, nil
 }
-
-// RefuseUnservedPushedSlices refuses a build of owner in language when owner
-// declares a pushed tenant slice: its receiver is generated in Go and Java only
-// so far (tacplus#927), and a build that cannot serve the slice must not come
-// up without it, every tenant's settings silently missing.
-func RefuseUnservedPushedSlices(inputDir, flatProtoDir, owner, language string) error {
-	if owner == "" || flatProtoDir == "" {
-		return nil
-	}
-	owned, err := OwnedPushedConfigSlices(inputDir, flatProtoDir, owner)
-	if err != nil || len(owned) == 0 {
-		return err
-	}
-	return fmt.Errorf("%s: %s is a pushed tenant slice (CONFIG_SLICE_DELIVERY_PUSH) of %q, and a %s build cannot serve it yet: the receiver of a pushed slice is generated in Go and Java only so far (tacplus#927). Generate %s in Go or Java",
-		owned[0].ProtoFile, owned[0].MessageFullName, owner, language, owner)
-}

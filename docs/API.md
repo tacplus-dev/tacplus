@@ -282,8 +282,7 @@ The behaviour is pinned by `cross-test/memberport` (`just memberport`).
 A service that owns a tenant-scope `(spec.config_slice)` with
 `delivery: CONFIG_SLICE_DELIVERY_PUSH` (tacplus#927) serves
 `configpush.ConfigPush` (`sys/configpush.proto`) beside its own services, and
-holds each tenant's slice in memory only. In Go and Java (Rust refuses such an
-owner at generation until it generates the receiver):
+holds each tenant's slice in memory only, in Go, Java and Rust:
 
 - Go: `sm.ConfigPush().<Slice>(tid)` returns `(*<Slice>, version, ok)`;
   `ok` is false until the tenant's record store's first snapshot is accepted,
@@ -291,9 +290,12 @@ owner at generation until it generates the receiver):
   `sm.ConfigPush().Watch<Slice>(func(tid string))` is called after each change.
   Java: `sm.configPush().<slice>(tid)` returns a `ConfigPushReceiver.Pushed<Slice>`
   (`value()`, `version()`), null while none is held; `watch<Slice>(Consumer<String>)`.
+  Rust: `sm.config_push().<slice>(tid)` returns `Option<(Arc<Slice>, i64)>`,
+  None while none is held; `watch_<slice>(impl Fn(&str))`.
 - The `Handler` must implement `HoldsTenant(ctx, tid) (bool, error)` (Go) or
-  `boolean holdsTenant(String tid) throws Exception` (Java), the owner's tenant
-  registry. A stream is admitted only from
+  `boolean holdsTenant(String tid) throws Exception` (Java) or
+  `async fn holds_tenant(&self, tid: &str) -> Result<bool, Box<dyn Error + Send + Sync>>`
+  (Rust), the owner's tenant registry. A stream is admitted only from
   `spiffe://<td>/tenants/<tid>/services/stratum` in the owner's own trust domain
   for a tenant `HoldsTenant` holds; anything else is `PERMISSION_DENIED`, with no
   description (`UNAUTHENTICATED` for a bad token).

@@ -1,0 +1,19 @@
+[package]
+name = "configpush"
+version = "0.1.0"
+edition = "2021"
+{{- if .License}}
+license = "{{.License}}"
+{{- end}}
+publish = false
+description = "The owner's receiver of a pushed tenant config slice (sys/configpush.proto, tacplus#927)"
+
+[dependencies]
+{{.CrateBasePath}}-types = { path = "../../types" }
+spiffe = { path = "../spiffe" }
+async-trait = { workspace = true }
+prost = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }

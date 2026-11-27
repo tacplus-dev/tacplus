@@ -177,11 +177,15 @@ type smTemplateData struct {
 	// serves no listener, publishes no instance health and never waits for a
 	// serving cert, so the host does not join its parent service's endpoint set;
 	// it still runs the health poller that fills the dynamic s2s connections.
-	ClientOnly            bool
-	HasAutoTls            bool
-	AutoTlsKeyType        string
-	HasSmb                bool // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
-	HasMemberPort         bool // true when this service declares (spec.member_port): the ServiceManager owns its member port (tacplus#212, #322)
+	ClientOnly     bool
+	HasAutoTls     bool
+	AutoTlsKeyType string
+	HasSmb         bool // true when this service is a spec.smb Service Mesh Blackbox service (SPIFFE plan D7)
+	HasMemberPort  bool // true when this service declares (spec.member_port): the ServiceManager owns its member port (tacplus#212, #322)
+	// ConfigPushSlices are the pushed tenant slices this service owns
+	// (tacplus#927): the ServiceManager serves configpush.ConfigPush, holds
+	// them, and its Handler is their TenantRegistry.
+	ConfigPushSlices      []rustConfigPushSlice
 	SmbAuthorityServiceID string
 	IsGateway             bool
 	HasSubscriptions      bool
@@ -431,6 +435,16 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 				return smTemplateData{}, fmt.Errorf("service %s: service_c2d requires socket_path (no default — a shared default socket would collide)", g.TraitName)
 			}
 			c2dSocketPath = g.C2DSocketPath
+		}
+	}
+
+	var configPushSlices []rustConfigPushSlice
+	if hasTlsGrpc {
+		// The receiver is served beside the service's TLS gRPC services: a
+		// service that hosts none serves no pushed slice.
+		var err error
+		if configPushSlices, err = rustConfigPushSlices(config); err != nil {
+			return smTemplateData{}, err
 		}
 	}
 
@@ -737,6 +751,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		}(),
 		HasSmb:                     hasSmb,
 		HasMemberPort:              hasMemberPort,
+		ConfigPushSlices:           configPushSlices,
 		SmbAuthorityServiceID:      smbAuthorityServiceID,
 		IsGateway:                  config.IsGateway,
 		HasSubscriptions:           len(config.Subscriptions) > 0,
@@ -1027,6 +1042,10 @@ func generateServiceManagerSM(config *tactype.Config, svcs []service.ServiceInfo
 	// Same contract for the client-facing plane's generated handler: the SM
 	// declares `pub mod record_c2s;` only when it exists, so write it here.
 	if err := generateRecordC2SPlane(config, data.RecordC2S); err != nil {
+		return err
+	}
+	// And for the receiver of the pushed slices: `pub mod config_push;`.
+	if err := generateConfigPush(config, data); err != nil {
 		return err
 	}
 

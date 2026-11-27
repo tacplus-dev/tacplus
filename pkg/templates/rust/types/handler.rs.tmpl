@@ -146,6 +146,16 @@ pub trait Handler: Send + Sync + 'static {
     async fn new_smb_cert(&self, member_chain: &X509CertChain, private_key_der: &[u8], ca: &X509Cert) -> Result<(), Box<dyn std::error::Error>>;
 {{- end}}
 
+{{- if .ConfigPushSlices}}
+
+    /// Reports whether tid is a tenant this service holds (its tenant
+    /// registry). Each tenant's record store pushes this service's pushed
+    /// config slices (sm.config_push(), tacplus#927); a stream is admitted only
+    /// for a tenant holds_tenant holds, and refused PERMISSION_DENIED on false
+    /// or an error.
+    async fn holds_tenant(&self, tid: &str) -> Result<bool, Box<dyn std::error::Error + Send + Sync>>;
+{{- end}}
+
     /// Returns the current health status of this service instance.
     /// Override to implement custom health checking (e.g., probing a sidecar
     /// process like a backing store via its health endpoint).

@@ -134,22 +134,3 @@ func TestPushedSliceRefusals(t *testing.T) {
 		}
 	}
 }
-
-// A Rust build of a pushed slice's owner is refused until Rust generates its
-// receiver; any other service's build is not.
-func TestRefuseUnservedPushedSlices(t *testing.T) {
-	skipWithoutProtoc(t)
-	dir := t.TempDir()
-	writeSliceFixture(t, dir, "registries: [g]\nservices:\n    - {name: kernel, id: 8, tenant_slice_field: 1}\n", map[string]string{
-		"kernel_settings.proto": pushSliceProto("kernel_settings", "KernelTenantSettings", "CONFIG_SLICE_SCOPE_TENANT", "kernel"),
-	})
-	err := RefuseUnservedPushedSlices(dir, dir, "kernel", "rust")
-	if err == nil || !strings.Contains(err.Error(), "a rust build cannot serve it yet") {
-		t.Fatalf("a rust build of the owner must be refused, got %v", err)
-	}
-	for _, owner := range []string{"stratum", ""} {
-		if err := RefuseUnservedPushedSlices(dir, dir, owner, "java"); err != nil {
-			t.Fatalf("%q owns no pushed slice: %v", owner, err)
-		}
-	}
-}

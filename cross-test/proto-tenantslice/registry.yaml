@@ -5,6 +5,7 @@ services:
       tenant_slice_field: 1
     - name: tenancy
       id: 2
+      tenant_slice_field: 3
     - name: registrar
       id: 3
       tenant_slice_field: 2

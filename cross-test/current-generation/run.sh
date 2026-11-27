@@ -1105,11 +1105,12 @@ PY
 #   diskstore        PC-L-7: compress, path, snapshot, redolog, schedule
 #   logger           credential redaction (unit tests only: see below)
 #   am               #34: the accounting sink's spool, where the fixture installs it
+#   configpush       #927: the owner's receiver of a pushed tenant slice
 rust_self_test_packages() {
   local output="$1" crate root
   root="$(sed -n '/^\[package\]/,/^\[/s/^name *= *"\([^"]*\)".*/\1/p' "$output/Cargo.toml" | head -1)"
   [[ -z "$root" ]] || echo "-p $root"
-  for crate in key jwk token spiffe httpclient x509 servicemanager grpcconfig grpcserver collection approval diskstore logger; do
+  for crate in key jwk token spiffe httpclient x509 servicemanager grpcconfig grpcserver collection approval diskstore logger configpush; do
     [[ -f "$output/chassis/$crate/Cargo.toml" ]] || die "missing generated Rust $crate crate"
     echo "-p $crate"
   done
@@ -1993,11 +1994,18 @@ assert_tenantslice_owner_output() {
 # projected to ledger's slice. ledger must be an allowed caller of exactly those
 # two RPCs, and the filter must be rendered on both (Go, Java; Rust hosts no
 # state service, so its leg is generation and compile only).
+#
+# tenancy also owns a PUSHED slice, TenancyTenantSettings (tacplus#927): its
+# ServiceManager must serve configpush.ConfigPush with the Handler as the tenant
+# registry and carry the slice's typed accessor under tenancy's registered
+# tenant_slice_field, 3, in every language. The receiver's rules are the
+# configpush chassis self-tests every fixture runs.
 assert_tenantslice_config_owner_output() {
   local output="$1"
   local language="$2"
   local wrapper="" n=""
 
+  assert_tenantslice_pushed_owner_output "$output" "$language"
   case "$language" in
     go)
       wrapper="$(find "$output" -type f -path '*/s2sm/grpc/servers/services/tenancy/config_state_service.go' -print -quit)"
@@ -2024,6 +2032,47 @@ assert_tenantslice_config_owner_output() {
         "$(dirname "$(find "$output/src/main/java" -type f -path '*/chassis/grpcserver/Authorizer.java' -print -quit)")/"
       ;;
   esac
+}
+
+# assert_tenantslice_pushed_owner_output asserts tenancy's receiver of its
+# pushed slice: see assert_tenantslice_config_owner_output.
+assert_tenantslice_pushed_owner_output() {
+  local output="$1"
+  local language="$2"
+  local file="" want=""
+  local -a wants=()
+
+  case "$language" in
+    go)
+      file="$(find "$output" -type f -path '*/s2sm/configpush.go' -print -quit)"
+      [[ -n "$file" ]] || die "tenant-slice pushed owner ($language): no receiver of TenancyTenantSettings generated under $output"
+      wants=('func (c *ConfigPushSlices) TenancyTenantSettings(tid string)' '{Field: 3, Decode: decodeTenancyTenantSettingsPush}')
+      grep -qF 'HoldsTenant(ctx context.Context, tid string) (bool, error)' "$(dirname "$file")/handler.go" \
+        || die "tenant-slice pushed owner (go): the Handler does not require HoldsTenant"
+      grep -qF 'sm.configPush.SetTenantRegistry(h)' "$(dirname "$file")/s2sm.go" \
+        || die "tenant-slice pushed owner (go): the ServiceManager does not serve configpush.ConfigPush"
+      ;;
+    java)
+      file="$(find "$output/src/main/java" -type f -name 'ServiceManager.java' -print -quit)"
+      wants=('new ConfigPushReceiver.Slice(3, value -> {' 'configPush.setTenantRegistry(handler::holdsTenant);' 'grpcServerBuilder.addService(configPush);')
+      ;;
+    rust)
+      file="$(find "$output" -type f -path '*/s2sm/config_push.rs' -print -quit)"
+      [[ -n "$file" ]] || die "tenant-slice pushed owner ($language): no receiver of TenancyTenantSettings generated under $output"
+      wants=('pub fn tenancy_tenant_settings(&self, tid: &str) -> Option<(Arc<TenancyTenantSettings>, i64)>' 'configpush::Slice { field: 3, decode: decode_tenancy_tenant_settings_push }')
+      grep -qF 'async fn holds_tenant(&self, tid: &str)' "$(dirname "$file")/handler.rs" \
+        || die "tenant-slice pushed owner (rust): the Handler does not require holds_tenant"
+      grep -qF 'configpush::ConfigPushServer::new(self.config_push.clone())' "$(dirname "$file")/mod.rs" \
+        || die "tenant-slice pushed owner (rust): the ServiceManager does not serve configpush.ConfigPush"
+      ;;
+    *)
+      return
+      ;;
+  esac
+  [[ -n "$file" ]] || die "tenant-slice pushed owner ($language): no receiver of TenancyTenantSettings generated under $output"
+  for want in "${wants[@]}"; do
+    grep -qF -- "$want" "$file" || die "tenant-slice pushed owner ($language): $file is missing: $want"
+  done
 }
 
 # assert_epochload_output checks that the (spec.epoch_expiration) value is

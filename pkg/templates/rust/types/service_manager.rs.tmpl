@@ -20,6 +20,9 @@ pub mod record_readers;
 {{- if .RecordC2SService}}
 pub mod record_c2s;
 {{- end}}
+{{- if .ConfigPushSlices}}
+pub mod config_push;
+{{- end}}
 
 use std::sync::Arc;
 use tokio::signal;
@@ -97,6 +100,9 @@ pub const STREAMING_RPC_PATHS: &[&str] = &[
 {{- end}}
 {{- end}}
 {{- end}}
+{{- if .ConfigPushSlices}}
+    configpush::PUSH_PATH,
+{{- end}}
 ];
 
 /// Full gRPC paths ("/pkg.ServiceRotating/Method") of the rotating siblings
@@ -121,6 +127,9 @@ const GENERATED_GRPC_SERVICES: &[&str] = &[
 {{- if not .IsC2D}}
     "{{.GrpcServiceName}}",
 {{- end}}
+{{- end}}
+{{- if .ConfigPushSlices}}
+    "configpush.ConfigPush",
 {{- end}}
 ];
 
@@ -474,6 +483,10 @@ pub struct ServiceManager {
 {{- end}}
 {{- if .HasTlsGrpc}}
 	    authorizer: Arc<GrpcAuthorizer>,
+{{- end}}
+{{- if .ConfigPushSlices}}
+    /// Receives and holds this service's pushed tenant slices (tacplus#927).
+    config_push: configpush::Receiver,
 {{- end}}
 {{- if .HasStates}}
     state_clients: StateClients,
@@ -1106,6 +1119,10 @@ impl ServiceManager {
         };
 {{- end}}
 
+{{- if .ConfigPushSlices}}
+        let config_push = config_push::new_receiver(&cfg, authorizer.clone());
+{{- end}}
+
         Ok(Self {
             cfg,
             identity,
@@ -1119,6 +1136,9 @@ impl ServiceManager {
 {{- end}}
 {{- if .HasTlsGrpc}}
             authorizer,
+{{- end}}
+{{- if .ConfigPushSlices}}
+            config_push,
 {{- end}}
 {{- if .HasStates}}
             state_clients,
@@ -1543,6 +1563,13 @@ impl ServiceManager {
     /// Returns the authorizer for token verification and entitlement resolution.
     pub fn authorizer(&self) -> Arc<GrpcAuthorizer> {
         self.authorizer.clone()
+    }
+{{- end}}
+{{- if .ConfigPushSlices}}
+
+    /// The pushed tenant slices this service holds (tacplus#927).
+    pub fn config_push(&self) -> config_push::ConfigPushSlices {
+        config_push::ConfigPushSlices::new(self.config_push.clone())
     }
 {{- end}}
 
@@ -2023,6 +2050,9 @@ impl ServiceManager {
         // exp with UNAUTHENTICATED so no stream outlives its credential, the
         // handler's own additional_services streams included.
         let additional_routes = handler.additional_services();
+{{- if .ConfigPushSlices}}
+        self.config_push.set_tenant_registry(Arc::new(config_push::HandlerRegistry(handler.clone())));
+{{- end}}
         let mut server = server.layer(stream_credential_expiry_layer(
             additional_routes.is_some(),
             handler.additional_streaming_paths(),
@@ -2035,6 +2065,16 @@ impl ServiceManager {
         let router = if let Some(additional_routes) = additional_routes {
             server.add_routes(additional_routes)
                 .add_service(grpc_health_svc)
+{{- if .ConfigPushSlices}}
+                // The pushed tenant slices (tacplus#927): served beside the
+                // services, each stream admitted only for a tenant the Handler
+                // holds.
+                .add_service(servicemanager::deadline::InboundDeadline::new(
+                    configpush::ConfigPushServer::new(self.config_push.clone())
+                        .max_decoding_message_size(max_recv_msg_size)
+                        .max_encoding_message_size(max_send_msg_size),
+                ))
+{{- end}}
 {{- range .GrpcServices}}
 {{- if not .IsC2D}}
                 .add_service(servicemanager::deadline::InboundDeadline::new(
@@ -2060,6 +2100,16 @@ impl ServiceManager {
         } else {
             server
                 .add_service(grpc_health_svc)
+{{- if .ConfigPushSlices}}
+                // The pushed tenant slices (tacplus#927): served beside the
+                // services, each stream admitted only for a tenant the Handler
+                // holds.
+                .add_service(servicemanager::deadline::InboundDeadline::new(
+                    configpush::ConfigPushServer::new(self.config_push.clone())
+                        .max_decoding_message_size(max_recv_msg_size)
+                        .max_encoding_message_size(max_send_msg_size),
+                ))
+{{- end}}
 {{- range .GrpcServices}}
 {{- if not .IsC2D}}
                 .add_service(servicemanager::deadline::InboundDeadline::new(

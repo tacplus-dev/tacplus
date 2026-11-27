@@ -322,7 +322,10 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-27 by lo
   owner. Part two: the owner's receiver in Go, Java and Rust (`chassis/configpush`; `sm.ConfigPush().<Slice>(tid)` /
   `sm.configPush().<slice>(tid)` / `sm.config_push().<slice>(tid)`, memory only, fail-closed, version-monotonic; the
   `Handler`'s `HoldsTenant` admits only `/tenants/<tid>/services/stratum`). `cross-test/proto-tenantslice`'s tenancy
-  owns a pushed slice, whose receiver each language's tenancy build asserts and compiles.
+  owns a pushed slice, whose receiver each language's tenancy build asserts and compiles. Part four: the
+  publisher's engine in Java (`chassis/configpush/ConfigPushPublisher`: one stream to each owner it holds a slice
+  of, a snapshot on open, then newer versions only, and the snapshot again after any break on the jittered
+  reconnect schedule), self-tested against the generated receiver in process.
 - **Released / deployed:** v2.6.0 is the newest release: the binaries and `checksums.txt`, and
   `ghcr.io/tacplus-dev/tacplus/build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c`
   (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.
@@ -359,8 +362,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-27 by lo
   namespace is `/tenants/<tid>`; kernel#23's `/tenants/<name>` namespaces need #202 first (PROPOSALS.md).
   The record write surface stamps no `(spec.identity_spiffe_subject)` (PROPOSALS.md). A fleet's service images must be on ghcr.io from a
   github.com repo (PROPOSALS.md).
-  The config push (#927) has its annotation, wire and receivers in Go, Java and Rust, but no record-store publisher
-  sends a pushed slice yet; kernel#70 waits on it.
+  The config push (#927) has its annotation, wire and receivers in Go, Java and Rust, and a Java publisher engine,
+  but no record store feeds or runs it yet (nor a Go or Rust engine), so nothing sends a pushed slice; kernel#70
+  waits on it.
   The product layer's remaining generated doors (`OnTenantDeleted`) and its cross-tests are not done (#475 steps 2-4),
   so a server of a product service, or of an rpc binding `caller_tid`, is refused at generation; the kernel mints no
   product token yet (tacplus-dev/kernel#63), nor does the operator deploy one (tacplus-dev/operator#33).

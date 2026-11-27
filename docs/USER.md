@@ -983,7 +983,8 @@ message Session {
 Every message-typed field of a state root is a **boundary** — stored independently
 and convergent (lockless, last-writer-wins / append-only). The repeated `label`
 field routes the state to its backing store services. The `export` flag makes the state available
-for read-only import by other services.
+for read-only import by other services; `export_to` narrows it to the packages it names (see
+[Cross-Service State Access](#cross-service-state-access)).
 
 tacplus generates:
 
@@ -1046,6 +1047,42 @@ never gets Set/Delete — imports are always read-only. The
 access is enforced server-side: the backing store validates the caller's token
 against the proto-declared permissions. Writing a custom gRPC client to call
 the raw Set RPC will fail.
+
+**3. Optionally, the owner names who may import it.** `export: true` alone lets
+any package import the root, tenant-owned ones included. `export_to` lists the
+proto packages allowed to:
+
+```protobuf
+message DeploymentState {
+  option (spec.service_state) = {label: ["kernel"], export: true, export_to: ["admiral"]};
+
+  DeploymentConfig redacted = 1;
+}
+```
+
+- A `state_import` or file-level `state_imports` of the root from a package the
+  list does not name fails generation, naming the importer, the root and the list:
+  `consumer.proto: field ConsumerState.deployment in package "acme" imports state
+  root "kernel.DeploymentState" (declared in kernel/deploy.proto), whose export_to
+  is ["admiral"]; "acme" is not listed`.
+- The root's generated state service authorizes (`auth_services`) the owner and
+  the listed importers in the build only, never an unlisted one.
+- With no `export_to`, `export: true` means what it always has.
+- `export_to` requires `export: true`. Each entry is a proto package name, listed
+  once, and not the owner's own package. A package absent from this build is
+  accepted: the importer may be built in another project.
+- A root with `(spec.topic)` boundaries may not set it: an exported topic root is
+  a client-reachable event surface that `export_to` does not narrow. Put the
+  restricted state in a root of its own. Likewise `export_to` does not govern the
+  tenant-pinned config reads below, nor the canonical backing store, which holds
+  every partition RW.
+
+What it binds: the check runs in the builds that see the owner's proto as the
+owner wrote it. The owner's generated server authorizes only the listed
+importers, and an importer's build refuses to import from an unlisted package.
+It does not stop a party who edits their own copy of the owner's proto from
+compiling an import; that party's calls are then refused at runtime by the
+owner's server.
 
 ### Per-Tenant Config Held in a State Root
 

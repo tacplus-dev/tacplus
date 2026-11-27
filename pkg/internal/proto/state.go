@@ -229,11 +229,18 @@ func AppendStateServiceToProtos(tempProtoDir, inputDir string) error {
 // read-only import of that root, from either the field-level state_import
 // projections or the legacy file-level state_imports option. Those importers,
 // plus the owning package itself, are exactly the callers the root's generated
-// state service must authorize — see stateServiceAuthServices.
+// state service must authorize — see stateServiceAuthServices. A root whose
+// export_to names its importers keeps only the listed ones: generation refuses
+// any other (ValidateStateConsistency, ResolveStatesFromProto), and this keeps
+// the owner's server from authorizing one whatever path it came in by.
 func stateImportersByRoot(allFiles map[string]*parser.FileDescriptor) map[string][]string {
+	exportTo := make(map[string][]string)
+	for root, ref := range indexStateImportRoots(allFiles) {
+		exportTo[root] = ref.exportTo
+	}
 	byRoot := make(map[string]map[string]bool)
 	add := func(root, pkg string) {
-		if root == "" || pkg == "" {
+		if root == "" || pkg == "" || !stateExportAllows(exportTo[root], pkg) {
 			return
 		}
 		if byRoot[root] == nil {
@@ -1290,6 +1297,7 @@ type stateImportRootRef struct {
 	relPath  string
 	msg      *parser.MessageDescriptor
 	exported bool
+	exportTo []string
 }
 
 func indexStateImportRoots(allFiles map[string]*parser.FileDescriptor) map[string]stateImportRootRef {
@@ -1309,6 +1317,7 @@ func indexStateImportRoots(allFiles map[string]*parser.FileDescriptor) map[strin
 				relPath:  relPath,
 				msg:      msg,
 				exported: exported,
+				exportTo: stateExportTo(msg),
 			}
 		}
 	}
@@ -1424,6 +1433,8 @@ func ValidateStateConsistency(inputDir string) error {
 			if !hasState || ann.StringValue == "" {
 				continue
 			}
+
+			errors = append(errors, validateStateExportTo(relPath, fileDesc.Package, msg)...)
 
 			// Kernel holds no durable user data (decision 2026-09-25): it is
 			// in-memory coordination plus its own identity snapshot, nothing else.
@@ -1542,6 +1553,11 @@ func ValidateStateConsistency(inputDir string) error {
 						errors = append(errors, fmt.Sprintf(
 							"%s: field %s.%s references non-exported state_import root %q declared in %s",
 							relPath, msg.Name, field.Name, root, sourceRoot.relPath))
+					} else if !stateExportAllows(sourceRoot.exportTo, fileDesc.Package) {
+						errors = append(errors, fmt.Sprintf(
+							"%s: field %s.%s in package %q imports state root %q (declared in %s), whose export_to is %s; %q is not listed",
+							relPath, msg.Name, field.Name, fileDesc.Package, root, sourceRoot.relPath,
+							formatExportTo(sourceRoot.exportTo), fileDesc.Package))
 					} else if sourceField := findStateImportSourceField(sourceRoot.msg, sourceFieldName); sourceField == nil {
 						errors = append(errors, fmt.Sprintf(
 							"%s: field %s.%s references missing source field %q on state_import root %q",

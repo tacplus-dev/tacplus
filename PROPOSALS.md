@@ -1050,16 +1050,14 @@ the looper then marks it `promoted` or `declined` here with the date.
   require `"wheel"` bare, which admits wheel 0.30 (GHSA-qwmp-2cf2-g9g6, HIGH, fixed 0.38.1). setuptools 70.1 and
   later build wheels without it, so on main (`setuptools>=84.1.0`) the entry can go; on the 3.8 release lines,
   `wheel>=0.38.1`.
-- **`export_to`: an exported state root lists the packages allowed to import it** (2026-11-20, #928):
-  `(spec.service_state).export` is a bool, so once it is true any package that declares a `state_import` (or a
-  file-level `state_imports`) of the root gets an RO client, tenant-owned ones included. kernel#71 needs the
-  deployment config's redacted copy read by the Admiral only. Proposed: add `repeated string export_to = 8` to
-  `StateAnnotation`, holding importer proto packages. Generation fails for an import from an unlisted package, both in
-  `ValidateStateConsistency` and in `ResolveStatesFromProto`. The generated state service's `auth_services` is
-  intersected with the list, so the owner's server never authorizes an unlisted caller. With no list, `export: true`
-  means what it does today. The questions for Jody are on the issue: does `export_to` require or imply `export`; are
-  importers named by package; does the list also govern tenant-pinned TenantConfig reads and the event-C2S topics of
-  an exported root; does `registry.json` carry it.
+- **`export_to` beyond `state_import`** (2026-11-26, #928, which built `export_to` for `state_import` and
+  `state_imports`): two follow-ups the design left out. (1) `registry.json` / `codegen-config.json` carry neither
+  `export` nor `export_to`, so a store built outside tacplus cannot enforce the list; one descriptive field on the
+  state root would let it. (2) `export_to` does not govern the tenant-pinned TenantConfig reads (`tenant_pin.go`
+  subscribes each config-slice owner to an exported root's TenantConfig collection with no `state_import`); generation
+  refuses `export_to` on a topic root, so the event-C2S surface is closed off, but a TenantConfig collection on a
+  restricted root stays readable by each slice owner. Either refuse that combination too, or intersect the pinned
+  callers with the list.
 - **The `images` gate rebuilds base and build cold on every run** (2026-11-21, #947): gates.yaml's `images` set
   (`just test && just images && just tacplus-script`) builds both images from scratch with `docker build`. A
   change to a base pin never got a verdict from tacplus-dev/build for #947: pipeline 3097248374 failed and 3097659078

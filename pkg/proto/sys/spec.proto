@@ -2796,6 +2796,16 @@ message StateAnnotation {
   // to Rule 3b. Only meaningful on a state root whose label includes
   // "kernel"; setting it on any other root does nothing.
   bool identity_snapshot = 7;
+  // export_to narrows an exported root to the importers it names: the proto
+  // packages (e.g. ["admiral"]) whose state_import / state_imports of this
+  // root generate. An import from any other package fails generation, and the
+  // root's generated state service authorizes only the owner and the listed
+  // importers. Empty keeps export's meaning: any package may import. Requires
+  // export: true; entries must be distinct package names other than the
+  // owner's; a root with topic boundaries may not set it, since an exported
+  // topic root is a client-reachable event surface it cannot narrow. A
+  // package absent from this build is accepted (it may be built elsewhere).
+  repeated string export_to = 8;
 }
 
 // ServiceStoreAnnotation marks a message as a durable key-value store.

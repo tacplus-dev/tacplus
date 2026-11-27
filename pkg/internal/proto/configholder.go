@@ -1460,6 +1460,7 @@ func ResolveStatesFromProto(config *tactype.Config, inputDir string) error {
 		protoFile string
 		autoTls   string
 		exported  bool
+		exportTo  []string
 	}
 	stateIndex := make(map[string]stateInfo)
 
@@ -1470,7 +1471,7 @@ func ResolveStatesFromProto(config *tactype.Config, inputDir string) error {
 		for _, msg := range fd.Messages {
 			if ann, ok := msg.Annotations["service_state"]; ok && ann.StringValue != "" {
 				key := fd.Package + "." + ann.StringValue
-				info := stateInfo{protoFile: path}
+				info := stateInfo{protoFile: path, exportTo: stateExportTo(&msg)}
 				if tlsAnn, ok := msg.Annotations["service_state_auto_tls"]; ok {
 					info.autoTls = tlsAnn.StringValue
 				}
@@ -1563,6 +1564,10 @@ func ResolveStatesFromProto(config *tactype.Config, inputDir string) error {
 		}
 		if !info.exported {
 			return fmt.Errorf("state_import/state_imports references non-exported state %q in %s", imp, importedRoots[imp])
+		}
+		if !stateExportAllows(info.exportTo, config.SelfPackage) {
+			return fmt.Errorf("%s: package %q imports state root %q (declared in %s), whose export_to is %s; %q is not listed",
+				importedRoots[imp], config.SelfPackage, imp, info.protoFile, formatExportTo(info.exportTo), config.SelfPackage)
 		}
 		entry := tactype.StateEntry{
 			ProtoFile:   info.protoFile,

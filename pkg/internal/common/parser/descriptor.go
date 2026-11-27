@@ -1988,6 +1988,9 @@ func (p *DescriptorParser) parseMessageAnnotations(md protoreflect.MessageDescri
 			if val.GetExport() {
 				annotations["service_state_export"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 			}
+			if exportTo := val.GetExportTo(); len(exportTo) > 0 {
+				annotations["service_state_export_to"] = model.AnnotationValue{Type: model.AnnotationTypeString, StringSliceValue: exportTo}
+			}
 			if val.GetRequiresArtifactOnWrite() {
 				annotations["service_state_requires_artifact_on_write"] = model.AnnotationValue{Type: model.AnnotationTypeBool, BoolValue: true}
 			}

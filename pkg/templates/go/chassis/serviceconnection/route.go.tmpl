@@ -116,17 +116,14 @@ func RouteTenantFromContext(ctx context.Context) (string, bool) {
 	return tid, ok && tid != ""
 }
 
-// NamespaceTenant returns the tenant a namespace claim belongs to: the tid of
-// /tenants/<tid>, or of any namespace below it. Any other namespace (/system, a
-// malformed or empty one) belongs to no tenant. The generated MCP surface of a
-// tenant-owned service opens its session in this tenant, taken from the
-// caller's token, never from anything the client or model sends.
-func NamespaceTenant(ns string) (string, bool) {
-	rest, ok := strings.CutPrefix(ns, "/"+wrapperSpiffe.TenantsSegment+"/")
-	if !ok {
-		return "", false
-	}
-	tid, _, _ := strings.Cut(rest, "/")
+// CallerTenant returns the tenant a verified caller is in: tid, its token's
+// tid claim, which kernel stamps at mint on every token whose namespace is in a
+// tenant. A missing or malformed claim is no tenant. The namespace claim names
+// the tenant (/tenants/<name>), never its tid, and is never read for one
+// (#284). The generated MCP surface of a tenant-owned service opens its session
+// in this tenant, and the client-facing record reader reads from it; nothing the
+// client or model sends chooses it.
+func CallerTenant(tid string) (string, bool) {
 	if !ValidTenantID(tid) {
 		return "", false
 	}

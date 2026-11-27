@@ -176,6 +176,9 @@ generate() { # set src pkg extra language
   mkdir -p "$dir"
   {
     printf 'language: "%s"\npkg: "%s"\nsrc: "%s"\noutput-dir: "tacplus"\n' "$language" "$pkg" "$src"
+    # The repository's own header: its SPDX line is every generated Rust
+    # crate's license, so cargo-deny finds none unlicensed (tacplus#1001).
+    printf 'header: |\n  Copyright (c) 2026 Jody Scott\n  SPDX-License-Identifier: Apache-2.0\n'
     [[ -z "$extra" ]] || tr ';' '\n' <<<"$extra"
   } >"$dir/tacplus.yaml"
 

@@ -193,6 +193,19 @@ func TestGenerated(t *testing.T) {
 				t.Errorf("generated.sh did not run %q; calls:\n%s", want, r.calls)
 			}
 		}
+		// Each set's tacplus.yaml carries the repository's header, so every
+		// Rust crate declares its license and cargo-deny finds none
+		// unlicensed (tacplus#1001).
+		configs, _ := filepath.Glob(filepath.Join(dir, "*", "*", "tacplus.yaml"))
+		if len(configs) == 0 {
+			t.Error("no tacplus.yaml in the generated tree")
+		}
+		for _, config := range configs {
+			body, _ := os.ReadFile(config)
+			if !strings.Contains(string(body), "header: |\n  Copyright (c) 2026 Jody Scott\n  SPDX-License-Identifier: Apache-2.0\n") {
+				t.Errorf("%s has no SPDX header:\n%s", config, body)
+			}
+		}
 		// The logs stay out of the scanned tree.
 		if logs, _ := filepath.Glob(filepath.Join(dir, "*", "*", "*.log")); len(logs) > 0 {
 			t.Errorf("logs in the scanned tree: %v", logs)

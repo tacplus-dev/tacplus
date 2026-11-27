@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/boundaries"
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/restdispatch"
@@ -36,8 +37,14 @@ import (
 // OTHER I/O failure is fatal: swallowing it would either drop the file from the
 // protoc compilation list or leave it without a go_package, surfacing later as
 // a misleading protoc/import failure instead of naming the real cause here.
-func injectGoPackage(path, protoPackage, goPackage string) (bool, error) {
-	content, err := os.ReadFile(path)
+func injectGoPackage(protoDir, file, protoPackage, goPackage string) (bool, error) {
+	root, err := os.OpenRoot(protoDir)
+	if err != nil {
+		return false, fmt.Errorf("failed to open staged proto dir %s: %w", protoDir, err)
+	}
+	defer root.Close()
+	path := filepath.Join(protoDir, file)
+	content, err := root.ReadFile(file)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
@@ -50,7 +57,7 @@ func injectGoPackage(path, protoPackage, goPackage string) (bool, error) {
 	modified := strings.Replace(string(content),
 		"package "+protoPackage+";",
 		fmt.Sprintf("package %s;\noption go_package = %q;", protoPackage, goPackage), 1)
-	if err := os.WriteFile(path, []byte(modified), 0644); err != nil {
+	if err := root.WriteFile(file, []byte(modified), 0644); err != nil {
 		return false, fmt.Errorf("failed to inject go_package into %s: %w", path, err)
 	}
 	return true, nil
@@ -271,8 +278,7 @@ func Generate(config *tactype.Config) error {
 	}
 	// OpaEval is now appended to the source vservices proto (no separate generated file).
 	for _, gp := range genProtos {
-		genPath := filepath.Join(tempProtoDir, gp.file)
-		exists, err := injectGoPackage(genPath, gp.protoPackage, gp.goPackage)
+		exists, err := injectGoPackage(tempProtoDir, gp.file, gp.protoPackage, gp.goPackage)
 		if err != nil {
 			return err
 		}
@@ -298,8 +304,7 @@ func Generate(config *tactype.Config) error {
 	// Inject go_package into the freshly-written tenant_config.proto and add it
 	// to the compilation list. Must happen after GenerateTenantConfig since that
 	// call overwrites any previously-injected go_package.
-	tenantConfigPath := filepath.Join(tempProtoDir, "generated/tenant_config.proto")
-	exists, err := injectGoPackage(tenantConfigPath, "tenant_config",
+	exists, err := injectGoPackage(tempProtoDir, "generated/tenant_config.proto", "tenant_config",
 		fmt.Sprintf("%s/types/generated/tenant_config", config.ModuleBasePath))
 	if err != nil {
 		return err
@@ -308,8 +313,7 @@ func Generate(config *tactype.Config) error {
 		protoFilePaths = append(protoFilePaths, "generated/tenant_config.proto")
 	}
 	// Same for the freshly-written project_config.proto.
-	projectConfigPath := filepath.Join(tempProtoDir, "generated/project_config.proto")
-	exists, err = injectGoPackage(projectConfigPath, "project_config",
+	exists, err = injectGoPackage(tempProtoDir, "generated/project_config.proto", "project_config",
 		fmt.Sprintf("%s/types/generated/project_config", config.ModuleBasePath))
 	if err != nil {
 		return err
@@ -410,7 +414,7 @@ func Generate(config *tactype.Config) error {
 				"package mcp;",
 				fmt.Sprintf("package mcp;\noption go_package = \"%s\";", goPackage),
 				1)
-			if err := os.WriteFile(mcpPath, []byte(modified), 0644); err != nil {
+			if err := fsroot.WriteFile(tempProtoDir, mcpPath, []byte(modified), 0644); err != nil {
 				return fmt.Errorf("failed to write mcp.proto with go_package: %w", err)
 			}
 			protoFilePaths = append(protoFilePaths, filepath.Join("services", "mcp.proto"))
@@ -1023,7 +1027,7 @@ func addGoPackageToSysProtos(config *tactype.Config, tempProtoDir string) error 
 		modifiedContent := packageRegex.ReplaceAllString(string(content),
 			fmt.Sprintf("package %s;\noption go_package = \"%s\";", matches[1], goPackage))
 
-		if err := os.WriteFile(path, []byte(modifiedContent), 0644); err != nil {
+		if err := fsroot.WriteFile(tempProtoDir, path, []byte(modifiedContent), 0644); err != nil {
 			return err
 		}
 
@@ -1079,7 +1083,7 @@ func addGoPackageToEmbeddedProtos(config *tactype.Config, tempProtoDir, subdir s
 		modifiedContent := packageRegex.ReplaceAllString(string(content),
 			fmt.Sprintf("package %s;\noption go_package = \"%s\";", matches[1], goPackage))
 
-		if err := os.WriteFile(path, []byte(modifiedContent), 0644); err != nil {
+		if err := fsroot.WriteFile(tempProtoDir, path, []byte(modifiedContent), 0644); err != nil {
 			return err
 		}
 
@@ -1090,6 +1094,13 @@ func addGoPackageToEmbeddedProtos(config *tactype.Config, tempProtoDir, subdir s
 
 // generateProtoCode runs protoc to generate .pb.go files
 func generateProtoCode(config *tactype.Config, protoFiles []string, tempProtoDir string, typesOutputDir string) error {
+	// Every directory made and file moved goes through outRoot, so a symlink
+	// under typesOutputDir cannot send protoc's output out of it.
+	outRoot, err := fsroot.Open(typesOutputDir)
+	if err != nil {
+		return err
+	}
+	defer outRoot.Close()
 	for _, protoFile := range protoFiles {
 		relPath := protoFile
 
@@ -1119,7 +1130,7 @@ func generateProtoCode(config *tactype.Config, protoFiles []string, tempProtoDir
 			subdir = filepath.Join(parentDir, packageName)
 		}
 		outputDir := filepath.Join(typesOutputDir, subdir)
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
+		if err := outRoot.MkdirAll(subdir, 0755); err != nil {
 			return err
 		}
 
@@ -1148,10 +1159,10 @@ func generateProtoCode(config *tactype.Config, protoFiles []string, tempProtoDir
 		// Move the generated file from nested path to target location.
 		// protoc generates at: outputDir/relPath (with .pb.go instead of .proto).
 		// Use the natural protoc output name (e.g., ballsports.pb.go, types.pb.go).
-		generatedFile := filepath.Join(outputDir, relPath[:len(relPath)-6]+".pb.go")
+		generatedFile := filepath.Join(subdir, relPath[:len(relPath)-6]+".pb.go")
 		baseName := filepath.Base(relPath[:len(relPath)-6]) + ".pb.go"
 		targetFile := filepath.Join(outputDir, baseName)
-		if err := os.Rename(generatedFile, targetFile); err != nil {
+		if err := outRoot.Rename(generatedFile, filepath.Join(subdir, baseName)); err != nil {
 			return fmt.Errorf("failed to rename %s to %s: %w", generatedFile, filepath.Base(targetFile), err)
 		}
 
@@ -1161,7 +1172,7 @@ func generateProtoCode(config *tactype.Config, protoFiles []string, tempProtoDir
 		}
 
 		// Remove any subdirectories created by protoc
-		if err := removeSubdirs(outputDir); err != nil {
+		if err := removeSubdirs(outRoot, subdir); err != nil {
 			return err
 		}
 
@@ -1571,6 +1582,18 @@ func goServiceHasRequiresDevice(service parser.ServiceDescriptor) bool {
 // Uses comprehensive M= flags so protoc-gen-go-grpc generates correct imports natively.
 // Returns a list of services that were generated.
 func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir string, typesOutputDir string) ([]ServiceInfo, error) {
+	// The staged protos are rewritten through protoRoot and protoc's output
+	// placed through outRoot: a symlink under either cannot redirect a write.
+	protoRoot, err := os.OpenRoot(tempProtoDir)
+	if err != nil {
+		return nil, err
+	}
+	defer protoRoot.Close()
+	outRoot, err := fsroot.Open(typesOutputDir)
+	if err != nil {
+		return nil, err
+	}
+	defer outRoot.Close()
 	// Check if protoc-gen-go-grpc is available
 	if _, err := exec.LookPath("protoc-gen-go-grpc"); err != nil {
 		return nil, fmt.Errorf("protoc-gen-go-grpc not found in PATH; install with: go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest")
@@ -1632,7 +1655,7 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 			subdir = filepath.Join(parentDir, dirPackageName, "services")
 		}
 		outputDir := filepath.Join(typesOutputDir, subdir)
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
+		if err := outRoot.MkdirAll(subdir, 0755); err != nil {
 			return nil, err
 		}
 
@@ -1670,7 +1693,7 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 		}
 
 		// Read proto file content for go_package modification
-		content, err := os.ReadFile(protoPath)
+		content, err := protoRoot.ReadFile(relPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read %s: %w", protoPath, err)
 		}
@@ -1708,7 +1731,7 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 		originalContent := content
 
 		// Write modified content back to the temp proto file
-		if err := os.WriteFile(protoPath, []byte(modifiedContent), 0644); err != nil {
+		if err := protoRoot.WriteFile(relPath, []byte(modifiedContent), 0644); err != nil {
 			return nil, err
 		}
 
@@ -1781,9 +1804,8 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 		}
 
 		// Move the generated file from nested path to target location.
-		generatedFile := filepath.Join(outputDir, relPath[:len(relPath)-6]+"_grpc.pb.go") // Remove .proto, add _grpc.pb.go
-		targetFile := filepath.Join(outputDir, filename+"_grpc.pb.go")
-		if err := os.Rename(generatedFile, targetFile); err != nil {
+		generatedFile := filepath.Join(subdir, relPath[:len(relPath)-6]+"_grpc.pb.go") // Remove .proto, add _grpc.pb.go
+		if err := outRoot.Rename(generatedFile, filepath.Join(subdir, filename+"_grpc.pb.go")); err != nil {
 			// File might already be in the correct location
 			if !os.IsNotExist(err) {
 				return nil, fmt.Errorf("failed to rename %s: %w", generatedFile, err)
@@ -1791,7 +1813,7 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 		}
 
 		// Remove any subdirectories created by protoc
-		if err := removeSubdirs(outputDir); err != nil {
+		if err := removeSubdirs(outRoot, subdir); err != nil {
 			return nil, err
 		}
 
@@ -1802,7 +1824,7 @@ func generateGrpcCode(config *tactype.Config, protoFiles []string, tempProtoDir 
 		}
 
 		// Restore original proto file content so subsequent iterations see correct go_package
-		if err := os.WriteFile(protoPath, originalContent, 0644); err != nil {
+		if err := protoRoot.WriteFile(relPath, originalContent, 0644); err != nil {
 			return nil, fmt.Errorf("failed to restore original proto file %s: %w", protoPath, err)
 		}
 
@@ -1910,12 +1932,11 @@ func copyHelperFiles(builderTempDir, outputDir string) error {
 		}
 
 		dstFile := filepath.Join(outputDir, relPath)
-		dstDir := filepath.Dir(dstFile)
-		if err := os.MkdirAll(dstDir, 0755); err != nil {
+		if err := fsroot.MkdirAll(outputDir, filepath.Dir(dstFile), 0755); err != nil {
 			return err
 		}
 
-		if err := copyFile(path, dstFile); err != nil {
+		if err := copyFile(path, outputDir, dstFile); err != nil {
 			return err
 		}
 		zap.L().Debug("Copied helper file", zap.String("path", relPath))
@@ -2088,8 +2109,9 @@ func cleanupStaleFiles(outputDir string) error {
 
 // Helper functions
 
-func removeSubdirs(outputDir string) error {
-	entries, err := os.ReadDir(outputDir)
+// removeSubdirs removes the directories under subdir of root.
+func removeSubdirs(root *os.Root, subdir string) error {
+	entries, err := fs.ReadDir(root.FS(), filepath.ToSlash(subdir))
 	if err != nil {
 		return err
 	}
@@ -2097,8 +2119,7 @@ func removeSubdirs(outputDir string) error {
 	// Remove all subdirectories (they were created by protoc but we've already moved the .pb.go file out)
 	for _, entry := range entries {
 		if entry.IsDir() {
-			toRemove := filepath.Join(outputDir, entry.Name())
-			if err := os.RemoveAll(toRemove); err != nil {
+			if err := root.RemoveAll(filepath.Join(subdir, entry.Name())); err != nil {
 				return err
 			}
 		}
@@ -2107,12 +2128,13 @@ func removeSubdirs(outputDir string) error {
 	return nil
 }
 
-func copyFile(src, dst string) error {
+// copyFile copies src to dst, which must be under dstDir.
+func copyFile(src, dstDir, dst string) error {
 	content, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, content, 0644)
+	return fsroot.WriteFile(dstDir, dst, content, 0644)
 }
 
 // generateBuiltinProfiles writes builtins.go into the generated/entitlements

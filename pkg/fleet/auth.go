@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/common/fsroot"
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 	"github.com/tacplus-dev/tacplus/pkg/registry"
 )
@@ -82,7 +83,7 @@ func stampFleetAuth(mergedDir string) error {
 				list = append(list, who)
 			}
 			sort.Strings(list)
-			if err := rewriteAuthServices(filepath.Join(mergedDir, relPath), svc.Name, list); err != nil {
+			if err := rewriteAuthServices(mergedDir, relPath, svc.Name, list); err != nil {
 				return fmt.Errorf("fleet: stamping callers of %s: %w", key, err)
 			}
 			zap.L().Info("fleet caller list stamped", zap.String("service", key), zap.Strings("auth_services", list))
@@ -92,8 +93,9 @@ func stampFleetAuth(mergedDir string) error {
 }
 
 // rewriteAuthServices replaces auth_services_from_fleet: true inside the named
-// service's block with the literal list.
-func rewriteAuthServices(path, serviceName string, list []string) error {
+// service's block with the literal list, in the proto at rel under dir.
+func rewriteAuthServices(dir, rel, serviceName string, list []string) error {
+	path := filepath.Join(dir, rel)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -117,7 +119,7 @@ func rewriteAuthServices(path, serviceName string, list []string) error {
 		quoted[i] = `"` + s + `"`
 	}
 	body = fromFleetRe.ReplaceAllLiteralString(body, "auth_services: ["+strings.Join(quoted, ", ")+"]")
-	return os.WriteFile(path, []byte(text[:open]+body+text[end:]), 0o644)
+	return fsroot.WriteFile(dir, path, []byte(text[:open]+body+text[end:]), 0o644)
 }
 
 // matchingBrace returns the index of the brace closing the one at open, or -1.

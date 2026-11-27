@@ -130,7 +130,8 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-26 by lo
   image that carries it (#830, #954). The log and the verdict are the same whatever
   the cap, and a table of each gate's and each shard's wall time and the pool's use of the machine comes before the
   verdict: 3396 s on 8 CPUs at `GATES_JOBS=4`, current-generation the longest (#300); 46 minutes, current-generation
-  1767 s of them, on its own pool, before #977. Each gate's rc and wall time
+  1767 s of them, on its own pool, before #977; 39-47 minutes on the 8-CPU looper VM beside one other full build
+  since #977 and #979 (gates.yaml's full minutes 45, #812). Each gate's rc and wall time
   also print as it ends, and a leg past `GATES_TIMEOUT` (5400 s) is stopped and fails naming itself; every Java
   fixture logs io.grpc and io.netty at INFO, which kept the trace under GitLab's 4 MiB (#893).
   The generated code is scanned at the source (#376, tacplus-dev/looper#108): `just generated DIR` writes every proto

@@ -19,7 +19,7 @@ ARG MAVEN_GUAVA_SHA256=b530942257fb935f8b2cfaa5f8eb5bd59c555fd8e8d01b8ce98912e07
 ARG NODE_VERSION=26
 ARG NPM_VERSION=11.21.1
 ARG NPM_UNDICI_VERSION=6.29.1
-ARG SWIFT_VERSION=6.4.2
+ARG SWIFT_VERSION=6.4.3
 ARG DOTNET_CHANNEL=10.0
 
 FROM golang:${GO_VERSION}-trixie AS go
@@ -31,13 +31,6 @@ FROM node:${NODE_VERSION}-trixie-slim AS node
 # ImageMagick -dev packages brought in OpenEXR (CVE-2026-42216/-42217) and
 # some two hundred other packages nothing here uses (#554).
 FROM rust:${RUST_VERSION}-slim-trixie
-ARG TARGETARCH
-ARG MAVEN_GUAVA_VERSION
-ARG MAVEN_GUAVA_SHA256
-ARG NPM_VERSION
-ARG NPM_UNDICI_VERSION
-ARG SWIFT_VERSION
-ARG DOTNET_CHANNEL
 LABEL org.opencontainers.image.title="tacplus base" \
       org.opencontainers.image.description="OS and language SDKs (Go, Java, Rust, Python, Node, Swift, .NET) for building and testing tacplus" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus"
@@ -67,6 +60,8 @@ RUN ln -s /usr/share/maven/bin/mvn /usr/local/bin/mvn \
 # so MAVEN_GUAVA_VERSION (same failureaccess 1.0.3 Maven ships) replaces it,
 # checksum-verified; Maven must then still start and build a project. Drop it
 # once a Maven release bundles it.
+ARG MAVEN_GUAVA_VERSION
+ARG MAVEN_GUAVA_SHA256
 RUN curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/guava.jar \
        "https://repo.maven.apache.org/maven2/com/google/guava/guava/${MAVEN_GUAVA_VERSION}/guava-${MAVEN_GUAVA_VERSION}.jar" \
     && echo "${MAVEN_GUAVA_SHA256}  /tmp/guava.jar" | sha256sum -c - \
@@ -87,6 +82,8 @@ RUN curl -fsSL --retry 30 --retry-delay 5 --retry-all-errors -o /tmp/guava.jar \
 # does not flag for brace-expansion. No npm release yet bundles an undici past
 # the latest advisory, so NPM_UNDICI_VERSION (same 6.x line npm requires) is
 # unpacked over npm's copy; drop it once an npm release bundles it.
+ARG NPM_VERSION
+ARG NPM_UNDICI_VERSION
 RUN npm install -g --no-fund --no-audit "npm@${NPM_VERSION}" \
     && d=$(mktemp -d) && (cd "$d" && npm pack --silent "undici@${NPM_UNDICI_VERSION}") \
     && rm -rf /usr/local/lib/node_modules/npm/node_modules/undici \
@@ -95,6 +92,8 @@ RUN npm install -g --no-fund --no-audit "npm@${NPM_VERSION}" \
     && rm -rf "$d" && npm cache clean --force && npm --version \
     && npm view undici version >/dev/null
 # Swift SDK into /usr, where swift.org's tarball layout puts it.
+ARG TARGETARCH
+ARG SWIFT_VERSION
 RUN case "$TARGETARCH" in \
       amd64) P=debian12; F="swift-${SWIFT_VERSION}-RELEASE-debian12" ;; \
       arm64) P=debian12-aarch64; F="swift-${SWIFT_VERSION}-RELEASE-debian12-aarch64" ;; \
@@ -107,6 +106,7 @@ RUN case "$TARGETARCH" in \
 # .NET SDK. The generated C# clients target net8.0, which the current SDK
 # builds against the targeting pack from NuGet; the 8.0 SDK itself ships
 # assemblies with fixed-only HIGH findings and no patched 8.0 SDK exists.
+ARG DOTNET_CHANNEL
 RUN curl -fsSL --retry 30 --retry-delay 5 -o /tmp/dotnet-install.sh https://dot.net/v1/dotnet-install.sh \
     && bash /tmp/dotnet-install.sh --channel "${DOTNET_CHANNEL}" --install-dir /usr/share/dotnet \
     && ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet && rm /tmp/dotnet-install.sh \

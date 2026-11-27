@@ -23,7 +23,7 @@ ARG BASE_IMAGE=ghcr.io/tacplus-dev/tacplus/base:latest@sha256:aa993f927c4d1e4ae1
 ARG GO_VERSION=1.27
 ARG RUST_VERSION=1
 ARG NODE_VERSION=26
-ARG SWIFT_VERSION=6.4.2
+ARG SWIFT_VERSION=6.4.3
 # The docker CLI is copied from docker:DOCKER_VERSION-cli, built with whatever
 # Go upstream used: 29.9.3's go1.26.10 carried CVE-2026-97054 (HIGH), fixed in
 # 29.10.0's go1.27.4 (#901). A rebuild takes the newest 29.x; images/smoke.sh
@@ -95,24 +95,15 @@ ARG RUST_NIGHTLY=nightly-2026-10-15
 ARG TACPLUS_LINE=
 
 FROM debian:trixie-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0 AS fetch
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip xz-utils \
+    && rm -rf /var/lib/apt/lists/*
 ARG TARGETARCH
 ARG PROTOC_VERSION
 ARG GRPC_JAVA_VERSION
 ARG JUST_VERSION
 ARG GCLOUD_VERSION
 ARG OPENJML_VERSION
-ARG BUILDKIT_VERSION
-ARG BUILDKIT_SHA256_AMD64
-ARG BUILDKIT_SHA256_ARM64
-ARG SCCACHE_VERSION
-ARG SCCACHE_SHA256_AMD64
-ARG SCCACHE_SHA256_ARM64
-ARG ZIG_VERSION
-ARG ZIG_SHA256_AMD64
-ARG ZIG_SHA256_ARM64
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip xz-utils \
-    && rm -rf /var/lib/apt/lists/*
 RUN case "$TARGETARCH" in \
       arm64) PROTOC_ARCH=aarch_64; JUST_ARCH=aarch64; GCLOUD_ARCH=arm ;; \
       amd64) PROTOC_ARCH=x86_64; JUST_ARCH=x86_64; GCLOUD_ARCH=x86_64 ;; \
@@ -138,6 +129,12 @@ RUN case "$TARGETARCH" in \
     && unzip -q /tmp/openjml.zip -d /opt/openjml && rm /tmp/openjml.zip && chmod -R +x /opt/openjml
 # BuildKit's QEMU helper for the other architecture (a foreign platform's RUN
 # steps, with no binfmt registration on the host), and sccache.
+ARG BUILDKIT_VERSION
+ARG BUILDKIT_SHA256_AMD64
+ARG BUILDKIT_SHA256_ARM64
+ARG SCCACHE_VERSION
+ARG SCCACHE_SHA256_AMD64
+ARG SCCACHE_SHA256_ARM64
 RUN case "$TARGETARCH" in \
       arm64) SC_ARCH=aarch64; BK_SHA=$BUILDKIT_SHA256_ARM64; SC_SHA=$SCCACHE_SHA256_ARM64 ;; \
       amd64) SC_ARCH=x86_64; BK_SHA=$BUILDKIT_SHA256_AMD64; SC_SHA=$SCCACHE_SHA256_AMD64 ;; \
@@ -156,6 +153,9 @@ RUN case "$TARGETARCH" in \
     && tar -xz --strip-components=1 -C /opt/buildkit/bin -f /tmp/sccache.tar.gz "sccache-v${SCCACHE_VERSION}-${SC_ARCH}-unknown-linux-musl/sccache" \
     && rm /tmp/sccache.tar.gz && chmod +x /opt/buildkit/bin/*
 # zig, which cargo-zigbuild links with (the rust: client recipe, #195).
+ARG ZIG_VERSION
+ARG ZIG_SHA256_AMD64
+ARG ZIG_SHA256_ARM64
 RUN case "$TARGETARCH" in \
       arm64) ZIG_ARCH=aarch64; ZIG_SHA=$ZIG_SHA256_ARM64 ;; \
       amd64) ZIG_ARCH=x86_64; ZIG_SHA=$ZIG_SHA256_AMD64 ;; \
@@ -210,10 +210,10 @@ RUN git clone --depth 1 --branch "v${BUILDKIT_VERSION}" https://github.com/moby/
 # runc, as BuildKit's release builds it (buildkit-runc): cgo and a static
 # libseccomp, so it builds for the target platform rather than across.
 FROM golang:${GO_VERSION}-trixie AS runc
+RUN apt-get update && apt-get install -y --no-install-recommends libseccomp-dev && rm -rf /var/lib/apt/lists/*
 ARG RUNC_VERSION
 ARG RUNC_COMMIT
 ARG X_NET_VERSION
-RUN apt-get update && apt-get install -y --no-install-recommends libseccomp-dev && rm -rf /var/lib/apt/lists/*
 RUN git clone --depth 1 --branch "v${RUNC_VERSION}" https://github.com/opencontainers/runc /src/runc \
     && cd /src/runc && test "$(git rev-parse HEAD)" = "${RUNC_COMMIT}" \
     && go get "golang.org/x/net@v${X_NET_VERSION}" && go mod tidy && go mod vendor \
@@ -256,9 +256,9 @@ RUN npm install -g "@bufbuild/protoc-gen-es@${PROTOC_GEN_ES_VERSION}" "@bufbuild
 # The Swift plugins, built with the same Swift release the base image
 # carries. /opt/swift-runtime holds the shared libraries they need.
 FROM swift:${SWIFT_VERSION}-bookworm AS swift-tools
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git && rm -rf /var/lib/apt/lists/*
 ARG SWIFT_PROTOBUF_VERSION
 ARG GRPC_SWIFT_PROTOBUF_VERSION
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git && rm -rf /var/lib/apt/lists/*
 RUN git clone --depth 1 --branch "${SWIFT_PROTOBUF_VERSION}" https://github.com/apple/swift-protobuf /tmp/swift-protobuf \
     && swift build --package-path /tmp/swift-protobuf -c release --product protoc-gen-swift \
     && git clone --depth 1 --branch "${GRPC_SWIFT_PROTOBUF_VERSION}" https://github.com/grpc/grpc-swift-protobuf /tmp/grpc-swift-protobuf \
@@ -271,9 +271,6 @@ RUN git clone --depth 1 --branch "${SWIFT_PROTOBUF_VERSION}" https://github.com/
 FROM docker:${DOCKER_VERSION}-cli AS docker-cli
 
 FROM ${BASE_IMAGE}
-ARG GRPCIO_TOOLS_VERSION
-ARG RUST_NIGHTLY
-ARG TACPLUS_LINE
 LABEL org.opencontainers.image.title="tacplus build" \
       org.opencontainers.image.description="tacplus base plus protoc and every plugin, grpcio-tools, Kani, JBMC/OpenJML, cargo-fuzz, cargo-zigbuild and zig, just, the docker CLI, gcloud, rootless BuildKit and sccache; its tacplus runs the repository's pinned release" \
       org.opencontainers.image.source="https://github.com/tacplus-dev/tacplus"
@@ -327,6 +324,7 @@ COPY images/image-build.sh /usr/local/bin/tacplus-image-build
 COPY images/cache.sh /usr/local/bin/tacplus-cache
 # Kani's setup downloads its CBMC bundle and installs the pinned nightly it
 # compiles with; cargo-fuzz runs on RUST_NIGHTLY: cargo +"$RUST_NIGHTLY" fuzz.
+ARG RUST_NIGHTLY
 RUN cargo kani setup \
     && rustup toolchain install "${RUST_NIGHTLY}" --profile minimal \
     && cargo kani --version && cargo +"${RUST_NIGHTLY}" fuzz --version
@@ -339,6 +337,7 @@ RUN ln -s ../lib/node_modules/@bufbuild/protoc-gen-es/bin/protoc-gen-es /usr/loc
 # what the Python client gates use. One venv, first on PATH. The floors
 # on cryptography, pyOpenSSL, jaraco.context and wheel (transitive deps of
 # twine) are the first versions Trivy does not flag at HIGH.
+ARG GRPCIO_TOOLS_VERSION
 RUN python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir "grpcio-tools==${GRPCIO_TOOLS_VERSION}" black build twine \
        "cryptography>=49.0.0" "pyOpenSSL>=26.0.0" "jaraco.context>=6.1.0" "wheel>=0.46.2"
@@ -350,6 +349,7 @@ RUN tacplus-packages-check /usr/local/share/tacplus/packages/base /usr/local/sha
 # gcloud-crc32c binary (a Go program) are removed in the fetch stage because
 # they pin cryptography, pyOpenSSL and a Go stdlib that Trivy flags at
 # HIGH/CRITICAL, and no gate uses them.
+ARG TACPLUS_LINE
 ENV CLOUDSDK_PYTHON=/usr/bin/python3 \
     PATH="/opt/venv/bin:/opt/google-cloud-sdk/bin:/root/.cache/tacplus/tools/openjml:${PATH}" \
     TACPLUS_CONTAINER=1 \

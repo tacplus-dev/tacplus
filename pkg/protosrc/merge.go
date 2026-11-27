@@ -64,11 +64,11 @@ func MergeSources(sourceDirs []string, destDir string) error {
 		// Each source is read through an os.Root, so nothing in it (a symlink
 		// named like a proto, say) can make the merge read outside it: a fetched
 		// dependency must never copy a host file into the merged tree.
-		root, err := os.OpenRoot(src)
+		srcRoot, err := os.OpenRoot(src)
 		if err != nil {
 			return fmt.Errorf("open proto source %q: %w", src, err)
 		}
-		walkErr := fs.WalkDir(root.FS(), ".", func(slashRel string, d fs.DirEntry, err error) error {
+		walkErr := fs.WalkDir(srcRoot.FS(), ".", func(slashRel string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
@@ -95,7 +95,7 @@ func MergeSources(sourceDirs []string, destDir string) error {
 					return nil
 				}
 			}
-			data, err := fs.ReadFile(root.FS(), slashRel)
+			data, err := fs.ReadFile(srcRoot.FS(), slashRel)
 			if err != nil {
 				if d.Type()&fs.ModeSymlink != 0 {
 					return fmt.Errorf("proto source %q: %s is a symlink that does not resolve inside the source; merging never reads outside a source tree: %w", src, rel, err)
@@ -142,7 +142,7 @@ func MergeSources(sourceDirs []string, destDir string) error {
 			origin[rel] = src
 			return nil
 		})
-		closeErr := root.Close()
+		closeErr := srcRoot.Close()
 		if walkErr != nil {
 			return walkErr
 		}

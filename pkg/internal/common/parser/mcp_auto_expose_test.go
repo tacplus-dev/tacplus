@@ -331,8 +331,11 @@ func TestAutoExpose_McpToolNameOverride(t *testing.T) {
 
 // MCP-6: a language that generates a service wrapper but has no MCP dispatch
 // backend must not silently host a service that owns tools. A client-only
-// target (typescript, swift, csharp) hosts nothing, so it is not gated: the
-// webapp is generated in typescript against every c2s service in the fleet.
+// target hosts nothing, so it is not gated: the webapp is generated in
+// typescript, and a python client in python, against every c2s service in the
+// fleet (#665: python is a full-client target, its server wrappers refused).
+// Every wrapper-emitting target has a backend today, so the refusal is
+// exercised through a stand-in host language.
 func TestAutoExpose_Mcp6LanguageGate(t *testing.T) {
 	skipIfNoProtoc(t)
 
@@ -341,19 +344,20 @@ func TestAutoExpose_Mcp6LanguageGate(t *testing.T) {
   rpc GetTicket(Ping) returns (Ping);
 `)
 
-	for _, lang := range []string{"go", "java", "rust", "typescript", "swift", "csharp", ""} {
+	for _, lang := range []string{"go", "java", "rust", "python", "typescript", "swift", "csharp", ""} {
 		if err := validateMcpAnnotations([]*FileDescriptor{fd}, lang); err != nil {
 			t.Errorf("language %q: unexpected MCP-6 failure: %v", lang, err)
 		}
 	}
-	for _, lang := range []string{"python"} {
-		err := validateMcpAnnotations([]*FileDescriptor{fd}, lang)
-		if err == nil {
-			t.Errorf("language %q: a host with no MCP backend was accepted", lang)
-			continue
-		}
-		if !strings.Contains(err.Error(), "no MCP dispatch backend") || !strings.Contains(err.Error(), "Surface") {
-			t.Errorf("language %q: unhelpful MCP-6 error: %v", lang, err)
-		}
+
+	const host = "wrapper-without-backend"
+	mcpHostLanguages[host] = true
+	t.Cleanup(func() { delete(mcpHostLanguages, host) })
+	err := validateMcpAnnotations([]*FileDescriptor{fd}, host)
+	if err == nil {
+		t.Fatalf("language %q: a host with no MCP backend was accepted", host)
+	}
+	if !strings.Contains(err.Error(), "no MCP dispatch backend") || !strings.Contains(err.Error(), "Surface") {
+		t.Errorf("language %q: unhelpful MCP-6 error: %v", host, err)
 	}
 }

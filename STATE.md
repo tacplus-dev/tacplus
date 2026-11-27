@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-27 by looper (#927).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-27 by looper (#928).
 
 - **Version / line:** v2.6.13 (latest release, 2026-11-15, on `release/2.6`; v2.6.0 at 87adda9e, where `release/2.6` was cut); main is the 2.7 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -249,6 +249,11 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-27 by lo
   read; `tacplus fleet build` checks each recipe's inputs at the locked commit and records the contribution under
   the service in `fleet.lock` (paths under `/-/apps/<service>/` and `/-/clients/<service>/`, targets, the webapp
   dir's tree). Contract and trust rule in docs/USER.md.
+  State export allow-list (#928, main, for 2.7; tacplus-dev/kernel#71): `(spec.service_state).export_to` names the
+  packages allowed to import an exported root; a `state_import`/`state_imports` from any other package fails
+  generation, and the root's generated state service authorizes only the owner and the listed importers. Empty
+  keeps `export: true`'s meaning. It needs `export: true` and is refused on a topic root; it does not narrow the
+  tenant-pinned TenantConfig reads, nor does `registry.json` carry it (PROPOSALS.md).
   flock state (#206, the merge half; ships in 2.7): a `(spec.service_state)` root labelled `flock` (a well-known
   label, like `kernel`) holds fleet-wide convergent tables. Every entry field merges by its `(spec.merge)` rule
   (IMMUTABLE, MIN, MAX, LAST_WRITE, SET_ADD_WINS, SET_REMOVE_WINS; a nested message field by field; LAST_WRITE on a

@@ -7,9 +7,9 @@
 //
 // What it pins: with the event-bus publisher blocked (nothing drains the queue),
 // AccountingManager.EventBusSink.emit never holds the calling RPC. Fifty
-// concurrent completions each return within a bound. Records emitted during the
-// outage are spooled and reach the publisher, in order, once it resumes. A spool
-// that is full drops the overflow rather than blocking.
+// concurrent completions each return while it stays blocked. Records emitted
+// during the outage are spooled and reach the publisher, in order, once it
+// resumes. A spool that is full drops the overflow rather than blocking.
 
 package com.gitlab.example.dummy.agentsensor.model.chassis.am;
 
@@ -22,8 +22,13 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 public final class AccountingSinkSpoolTest {
-    // EMIT_BOUND_MS is how long an RPC completion may take to hand its record to the sink.
-    private static final long EMIT_BOUND_MS = 1000;
+    // PROGRESS_BOUND_MS is how long a wait for a thread to make progress (an emit to
+    // return; the sink's own thread to deliver, append, compact) may take. It is a hang
+    // guard, not a latency bound: the waits return as soon as their condition holds,
+    // and on a busy runner a thread may not be scheduled for well over a second (#851).
+    // An emit that waits on the publisher never returns, since the tests keep it
+    // blocked for the whole wait, so the guard catches it however loaded the runner.
+    private static final long PROGRESS_BOUND_MS = 30_000;
 
     private static Accounting.Event event(int i) {
         return Accounting.Event.newBuilder()
@@ -39,9 +44,9 @@ public final class AccountingSinkSpoolTest {
         }
     }
 
-    // emitAll runs n emits on one thread and checks they all return within the bound.
-    // A blocked emit leaves the thread parked, which is the failure this gate exists
-    // to catch.
+    // emitAll runs n emits on one thread and checks they all return while the
+    // publisher is blocked. A blocked emit leaves the thread parked, which is the
+    // failure this gate exists to catch.
     private static void emitAll(AccountingManager.EventBusSink sink, int n) throws InterruptedException {
         Thread emitter = new Thread(() -> {
             for (int i = 0; i < n; i++) {
@@ -50,12 +55,12 @@ public final class AccountingSinkSpoolTest {
         }, "emitter");
         emitter.setDaemon(true);
         emitter.start();
-        emitter.join(EMIT_BOUND_MS);
-        check(!emitter.isAlive(), n + " emits did not return within " + EMIT_BOUND_MS + " ms while the publisher was blocked");
+        emitter.join(PROGRESS_BOUND_MS);
+        check(!emitter.isAlive(), n + " emits did not return within " + PROGRESS_BOUND_MS + " ms while the publisher was blocked");
     }
 
     // The publisher is blocked: nothing drains queue. Fifty concurrent completions
-    // must each return within the bound. Before the spool, the second emit parked
+    // must each return. Before the spool, the second emit parked
     // its handler thread.
     private static void checkRpcNeverHeldWhenPublisherBlocked() throws InterruptedException {
         BlockingQueue<Accountingrecord.AccountingRecord> queue = new ArrayBlockingQueue<>(1);
@@ -68,8 +73,8 @@ public final class AccountingSinkSpoolTest {
             rpc.start();
         }
         for (Thread rpc : rpcs) {
-            rpc.join(EMIT_BOUND_MS);
-            check(!rpc.isAlive(), "an RPC completion did not return within " + EMIT_BOUND_MS + " ms while the publisher was blocked");
+            rpc.join(PROGRESS_BOUND_MS);
+            check(!rpc.isAlive(), "an RPC completion did not return within " + PROGRESS_BOUND_MS + " ms while the publisher was blocked");
         }
     }
 
@@ -80,7 +85,7 @@ public final class AccountingSinkSpoolTest {
         AccountingManager.EventBusSink sink = new AccountingManager.EventBusSink(queue, "test-2", () -> false);
         emitAll(sink, 10);
         for (int i = 0; i < 10; i++) {
-            Accountingrecord.AccountingRecord rec = queue.poll(EMIT_BOUND_MS, TimeUnit.MILLISECONDS);
+            Accountingrecord.AccountingRecord rec = queue.poll(PROGRESS_BOUND_MS, TimeUnit.MILLISECONDS);
             check(rec != null, "record " + i + " did not reach the publisher after it resumed");
             check(rec.getRequestId().equals("r" + i),
                     "record " + i + " arrived as " + rec.getRequestId() + ": the spool did not replay in order");
@@ -97,8 +102,23 @@ public final class AccountingSinkSpoolTest {
         int emitted = AccountingManager.EventBusSink.SPOOL_DEPTH + 100;
         emitAll(sink, emitted);
 
+        long dropped = sink.droppedCount();
+        check(dropped > 0, "emitted " + emitted + " records past a spool of "
+                + AccountingManager.EventBusSink.SPOOL_DEPTH + " with the publisher blocked, none were dropped");
+
+        // Every record not dropped is delivered once the publisher resumes, so drain
+        // until the two account for every emit, then check nothing more arrives.
         int delivered = 0;
-        while (queue.poll(EMIT_BOUND_MS, TimeUnit.MILLISECONDS) != null) {
+        long deadline = System.currentTimeMillis() + PROGRESS_BOUND_MS;
+        while (delivered + dropped < emitted) {
+            check(System.currentTimeMillis() < deadline,
+                    "delivered " + delivered + " + dropped " + dropped + " of " + emitted + " records within "
+                            + PROGRESS_BOUND_MS + " ms: a record was lost without being counted");
+            if (queue.poll(10, TimeUnit.MILLISECONDS) != null) {
+                delivered++;
+            }
+        }
+        if (queue.poll(200, TimeUnit.MILLISECONDS) != null) {
             delivered++;
         }
         // One record sits in the queue, one in the drain thread's hand, and up to
@@ -109,6 +129,9 @@ public final class AccountingSinkSpoolTest {
                 "delivered " + delivered + " of " + emitted + " records; want between "
                         + AccountingManager.EventBusSink.SPOOL_DEPTH + " and "
                         + (AccountingManager.EventBusSink.SPOOL_DEPTH + 2) + ", and fewer than emitted");
+        check(delivered + dropped == emitted,
+                "delivered " + delivered + " + dropped " + dropped + " != emitted " + emitted
+                        + ": a record was lost without being counted");
     }
 
     public static void main(String[] args) throws InterruptedException {

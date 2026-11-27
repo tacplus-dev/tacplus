@@ -215,3 +215,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-27 looper issue looper.yaml: tacplus's looper/builder VM spec (the pilot's first version) (#968)
 - 2026-11-27 looper issue fleet build: lock a service at a main release (a given commit and image by digest), not only its line's newest tag (#981)
 - 2026-11-27 looper issue just generated writes no SPDX header, so every Rust crate it generates is scanned unlicensed (#475's land red on 4 cargo-deny:unlicensed findings) (#1001)
+- 2026-11-27 looper issue Pinned images behind their lines: relock (build.lock: ghcr.io/tacplus-dev/tacplus/build:20261123-57a6521 → ghcr.io/tacplus-dev/tacplus/build:20261126-57a6521, and 1 more) (#1002)

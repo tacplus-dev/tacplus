@@ -305,7 +305,9 @@ the looper then marks it `promoted` or `declined` here with the date.
   mode, the generated types crate among them, and the test then compiles them again: a `cargo build` of the
   workspace in its place would share its units with the test's, at the cost of codegen for the members no test
   builds; measure both on one fixture before choosing, a lighter rust/base among them; (3) `cross-test/consumer-contract/run.sh` still runs a `cargo test -p` per crate
-  (not in `just gates`). `gates.yaml`'s `full: minutes` follows. The first sharded run (2026-11-26, #977, a looper VM's
+  (not in `just gates`). `gates.yaml`'s `full: minutes` is 45 since #812, from the looper VM: 2362-2825 s, each
+  run beside one other full build (2026-11-26; 2825 s was red on #990, memberport-java's 60 s stall under load);
+  no run alone on 8 CPUs has been measured yet, the VM's two slots being full. The first sharded run (2026-11-26, #977, a looper VM's
   local build of 41742e1a, shared with other builds: load average about 50 on 8 CPUs, the gates' own processes 2.5 CPUs
   on average) took 3770 s, current-generation 2455 s of it with the slots 97% busy: `rust/base` 850 s, then the other
   Rust shards 365-683 s, Java 245-432 s, Go 68-107 s. Its critical path is `rust/base` and then its slowest

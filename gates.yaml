@@ -5,16 +5,20 @@
 # at the root of the checkout, with LOOPER_GATES_BASE the main the land is
 # rebased on.
 #
-# full's minutes: 79 on an 8-CPU runner from a cold target/cross-test,
-# current-generation about 33 of them on its worker pool with one cargo test per
-# Rust fixture (tacplus#812; was 2h55m, 2h26m), and a margin for a slower runner.
-# Since tacplus#977 its shards are legs of the gates' own pool.
+# full's minutes (tacplus#812; was 2h55m, current-generation 2h26m of it
+# serially): measured on the 8-CPU looper VM, GATES_JOBS=8, its gates' wall
+# time 2362 s and 2457 s (tacplus#979, main 654a7b3 and its change) and 2825 s
+# (2026-11-26, main 715ecaa, current-generation 1687 s, memberport 633 s) and
+# 2495 s (2026-11-27, main 6a271f8, current-generation 1466 s), each
+# beside one other full build (the VM's two build slots), the gates' own
+# processes using 3.4 of 8 CPUs. Since tacplus#977 current-generation's shards
+# are legs of the gates' own pool.
 # Under pkg/, only the language sets below are split out (tacplus#976): any
 # other path of pkg/ (the shared generator, pkg/internal/common, the spec
 # protos, pkg/templates/embed.go) matches no set, so it runs full.
 full:
   run: just gates
-  minutes: 100
+  minutes: 45
   paths: [proto/**, cmd/**, /justfile, /dependencies.yaml, /go.mod, /go.sum, /main.go, /docs/embed.go, /docs/*.tmpl]
 # One language's generator and templates (tacplus#976): every leg of the full
 # gates that generates that language (its generation, compile and cross-tests,

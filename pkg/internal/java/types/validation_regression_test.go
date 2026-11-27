@@ -49,7 +49,7 @@ func TestJavaValidationEmitsConstraintParityHandlers(t *testing.T) {
 	rendered := b.String()
 
 	for _, want := range []string{
-		"//@ invariant self.ttl_seconds > 0;",
+		"// invariant (ttl_seconds): self.ttl_seconds > 0",
 		"Validate endpointUrl (assert_url: URL_SCHEME_HTTPS)",
 		"Validation.validateUrl(msg.getEndpointUrl(), \"URL_SCHEME_HTTPS\", \"endpointUrl\");",
 		"Validate configPath (assert_file_path: PATH_ABSOLUTE)",

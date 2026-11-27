@@ -29,23 +29,52 @@ func writeValidation(b *strings.Builder, pf model.ProtoFile, outerClassName stri
 // strict validator, and the at-rest variant (validate<Type>AtRest) that runs over
 // stored state on disk load.
 func writeMessageValidation(b *strings.Builder, msg model.Message, outerClassName string, crossHelpers map[string]string) error {
-	// Emit JML formal verification specs as Java comments before the strict method
-	writeJmlSpecs(b, msg)
-	if err := writeValidateMethods(b, msg, outerClassName, crossHelpers, ""); err != nil {
+	// The strict validator carries the message's JML specs, which `tacplus
+	// verify` proves with OpenJML ESC (#257).
+	specs := jmlSpecs(msg)
+	var strict strings.Builder
+	if err := writeValidateMethods(&strict, msg, outerClassName, crossHelpers, "", specs); err != nil {
 		return err
 	}
-	return writeValidateMethods(b, msg, outerClassName, crossHelpers, "AtRest")
+	if specs == "" {
+		b.WriteString(strict.String())
+	} else {
+		b.WriteString(withJmlLoopFrames(strict.String()))
+	}
+	return writeValidateMethods(b, msg, outerClassName, crossHelpers, "AtRest", "")
+}
+
+// withJmlLoopFrames puts `loop_assigns \everything` before each loop of a
+// validator ESC proves. ESC otherwise infers a loop's frame from the
+// assignments in its body and refuses the calls a validator loop makes (an
+// element getter, a nested validator), which may assign anything. The
+// message's getters stay fixed across the loop (their results are final ghost
+// fields), so the specs still prove.
+func withJmlLoopFrames(code string) string {
+	lines := strings.SplitAfter(code, "\n")
+	var out strings.Builder
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "for (") {
+			out.WriteString("//@ loop_assigns \\everything;\n")
+		}
+		out.WriteString(line)
+	}
+	return out.String()
 }
 
 // writeValidateMethods writes one validator family. suffix is "" for the strict
 // validator and "AtRest" for the at-rest one, which is the same validator without
-// the time-relative assertions: a stored value ages.
-func writeValidateMethods(b *strings.Builder, msg model.Message, outerClassName string, crossHelpers map[string]string, suffix string) error {
+// the time-relative assertions: a stored value ages. specs (JML, see jmlSpecs)
+// sits on both methods: ESC proves the Depth method, which does the checking,
+// from its body, and the public one from the Depth method's spec.
+func writeValidateMethods(b *strings.Builder, msg model.Message, outerClassName string, crossHelpers map[string]string, suffix, specs string) error {
 	fullTypeName := outerClassName + "." + msg.Name
 
+	b.WriteString(specs)
 	fmt.Fprintf(b, "public static void validate%s%s(%s msg) throws ProtoException {\n", msg.Name, suffix, fullTypeName)
 	fmt.Fprintf(b, "validate%s%sDepth(msg, 0);\n", msg.Name, suffix)
 	b.WriteString("}\n")
+	b.WriteString(specs)
 	fmt.Fprintf(b, "public static void validate%s%sDepth(%s msg, int depth) throws ProtoException {\n", msg.Name, suffix, fullTypeName)
 	b.WriteString("if (msg == null) {\n")
 	b.WriteString("return;\n")
@@ -526,8 +555,8 @@ func writeValidateMethods(b *strings.Builder, msg model.Message, outerClassName 
 				writeJavaRequiredIfEq(b, msg, field, javaFieldName, getterName, annotationValue.StringValue)
 
 			case "assert_invariant":
-				// Emitted as a formal //@ invariant by the JML annotation pass
-				// (writeJmlSpecs); no runtime constraint, matching the Go emitter.
+				// Emitted as a comment by jmlSpecs; no runtime constraint,
+				// matching the Go emitter.
 
 			case "epoch_expiration":
 				if suffix != "" {
@@ -968,88 +997,173 @@ func javaFieldNameUpper(s string) string {
 	return n
 }
 
-// writeJmlSpecs emits JML formal verification specs as Java comments
-// before a validate method. JML annotations are pure comments (//@ ...)
-// with zero runtime impact — no build changes needed.
-func writeJmlSpecs(b *strings.Builder, msg model.Message) {
+// jmlSpecs returns the JML specs of a message's strict validator, one comment
+// line each, or "" when it has none beyond msg != null. Each `ensures` states a
+// bound the validator enforces, in the terms its code uses, so that OpenJML ESC
+// (`tacplus verify`, #257) proves it from the method body: a validator that
+// returns normally accepted only values within the declared bounds. ESC treats
+// the protobuf getters as pure functions of the message (the spec stubs
+// pkg/verification writes), so the proof holds for every value they can return.
+// A bound is left out when no pure expression states it: a string's UTF-8 byte
+// length (the validator measures String.getBytes, which allocates).
+func jmlSpecs(msg model.Message) string {
 	var specs []string
-
-	// Universal precondition: message must not be null
-	specs = append(specs, "//@ requires msg != null;")
-
 	for _, field := range msg.Fields {
 		if field.IsOneOf {
 			continue
 		}
-
-		getterName := "get" + javaFieldNameUpper(field.Name)
-
+		getter := "msg.get" + javaFieldNameUpper(field.Name)
+		guard := func(spec string) string {
+			if field.IsOptional {
+				return fmt.Sprintf("!msg.has%s() || (%s)", javaFieldNameUpper(field.Name), spec)
+			}
+			return spec
+		}
+		scalar := !field.IsRepeated && !field.IsMap
 		for _, annotationName := range model.SortedAnnotationNames(field.Annotations) {
 			annotationValue := field.Annotations[annotationName]
 			switch annotationName {
 			case "assert_required":
-				if annotationValue.Type == model.AnnotationTypeBool && annotationValue.BoolValue {
-					if field.Type == "string" {
-						specs = append(specs,
-							fmt.Sprintf("//@ ensures !msg.%s().isEmpty();", getterName))
-					}
+				if annotationValue.Type == model.AnnotationTypeBool && annotationValue.BoolValue && scalar && field.Type == "string" {
+					specs = append(specs, "//@ ensures "+guard(fmt.Sprintf("!%s().isEmpty()", getter))+";")
 				}
 
 			case "assert_max_size":
-				if annotationValue.Type == model.AnnotationTypeInt {
-					if field.Type == "string" || field.Type == "bytes" {
-						specs = append(specs,
-							fmt.Sprintf("//@ ensures msg.%s().size() <= %d;", getterName, annotationValue.IntValue))
-					} else if field.IsRepeated {
-						specs = append(specs,
-							fmt.Sprintf("//@ ensures msg.%sCount() <= %d;", getterName, annotationValue.IntValue))
+				if annotationValue.Type != model.AnnotationTypeInt {
+					break
+				}
+				switch {
+				case field.IsMap:
+					specs = append(specs, fmt.Sprintf("//@ ensures %sMap().size() <= %d;", getter, annotationValue.IntValue))
+				case field.IsRepeated:
+					specs = append(specs, fmt.Sprintf("//@ ensures %sCount() <= %d;", getter, annotationValue.IntValue))
+				case field.Type == "bytes":
+					specs = append(specs, "//@ ensures "+guard(fmt.Sprintf("%s().size() <= %d", getter, annotationValue.IntValue))+";")
+				}
+
+			case "assert_gt", "assert_ge", "assert_lt", "assert_le":
+				if annotationValue.Type == model.AnnotationTypeInt && scalar {
+					op := map[string]string{"assert_gt": ">", "assert_ge": ">=", "assert_lt": "<", "assert_le": "<="}[annotationName]
+					if spec := jmlIntegerBound(getter+"()", field.Type, op, annotationValue.IntValue); spec != "" {
+						specs = append(specs, "//@ ensures "+guard(spec)+";")
 					}
 				}
 
-			case "assert_gt":
-				if annotationValue.Type == model.AnnotationTypeInt {
-					specs = append(specs,
-						fmt.Sprintf("//@ ensures msg.%s() > %d;", getterName, annotationValue.IntValue))
+			case "assert_enum_defined":
+				if field.IsEnum && scalar {
+					specs = append(specs, "//@ ensures "+guard(fmt.Sprintf("%sValue() != 0", getter))+";")
 				}
 
-			case "assert_ge":
-				if annotationValue.Type == model.AnnotationTypeInt {
-					specs = append(specs,
-						fmt.Sprintf("//@ ensures msg.%s() >= %d;", getterName, annotationValue.IntValue))
-				}
-
-			case "assert_lt":
-				if annotationValue.Type == model.AnnotationTypeInt {
-					specs = append(specs,
-						fmt.Sprintf("//@ ensures msg.%s() < %d;", getterName, annotationValue.IntValue))
-				}
-
-			case "assert_le":
-				if annotationValue.Type == model.AnnotationTypeInt {
-					specs = append(specs,
-						fmt.Sprintf("//@ ensures msg.%s() <= %d;", getterName, annotationValue.IntValue))
+			case "assert_numeric":
+				if c := annotationValue.NumericConstraint; c != nil && scalar {
+					if spec := jmlNumericConstraint(getter+"()", field.Type, c); spec != "" {
+						specs = append(specs, "//@ ensures "+guard(spec)+";")
+					}
 				}
 
 			case "assert_net_port":
-				if annotationValue.Type == model.AnnotationTypeBool && annotationValue.BoolValue {
-					specs = append(specs,
-						fmt.Sprintf("//@ ensures msg.%s() >= 0 && msg.%s() <= 65535;", getterName, getterName))
+				if annotationValue.Type == model.AnnotationTypeBool && annotationValue.BoolValue && scalar {
+					lo := jmlIntegerBound(getter+"()", field.Type, ">=", 0)
+					hi := jmlIntegerBound(getter+"()", field.Type, "<=", 65535)
+					if lo != "" && hi != "" {
+						specs = append(specs, "//@ ensures "+guard(lo+" && "+hi)+";")
+					}
 				}
 
 			case "assert_invariant":
+				// The proto's expression, not Java: kept as a comment, not a
+				// JML clause OpenJML would have to resolve.
 				if annotationValue.Type == model.AnnotationTypeString && annotationValue.StringValue != "" {
-					specs = append(specs,
-						fmt.Sprintf("//@ invariant %s;", annotationValue.StringValue))
+					specs = append(specs, fmt.Sprintf("// invariant (%s): %s", field.Name, annotationValue.StringValue))
 				}
 			}
 		}
 	}
+	if len(specs) == 0 {
+		return ""
+	}
+	return "//@ requires msg != null;\n" + strings.Join(specs, "\n") + "\n"
+}
 
-	// Only emit specs if we have more than just the null precondition
-	if len(specs) > 1 {
-		for _, spec := range specs {
-			b.WriteString(spec)
-			b.WriteString("\n")
+// jmlNumericConstraint states an assert_numeric constraint on value, a getter
+// call of a protobuf integer type, in the comparisons the validator makes; ""
+// for a type that is not an integer.
+func jmlNumericConstraint(value, protoType string, c *model.NumericConstraint) string {
+	if jmlIntegerBound(value, protoType, "==", 0) == "" {
+		return ""
+	}
+	// v is the value as the validator's long holds it; lit renders a bound.
+	v, lit := value, func(n int64) string { return fmt.Sprintf("%dL", n) }
+	switch protoType {
+	case "int32", "sint32", "sfixed32":
+		lit = func(n int64) string { return fmt.Sprintf("%d", n) }
+	case "uint32", "fixed32":
+		v = "Integer.toUnsignedLong(" + value + ")"
+	}
+	var parts []string
+	for _, bound := range []struct {
+		op string
+		n  *int64
+	}{{">", c.Gt}, {">=", c.Ge}, {"<", c.Lt}, {"<=", c.Le}} {
+		if bound.n != nil {
+			parts = append(parts, jmlIntegerBound(value, protoType, bound.op, *bound.n))
 		}
 	}
+	if c.Eq != nil {
+		parts = append(parts, v+" == "+lit(*c.Eq))
+	}
+	if c.Ne != nil {
+		parts = append(parts, v+" != "+lit(*c.Ne))
+	}
+	if len(c.In) > 0 {
+		terms := make([]string, len(c.In))
+		for i, n := range c.In {
+			terms[i] = v + " == " + lit(n)
+		}
+		in := strings.Join(terms, " || ")
+		if len(c.In) > 1 && (len(parts) > 0 || len(c.NotIn) > 0 || c.MultipleOf != nil) {
+			in = "(" + in + ")"
+		}
+		parts = append(parts, in)
+	}
+	for _, n := range c.NotIn {
+		parts = append(parts, v+" != "+lit(n))
+	}
+	if c.MultipleOf != nil {
+		if protoType == "uint64" || protoType == "fixed64" {
+			// Long.remainderUnsigned has no ESC spec: left out.
+		} else {
+			parts = append(parts, fmt.Sprintf("%s %% %dL == 0L", v, *c.MultipleOf))
+		}
+	}
+	return strings.Join(parts, " && ")
+}
+
+// jmlIntegerBound states `value op bound` for a protobuf integer type, in the
+// comparison the validator makes: a uint32 or uint64 is held in a signed int or
+// long and ordered as unsigned. "" for a type that is not an integer.
+func jmlIntegerBound(value, protoType, op string, bound int64) string {
+	switch protoType {
+	case "int32", "sint32", "sfixed32":
+		return fmt.Sprintf("%s %s %d", value, op, bound)
+	case "int64", "sint64", "sfixed64":
+		return fmt.Sprintf("%s %s %dL", value, op, bound)
+	case "uint32", "fixed32":
+		return fmt.Sprintf("Integer.toUnsignedLong(%s) %s %dL", value, op, bound)
+	case "uint64", "fixed64":
+		// A long holding a uint64 is negative from 2^63 up, above every
+		// non-negative bound. Split on the sign, which ESC reads; it has no
+		// spec of Long.compareUnsigned. A negative bound (2^63 and up) is left out.
+		if bound < 0 {
+			return ""
+		}
+		switch op {
+		case ">", ">=":
+			return fmt.Sprintf("(%s < 0 || %s %s %dL)", value, value, op, bound)
+		case "<", "<=":
+			return fmt.Sprintf("(%s >= 0 && %s %s %dL)", value, value, op, bound)
+		}
+		return fmt.Sprintf("%s %s %dL", value, op, bound)
+	}
+	return ""
 }

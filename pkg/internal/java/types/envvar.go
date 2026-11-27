@@ -285,6 +285,9 @@ func writeScalarFromEnvVar(b *strings.Builder, field model.Field, javaFieldName,
 }
 
 // writeRepeatedScalarFromEnvVar generates fromEnvVar code for a repeated scalar field.
+// Each element is parsed straight to its boxed type (Integer::valueOf, not
+// Integer::parseInt): OpenJML, which `tacplus verify` runs over this file,
+// cannot infer Stream.map's type from a reference that returns a primitive (#257).
 func writeRepeatedScalarFromEnvVar(b *strings.Builder, field model.Field, javaFieldName, envKey, _setterName string) {
 	addAllName := "addAll" + javaFieldName
 
@@ -296,19 +299,19 @@ func writeRepeatedScalarFromEnvVar(b *strings.Builder, field model.Field, javaFi
 	case "string":
 		fmt.Fprintf(b, "builder.%s(Arrays.asList(val.split(\",\")));\n", addAllName)
 	case "int32", "sint32", "sfixed32":
-		fmt.Fprintf(b, "builder.%s(Arrays.stream(val.split(\",\")).map(String::trim).map(Integer::parseInt).collect(Collectors.toList()));\n", addAllName)
+		fmt.Fprintf(b, "builder.%s(Arrays.stream(val.split(\",\")).map(String::trim).map(Integer::valueOf).collect(Collectors.toList()));\n", addAllName)
 	case "int64", "sint64", "sfixed64":
-		fmt.Fprintf(b, "builder.%s(Arrays.stream(val.split(\",\")).map(String::trim).map(Long::parseLong).collect(Collectors.toList()));\n", addAllName)
+		fmt.Fprintf(b, "builder.%s(Arrays.stream(val.split(\",\")).map(String::trim).map(Long::valueOf).collect(Collectors.toList()));\n", addAllName)
 	case "uint32", "fixed32":
-		fmt.Fprintf(b, "builder.%s(Arrays.stream(val.split(\",\")).map(String::trim).map(Integer::parseUnsignedInt).collect(Collectors.toList()));\n", addAllName)
+		fmt.Fprintf(b, "builder.%s(Arrays.stream(val.split(\",\")).map(String::trim).map(s -> Integer.valueOf(Integer.parseUnsignedInt(s))).collect(Collectors.toList()));\n", addAllName)
 	case "uint64", "fixed64":
-		fmt.Fprintf(b, "builder.%s(Arrays.stream(val.split(\",\")).map(String::trim).map(Long::parseUnsignedLong).collect(Collectors.toList()));\n", addAllName)
+		fmt.Fprintf(b, "builder.%s(Arrays.stream(val.split(\",\")).map(String::trim).map(s -> Long.valueOf(Long.parseUnsignedLong(s))).collect(Collectors.toList()));\n", addAllName)
 	case "float":
-		fmt.Fprintf(b, "builder.%s(Arrays.stream(val.split(\",\")).map(String::trim).map(Float::parseFloat).collect(Collectors.toList()));\n", addAllName)
+		fmt.Fprintf(b, "builder.%s(Arrays.stream(val.split(\",\")).map(String::trim).map(Float::valueOf).collect(Collectors.toList()));\n", addAllName)
 	case "double":
-		fmt.Fprintf(b, "builder.%s(Arrays.stream(val.split(\",\")).map(String::trim).map(Double::parseDouble).collect(Collectors.toList()));\n", addAllName)
+		fmt.Fprintf(b, "builder.%s(Arrays.stream(val.split(\",\")).map(String::trim).map(Double::valueOf).collect(Collectors.toList()));\n", addAllName)
 	case "bool":
-		fmt.Fprintf(b, "builder.%s(Arrays.stream(val.split(\",\")).map(String::trim).map(Boolean::parseBoolean).collect(Collectors.toList()));\n", addAllName)
+		fmt.Fprintf(b, "builder.%s(Arrays.stream(val.split(\",\")).map(String::trim).map(Boolean::valueOf).collect(Collectors.toList()));\n", addAllName)
 	default:
 		b.WriteString("// unsupported repeated type: " + field.Type + "\n")
 	}

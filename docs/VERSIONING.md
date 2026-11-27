@@ -138,6 +138,21 @@ back an older run's layer, and a run whose index lacks linux/amd64 or
 linux/arm64, or holds an image created before the run started, fails before
 any `X.Y.Z` or floating tag moves (`scripts/images-check-index.sh`).
 
+Retention (#1003). Every version of `base` and `build` ever pushed is kept,
+tagged or not: an `X.Y.Z`, a dated tag, the digest a floating tag moved off,
+each platform's image and attestation. A repository pins by digest
+(`build.lock`, `tacplus.lock`, a runner's job image in `pin.yaml`), and a
+pin is reproducible only while its digest exists, so nothing deletes one:
+no workflow, script or recipe here removes a package version (a cleanup
+action or the packages API; `TestNothingDeletesImageVersions` fails on one),
+and the packages have no retention rule. A consumer may rely on a digest it
+pinned staying pullable while any repository pins it, and for at least
+twelve months after it was pushed in any case, which covers every relock. A
+retention rule, if one is ever needed, keeps both. A version deleted by
+hand on ghcr is a bug: GitHub restores a deleted package version for 30
+days after its deletion (the package's settings, or the packages API's
+restore).
+
 A Debian package advisory (a DSA) is fixed in `base`, not in `build` alone
 (#757). Both images run `apt-get upgrade`, so rebuilding `build` alone clears
 the build images but leaves `base:latest` and every `base:X.Y` on the old

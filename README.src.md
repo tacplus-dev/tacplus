@@ -41,6 +41,14 @@ verifier and whose `tacplus` runs the pinned binary:
 
 --8<-- "docs/snippets/install-container.md"
 
+What a pin may rely on: no version of `ghcr.io/tacplus-dev/tacplus/build` or
+`base` is ever deleted, tagged or not. A digest you resolved from an `X.Y.Z`
+tag or a dated tag (`build:<yyyymmdd>-<sha7>`) stays pullable for as long as
+you pin it, and in any case for at least twelve months after it was pushed.
+An `X.Y.Z` tag never moves; `X.Y`, `X` and `latest` do, so pin a digest
+(with the tag it came from), never a floating tag alone ([docs/VERSIONING.md](docs/VERSIONING.md),
+Retention).
+
 From source, with Go, `just` and `protoc`:
 
 --8<-- "docs/snippets/install-source.md"

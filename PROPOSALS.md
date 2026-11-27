@@ -4,6 +4,16 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **A dated tag that already exists is never pushed again** (2026-11-27, #1003): docs/VERSIONING.md calls
+  `build:<yyyymmdd>-<sha7>` (and `base:`'s) immutable, but only the nightly line rebuild keeps it so
+  (`scripts/images-line-stale.sh` skips a line whose tag for today exists). A weekly run, a dispatch or a re-run on
+  the same day and commit would move the tag to a new digest; the old one stays (nothing deletes it), untagged.
+  `images.yml` could refuse an existing dated tag as it refuses an existing `X.Y.Z`, or give a second build of the
+  day its own tag (a run-number suffix), once the consumers that parse the tag (the relock tools) agree on the form.
+- **A nightly check that every digest the org pins resolves** (2026-11-27, #1003): on 2026-11-27 a GKE node
+  reported `NotFound` for `build@sha256:72fcd044…` while ghcr served it (index, both platforms, every blob; its
+  package version never deleted). A scheduled job resolving each `build.lock`, `tacplus.lock` and `pin.yaml` `job:`
+  of tacplus-dev, anonymously, would tell a deleted digest from a registry or node fault on the day it happens.
 - **The Java LLM-rule gate sees one module** (2026-11-26, #909): `LlmRule` takes the service to be the classes
   compiled beside it (`target/classes`, `target/test-classes`). A service split into Maven modules, with its core in
   another module than the generated tree, would let the advisor reference the core's classes unseen (jdeps reports

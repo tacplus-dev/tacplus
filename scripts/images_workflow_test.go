@@ -196,3 +196,62 @@ func TestImagesNightlyLineRebuild(t *testing.T) {
 		}
 	}
 }
+
+// Nothing here deletes an image (#1003): a repository pins base and build by
+// digest (build.lock, tacplus.lock, a runner's job image), and a pin is only
+// reproducible while its digest exists. No workflow, script or recipe removes
+// a package version, by a cleanup action or the packages API, so every digest
+// these images were ever pushed as stays (docs/VERSIONING.md, Retention).
+var imageVersionDeletion = regexp.MustCompile(`(?i)delete-package-versions|container-retention-policy|ghcr-cleanup|ghcr-prune|regctl\s+(image|manifest|tag)\s+(delete|rm)|crane\s+(delete|tag\s+rm)|skopeo\s+delete|(-X|--method)[\s=]*DELETE[^\n]*packages|packages[^\n]*(-X|--method)[\s=]*DELETE`)
+
+func TestImageVersionDeletionPattern(t *testing.T) {
+	for _, s := range []string{
+		"uses: actions/delete-package-versions@v5",
+		"uses: snok/container-retention-policy@v3",
+		"uses: dataaxiom/ghcr-cleanup-action@v1",
+		`gh api -X DELETE "orgs/tacplus-dev/packages/container/tacplus%2Fbuild/versions/$id"`,
+		`gh api --method DELETE /orgs/o/packages/container/p/versions/1`,
+		`gh api "orgs/o/packages/container/p/versions/$id" --method=DELETE`,
+		`crane delete "$NS/build@$digest"`,
+		`regctl tag rm "$NS/build:20261123-57a6521"`,
+		`skopeo delete docker://ghcr.io/o/p@sha256:0`,
+	} {
+		if !imageVersionDeletion.MatchString(s) {
+			t.Errorf("not caught as a deletion: %s", s)
+		}
+	}
+	for _, s := range []string{
+		`gh api "orgs/o/packages/container/p/versions?per_page=100"`,
+		"sudo docker system prune -af >/dev/null 2>&1 || true",
+		`gh api -X DELETE repos/o/r/git/refs/heads/looper/x`,
+	} {
+		if imageVersionDeletion.MatchString(s) {
+			t.Errorf("caught as a deletion, but is not one: %s", s)
+		}
+	}
+}
+
+func TestNothingDeletesImageVersions(t *testing.T) {
+	var files []string
+	for _, g := range []string{"../.github/workflows/*.yml", "../.github/workflows/*.yaml", "*.sh", "../images/*.sh", "../justfile"} {
+		m, err := filepath.Glob(g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, m...)
+	}
+	if len(files) == 0 {
+		t.Fatal("no workflows or scripts found")
+	}
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(data), "\n") {
+			if imageVersionDeletion.MatchString(line) {
+				t.Errorf("%s:%d deletes an image version, which a repository may pin by digest (#1003): %s", f, i+1, strings.TrimSpace(line))
+			}
+		}
+	}
+}

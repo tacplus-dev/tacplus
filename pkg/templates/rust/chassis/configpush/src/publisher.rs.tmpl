@@ -277,6 +277,8 @@ mod tests {
     const TID: &str = "t0000001";
     const KERNEL: i32 = 7;
     const AUDIT: i32 = 9;
+    /// TID's record store.
+    const STRATUM: &str = "spiffe://example.org/tenants/t0000001/services/stratum";
 
     /// A slice's message for the test: a ConfigPushSlice carrying a string.
     fn decode(value: &[u8]) -> Result<Message, String> {
@@ -373,7 +375,7 @@ mod tests {
 
         /// A new receiver of field at label: a restarted owner, if label had one.
         fn start(&self, label: &str, field: i32) -> Receiver {
-            let subject: crate::Subject = Arc::new(|_: &MetadataMap| Ok(format!("spiffe://{TD}/tenants/{TID}/services/stratum")));
+            let subject: crate::Subject = Arc::new(|_: &MetadataMap| Ok(STRATUM.to_string()));
             let r = Receiver::new(&[Slice { field, decode }], Some(subject));
             r.set_trust_domain(TD);
             r.set_tenant_registry(Arc::new(Held(self.held.clone())));

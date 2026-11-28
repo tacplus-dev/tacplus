@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-28 by looper (#475).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-28 by looper (#927).
 
 - **Version / line:** v2.7.0 (latest release, 2026-11-26, at 715ecaa9, where `release/2.7` was cut; latest 2.6 patch v2.6.15); main is the 2.8 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -347,7 +347,11 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-28 by lo
   Part six: a tenant-owned `(spec.record_store)`'s ServiceManager holds the publisher (`sm.ConfigPushPublisher()` /
   `sm.configPushPublisher()` / `sm.config_push_publisher()`), its owners every registered `tenant_slice_field`,
   each stream on a connection to the owner's label with a token for it; the store's own code feeds it, and a store
-  implemented outside tacplus reads the owners from `codegen-config.json` (`configPushOwners`).
+  implemented outside tacplus reads the owners from `codegen-config.json` (`configPushOwners`). Part seven:
+  `(spec.record_store).config_push` (a tenant-owned store only) puts the sys record `configpush.TenantSliceRecord
+  {slice_field, value}` on that store's record plane, S2S half only, and its ServiceManager feeds the publisher from
+  the record's change feed (snapshot at its revision, then each acked write; again after any end of the watch), in
+  Go, Java and Rust, each engine self-tested; `cross-test/proto-tenantrecord`'s tstratum opts in.
 - **Released / deployed:** v2.6.0 is the newest release: the binaries and `checksums.txt`, and
   `ghcr.io/tacplus-dev/tacplus/build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c`
   (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.
@@ -384,9 +388,8 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-28 by lo
   namespace is `/tenants/<tid>`; kernel#23's `/tenants/<name>` namespaces need #202 first (PROPOSALS.md).
   The record write surface stamps no `(spec.identity_spiffe_subject)` (PROPOSALS.md). A fleet's service images must be on ghcr.io from a
   github.com repo (PROPOSALS.md).
-  The config push (#927) has its annotation, wire, receivers and publishers in Go, Java and Rust, and a tenant's
-  record store holds the publisher, but nothing generated feeds it yet (a sys record the store hosts), nor is a
-  store's publisher cross-tested against an owner over the wire; kernel#70 waits on them.
+  The config push (#927) is generated end to end in Go, Java and Rust (a `config_push` store feeds its publisher from
+  `configpush.TenantSliceRecord`), but a store's publisher is not yet cross-tested against an owner over the wire.
   The product layer's `OnTenantDeleted` waits on the kernel to hold `sys/tenantdeletion.proto`'s record that drives
   it (tacplus-dev/kernel#75); the kernel mints no product token yet (tacplus-dev/kernel#63), nor does the operator
   deploy one (tacplus-dev/operator#33).

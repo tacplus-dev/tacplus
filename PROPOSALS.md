@@ -4,6 +4,14 @@ Written by loopers. Each proposal: what, why, links. Jody promotes accepted ones
 the looper then marks it `promoted` or `declined` here with the date.
 
 ## Open
+- **Release v2.8.0, for the generated tenant-to-owner config push** (2026-11-28, #1019): cut v2.8.0 from main, as
+  #954 cut 2.7.0. The steps: VERSIONING/CONTRIBUTING/README name 2.8, then the tag, `release/2.8`, the binaries,
+  `build:2.8.0` / `build:2.8`, and the digest in STATE.md. No deploy. #927 closed on 2026-11-28 and no release
+  carries it, and a feature ships only in a minor. kernel#70 (a pushed `KernelTenantSettings`, the generated receiver)
+  and Stratum's publisher need a 2.8 pin. kernel#70's approval does not cover the standing cost of a new supported
+  line: `images.yml` rebuilding `base:2.8` / `build:2.8` weekly and nightly when stale, and a backport PR per fix,
+  for twelve months. 2.8.0 also freezes #475's product-layer steps built so far, while #475 is still open. Asked on
+  #1019 (https://github.com/tacplus-dev/tacplus/issues/1019#issuecomment-7239696788).
 - **A dated tag that already exists is never pushed again** (2026-11-27, #1003): docs/VERSIONING.md calls
   `build:<yyyymmdd>-<sha7>` (and `base:`'s) immutable, but only the nightly line rebuild keeps it so
   (`scripts/images-line-stale.sh` skips a line whose tag for today exists). A weekly run, a dispatch or a re-run on

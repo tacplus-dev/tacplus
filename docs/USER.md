@@ -1018,9 +1018,12 @@ Every service owning a slice of that TenantConfig is then subscribed read-only
 to that one collection — no `state_import` needed — and holds a
 **tenant-pinned** read of it, enforced by the serving side:
 
-- a caller in exactly `/tenants/<t>` sees only the entry keyed `<t>`; a
-  Get/ContainsKey of another key is `PERMISSION_DENIED`, and
-  GetAll/KeySet/Size/Watch/Query/WatchQuery carry only its own entry;
+- a caller in exactly `/tenants/<t>` sees only its own entry, keyed either
+  by the bare tenant name `<t>` or by the tenant's namespace `/tenants/<t>`
+  (kernel keys `tenant_configs` by namespace); both name the same tenant, so
+  neither form reaches another tenant's entry. A Get/ContainsKey of another
+  key is `PERMISSION_DENIED`, and GetAll/KeySet/Size/Watch/Query/WatchQuery
+  carry only its own entry;
 - a caller in `/system` (or below) sees every tenant's entry;
 - a caller in any other namespace is `PERMISSION_DENIED`;
 - every entry it receives is projected to the key and its own slice — another

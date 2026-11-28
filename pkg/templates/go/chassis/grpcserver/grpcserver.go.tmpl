@@ -128,6 +128,29 @@ func buildTLSCertificate(chain *x509_pb.X509CertChain, key crypto.PrivateKey) (*
 	return &tlsCertObj, nil
 }
 
+// streamWindowBytes and connWindowBytes are the HTTP/2 flow-control windows
+// the generated servers serve with: each stream's and the connection's.
+const (
+	streamWindowBytes = 1 << 20
+	connWindowBytes   = 16 << 20
+)
+
+// staticWindowOptions makes a server's HTTP/2 windows static (#958). With
+// grpc-go's default, dynamic windows its BDP estimator PINGs the client each
+// time data arrives with none of its PINGs outstanding: hundreds a second
+// under a client's stream of small messages on a fast link. swift-nio-http2,
+// the generated Swift clients' transport, closes the whole connection
+// (ENHANCE_YOUR_CALM) past 200 inbound PING and SETTINGS frames in 30 s, and
+// every stream on it ends UNAVAILABLE. Static windows send no BDP PINGs; their
+// cost is no window growth past these on a high-latency link. The sizes are
+// the member port's.
+func staticWindowOptions() []grpc.ServerOption {
+	return []grpc.ServerOption{
+		grpc.InitialWindowSize(streamWindowBytes),
+		grpc.InitialConnWindowSize(connWindowBytes),
+	}
+}
+
 // NewHealthServer creates a gRPC health.Server that starts NOT_SERVING.
 // Use this to create the health server early in the bootstrap sequence,
 // before any kernel-dependent init, and share it with grpcserver.New().
@@ -281,6 +304,7 @@ func (ps *GrpcServer) Listen(ctx context.Context) error {
 	if ps.config.MaxConcurrentStreams > 0 {
 		opts = append(opts, grpc.MaxConcurrentStreams(uint32(ps.config.MaxConcurrentStreams)))
 	}
+	opts = append(opts, staticWindowOptions()...)
 
 	// Keepalive enforcement: permit client pings at intervals ≥ keepaliveMinTime.
 	// Always enforced — without an explicit policy grpc-go defaults to 5 minutes,

@@ -156,6 +156,19 @@ pub trait Handler: Send + Sync + 'static {
     async fn holds_tenant(&self, tid: &str) -> Result<bool, Box<dyn std::error::Error + Send + Sync>>;
 {{- end}}
 
+{{- if .HasTenantDeletion}}
+
+    /// Deletes every row tid owns: this product service keeps tenants' data
+    /// as their custodian, keyed by the caller's tid ((spec.caller_tid)), and
+    /// the data goes with the tenant (#475). The ServiceManager calls it once
+    /// for each deleted tenant of the fleet's record
+    /// (sys/tenantdeletion.proto), and again, with backoff, while it returns
+    /// Err or panics: return Err while a row of tid is left. After a restart
+    /// it is called again for every deleted tenant, so it must be idempotent:
+    /// deleting nothing is Ok. It must not delete another tenant's rows.
+    async fn on_tenant_deleted(&self, tid: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+{{- end}}
+
     /// Returns the current health status of this service instance.
     /// Override to implement custom health checking (e.g., probing a sidecar
     /// process like a backing store via its health endpoint).

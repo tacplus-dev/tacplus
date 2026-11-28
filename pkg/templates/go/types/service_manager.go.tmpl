@@ -27,6 +27,10 @@ import (
 {{- if or .ConfigPushSlices .ConfigPushOwners}}
 "{{.ModuleBasePath}}/chassis/configpush"
 {{- end}}
+{{- if .HasTenantDeletion}}
+"{{.ModuleBasePath}}/chassis/tenantdeletion"
+tenantdeletion_pb "{{.ModuleBasePath}}/types/{{.TenantDeletionProtoDir}}"
+{{- end}}
 {{if or .HasAutoTls .HasSmb}}
 "bytes"
 {{- if eq .AutoTlsKeyType "ecdsa"}}
@@ -1399,6 +1403,20 @@ zap.L().Error("{{.HandleConfigName}} failed on update", zap.Error(err))
 })
 {{end}}
 {{end}}
+{{end}}
+
+{{if .HasTenantDeletion}}
+// A product custodian's tenants' rows go with the tenant (#475): run
+// OnTenantDeleted for each tid of the fleet's record of deleted tenants, as it
+// arrives, until it returns nil.
+// trace: unrelated: deletion is driven by the state host's record, not a request.
+tenantDeletions := tenantdeletion.New(h.OnTenantDeleted)
+tenantDeletionState := sm.bc.{{.TenantDeletionGroupAccessor}}().TenantDeletions()
+tenantDeletionState.OnDeletedChange(func(rows []*tenantdeletion_pb.TenantDeletion) {
+tenantDeletions.Observe(deletedTids(rows))
+})
+tenantDeletions.Observe(deletedTids(tenantDeletionState.GetDeleted()))
+sm.tasks.Go(tenantDeletions.Run)
 {{end}}
 
 {{if and (or .HasGrpc .HasSubscriptions) .HasTracePublisher}}
@@ -2830,3 +2848,14 @@ return raw, nil
 return nil, fmt.Errorf("certificate base64 is invalid")
 }
 {{end}}
+{{- if .HasTenantDeletion}}
+
+// deletedTids is the tids of a snapshot of the fleet's deleted tenants.
+func deletedTids(rows []*tenantdeletion_pb.TenantDeletion) []string {
+	tids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		tids = append(tids, row.GetTid())
+	}
+	return tids
+}
+{{- end}}

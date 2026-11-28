@@ -661,6 +661,8 @@ func isSysPackage(pkg string) bool {
 		return true
 	case "configpush": // tacplus#927
 		return true
+	case "tenantdeletion": // tacplus#475
+		return true
 	}
 	return false
 }

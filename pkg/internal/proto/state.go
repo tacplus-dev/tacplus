@@ -256,6 +256,12 @@ func stateImportersByRoot(allFiles map[string]*parser.FileDescriptor) map[string
 			add(root, fileDesc.Package)
 		}
 	}
+	// A product custodian imports the fleet's tenant deletions without
+	// declaring it (InjectTenantDeletionState); the state host, generated from
+	// the merged tree, authorizes it.
+	for _, pkg := range parser.ProductCustodians(allFiles) {
+		add("tenantdeletion."+TenantDeletionStateName, pkg)
+	}
 	out := make(map[string][]string, len(byRoot))
 	for root, pkgs := range byRoot {
 		list := make([]string, 0, len(pkgs))

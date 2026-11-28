@@ -1,0 +1,47 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+// Package tenantdeletion is the fleet's record of deleted tenants, part of the
+// sys contract every fleet provides (tacplus#475; tacplus-dev/roadmap
+// decisions/products-layer-2026-11-08.md and tenant-deletion-2026-10-27.md).
+// A product service keeps tenants' data as their custodian, keyed by the
+// caller's tid ((spec.caller_tid)), and that data goes with the tenant: the
+// generated runner of such a service watches this root and calls the
+// handler's OnTenantDeleted once for each tid in it, retrying until it
+// returns OK.
+//
+// The fleet's state host (routing label "kernel", the tenant authority)
+// holds it and imports this file rather than declaring its own copy. It
+// writes one row when it tombstones a tenant's tid, writes every tombstoned
+// tid it holds again when it starts (it keeps the tombstones itself, so this
+// root needs no persistence of its own), and never removes one:
+// a tid is never reused, so a row stays true, and a product service that
+// starts later still deletes what it holds for that tenant. Field numbers are
+// frozen: they are the wire contract with every running service.
+//
+// It names only tids, never a tenant's name or data. The host serves it to
+// the platform's and products' services, read-only; a tenant's service has no
+// need of it.
+
+syntax = "proto3";
+
+package tenantdeletion;
+
+import "sys/spec.proto";
+
+// TenantDeletions is the root the state host holds: every deleted tenant's
+// tid, keyed by tid.
+message TenantDeletions {
+  option (spec.service_state) = {label: ["kernel"], export: true};
+
+  // deleted holds one row per deleted tenant, keyed by TenantDeletion.tid.
+  repeated TenantDeletion deleted = 1 [(spec.assert_max_size) = 65536];
+}
+
+// TenantDeletion is one deleted tenant.
+message TenantDeletion {
+  // tid is the deleted tenant's id: exactly 8 of [0-9a-z].
+  string tid = 1 [(spec.indexed) = true, (spec.assert_required) = true, (spec.assert_max_size) = 8];
+  // deleted_at_ms is when the state host tombstoned the tid (Unix ms).
+  int64 deleted_at_ms = 2 [(spec.assert_ge) = 0];
+}

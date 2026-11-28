@@ -25,6 +25,9 @@ import {{.ChassisBase}}.configpush.ConfigPushReceiver;
 {{- if .ConfigPushOwners}}
 import {{.ChassisBase}}.configpush.ConfigPushPublisher;
 {{- end}}
+{{- if .HasTenantDeletion}}
+import {{.ChassisBase}}.tenantdeletion.TenantDeletionRunner;
+{{- end}}
 {{- if .HasDiskStores}}
 import {{.ChassisBase}}.diskstore.ArchiveShipper;
 import {{.ChassisBase}}.diskstore.ArchiveSink;
@@ -1770,6 +1773,33 @@ public class ServiceManager implements AutoCloseable {
         }
 {{- end}}
 {{- end}}
+{{- if .HasTenantDeletion}}
+
+        // A product custodian's tenants' rows go with the tenant (#475): run
+        // onTenantDeleted for each tid of the fleet's record of deleted
+        // tenants, as it arrives, until it returns. The change callback is
+        // registered before the current snapshot is read, so no deletion falls
+        // between the two.
+        // trace: unrelated: deletion is driven by the state host's record, not a request.
+        TenantDeletionRunner tenantDeletions = new TenantDeletionRunner(handler::onTenantDeleted);
+        var tenantDeletionState = stateClients.{{.TenantDeletionGroupAccessor}}().{{.TenantDeletionStateAccessor}}();
+        tenantDeletionState.subscribeDeleted(rows -> {
+            java.util.List<String> tids = new java.util.ArrayList<>(rows.size());
+            for (var row : rows.values()) {
+                tids.add(row.getTid());
+            }
+            tenantDeletions.observe(tids);
+        });
+        {
+            java.util.List<String> tids = new java.util.ArrayList<>();
+            for (var row : tenantDeletionState.getDeleted()) {
+                tids.add(row.getTid());
+            }
+            tenantDeletions.observe(tids);
+        }
+        tenantDeletions.start();
+        LOG.info("Started the tenant deletion runner");
+{{- end}}
 
         // Wait for shutdown signal.
         CountDownLatch shutdownLatch = new CountDownLatch(1);
@@ -1793,6 +1823,13 @@ public class ServiceManager implements AutoCloseable {
 
         LOG.info("Starting graceful shutdown");
         closing = true;
+
+{{- if .HasTenantDeletion}}
+        // Stop calling onTenantDeleted before the handler shuts down.
+        if (!tenantDeletions.shutdown(java.time.Duration.ofSeconds(5))) {
+            LOG.warning("tenant deletion runner did not stop within 5s");
+        }
+{{- end}}
 
 {{- if .HasSubscriptions}}
         // Cancel event-bus subscriptions.

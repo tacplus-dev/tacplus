@@ -181,6 +181,9 @@ method, `OnTenantDeleted(tid)`, driven by a watch of the kernel's tenant records
 The generated runner calls it once per deleted tenant and retries until it returns OK; the implementer rule (USER.md) is
 that it deletes every row that tid owns. Proposed for tenant-deletion-2026-10-27's table (Jody's to add): "a product's
 custodian data: deleted by the product, on the kernel's deletion event."
+The kernel's tenant records reach a product as a sys contract root, `tenantdeletion.TenantDeletions`
+(`sys/tenantdeletion.proto`: one row per tombstoned tid, never removed), which the kernel holds
+(tacplus-dev/kernel#75) and the product's generated runner reads, read-only, without declaring it.
 
 **Cross-tests,** like #258, one leg per cell of the edge table above, in each server language (Go, Java, Rust), in a new
 `cross-test/proto-productlayer`: a product instance, a tenant-owned instance and a `/system` instance; tokens minted

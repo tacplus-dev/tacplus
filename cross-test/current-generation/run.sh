@@ -198,7 +198,7 @@ fixture_sides() {
     tenantroute) echo harbor crew ;;
     redo) echo stratum redo ;;
     tenantrecord) echo tstratum tmessaging ;;
-    productlayer) echo billing hub ;;
+    productlayer) echo billing hub meter ;;
   esac
 }
 # The builds of fixture $1 this run builds: one with --side, else every one.
@@ -831,7 +831,7 @@ run_java_generated_self_tests() {
 
   : >"$test_log"
   local pattern source_file package_name class_name
-  for pattern in '*/chassis/spiffe/SpiffeVectorsTest.java' '*/chassis/x509/ImmutableCertChainTest.java' '*/chassis/grpcserver/AuthorizerBehaviorTest.java' '*/chassis/collection/CollectionRuntimeTest.java' '*/chassis/approval/ApprovalCanonicalTest.java' '*/chassis/grpcconfig/ConfigDefaultsTest.java' '*/chassis/grpcconfig/RedactionInstalledTest.java' '*/chassis/logger/LogbackConfiguratorSecurityTest.java' '*/chassis/diskstore/DiskStoreTest.java' '*/chassis/diskstore/AppendLogTest.java' '*/chassis/backoff/BackoffTest.java' '*/chassis/service_im/IdentityManagerRejectionTest.java' '*/chassis/token/TokenProductTest.java' '*/chassis/configpush/ConfigPushReceiverTest.java' '*/chassis/configpush/ConfigPushPublisherTest.java'; do
+  for pattern in '*/chassis/spiffe/SpiffeVectorsTest.java' '*/chassis/x509/ImmutableCertChainTest.java' '*/chassis/grpcserver/AuthorizerBehaviorTest.java' '*/chassis/collection/CollectionRuntimeTest.java' '*/chassis/approval/ApprovalCanonicalTest.java' '*/chassis/grpcconfig/ConfigDefaultsTest.java' '*/chassis/grpcconfig/RedactionInstalledTest.java' '*/chassis/logger/LogbackConfiguratorSecurityTest.java' '*/chassis/diskstore/DiskStoreTest.java' '*/chassis/diskstore/AppendLogTest.java' '*/chassis/backoff/BackoffTest.java' '*/chassis/service_im/IdentityManagerRejectionTest.java' '*/chassis/token/TokenProductTest.java' '*/chassis/configpush/ConfigPushReceiverTest.java' '*/chassis/configpush/ConfigPushPublisherTest.java' '*/chassis/tenantdeletion/TenantDeletionRunnerTest.java'; do
     source_file="$(find "$output/src/main/java" -type f -path "$pattern" -print -quit)"
     [[ -n "$source_file" ]] || die "missing generated Java self-test source: $pattern"
     package_name="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$source_file")"
@@ -1146,11 +1146,12 @@ PY
 #   logger           credential redaction (unit tests only: see below)
 #   am               #34: the accounting sink's spool, where the fixture installs it
 #   configpush       #927: the owner's receiver of a pushed tenant slice
+#   tenantdeletion   #475: a product custodian's OnTenantDeleted runner
 rust_self_test_packages() {
   local output="$1" crate root
   root="$(sed -n '/^\[package\]/,/^\[/s/^name *= *"\([^"]*\)".*/\1/p' "$output/Cargo.toml" | head -1)"
   [[ -z "$root" ]] || echo "-p $root"
-  for crate in key jwk token spiffe httpclient x509 servicemanager grpcconfig grpcserver collection approval diskstore logger configpush; do
+  for crate in key jwk token spiffe httpclient x509 servicemanager grpcconfig grpcserver collection approval diskstore logger configpush tenantdeletion; do
     [[ -f "$output/chassis/$crate/Cargo.toml" ]] || die "missing generated Rust $crate crate"
     echo "-p $crate"
   done
@@ -3785,6 +3786,22 @@ if [[ -d "$PRODUCTLAYER_PROTO_SRC" ]]; then
       if [[ "$self" == "billing" ]]; then
         grep -Eq '"product": *"ledger"' "$output_root/registry.json" \
           || die "product-layer fixture ($language, $self): registry.json does not carry billing's product"
+      fi
+      if [[ "$self" == "meter" ]]; then
+        # A product's custodian (#475): its Handler deletes a deleted tenant's
+        # rows, and its ServiceManager runs that for the fleet's record.
+        case "$language" in
+          go) td_handler=('handler.go' 'OnTenantDeleted(ctx context.Context, tid string) error')
+              td_runner=('s2sm.go' 'tenantdeletion.New(h.OnTenantDeleted)') ;;
+          java) td_handler=('Handler.java' 'void onTenantDeleted(String tid) throws Exception;')
+                td_runner=('ServiceManager.java' 'new TenantDeletionRunner(handler::onTenantDeleted)') ;;
+          rust) td_handler=('handler.rs' 'async fn on_tenant_deleted(&self, tid: &str)')
+                td_runner=('mod.rs' 'tenantdeletion::Runner::new(') ;;
+        esac
+        grep -rqF --include="${td_handler[0]}" "${td_handler[1]}" "$output_root" \
+          || die "product-layer fixture ($language, meter): the custodian's Handler has no OnTenantDeleted"
+        grep -rqF --include="${td_runner[0]}" "${td_runner[1]}" "$output_root" \
+          || die "product-layer fixture ($language, meter): the custodian's ServiceManager does not run OnTenantDeleted"
       fi
       install_productlayer_client_selftest "$output_root" "$language" "$self"
       echo "==> Compiling $language product-layer fixture ($self)"

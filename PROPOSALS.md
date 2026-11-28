@@ -361,6 +361,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   the build serves on a service's own surface (as `ValidateRoutingLabels` does for state roots), or read such a
   surface's layer as its declaring service's. Why: the client check is the second door, and it should not depend on
   a label being spelled right.
+- **Product layer: OnTenantDeleted remembers the tids it handled** (2026-11-28, #475): the generated runner keeps
+  the handled tids in memory only, so after every restart a product custodian's `OnTenantDeleted` is called again
+  for every tenant the fleet ever deleted (`sys/tenantdeletion.proto` never drops a row). That is correct (the
+  method is idempotent) but its cost grows with the fleet's history. A per-service watermark (the highest
+  `deleted_at_ms` handled, in the service's own state, or a `(spec.persistence)` boundary) would make a restart call
+  only the new ones. Why: a fleet with thousands of deleted tenants restarts a custodian into thousands of calls.
 - **cmd/soundness reads every file through one os.Root** (2026-11-13, #566): #566 moved the store-vendor walk onto
   `os.OpenRoot` (gosec G122, HIGH). gosec still reports eleven G304 (CWE-22, MEDIUM, not blocking) in
   `cmd/soundness/main.go`: the other checks `os.ReadFile` paths joined under `-root` (the SPIFFE walk among them).

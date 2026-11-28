@@ -386,6 +386,12 @@ type serviceManagerTemplateData struct {
 	// to (tacplus#927): the ServiceManager holds a configpush.Publisher of
 	// them.
 	ConfigPushOwners []stateproto.ConfigPushOwner
+	// HasTenantDeletion is a product custodian's (#475): its Handler has
+	// OnTenantDeleted, and the ServiceManager runs it for each tid of the
+	// fleet's TenantDeletions root (sys/tenantdeletion.proto), read-only.
+	HasTenantDeletion           bool
+	TenantDeletionProtoDir      string // generated types dir of sys/tenantdeletion.proto
+	TenantDeletionGroupAccessor string // root state-client group accessor containing TenantDeletions
 }
 
 // ApprovalBrokerTemplateEntry names the approval-broker RPC the generated
@@ -539,6 +545,9 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 	healthStateProtoDir := ""
 	healthStateGroupAccessor := ""
 	hasSysState := false
+	hasTenantDeletion := false
+	tenantDeletionProtoDir := ""
+	tenantDeletionGroupAccessor := ""
 	for _, b := range config.States {
 		if b.IsHealthState && b.AccessMode != tactype.AccessRO {
 			hasServiceHealthState = true
@@ -549,9 +558,18 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 			healthStateProtoDir = generatedTypesRelDir(stateInfo.ProtoFile, stateInfo.Package)
 			healthStateGroupAccessor = goAccessorName(filepath.Dir(stateInfo.ProtoFile))
 		}
-		// The tacplus-injected health state lives in sys/ but every service has it;
-		// it does not make a service a sys-state consumer (runtime config etc.).
-		if strings.HasPrefix(b.ProtoFile, "sys/") && !b.IsHealthState {
+		if b.IsTenantDeletionState {
+			stateInfo, err := stateproto.DiscoverStateRoot(config.FlatProtoDir, b.MessageName)
+			if err != nil {
+				return serviceManagerTemplateData{}, err
+			}
+			hasTenantDeletion = true
+			tenantDeletionProtoDir = generatedTypesRelDir(stateInfo.ProtoFile, stateInfo.Package)
+			tenantDeletionGroupAccessor = goAccessorName(filepath.Dir(stateInfo.ProtoFile))
+		}
+		// The tacplus-injected health and tenant deletion states live in sys/;
+		// they do not make a service a sys-state consumer (runtime config etc.).
+		if strings.HasPrefix(b.ProtoFile, "sys/") && !b.IsHealthState && !b.IsTenantDeletionState {
 			hasSysState = true
 		}
 	}
@@ -945,62 +963,65 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 	}
 
 	return serviceManagerTemplateData{
-		ServiceLabel:             config.ServiceLabel(),
-		ModuleBasePath:           config.ModuleBasePath,
-		SmPrefix:                 config.GetSmPrefix(),
-		ServiceManagerImportPath: config.ModuleBasePath + "/sm",
-		HasServiceHealthState:    hasServiceHealthState,
-		HealthStateProtoDir:      healthStateProtoDir,
-		HealthStateGroupAccessor: healthStateGroupAccessor,
-		HasGrpc:                  len(svcs) > 0,
-		HasGrpcServers:           len(svcs) > 0,
-		HasTlsGrpc:               hasTlsGrpc,
-		HasC2DGrpc:               len(c2dSockets) > 0,
-		C2DSocketPath:            c2dSocketPath,
-		HasStates:                len(config.States) > 0 || config.AllStates,
-		HasSysState:              hasSysState,
-		HasGrpcS2SClients:        len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll,
-		HasSubscriptions:         len(subEntries) > 0,
-		HasPublishers:            hasPublishers,
-		HasAutoTls:               config.HasAutoTls(),
-		AutoTlsKeyType:           config.AutoTlsKeyType(),
-		HasSmb:                   hasSmb,
-		HasMemberPort:            hasMemberPort,
-		SmbAuthorityServiceID:    smbAuthorityServiceID,
-		TimeseriesInserts:        timeseriesInserts,
-		HasTypedHealth:           hasTypedHealth,
-		TypedHealthType:          typedHealthType,
-		TypedHealthPkgAlias:      typedHealthPkgAlias,
-		TypedHealthPkgImport:     typedHealthPkgImport,
-		TacplusVersion:           buildinfo.Version,
-		TacplusGitSha:            buildinfo.GitSha,
-		ProtoSourceVersion:       protoSourceVersion,
-		ProtoSourceGitSha:        protoGitSha,
-		HasTracePublisher:        hasTracePublisher,
-		TracePublisherTopicRef:   tracePublisherTopicRef,
-		TracePublisherTarget:     tracePublisherTarget,
-		TracePublishStreamName:   tracePublishStreamName,
-		TracePublishGrpcPath:     tracePublishGrpcPath,
-		S2STargetServices:        s2sPlatformTargets,
-		S2STenantTargets:         s2sTenantTargets,
-		S2STargetsRequired:       len(config.GrpcS2SClients) > 0 && !config.GrpcS2SClientAll,
-		RecordReaders:            recordReaders,
-		HasRecordReaders:         len(recordReaders) > 0,
-		RecordC2S:                recordC2S,
-		GrpcServices:             grpcSvcs,
-		WrapperImports:           wrapperImports,
-		TypeImports:              typeImports,
-		Subscriptions:            subEntries,
-		PublisherTypeImports:     publisherTypeImports,
-		Publishers:               publishers,
-		HasAccountingPublisher:   hasAccountingPublisher,
-		AccountingPublisher:      accountingPublisherOrZero(accountingPublisher),
-		DiskStores:               diskStores,
-		HasDiskStores:            len(diskStores) > 0,
-		HasApprovalBroker:        hasApprovalBroker,
-		ApprovalBroker:           approvalBroker,
-		ConfigPushSlices:         configPushSlices,
-		ConfigPushOwners:         configPushOwners,
+		ServiceLabel:                config.ServiceLabel(),
+		ModuleBasePath:              config.ModuleBasePath,
+		SmPrefix:                    config.GetSmPrefix(),
+		ServiceManagerImportPath:    config.ModuleBasePath + "/sm",
+		HasServiceHealthState:       hasServiceHealthState,
+		HealthStateProtoDir:         healthStateProtoDir,
+		HealthStateGroupAccessor:    healthStateGroupAccessor,
+		HasGrpc:                     len(svcs) > 0,
+		HasGrpcServers:              len(svcs) > 0,
+		HasTlsGrpc:                  hasTlsGrpc,
+		HasC2DGrpc:                  len(c2dSockets) > 0,
+		C2DSocketPath:               c2dSocketPath,
+		HasStates:                   len(config.States) > 0 || config.AllStates,
+		HasSysState:                 hasSysState,
+		HasGrpcS2SClients:           len(config.GrpcS2SClients) > 0 || config.GrpcS2SClientAll,
+		HasSubscriptions:            len(subEntries) > 0,
+		HasPublishers:               hasPublishers,
+		HasAutoTls:                  config.HasAutoTls(),
+		AutoTlsKeyType:              config.AutoTlsKeyType(),
+		HasSmb:                      hasSmb,
+		HasMemberPort:               hasMemberPort,
+		SmbAuthorityServiceID:       smbAuthorityServiceID,
+		TimeseriesInserts:           timeseriesInserts,
+		HasTypedHealth:              hasTypedHealth,
+		TypedHealthType:             typedHealthType,
+		TypedHealthPkgAlias:         typedHealthPkgAlias,
+		TypedHealthPkgImport:        typedHealthPkgImport,
+		TacplusVersion:              buildinfo.Version,
+		TacplusGitSha:               buildinfo.GitSha,
+		ProtoSourceVersion:          protoSourceVersion,
+		ProtoSourceGitSha:           protoGitSha,
+		HasTracePublisher:           hasTracePublisher,
+		TracePublisherTopicRef:      tracePublisherTopicRef,
+		TracePublisherTarget:        tracePublisherTarget,
+		TracePublishStreamName:      tracePublishStreamName,
+		TracePublishGrpcPath:        tracePublishGrpcPath,
+		S2STargetServices:           s2sPlatformTargets,
+		S2STenantTargets:            s2sTenantTargets,
+		S2STargetsRequired:          len(config.GrpcS2SClients) > 0 && !config.GrpcS2SClientAll,
+		RecordReaders:               recordReaders,
+		HasRecordReaders:            len(recordReaders) > 0,
+		RecordC2S:                   recordC2S,
+		GrpcServices:                grpcSvcs,
+		WrapperImports:              wrapperImports,
+		TypeImports:                 typeImports,
+		Subscriptions:               subEntries,
+		PublisherTypeImports:        publisherTypeImports,
+		Publishers:                  publishers,
+		HasAccountingPublisher:      hasAccountingPublisher,
+		AccountingPublisher:         accountingPublisherOrZero(accountingPublisher),
+		DiskStores:                  diskStores,
+		HasDiskStores:               len(diskStores) > 0,
+		HasApprovalBroker:           hasApprovalBroker,
+		ApprovalBroker:              approvalBroker,
+		ConfigPushSlices:            configPushSlices,
+		HasTenantDeletion:           hasTenantDeletion,
+		TenantDeletionProtoDir:      tenantDeletionProtoDir,
+		TenantDeletionGroupAccessor: tenantDeletionGroupAccessor,
+		ConfigPushOwners:            configPushOwners,
 		HostsC2DStandalone: service.HostsC2DStandalone(service.C2DHostShape{
 			HostsC2D:       len(c2dSockets) > 0,
 			HostsNonC2D:    hasTlsGrpc,

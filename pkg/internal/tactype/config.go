@@ -179,6 +179,10 @@ type StateEntry struct {
 	// "ServiceHealth" message name, so a user state coincidentally named
 	// ServiceHealth behaves like any other user state (OF-4).
 	IsHealthState bool
+	// IsTenantDeletionState marks the tacplus-injected, read-only fleet record
+	// of deleted tenants (sys/tenantdeletion.proto) a product custodian reads to
+	// call its OnTenantDeleted (see InjectTenantDeletionState, #475).
+	IsTenantDeletionState bool
 	// Boundaries, when non-empty, narrows the generated client to these
 	// state-root fields only. A tenant-pinned subscription (#130) is granted one
 	// collection of the root and nothing else, so its client must not open a

@@ -466,17 +466,23 @@ func SelfServiceProductIn(annotatedProtoDir, selfPackage string) (string, error)
 // section 3).
 var productLayerServerLanguages = map[string]bool{"go": true, "java": true, "rust": true, "python": false, "typescript": false}
 
+// productTenantDeletionLanguages are the languages whose server generates a
+// product custodian's OnTenantDeleted and the runner that calls it
+// (SelfProductCustodian; sys/tenantdeletion.proto).
+var productTenantDeletionLanguages = map[string]bool{"go": true, "java": true, "rust": true}
+
 // ValidateProductLayerHosting refuses to generate a server the product layer's
 // doors do not cover yet, which would fail open: in Python and TypeScript, the
 // server of a product service (it would run a product's code behind no product
 // door) or of one binding (spec.caller_tid) (it would serve the field the
-// client wrote); in every language, a product service binding
-// (spec.caller_tid), whose custodian rows must go with their tenant and have
-// no generated OnTenantDeleted yet. Clients of a product service generate as
-// before: an edge into a product is the door's to check, and a caller_tid
-// field is the server's to bind.
+// client wrote); in a language without its generated OnTenantDeleted, a
+// product service binding (spec.caller_tid), whose custodian rows must go
+// with their tenant. Clients of a product service generate as before: an edge
+// into a product is the door's to check, and a caller_tid field is the
+// server's to bind.
 func ValidateProductLayerHosting(dp *DescriptorParser, selfPackage, language string) error {
 	doors, server := productLayerServerLanguages[language]
+	deletion := productTenantDeletionLanguages[language]
 	if dp == nil || !server {
 		return nil
 	}
@@ -494,9 +500,9 @@ func ValidateProductLayerHosting(dp *DescriptorParser, selfPackage, language str
 					continue
 				}
 				switch {
-				case fd.ServiceProduct != "":
-					errs = append(errs, fmt.Sprintf("%s: %s.%s (spec.caller_tid) on product %q: a product's custodian rows go with their tenant, and OnTenantDeleted is not generated yet",
-						path, fd.Messages[mi].Name, fd.Messages[mi].Fields[fi].Name, fd.ServiceProduct))
+				case fd.ServiceProduct != "" && !deletion:
+					errs = append(errs, fmt.Sprintf("%s: %s.%s (spec.caller_tid) on product %q: a product's custodian rows go with their tenant, and OnTenantDeleted is not generated in %s yet",
+						path, fd.Messages[mi].Name, fd.Messages[mi].Fields[fi].Name, fd.ServiceProduct, language))
 				case !doors:
 					errs = append(errs, fmt.Sprintf("%s: %s.%s (spec.caller_tid): no %s binding", path, fd.Messages[mi].Name, fd.Messages[mi].Fields[fi].Name, language))
 				}
@@ -509,6 +515,52 @@ func ValidateProductLayerHosting(dp *DescriptorParser, selfPackage, language str
 	sort.Strings(errs)
 	return fmt.Errorf("the product layer's generated doors are not all in this release yet (#475), so a %s server of it would fail open; not generated:\n  %s",
 		language, strings.Join(errs, "\n  "))
+}
+
+// SelfProductCustodian reports whether selfPackage is a product service that
+// binds (spec.caller_tid): a custodian of tenants' data, which deletes a
+// tenant's rows when the tenant is deleted. Its server generates the
+// handler's OnTenantDeleted and a runner that calls it for each tid in the
+// fleet's sys/tenantdeletion.proto root, which it reads.
+func SelfProductCustodian(dp *DescriptorParser, selfPackage string) bool {
+	if dp == nil || selfPackage == "" {
+		return false
+	}
+	for _, pkg := range ProductCustodians(dp.GetAllFiles()) {
+		if pkg == selfPackage {
+			return true
+		}
+	}
+	return false
+}
+
+// ProductCustodians is every package of files that is a product service
+// binding (spec.caller_tid), sorted: the readers of the fleet's tenant
+// deletions, whom the state host's generated state service authorizes.
+func ProductCustodians(files map[string]*FileDescriptor) []string {
+	product := map[string]bool{}
+	for _, fd := range files {
+		if fd.ServiceProduct != "" {
+			product[fd.Package] = true
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, fd := range files {
+		if !product[fd.Package] || seen[fd.Package] {
+			continue
+		}
+		for mi := range fd.Messages {
+			for fi := range fd.Messages[mi].Fields {
+				if fd.Messages[mi].Fields[fi].Annotations["caller_tid"].BoolValue && !seen[fd.Package] {
+					seen[fd.Package] = true
+					out = append(out, fd.Package)
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // RefusedS2SClient is an S2S service a declaring service may not call: Ref is

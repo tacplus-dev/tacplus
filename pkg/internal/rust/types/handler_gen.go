@@ -189,23 +189,31 @@ type smTemplateData struct {
 	// ConfigPushOwners are the owners a tenant's record store pushes slices
 	// to (tacplus#927): the ServiceManager holds a configpush::Publisher of
 	// them.
-	ConfigPushOwners      []stateproto.ConfigPushOwner
-	SmbAuthorityServiceID string
-	IsGateway             bool
-	HasSubscriptions      bool
-	HealthStateProtoDir   string
-	HealthStateModPath    string // Rust module path, e.g. "services::identity"
-	StateStoreServiceID   string
-	HasTypedHealth        bool   // true when the service's package declares a service_health message
-	TypedHealthType       string // e.g. "ColumnarStoreHealth"
-	TypedHealthModPath    string // Rust module path, e.g. "crate::types::services::columnarstore::columnarstore"
-	TacplusVersion        string
-	TacplusGitSha         string
-	ProtoSourceVersion    string
-	ProtoSourceGitSha     string
-	GrpcServices          []grpcServiceEntry
-	ConfigFetches         []rustConfigFetchEntry
-	Subscriptions         []subscriptionEntry
+	ConfigPushOwners []stateproto.ConfigPushOwner
+	// HasTenantDeletion is a product custodian's (#475): its Handler has
+	// on_tenant_deleted, and the ServiceManager runs it, through
+	// chassis/tenantdeletion's Runner, for each tid of the fleet's
+	// TenantDeletions root (sys/tenantdeletion.proto), read-only.
+	HasTenantDeletion            bool
+	TenantDeletionGroupAccessor  string // state-client group holding TenantDeletions, e.g. "sys"
+	TenantDeletionClientAccessor string // its client's accessor in that group, "tenant_deletions"
+	TenantDeletionModPath        string // module of its types, e.g. "crate::types::sys::tenantdeletion::tenantdeletion"
+	SmbAuthorityServiceID        string
+	IsGateway                    bool
+	HasSubscriptions             bool
+	HealthStateProtoDir          string
+	HealthStateModPath           string // Rust module path, e.g. "services::identity"
+	StateStoreServiceID          string
+	HasTypedHealth               bool   // true when the service's package declares a service_health message
+	TypedHealthType              string // e.g. "ColumnarStoreHealth"
+	TypedHealthModPath           string // Rust module path, e.g. "crate::types::services::columnarstore::columnarstore"
+	TacplusVersion               string
+	TacplusGitSha                string
+	ProtoSourceVersion           string
+	ProtoSourceGitSha            string
+	GrpcServices                 []grpcServiceEntry
+	ConfigFetches                []rustConfigFetchEntry
+	Subscriptions                []subscriptionEntry
 	// TimeseriesInserts are every subscription's insert callbacks, once each.
 	TimeseriesInserts []rustTimeseriesInsertEntry
 	Publishers        []publisherEntry // model-driven EventBus topic publishers (own (spec.service_event) topics)
@@ -460,6 +468,10 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 	healthStateProtoDir := ""
 	stateStoreServiceID := "state-store"
 	hasSysState := false
+	hasTenantDeletion := false
+	tenantDeletionGroupAccessor := ""
+	tenantDeletionClientAccessor := ""
+	tenantDeletionModPath := ""
 	for _, b := range config.States {
 		if b.IsHealthState && b.AccessMode != tactype.AccessRO {
 			dir := strings.TrimSuffix(b.ProtoFile, ".proto")
@@ -477,9 +489,21 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 				}
 			}
 		}
-		// The tacplus-injected health state lives in sys/ but every service has it;
-		// it does not make a service a sys-state consumer (runtime config etc.).
-		if strings.HasPrefix(b.ProtoFile, "sys/") && !b.IsHealthState {
+		if b.IsTenantDeletionState {
+			stateInfo, err := stateproto.DiscoverStateRoot(config.FlatProtoDir, b.MessageName)
+			if err != nil {
+				return smTemplateData{}, err
+			}
+			hasTenantDeletion = true
+			// The group and client accessors generateRustStateClientAggregators
+			// writes: the proto's directory, and the root's snake_case name.
+			tenantDeletionGroupAccessor = filepath.ToSlash(filepath.Dir(stateInfo.ProtoFile))
+			tenantDeletionClientAccessor = strutil.ToSnakeCase(b.MessageName)
+			tenantDeletionModPath = "crate::types::" + strings.ReplaceAll(generatedTypesRelDir(stateInfo.ProtoFile, stateInfo.Package), "/", "::") + "::" + stateInfo.Package
+		}
+		// The tacplus-injected health and tenant deletion states live in sys/;
+		// they do not make a service a sys-state consumer (runtime config etc.).
+		if strings.HasPrefix(b.ProtoFile, "sys/") && !b.IsHealthState && !b.IsTenantDeletionState {
 			hasSysState = true
 		}
 	}
@@ -757,43 +781,47 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 			}
 			return "ecdsa"
 		}(),
-		HasSmb:                     hasSmb,
-		HasMemberPort:              hasMemberPort,
-		ConfigPushSlices:           configPushSlices,
-		ConfigPushOwners:           configPushOwners,
-		SmbAuthorityServiceID:      smbAuthorityServiceID,
-		IsGateway:                  config.IsGateway,
-		HasSubscriptions:           len(config.Subscriptions) > 0,
-		HealthStateProtoDir:        healthStateProtoDir,
-		HealthStateModPath:         strings.ReplaceAll(healthStateProtoDir, "/", "::"),
-		StateStoreServiceID:        stateStoreServiceID,
-		HasTypedHealth:             hasTypedHealth,
-		TypedHealthType:            typedHealthType,
-		TypedHealthModPath:         typedHealthModPath,
-		TacplusVersion:             buildinfo.Version,
-		TacplusGitSha:              buildinfo.GitSha,
-		ProtoSourceVersion:         protoSourceVersion,
-		ProtoSourceGitSha:          protoGitSha,
-		GrpcServices:               grpcSvcs,
-		ConfigFetches:              rustConfigFetches(grpcSvcs),
-		Subscriptions:              subs,
-		TimeseriesInserts:          timeseriesInserts,
-		Publishers:                 publishers,
-		HasPublishers:              len(publishers) > 0,
-		RecordReaders:              recordReaders,
-		HasRecordReaders:           len(recordReaders) > 0,
-		RecordC2S:                  recordC2S,
-		RecordC2SService:           recordC2SServiceName(recordC2S),
-		TracePublisherFn:           tracePublisherFn,
-		AccountingPublisher:        accountingPublisher,
-		TargetServices:             targetServices,
-		DiskStores:                 diskStores,
-		HasDiskStores:              len(diskStores) > 0,
-		HasApprovalBroker:          hasApprovalBroker,
-		ApprovalBroker:             approvalBroker,
-		KeepaliveTimeSecs:          keepaliveconst.TimeSecs,
-		KeepaliveTimeoutSecs:       keepaliveconst.TimeoutSecs,
-		KeepalivePermitMinTimeSecs: keepaliveconst.PermitMinTimeSecs,
+		HasSmb:                       hasSmb,
+		HasMemberPort:                hasMemberPort,
+		ConfigPushSlices:             configPushSlices,
+		ConfigPushOwners:             configPushOwners,
+		HasTenantDeletion:            hasTenantDeletion,
+		TenantDeletionGroupAccessor:  tenantDeletionGroupAccessor,
+		TenantDeletionClientAccessor: tenantDeletionClientAccessor,
+		TenantDeletionModPath:        tenantDeletionModPath,
+		SmbAuthorityServiceID:        smbAuthorityServiceID,
+		IsGateway:                    config.IsGateway,
+		HasSubscriptions:             len(config.Subscriptions) > 0,
+		HealthStateProtoDir:          healthStateProtoDir,
+		HealthStateModPath:           strings.ReplaceAll(healthStateProtoDir, "/", "::"),
+		StateStoreServiceID:          stateStoreServiceID,
+		HasTypedHealth:               hasTypedHealth,
+		TypedHealthType:              typedHealthType,
+		TypedHealthModPath:           typedHealthModPath,
+		TacplusVersion:               buildinfo.Version,
+		TacplusGitSha:                buildinfo.GitSha,
+		ProtoSourceVersion:           protoSourceVersion,
+		ProtoSourceGitSha:            protoGitSha,
+		GrpcServices:                 grpcSvcs,
+		ConfigFetches:                rustConfigFetches(grpcSvcs),
+		Subscriptions:                subs,
+		TimeseriesInserts:            timeseriesInserts,
+		Publishers:                   publishers,
+		HasPublishers:                len(publishers) > 0,
+		RecordReaders:                recordReaders,
+		HasRecordReaders:             len(recordReaders) > 0,
+		RecordC2S:                    recordC2S,
+		RecordC2SService:             recordC2SServiceName(recordC2S),
+		TracePublisherFn:             tracePublisherFn,
+		AccountingPublisher:          accountingPublisher,
+		TargetServices:               targetServices,
+		DiskStores:                   diskStores,
+		HasDiskStores:                len(diskStores) > 0,
+		HasApprovalBroker:            hasApprovalBroker,
+		ApprovalBroker:               approvalBroker,
+		KeepaliveTimeSecs:            keepaliveconst.TimeSecs,
+		KeepaliveTimeoutSecs:         keepaliveconst.TimeoutSecs,
+		KeepalivePermitMinTimeSecs:   keepaliveconst.PermitMinTimeSecs,
 		// An MCP-only service has no GrpcServices entry (see HasAutoTls above)
 		// but still serves on the TLS listener, so it counts as non-c2d here.
 		HostsC2DStandalone: service.HostsC2DStandalone(service.C2DHostShape{

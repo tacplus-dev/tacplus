@@ -93,6 +93,7 @@ SETS=(
   "tenantroute-crew|proto-tenantroute|com.gitlab.example.dummy.crew||go rust java"
   "productlayer-billing|proto-productlayer|com.gitlab.example.dummy.billing|depends: [\"hub\", \"meter\"]|go rust java"
   "productlayer-hub|proto-productlayer|com.gitlab.example.dummy.hub|depends: [\"crew\"]|go rust java"
+  "productlayer-meter|proto-productlayer|com.gitlab.example.dummy.meter||go rust java"
   "redo-stratum|proto-redo/caller|com.gitlab.example.dummy.stratum||go rust java"
   "redo-host|proto-redo/host|com.gitlab.example.dummy.redo||go rust java"
   "tenantrecord-tstratum|proto-tenantrecord|com.gitlab.example.dummy.tstratum|records: \"all\"|go rust java"

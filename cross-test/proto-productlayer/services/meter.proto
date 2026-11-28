@@ -1,7 +1,10 @@
 // Copyright (c) 2026 Jody Scott
 // SPDX-License-Identifier: Apache-2.0
 // The product-layer fixture's second service of product ledger (#475): billing
-// calls it (a product's own service, an allowed edge). Never built itself.
+// calls it (a product's own service, an allowed edge). It keeps each tenant's
+// meter readings as their custodian, keyed by the caller's tid, so its server
+// runs OnTenantDeleted for each deleted tenant. Built itself in Go, Java and
+// Rust.
 
 syntax = "proto3";
 
@@ -17,9 +20,24 @@ service MeterService {
   rpc GetMeterReading(GetMeterReadingRequest) returns (GetMeterReadingResponse) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
   }
+
+  // CreateReading adds units to the calling tenant's meter. Its tenant is
+  // bound to the caller's token's tid (spec.caller_tid), never the client's
+  // value, so the readings are the custodian rows OnTenantDeleted deletes.
+  rpc CreateReading(CreateReadingRequest) returns (CreateReadingResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 }
 
 message GetMeterReadingRequest {}
+
+message CreateReadingRequest {
+  // tenant is the caller's tid, from its token, never the client's value.
+  string tenant = 1 [(spec.caller_tid) = true];
+  int64 units = 2;
+}
+
+message CreateReadingResponse {}
 
 message GetMeterReadingResponse {
   int64 units = 1;

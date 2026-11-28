@@ -1717,6 +1717,48 @@ func ResolveServiceStates(config *tactype.Config, entries []GrpcConfigEntry) err
 	if err := InjectHealthState(config, config.FlatProtoDir); err != nil {
 		return fmt.Errorf("failed to inject health state: %w", err)
 	}
+	if err := InjectTenantDeletionState(config, config.FlatProtoDir); err != nil {
+		return fmt.Errorf("failed to inject tenant deletion state: %w", err)
+	}
+	return nil
+}
+
+// TenantDeletionStateName is the sys contract's root of the fleet's deleted
+// tenants (sys/tenantdeletion.proto, #475), held by the state host.
+const TenantDeletionStateName = "TenantDeletions"
+
+// InjectTenantDeletionState subscribes a product custodian (a product service
+// binding (spec.caller_tid), parser.SelfProductCustodian) read-only to the
+// fleet's TenantDeletions root: its generated runner calls the handler's
+// OnTenantDeleted for each tid there, so the tenant's rows go with the tenant
+// (products-layer-2026-11-08). The state host authorizes it from the merged
+// tree (stateImportersByRoot). Any other service is left as it is.
+func InjectTenantDeletionState(config *tactype.Config, inputDir string) error {
+	if config.SelfPackage == "" || inputDir == "" {
+		return nil
+	}
+	dp, err := parser.NewDescriptorParser(inputDir)
+	if err != nil {
+		return fmt.Errorf("tenant deletion state: parse proto descriptors in %q: %w", inputDir, err)
+	}
+	if !parser.SelfProductCustodian(dp, config.SelfPackage) {
+		return nil
+	}
+	for _, b := range config.States {
+		if b.IsTenantDeletionState {
+			return nil
+		}
+	}
+	root, err := DiscoverStateRoot(inputDir, TenantDeletionStateName)
+	if err != nil {
+		return err
+	}
+	config.States = append(config.States, tactype.StateEntry{
+		ProtoFile:             root.ProtoFile,
+		MessageName:           TenantDeletionStateName,
+		AccessMode:            tactype.AccessRO,
+		IsTenantDeletionState: true,
+	})
 	return nil
 }
 

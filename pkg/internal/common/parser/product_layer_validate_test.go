@@ -286,7 +286,8 @@ func TestS2SEdgeRefusal(t *testing.T) {
 
 // A server of a product service generates where its doors are generated (Go,
 // Java, Rust), and nowhere else; a product's custodian rows ((spec.caller_tid)
-// on a product service) wait for OnTenantDeleted, in every language.
+// on a product service) generate where OnTenantDeleted is generated (Go, Java,
+// Rust), and wait for it in every other language.
 func TestValidateProductLayerHosting(t *testing.T) {
 	dp := writeSurfaceProtoDir(t, layerProto("billing", `, product: "ledger"`, "", `auth_services: ["*"]`),
 		layerProto("crew", `, tenant_owned: true`, "", `auth_services: ["*"]`))
@@ -320,8 +321,39 @@ func TestValidateProductLayerHosting(t *testing.T) {
 	}
 
 	custodian := writeSurfaceProtoDir(t, callerTidProto(`, product: "ledger"`, `  string tenant = 1 [(spec.caller_tid) = true];`))
-	for _, lang := range []string{"go", "java", "rust", "python", "typescript"} {
+	for _, lang := range []string{"go", "java", "rust"} {
+		if err := ValidateProductLayerHosting(custodian, "billing", lang); err != nil {
+			t.Fatalf("%s: a product's custodian server refused, though its OnTenantDeleted is generated: %v", lang, err)
+		}
+	}
+	for _, lang := range []string{"python", "typescript"} {
 		wantLayerRefusal(t, ValidateProductLayerHosting(custodian, "billing", lang), "RecordUsageRequest.tenant", "OnTenantDeleted", lang)
+	}
+}
+
+// A product service binding (spec.caller_tid) is a custodian of tenants' data:
+// it, and only it, deletes a tenant's rows on the tenant's deletion.
+func TestSelfProductCustodian(t *testing.T) {
+	custodian := writeSurfaceProtoDir(t, callerTidProto(`, product: "ledger"`, `  string tenant = 1 [(spec.caller_tid) = true];`))
+	if !SelfProductCustodian(custodian, "billing") {
+		t.Error("a product service binding caller_tid is not a custodian")
+	}
+	if SelfProductCustodian(custodian, "crew") || SelfProductCustodian(custodian, "") || SelfProductCustodian(nil, "billing") {
+		t.Error("a package that is not the custodian, or none, is one")
+	}
+	platform := writeSurfaceProtoDir(t, callerTidProto("", `  string tenant = 1 [(spec.caller_tid) = true];`))
+	if SelfProductCustodian(platform, "billing") {
+		t.Error("a platform service binding caller_tid is a product's custodian")
+	}
+	plain := writeSurfaceProtoDir(t, layerProto("billing", `, product: "ledger"`, "", `auth_services: ["*"]`))
+	if SelfProductCustodian(plain, "billing") {
+		t.Error("a product service binding no caller_tid is a custodian")
+	}
+	if got := ProductCustodians(custodian.GetAllFiles()); len(got) != 1 || got[0] != "billing" {
+		t.Errorf("ProductCustodians = %v, want [billing]", got)
+	}
+	if got := ProductCustodians(plain.GetAllFiles()); len(got) != 0 {
+		t.Errorf("ProductCustodians of a product with no caller_tid = %v, want none", got)
 	}
 }
 

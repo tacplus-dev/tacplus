@@ -109,6 +109,25 @@ public interface Handler {
     boolean holdsTenant(String tid) throws Exception;
 {{- end}}
 
+{{- if .HasTenantDeletion}}
+    /**
+     * Deletes every row tid owns: this product service keeps tenants' data as
+     * their custodian, keyed by the caller's tid ((spec.caller_tid)), and the
+     * data goes with the tenant (#475). The ServiceManager calls it once for
+     * each deleted tenant of the fleet's record (sys/tenantdeletion.proto), on
+     * its own thread, and again, with backoff, for as long as it throws.
+     *
+     * <ul>
+     *   <li>Delete every row tid owns, and nothing else: never another
+     *       tenant's rows.</li>
+     *   <li>Be idempotent: after a restart it is called again for every
+     *       deleted tenant, so deleting nothing must return normally.</li>
+     *   <li>Throw while a row of tid is left; return only once none is.</li>
+     * </ul>
+     */
+    void onTenantDeleted(String tid) throws Exception;
+{{- end}}
+
 {{- if .HasAutoTls}}
     /**
      * Called when the certificate stream delivers a new TLS certificate (initial + renewals).

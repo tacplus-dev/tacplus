@@ -1825,11 +1825,41 @@ generated without them. A `(spec.caller_tid)` field may not also be
 `assert_required` or `assert_min_size`: the request is validated before the
 binding fills it, so the client must be free to leave it empty.
 
-A product's custodian rows go with their tenant (tenant-deletion-2026-10-27),
-and the generated `OnTenantDeleted` that deletes them is not in this release
-yet. Until it is, a **product** service binding `(spec.caller_tid)` is refused
-at generation in every language: a product service keeps no tenant's data.
-Clients of a product service generate as before, with the check above.
+A product's custodian rows go with their tenant (tenant-deletion-2026-10-27). A
+**product** service binding `(spec.caller_tid)` is a custodian, and its
+generated server requires one more `Handler` method:
+
+```go
+// Go
+OnTenantDeleted(ctx context.Context, tid string) error
+```
+
+```java
+// Java
+void onTenantDeleted(String tid) throws Exception;
+```
+
+```rust
+// Rust
+async fn on_tenant_deleted(&self, tid: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+```
+
+The ServiceManager reads the fleet's record of deleted tenants,
+`tenantdeletion.TenantDeletions` (`sys/tenantdeletion.proto`, held by the state
+host, read-only; nothing to declare), and calls `OnTenantDeleted` once for each
+tid in it, as it arrives, one at a time. A call that returns an error (throws,
+in Java), or panics, is retried with backoff (1s, doubling to 5m) until it returns nil, and
+the other tids go on meanwhile. The record keeps every deleted tid, so after a
+restart the method is called again for each. Its rules:
+
+- Delete every row the tid owns, wherever the service keeps it, and nothing
+  else: never another tenant's rows.
+- Be idempotent: deleting nothing (the rows went before a restart) is a success.
+- Return an error while a row is left; the call comes again.
+
+Python and TypeScript do not generate it, so a product service binding
+`(spec.caller_tid)` is refused at generation there. Clients of a product
+service generate as before, with the check above.
 
 ### Every user RPC is also an MCP tool
 
@@ -3287,6 +3317,7 @@ in the run. The fleet build loads the real implementors. Today:
 | `sys/redo.proto` (`redolog.Redo`) | The record store's durability: the contract between the record store and the redo service (the log is the database). `Append` (bidi: the store sends each operation, a single write or a whole `Apply`, at the next `seq` of the tenant's log; the redo service acks it per durability level, `DURABILITY_LOCAL` on local disk, `DURABILITY_REMOTE` once the second site has it) and `Replay` (the tenant's compacted snapshot, then the tail, then the end). Neither is tenant-routed nor `RPC_FLAG_ANY_TENANT`: a tenant's store calls redo in `/system` (#258); the tenant a write belongs to is the caller's tid, from its token, never a field. Callers: `stratum`. Field numbers are frozen (field 1 of `RedoAppend` and `RedoReplayRequest`, the old route tenant, is reserved). | The redo service, at routing label `redo`: a `/system` service, the custodian of every tenant's log, kept apart by the caller's tid. Its own proto is package `redo` (its identity, hence the contract's package `redolog`) and declares only `option (spec.service) = {name: "redo"};`; it serves `redolog.Redo` by the label. |
 | `sys/configpush.proto` (`configpush.ConfigPush`) | A pushed tenant config slice, from a tenant's record store to the slice's owner (tacplus#927; see Per-Tenant Config Pushed to Its Owner). `Push` is bidi, one stream for each tenant and owner. The first frame is a snapshot, then each new version of one slice follows. A slice is its owner's registered `tenant_slice_field` plus the slice message's bytes, because the record store's run never holds the owner's proto. The tenant is the caller's identity, never a field. Each slice gets an ack, `ACCEPTED`, or `STALE` for a version that is not newer, which leaves the stream open. A first frame that is not a snapshot ends the stream with `FAILED_PRECONDITION`; an unknown slice or invalid value ends it with `INVALID_ARGUMENT`. Field numbers are frozen. | Every owner of a pushed slice, at its own routing label. The service carries no `(spec.service_s2s)`: the generated receiver admits only `spiffe://<td>/tenants/<tid>/services/stratum` for a tenant its tenant registry holds. The receiver and the publisher are generated in Go, Java and Rust; a tenant's record store's ServiceManager holds the publisher, which the store's own code feeds. |
 | `sys/servicehealth.proto` (`servicehealth.ServiceHealth`) | The service-instance health root every service reports into. Field numbers are frozen. | The state host (`kernel`), which imports it rather than declaring a copy. |
+| `sys/tenantdeletion.proto` (`tenantdeletion.TenantDeletions`) | The fleet's deleted tenants: one row per tombstoned tid, keyed by tid, never removed (#475). A product service binding `(spec.caller_tid)` reads it, read-only, and its generated runner calls `OnTenantDeleted` for each tid; the host's generated state service authorizes every such service of the merged tree. It names tids only. Field numbers are frozen. | The state host (`kernel`, tacplus-dev/kernel#75), which imports it, writes a row when it tombstones a tid and every tombstoned tid again when it starts. |
 | routing label `kernel` | The state host. Counts as served in every run (see Well-Known Names); config state routes there when no store is loaded. | The fleet's state host. |
 
 A service that declared these itself before now imports them; declaring a second

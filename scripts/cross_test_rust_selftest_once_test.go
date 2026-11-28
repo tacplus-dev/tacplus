@@ -26,7 +26,7 @@ func rustSelftestFixture(t *testing.T, root, fixture, base, tokenTest string) st
 	types := strings.ReplaceAll(base, "-", "_") + "_model_types"
 	members := `".", "types", "chassis/key", "chassis/token"`
 	for _, crate := range []string{"jwk", "spiffe", "httpclient", "x509", "servicemanager", "grpcconfig", "grpcserver",
-		"collection", "approval", "diskstore", "logger", "configpush"} {
+		"collection", "approval", "diskstore", "logger", "configpush", "tenantdeletion"} {
 		members += `, "chassis/` + crate + `"`
 		writeFile(t, filepath.Join(ws, "chassis", crate, "Cargo.toml"),
 			"[package]\nname = \""+crate+"\"\nversion = \"0.1.0\"\nedition = \"2021\"\n")

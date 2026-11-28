@@ -22,9 +22,26 @@ service HubService {
   rpc GetHubStatus(GetHubStatusRequest) returns (GetHubStatusResponse) {
     option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
   }
+
+  // GetUsage returns the calling tenant's usage. Its tenant is bound to the
+  // caller's token's tid (spec.caller_tid), so the fixture's hub server in
+  // each language compiles the binding; a caller with no tid (the platform,
+  // a product) is refused.
+  rpc GetUsage(GetUsageRequest) returns (GetUsageResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
 }
 
 message GetHubStatusRequest {}
+
+message GetUsageRequest {
+  // tenant is the caller's tid, from its token, never the client's value.
+  string tenant = 1 [(spec.caller_tid) = true];
+}
+
+message GetUsageResponse {
+  int64 units = 1;
+}
 
 message GetHubStatusResponse {
   bool ready = 1;

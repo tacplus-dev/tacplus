@@ -26,9 +26,11 @@ use std::sync::Arc;
 use billing_model::s2sm::internal::grpc::clients::services::hub::service::HubServiceGrpcClient;
 use billing_model::s2sm::internal::grpc::clients::services::meter::service::{MeterServiceGrpcClient, TokenProvider};
 use billing_model::types::services::hub::hub_service_server::{HubService, HubServiceServer};
-use billing_model::types::services::hub::{GetHubStatusRequest, GetHubStatusResponse};
+use billing_model::types::services::hub::{GetHubStatusRequest, GetHubStatusResponse, GetUsageRequest, GetUsageResponse};
 use billing_model::types::services::meter::meter_service_server::{MeterService, MeterServiceServer};
-use billing_model::types::services::meter::{GetMeterReadingRequest, GetMeterReadingResponse};
+use billing_model::types::services::meter::{
+    CreateReadingRequest, CreateReadingResponse, GetMeterReadingRequest, GetMeterReadingResponse,
+};
 use servicemanager::ChannelProvider;
 use tonic::{Code, Request, Response, Status};
 
@@ -115,6 +117,10 @@ impl MeterService for Meter {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(Response::new(GetMeterReadingResponse { units: 1, ..Default::default() }))
     }
+
+    async fn create_reading(&self, _request: Request<CreateReadingRequest>) -> Result<Response<CreateReadingResponse>, Status> {
+        Err(Status::unimplemented("not driven by this test"))
+    }
 }
 
 /// The platform's hub: answers every call and counts it.
@@ -126,6 +132,10 @@ impl HubService for Hub {
     async fn get_hub_status(&self, _request: Request<GetHubStatusRequest>) -> Result<Response<GetHubStatusResponse>, Status> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(Response::new(GetHubStatusResponse { ready: true, ..Default::default() }))
+    }
+
+    async fn get_usage(&self, _request: Request<GetUsageRequest>) -> Result<Response<GetUsageResponse>, Status> {
+        Err(Status::unimplemented("not driven by this test"))
     }
 }
 

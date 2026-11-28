@@ -1,0 +1,431 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+//
+// CODE GENERATED - DO NOT EDIT
+//! Runs a product custodian's `on_tenant_deleted` (tacplus#475,
+//! products-layer-2026-11-08). A product service binding (spec.caller_tid)
+//! keeps tenants' data, keyed by the caller's tid, and that data goes with the
+//! tenant. The generated ServiceManager watches the fleet's record of deleted
+//! tenants (sys/tenantdeletion.proto, held by the state host) and gives each
+//! snapshot's tids to a [`Runner`], which calls the handler once for each tid,
+//! retrying one that fails or panics, with backoff, until it returns `Ok`.
+//!
+//! A tid the Runner has handled is not handled again while the process lives.
+//! The record keeps every deleted tid, so after a restart the handler is called
+//! again for each: `on_tenant_deleted` deletes every row the tid owns, and
+//! deleting nothing is a success. The same rules as Go's chassis/tenantdeletion.
+
+use std::collections::{BTreeMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+
+use tokio::sync::{watch, Notify};
+
+/// The error a handler returns while a row of the tid is left.
+pub type Error = Box<dyn std::error::Error + Send + Sync>;
+
+/// The future a [`Handler`] returns.
+pub type HandlerFuture = Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>;
+
+/// Deletes every row the tid owns. It returns `Ok` once none is left.
+pub type Handler = Arc<dyn Fn(String) -> HandlerFuture + Send + Sync>;
+
+/// The wait before a failed tid's first retry.
+pub const DEFAULT_MIN_BACKOFF: Duration = Duration::from_secs(1);
+/// The cap on the wait between a failing tid's retries.
+pub const DEFAULT_MAX_BACKOFF: Duration = Duration::from_secs(5 * 60);
+
+/// Makes a [`Handler`] of an async function of the tid.
+pub fn handler_fn<F, Fut>(f: F) -> Handler
+where
+    F: Fn(String) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<(), Error>> + Send + 'static,
+{
+    Arc::new(move |tid: String| -> HandlerFuture { Box::pin(f(tid)) })
+}
+
+/// Calls a [`Handler`] once for each observed tid until it succeeds.
+pub struct Runner {
+    handle: Handler,
+    min_backoff: Duration,
+    max_backoff: Duration,
+    state: Mutex<State>,
+    wake: Notify,
+}
+
+#[derive(Default)]
+struct State {
+    /// Observed, not handled yet; ordered, so the lowest tid comes first.
+    pending: BTreeMap<String, Attempt>,
+    /// Handled.
+    done: HashSet<String>,
+}
+
+#[derive(Default)]
+struct Attempt {
+    failures: u32,
+    /// None: ready now.
+    not_before: Option<Instant>,
+}
+
+impl Runner {
+    /// A Runner calling handle, with the default backoff.
+    pub fn new(handle: Handler) -> Self {
+        Self::with_backoff(handle, DEFAULT_MIN_BACKOFF, DEFAULT_MAX_BACKOFF)
+    }
+
+    /// A Runner calling handle, whose failing tid waits min_backoff before its
+    /// first retry, doubling up to max_backoff.
+    pub fn with_backoff(handle: Handler, min_backoff: Duration, max_backoff: Duration) -> Self {
+        let min_backoff = if min_backoff.is_zero() { DEFAULT_MIN_BACKOFF } else { min_backoff };
+        let max_backoff = max_backoff.max(min_backoff);
+        Self {
+            handle,
+            min_backoff,
+            max_backoff,
+            state: Mutex::new(State::default()),
+            wake: Notify::new(),
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Records the deleted tids of one snapshot of the record. A tid seen
+    /// before, handled or pending, is not added again; an empty one is ignored.
+    pub fn observe<I, S>(&self, tids: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut added = false;
+        {
+            let mut state = self.lock();
+            for tid in tids {
+                let tid = tid.as_ref();
+                if tid.is_empty() || state.done.contains(tid) || state.pending.contains_key(tid) {
+                    continue;
+                }
+                state.pending.insert(tid.to_string(), Attempt::default());
+                added = true;
+            }
+        }
+        if added {
+            // A permit is kept when run() is not waiting, so no wake is lost.
+            self.wake.notify_one();
+        }
+    }
+
+    /// Reports whether the handler has returned `Ok` for tid.
+    pub fn handled(&self, tid: &str) -> bool {
+        self.lock().done.contains(tid)
+    }
+
+    /// Calls the handler for each pending tid, one at a time and the lowest
+    /// ready tid first, until stop changes or its sender is dropped. A tid that
+    /// fails waits its backoff while the others go on; a call in flight when
+    /// run ends is dropped, and its tid is not handled.
+    pub async fn run(self: Arc<Self>, mut stop: watch::Receiver<bool>) {
+        loop {
+            if *stop.borrow_and_update() {
+                return;
+            }
+            let (tid, wait) = self.next(Instant::now());
+            let Some(tid) = tid else {
+                let notified = self.wake.notified();
+                tokio::select! {
+                    _ = stop.changed() => return,
+                    _ = notified => {}
+                    _ = tokio::time::sleep(wait.unwrap_or_default()), if wait.is_some() => {}
+                }
+                continue;
+            };
+            let result = tokio::select! {
+                result = self.call(&tid) => result,
+                _ = stop.changed() => return,
+            };
+            self.finish(&tid, result, Instant::now());
+        }
+    }
+
+    /// The lowest pending tid ready at now, or None and how long until the
+    /// first one is ready (None when none is pending).
+    fn next(&self, now: Instant) -> (Option<String>, Option<Duration>) {
+        let state = self.lock();
+        let mut wait: Option<Duration> = None;
+        for (tid, attempt) in state.pending.iter() {
+            match attempt.not_before {
+                Some(t) if t > now => {
+                    let d = t - now;
+                    wait = Some(wait.map_or(d, |w| w.min(d)));
+                }
+                _ => return (Some(tid.clone()), None),
+            }
+        }
+        (None, wait)
+    }
+
+    /// Calls the handler for tid on its own task, so that a panic is an error
+    /// like any other. Dropping the call aborts the task.
+    async fn call(&self, tid: &str) -> Result<(), Error> {
+        let handle = self.handle.clone();
+        let tid = tid.to_string();
+        let mut task = AbortOnDrop(tokio::spawn(async move { handle(tid).await }));
+        match (&mut task.0).await {
+            Ok(result) => result,
+            Err(e) if e.is_panic() => {
+                Err(format!("on_tenant_deleted panicked: {}", panic_message(e.into_panic().as_ref())).into())
+            }
+            Err(e) => Err(format!("on_tenant_deleted did not finish: {}", e).into()),
+        }
+    }
+
+    fn finish(&self, tid: &str, result: Result<(), Error>, now: Instant) {
+        let mut state = self.lock();
+        if !state.pending.contains_key(tid) {
+            return;
+        }
+        match result {
+            Ok(()) => {
+                state.pending.remove(tid);
+                state.done.insert(tid.to_string());
+                tracing::info!(tid = %tid, "on_tenant_deleted: the tenant's rows are deleted");
+            }
+            Err(e) => {
+                let (min, max) = (self.min_backoff, self.max_backoff);
+                let attempt = state.pending.get_mut(tid).expect("pending tid");
+                let mut backoff = min;
+                for _ in 0..attempt.failures {
+                    if backoff >= max {
+                        break;
+                    }
+                    backoff = backoff.saturating_mul(2);
+                }
+                backoff = backoff.min(max);
+                attempt.failures += 1;
+                attempt.not_before = Some(now + backoff);
+                tracing::warn!(
+                    tid = %tid,
+                    failures = attempt.failures,
+                    backoff_ms = backoff.as_millis() as u64,
+                    error = %e,
+                    "on_tenant_deleted failed; retrying"
+                );
+            }
+        }
+    }
+}
+
+struct AbortOnDrop(tokio::task::JoinHandle<Result<(), Error>>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "a non-string panic".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[derive(Default)]
+    struct Recorder {
+        calls: Mutex<Vec<String>>,
+        fail: Mutex<HashMap<String, u32>>, // tid -> failures still to return
+        panic: Mutex<HashSet<String>>,
+    }
+
+    impl Recorder {
+        fn handle(&self, tid: &str) -> Result<(), Error> {
+            self.calls.lock().unwrap().push(tid.to_string());
+            let fail = {
+                let mut fail = self.fail.lock().unwrap();
+                match fail.get_mut(tid) {
+                    Some(n) if *n > 0 => {
+                        *n -= 1;
+                        true
+                    }
+                    _ => false,
+                }
+            };
+            let boom = self.panic.lock().unwrap().remove(tid);
+            if boom {
+                panic!("boom");
+            }
+            if fail {
+                return Err("store unavailable".into());
+            }
+            Ok(())
+        }
+
+        fn count(&self, tid: &str) -> usize {
+            self.calls.lock().unwrap().iter().filter(|c| c.as_str() == tid).count()
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    fn runner(rec: &Arc<Recorder>, min: Duration, max: Duration) -> Arc<Runner> {
+        let rec = rec.clone();
+        Arc::new(Runner::with_backoff(
+            handler_fn(move |tid| {
+                let rec = rec.clone();
+                async move { rec.handle(&tid) }
+            }),
+            min,
+            max,
+        ))
+    }
+
+    struct Started {
+        stop: watch::Sender<bool>,
+        done: tokio::task::JoinHandle<()>,
+    }
+
+    impl Started {
+        async fn stop(self) {
+            let _ = self.stop.send(true);
+            tokio::time::timeout(Duration::from_secs(5), self.done)
+                .await
+                .expect("run did not return after stop")
+                .expect("run panicked");
+        }
+    }
+
+    fn start(r: &Arc<Runner>) -> Started {
+        let (stop, rx) = watch::channel(false);
+        let done = tokio::spawn(r.clone().run(rx));
+        Started { stop, done }
+    }
+
+    async fn wait_handled(r: &Runner, tids: &[&str]) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        for tid in tids {
+            while !r.handled(tid) {
+                assert!(Instant::now() < deadline, "tid {tid:?} not handled in time");
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        }
+    }
+
+    // Each deleted tid is handled once, whether it is in the first snapshot or
+    // a later one, and a snapshot repeating a handled tid calls nothing again.
+    #[tokio::test]
+    async fn runner_handles_each_tid_once() {
+        let rec = Arc::new(Recorder::default());
+        let r = runner(&rec, Duration::from_millis(1), Duration::from_millis(4));
+        r.observe(["a0000001", "", "b0000002"]);
+        let started = start(&r);
+        wait_handled(&r, &["a0000001", "b0000002"]).await;
+        r.observe(vec!["a0000001".to_string(), "b0000002".to_string(), "c0000003".to_string()]);
+        wait_handled(&r, &["c0000003"]).await;
+        r.observe(["a0000001", "b0000002", "c0000003"]);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        started.stop().await;
+        for tid in ["a0000001", "b0000002", "c0000003"] {
+            assert_eq!(rec.count(tid), 1, "tid {tid:?} handled {} times, want 1", rec.count(tid));
+        }
+        assert_eq!(rec.count(""), 0, "the empty tid was handled");
+    }
+
+    // The lowest ready tid goes first.
+    #[tokio::test]
+    async fn runner_handles_the_lowest_tid_first() {
+        let rec = Arc::new(Recorder::default());
+        let r = runner(&rec, Duration::from_millis(1), Duration::from_millis(1));
+        r.observe(["c0000003", "a0000001", "b0000002"]);
+        let started = start(&r);
+        wait_handled(&r, &["a0000001", "b0000002", "c0000003"]).await;
+        started.stop().await;
+        assert_eq!(rec.calls(), vec!["a0000001", "b0000002", "c0000003"]);
+    }
+
+    // A failing tid is retried until the handler returns Ok, and while it
+    // waits its backoff the other tids are handled.
+    #[tokio::test]
+    async fn runner_retries_until_ok() {
+        let rec = Arc::new(Recorder::default());
+        rec.fail.lock().unwrap().insert("a0000001".to_string(), 3);
+        // A backoff long enough that b is surely called inside a's first one.
+        let r = runner(&rec, Duration::from_millis(50), Duration::from_millis(50));
+        r.observe(["a0000001", "b0000002"]);
+        let started = start(&r);
+        wait_handled(&r, &["a0000001", "b0000002"]).await;
+        started.stop().await;
+        assert_eq!(rec.count("a0000001"), 4, "failing tid: 3 failures, then Ok");
+        assert_eq!(rec.count("b0000002"), 1, "the other tid is called once");
+        // b went while a waited: a's first failure came before b's only call.
+        let calls = rec.calls();
+        assert_eq!(&calls[..2], &["a0000001", "b0000002"]);
+    }
+
+    // A handler that panics is a failure, retried like an error.
+    #[tokio::test]
+    async fn runner_recovers_a_panic() {
+        let rec = Arc::new(Recorder::default());
+        rec.panic.lock().unwrap().insert("a0000001".to_string());
+        let r = runner(&rec, Duration::from_millis(1), Duration::from_millis(1));
+        r.observe(["a0000001"]);
+        let started = start(&r);
+        wait_handled(&r, &["a0000001"]).await;
+        started.stop().await;
+        assert_eq!(rec.count("a0000001"), 2, "panicking tid: one panic, then Ok");
+    }
+
+    // run ends on stop, or when the stop sender is dropped, even with a call in
+    // flight, which leaves its tid unhandled.
+    #[tokio::test]
+    async fn runner_stops_on_its_signal() {
+        let r = Arc::new(Runner::new(handler_fn(|_tid| std::future::pending::<Result<(), Error>>())));
+        r.observe(["a0000001"]);
+        let started = start(&r);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        started.stop().await;
+        assert!(!r.handled("a0000001"));
+
+        let idle = Arc::new(Runner::new(handler_fn(|_tid| async { Ok(()) })));
+        let (stop, rx) = watch::channel(false);
+        let done = tokio::spawn(idle.clone().run(rx));
+        drop(stop);
+        tokio::time::timeout(Duration::from_secs(5), done)
+            .await
+            .expect("run did not return when its stop sender was dropped")
+            .expect("run panicked");
+    }
+
+    // The backoff doubles from its floor to its cap.
+    #[test]
+    fn runner_backoff() {
+        let r = Runner::with_backoff(
+            handler_fn(|_tid| async { Ok(()) }),
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+        );
+        r.observe(["a0000001"]);
+        let now = Instant::now();
+        for want in [1, 2, 4, 5, 5].map(Duration::from_secs) {
+            r.finish("a0000001", Err("no".into()), now);
+            assert_eq!(r.next(now), (None, Some(want)), "after a failure: none ready for {want:?}");
+        }
+        assert_eq!(r.next(now + Duration::from_secs(5)).0.as_deref(), Some("a0000001"), "after its backoff");
+        r.finish("a0000001", Ok(()), now);
+        assert!(r.handled("a0000001"));
+        assert_eq!(r.next(now), (None, None), "nothing pending");
+    }
+}

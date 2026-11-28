@@ -1,0 +1,13 @@
+[package]
+name = "tenantdeletion"
+version = "0.1.0"
+edition = "2021"
+{{- if .License}}
+license = "{{.License}}"
+{{- end}}
+publish = false
+description = "Runs a product custodian's on_tenant_deleted for each deleted tenant (sys/tenantdeletion.proto, tacplus#475)"
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }

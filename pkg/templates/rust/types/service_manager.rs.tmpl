@@ -1815,6 +1815,36 @@ impl ServiceManager {
         self.start_disk_store_roll_schedulers(handler.clone())?;
 {{- end}}
 
+{{- if .HasTenantDeletion}}
+        // A product custodian's tenants' rows go with the tenant (#475): run
+        // on_tenant_deleted for each tid of the fleet's record of deleted
+        // tenants, as it arrives, until it returns Ok. The change callback is
+        // registered before the current snapshot is read, so no deletion falls
+        // between the two. It stops at graceful shutdown, before the Handler's.
+        // trace: unrelated: deletion is driven by the state host's record, not a request.
+        let (tenant_deletion_stop, tenant_deletion_stop_rx) = tokio::sync::watch::channel(false);
+        {
+            let tenant_deletions = Arc::new(tenantdeletion::Runner::new({
+                let h = handler.clone();
+                tenantdeletion::handler_fn(move |tid: String| {
+                    let h = h.clone();
+                    async move { h.on_tenant_deleted(&tid).await }
+                })
+            }));
+            let tenant_deletion_state = self.state_clients.{{.TenantDeletionGroupAccessor}}().{{.TenantDeletionClientAccessor}}();
+            {
+                let tenant_deletions = tenant_deletions.clone();
+                tenant_deletion_state.on_deleted_change(Arc::new(
+                    move |rows: &std::collections::HashMap<String, {{.TenantDeletionModPath}}::TenantDeletion>| {
+                        tenant_deletions.observe(rows.values().map(|row| row.tid.as_str()));
+                    },
+                ));
+            }
+            tenant_deletions.observe(tenant_deletion_state.get_deleted().iter().map(|row| row.tid.as_str()));
+            self.spawn_owned(tenant_deletions.run(tenant_deletion_stop_rx));
+        }
+{{- end}}
+
 {{- if .HasApprovalBroker}}
         // (spec.rpc).requires_device: the generated gate in each wrapper calls
         // this, which calls {{.ApprovalBroker.Package}}.{{.ApprovalBroker.ServiceName}}/{{.ApprovalBroker.MethodName}} — the approval broker on
@@ -2663,6 +2693,10 @@ impl ServiceManager {
 {{- end}}
 
         info!("Starting graceful shutdown");
+{{- if .HasTenantDeletion}}
+        // No on_tenant_deleted call runs into the Handler's shutdown.
+        let _ = tenant_deletion_stop.send(true);
+{{- end}}
 {{- if .HasStates}}
         self.state_clients.close();
 {{- end}}

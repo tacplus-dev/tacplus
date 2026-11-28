@@ -85,6 +85,17 @@ NewSmbCert(memberChain *x509_pb.X509CertChain, privateKeyDER []byte, ca *x509_pb
 HoldsTenant(ctx context.Context, tid string) (bool, error)
 {{- end}}
 
+{{- if .HasTenantDeletion}}
+// OnTenantDeleted deletes every row tid owns: this product service keeps
+// tenants' data as their custodian, keyed by the caller's tid
+// ((spec.caller_tid)), and the data goes with the tenant (#475). The
+// ServiceManager calls it once for each deleted tenant of the fleet's record
+// (sys/tenantdeletion.proto), and again, with backoff, until it returns nil;
+// after a restart it calls it again for every deleted tenant, so deleting
+// nothing must succeed. It must not delete another tenant's rows.
+OnTenantDeleted(ctx context.Context, tid string) error
+{{- end}}
+
 // Shutdown is called during graceful shutdown. Drain in-flight work and
 // release resources. The context carries the deadline from
 // shutdown_timeout_seconds. On forced shutdown (second signal or timeout)

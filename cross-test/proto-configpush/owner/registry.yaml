@@ -1,0 +1,10 @@
+# Managed by tacplus — do not edit IDs manually.
+services:
+    - name: stratum
+      id: 1
+    - name: tenancy
+      id: 2
+      tenant_slice_field: 1
+vservices:
+    - name: query
+      field_id: 31

@@ -1,0 +1,29 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// The config push wire fixture's tenant record store (#927): each tenant's
+// stratum holds its pushed config slices as the sys record
+// configpush.TenantSliceRecord ((spec.record_store).config_push), and its
+// ServiceManager's publisher pushes them to their owners. Generated from this
+// proto alone, plus sys/: the owner's proto is not in the run, so the
+// registry's tenant_slice_field is all it knows of tenancy.
+
+syntax = "proto3";
+
+package stratum;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "stratum", tenant_owned: true};
+option (spec.record_store) = {no_bus_ingest: true, config_push: true};
+
+message StratumPing {
+  string target_tenant = 1;
+}
+
+service Stratum {
+  option (spec.service_s2s) = {};
+
+  rpc Ping(StratumPing) returns (StratumPing) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"], route_field: "target_tenant"};
+  }
+}

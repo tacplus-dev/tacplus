@@ -1,0 +1,38 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// The config push wire fixture's owner (#927): a /system service that owns a
+// pushed tenant config slice, TenancyTenantSettings. Each tenant's stratum
+// pushes it over configpush.ConfigPush under tenancy's registered
+// tenant_slice_field; the tenancy build generates its receiver and typed
+// accessor.
+
+syntax = "proto3";
+
+package tenancy;
+
+import "sys/spec.proto";
+
+option (spec.service) = {name: "tenancy"};
+
+service TenancyService {
+  option (spec.service_s2s) = {};
+
+  rpc GetTenancyStatus(GetTenancyStatusRequest) returns (GetTenancyStatusResponse) {
+    option (spec.rpc) = {principal: RPC_PRINCIPAL_SERVICE, auth_services: ["*"]};
+  }
+}
+
+message GetTenancyStatusRequest {}
+
+message GetTenancyStatusResponse {
+  bool ready = 1;
+}
+
+// TenancyTenantSettings is tenancy's pushed slice of each tenant's
+// configuration.
+message TenancyTenantSettings {
+  option (spec.config_slice) = {scope: CONFIG_SLICE_SCOPE_TENANT, service_name: "tenancy", delivery: CONFIG_SLICE_DELIVERY_PUSH};
+
+  // join_mode is how a new member joins the tenant.
+  string join_mode = 1 [(spec.assert_max_size) = 64];
+}

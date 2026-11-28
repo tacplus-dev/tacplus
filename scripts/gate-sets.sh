@@ -84,6 +84,7 @@ c2d-server            | c2d-server-java              | java
 c2d-server            | c2d-server-rust              | rust
 c2d-server            | c2d-server-swift             | swift go
 zero-rpc-s2s          | zero-rpc-s2s                 | rust
+config-push           | config-push-go               | go
 llm-rule              | llm-rule                     | rust go
 jwk-alg               | jwk-alg-go                   | go
 jwk-alg               | jwk-alg-java                 | java

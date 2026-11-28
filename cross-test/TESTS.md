@@ -159,6 +159,23 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   reach the peer, and the host must publish no instance health, ask for no
   serving cert and bind no listener. Rust only. Local (`just zero-rpc-s2s`, part
   of `just gates`); not yet in CI.
+- `config-push` (`cross-test/config-push/run.sh`): the config push over the
+  wire (#927). Generates `cross-test/proto-configpush` as two Go modules of one
+  fleet: `store/`, stratum, a tenant-owned `(spec.record_store)` with
+  `config_push`, from its own proto alone, and `owner/`, tenancy, the owner of
+  the pushed slice `TenancyTenantSettings`. A file of the gate's in stratum's
+  `s2sm` hands out its generated owners table, publisher and feed; a test in
+  tenancy's `s2sm` serves its generated receiver on TCP against them, with
+  `-race`. The owner holds nothing before the first snapshot, then the
+  snapshot and each version at the record's revision, and none after a
+  delete. After the owner restarts it holds nothing until the publisher sends
+  the snapshot again, with no new write. Another tenant service, a tenant its
+  registry does not hold and another trust domain are refused
+  `PERMISSION_DENIED`. A value its generated validation refuses ends the
+  stream `INVALID_ARGUMENT` and is not held. The fleet's token is the
+  test's: the owner takes a stream's bearer as its subject. Go only (the Java
+  and Rust engines are self-tested against their own receivers in
+  `current-generation`). Local (`just config-push`, part of `just gates`).
 - `llm-rule` (`cross-test/llm-rule/run.sh`, needs cargo, go and mvn): the LLM rule as a generated
   build gate (#909). Generates `cross-test/proto-zerorpc` with tacplus.yaml
   `advisor: {path: advisor}`. Green: an advisor depending only on the

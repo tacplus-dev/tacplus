@@ -199,7 +199,7 @@ protoc-check:
 # per gate would let another job interleave a regeneration between two of them.
 # The nested `just` calls re-enter this same lock.
 gates:
-  {{lock}} bash scripts/gates.sh soundness test current-generation determinism cert-stream stream-expiry rotation memberport claims-provenance accounting-identity w2s-validate c2d-server zero-rpc-s2s llm-rule jwk-alg redact trace-carry floors tacplus-script
+  {{lock}} bash scripts/gates.sh soundness test current-generation determinism cert-stream stream-expiry rotation memberport claims-provenance accounting-identity w2s-validate c2d-server zero-rpc-s2s config-push llm-rule jwk-alg redact trace-carry floors tacplus-script
 
 # The gates of one language (tacplus#976): what a land changing only
 # pkg/internal/LANG/ or pkg/templates/LANG/ runs instead of `just gates`
@@ -572,6 +572,15 @@ c2d-server: c2d-server-go c2d-server-java c2d-server-rust c2d-server-swift
 # parent service (no instance health, no serving cert, no listener).
 zero-rpc-s2s:
   {{lock}} bash cross-test/zero-rpc-s2s/run.sh
+
+# The config push over the wire (#927): a tenant's record store (stratum, a
+# config_push store) and the owner of a pushed slice (tenancy), generated
+# apart from one fleet, push and receive the slice over TCP: the snapshot, each
+# version, a delete, the owner's restart and the receiver's refusals.
+config-push: config-push-go
+
+config-push-go:
+  {{lock}} bash cross-test/config-push/run.sh --language go
 
 # The LLM rule as a generated build gate (#909): an advisor whose manifest
 # depends only on the generated model port builds; one that reaches a state

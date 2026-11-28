@@ -1121,8 +1121,12 @@ the looper then marks it `promoted` or `declined` here with the date.
   each on a connection to the owner's label with a token for it. Its feed is generated when the store opts in,
   `(spec.record_store).config_push`: the store's plane carries the sys record `configpush.TenantSliceRecord
   {slice_field, value}` on its S2S half, and its ServiceManager watches it and pushes each acked write at its
-  revision (an opt-in, because a record type on a plane adds handler methods every store must implement). Left: a
-  cross-test of a store's publisher against an owner over the wire (two generated services, one fleet).
+  revision (an opt-in, because a record type on a plane adds handler methods every store must implement). The gate
+  `cross-test/config-push` runs a store's generated publisher and feed against an owner's generated receiver over
+  TCP. The two are generated apart, from one fleet (`cross-test/proto-configpush`), and run in Go. Still open: the
+  same leg across languages (a Java or Rust store against an owner in another language), and with both
+  ServiceManagers run whole against a fake kernel's tokens and service health. The gate's opener and token are its
+  own, since a ServiceManager cannot run without a kernel.
 - **Rebuild the build images when an upstream stage image moves** (2026-11-20, #901): `docker:29-cli` moved to
   29.10.0 (go1.27.4, fixing CVE-2026-97054) on 2026-11-16 22:07Z. Every `build:*` had been built that morning, so the
   nightly sweep failed for days on a fix that was already published. `build:latest` is rebuilt only when its files

@@ -15,8 +15,10 @@
 // tenants x and y — each carrying ledger's slice AND registrar's secret slice —
 // and pins what the serving side must do:
 //   - ledger in /tenants/x gets x's entry only, on every read RPC, projected to
-//     the key and ledger's slice (registrar's client_secret never leaves);
-//   - a Get/ContainsKey of y from /tenants/x is PERMISSION_DENIED;
+//     the key and ledger's slice (registrar's client_secret never leaves),
+//     whether the holder keys it x or /tenants/x (kernel's form, #1009);
+//   - a Get/ContainsKey of y or /tenants/y from /tenants/x is PERMISSION_DENIED,
+//     and a holder keying both forms serves x's two entries and no other;
 //   - ledger in /system gets every tenant, each projected;
 //   - ledger in any other namespace is PERMISSION_DENIED;
 //   - ledger is refused the root's other boundary (tenants) outright;
@@ -46,6 +48,7 @@ import io.grpc.stub.StreamObserver;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
@@ -67,11 +70,30 @@ public class TenantPinnedReadTest {
             .build();
     }
 
+    /** Tenants x and y keyed by the bare name, and by namespace as kernel keys them (#1009). */
+    private static final List<String> BARE_KEYS = List.of("x", "y");
+    private static final List<String> NAMESPACE_KEYS = List.of("/tenants/x", "/tenants/y");
+
+    /** The keys the handler holds an entry for. */
+    private static List<String> held = BARE_KEYS;
+
     private static Map<String, Registrar.TenantConfigEntry> all() {
-        return Map.of("x", entry("x"), "y", entry("y"));
+        Map<String, Registrar.TenantConfigEntry> m = new LinkedHashMap<>();
+        for (String k : held) {
+            m.put(k, entry(k));
+        }
+        return m;
     }
 
-    /** A handler serving tenants x and y; any other method throws. */
+    private static Registrar.TenantConfigsQueryResponse queryAll() {
+        Registrar.TenantConfigsQueryResponse.Builder b = Registrar.TenantConfigsQueryResponse.newBuilder();
+        for (String k : held) {
+            b.addResults(entry(k));
+        }
+        return b.setTotalCount(held.size()).build();
+    }
+
+    /** A handler serving an entry for each of held; any other method throws. */
     @SuppressWarnings("unchecked")
     private static RegistrarStateService.RegistrarStateServiceHandler handler() {
         return (RegistrarStateService.RegistrarStateServiceHandler) Proxy.newProxyInstance(
@@ -92,12 +114,11 @@ public class TenantPinnedReadTest {
                     case "getAllTenantConfigs":
                         return Registrar.TenantConfigsEntriesResponse.newBuilder().putAllEntries(all()).build();
                     case "keySetTenantConfigs":
-                        return Registrar.TenantConfigsKeysResponse.newBuilder().addKeys("x").addKeys("y").build();
+                        return Registrar.TenantConfigsKeysResponse.newBuilder().addAllKeys(held).build();
                     case "sizeTenantConfigs":
-                        return Registrar.TenantConfigsSizeResponse.newBuilder().setSize(2).build();
+                        return Registrar.TenantConfigsSizeResponse.newBuilder().setSize(held.size()).build();
                     case "queryTenantConfigs":
-                        return Registrar.TenantConfigsQueryResponse.newBuilder()
-                            .addResults(entry("x")).addResults(entry("y")).setTotalCount(2).build();
+                        return queryAll();
                     case "watchTenantConfigs": {
                         StreamObserver<Registrar.TenantConfigsEntriesResponse> o = (StreamObserver<Registrar.TenantConfigsEntriesResponse>) args[1];
                         o.onNext(Registrar.TenantConfigsEntriesResponse.newBuilder().putAllEntries(all()).build());
@@ -106,8 +127,7 @@ public class TenantPinnedReadTest {
                     }
                     case "watchQueryTenantConfigs": {
                         StreamObserver<Registrar.TenantConfigsQueryResponse> o = (StreamObserver<Registrar.TenantConfigsQueryResponse>) args[2];
-                        o.onNext(Registrar.TenantConfigsQueryResponse.newBuilder()
-                            .addResults(entry("x")).addResults(entry("y")).setTotalCount(2).build());
+                        o.onNext(queryAll());
                         o.onCompleted();
                         return null;
                     }
@@ -205,33 +225,28 @@ public class TenantPinnedReadTest {
         return a;
     }
 
-    public static void main(String[] args) throws Exception {
-        key = ImmutableKey.from(KeyHelpers.newEd25519Key());
-        authorizer = authorizer(key);
-        service = new RegistrarStateService(handler(), authorizer);
-
+    /** Every read RPC from /tenants/x serves tenant x's entry, keyed own, alone and projected. */
+    private static void ownEntryOnly(String own) throws Exception {
         Registrar.TenantConfigsGetAllRequest getAll = Registrar.TenantConfigsGetAllRequest.getDefaultInstance();
-
-        // Tenant x: its own entry only, projected, on every read RPC.
         Registrar.TenantConfigsEntriesResponse all = only("GetAll /tenants/x",
             TenantPinnedReadTest.<Registrar.TenantConfigsEntriesResponse>as("ledger", "/tenants/x", (s, o) -> s.getAllTenantConfigs(getAll, o)));
         if (all != null) {
-            if (!new TreeSet<>(all.getEntriesMap().keySet()).equals(new TreeSet<>(List.of("x")))) {
-                fail("GetAll: tenant x was served keys " + all.getEntriesMap().keySet() + ", want only [x]");
+            if (!new TreeSet<>(all.getEntriesMap().keySet()).equals(new TreeSet<>(List.of(own)))) {
+                fail("GetAll: tenant x was served keys " + all.getEntriesMap().keySet() + ", want only [" + own + "]");
             }
-            wantProjected("GetAll", "x", all.getEntriesMap().get("x"));
+            wantProjected("GetAll", own, all.getEntriesMap().get(own));
         }
-        Registrar.TenantConfigsValueResponse got = only("Get x",
+        Registrar.TenantConfigsValueResponse got = only("Get " + own,
             TenantPinnedReadTest.<Registrar.TenantConfigsValueResponse>as("ledger", "/tenants/x",
-                (s, o) -> s.getTenantConfigs(Registrar.TenantConfigsGetRequest.newBuilder().setKey("x").build(), o)));
+                (s, o) -> s.getTenantConfigs(Registrar.TenantConfigsGetRequest.newBuilder().setKey(own).build(), o)));
         if (got != null) {
-            wantProjected("Get", "x", got.getValue());
+            wantProjected("Get", own, got.getValue());
         }
         Registrar.TenantConfigsKeysResponse keys = only("KeySet",
             TenantPinnedReadTest.<Registrar.TenantConfigsKeysResponse>as("ledger", "/tenants/x",
                 (s, o) -> s.keySetTenantConfigs(Registrar.TenantConfigsKeysRequest.getDefaultInstance(), o)));
-        if (keys != null && !keys.getKeysList().equals(List.of("x"))) {
-            fail("KeySet: " + keys.getKeysList() + ", want [x]");
+        if (keys != null && !keys.getKeysList().equals(List.of(own))) {
+            fail("KeySet: " + keys.getKeysList() + ", want [" + own + "]");
         }
         Registrar.TenantConfigsSizeResponse size = only("Size",
             TenantPinnedReadTest.<Registrar.TenantConfigsSizeResponse>as("ledger", "/tenants/x",
@@ -246,7 +261,7 @@ public class TenantPinnedReadTest {
             if (q.getResultsCount() != 1 || q.getTotalCount() != 1) {
                 fail("Query: " + q.getResultsCount() + " results, total " + q.getTotalCount() + ", want 1 and 1");
             } else {
-                wantProjected("Query", "x", q.getResults(0));
+                wantProjected("Query", own, q.getResults(0));
             }
         }
         Registrar.TenantConfigsEntriesResponse frame = only("Watch",
@@ -254,42 +269,81 @@ public class TenantPinnedReadTest {
                 (s, o) -> s.watchTenantConfigs(Trace.TraceRequest.getDefaultInstance(), o)));
         if (frame != null) {
             if (frame.getEntriesCount() != 1) {
-                fail("Watch: frame carried " + frame.getEntriesMap().keySet() + ", want only x");
+                fail("Watch: frame carried " + frame.getEntriesMap().keySet() + ", want only " + own);
             }
-            wantProjected("Watch", "x", frame.getEntriesMap().get("x"));
+            wantProjected("Watch", own, frame.getEntriesMap().get(own));
         }
         Registrar.TenantConfigsQueryResponse qframe = only("WatchQuery",
             TenantPinnedReadTest.<Registrar.TenantConfigsQueryResponse>as("ledger", "/tenants/x",
                 (s, o) -> s.watchQueryTenantConfigs(Registrar.TenantConfigsQueryRequest.getDefaultInstance(), o)));
         if (qframe != null) {
             if (qframe.getResultsCount() != 1) {
-                fail("WatchQuery: frame carried " + qframe.getResultsCount() + " results, want only x");
+                fail("WatchQuery: frame carried " + qframe.getResultsCount() + " results, want only " + own);
             } else {
-                wantProjected("WatchQuery", "x", qframe.getResults(0));
+                wantProjected("WatchQuery", own, qframe.getResults(0));
             }
         }
+    }
 
-        // A cross-tenant read is refused.
-        wantDenied("Get y from /tenants/x", TenantPinnedReadTest.<Registrar.TenantConfigsValueResponse>as("ledger", "/tenants/x",
-            (s, o) -> s.getTenantConfigs(Registrar.TenantConfigsGetRequest.newBuilder().setKey("y").build(), o)));
-        wantDenied("ContainsKey y from /tenants/x", TenantPinnedReadTest.<Registrar.TenantConfigsValueResponse>as("ledger", "/tenants/x",
-            (s, o) -> s.containsKeyTenantConfigs(Registrar.TenantConfigsGetRequest.newBuilder().setKey("y").build(), o)));
+    public static void main(String[] args) throws Exception {
+        key = ImmutableKey.from(KeyHelpers.newEd25519Key());
+        authorizer = authorizer(key);
+        service = new RegistrarStateService(handler(), authorizer);
+
+        Registrar.TenantConfigsGetAllRequest getAll = Registrar.TenantConfigsGetAllRequest.getDefaultInstance();
+
+        // Tenant x: its own entry only, projected, on every read RPC, under
+        // either key form.
+        for (List<String> keys : List.of(BARE_KEYS, NAMESPACE_KEYS)) {
+            held = keys;
+            ownEntryOnly(keys.get(0));
+        }
+        held = BARE_KEYS;
+
+        // A cross-tenant read is refused, under either key form.
+        for (String other : List.of("y", "/tenants/y", "/tenants/x/y", "xy", "/tenants/xy")) {
+            Registrar.TenantConfigsGetRequest req = Registrar.TenantConfigsGetRequest.newBuilder().setKey(other).build();
+            wantDenied("Get " + other + " from /tenants/x", TenantPinnedReadTest.<Registrar.TenantConfigsValueResponse>as("ledger", "/tenants/x",
+                (s, o) -> s.getTenantConfigs(req, o)));
+            wantDenied("ContainsKey " + other + " from /tenants/x", TenantPinnedReadTest.<Registrar.TenantConfigsValueResponse>as("ledger", "/tenants/x",
+                (s, o) -> s.containsKeyTenantConfigs(req, o)));
+        }
+
+        // #1009: a holder keying tenants by either form serves /tenants/x both
+        // of x's entries, and never y's nor a key that merely starts like x's.
+        held = List.of("x", "/tenants/x", "y", "/tenants/y", "xy", "/tenants/xy", "/tenants/x/y");
+        Registrar.TenantConfigsEntriesResponse mixed = only("GetAll /tenants/x, both forms held",
+            TenantPinnedReadTest.<Registrar.TenantConfigsEntriesResponse>as("ledger", "/tenants/x", (s, o) -> s.getAllTenantConfigs(getAll, o)));
+        if (mixed != null && !new TreeSet<>(mixed.getEntriesMap().keySet()).equals(new TreeSet<>(List.of("x", "/tenants/x")))) {
+            fail("GetAll: tenant x was served keys " + mixed.getEntriesMap().keySet() + ", want only [/tenants/x, x]");
+        }
+        Registrar.TenantConfigsKeysResponse mixedKeys = only("KeySet /tenants/x, both forms held",
+            TenantPinnedReadTest.<Registrar.TenantConfigsKeysResponse>as("ledger", "/tenants/x",
+                (s, o) -> s.keySetTenantConfigs(Registrar.TenantConfigsKeysRequest.getDefaultInstance(), o)));
+        if (mixedKeys != null && !mixedKeys.getKeysList().equals(List.of("x", "/tenants/x"))) {
+            fail("KeySet: " + mixedKeys.getKeysList() + ", want [x, /tenants/x]");
+        }
+        held = BARE_KEYS;
 
         // The grant is the one collection: the root's other boundary is refused.
         wantDenied("GetAllTenants from ledger", TenantPinnedReadTest.<Registrar.TenantsEntriesResponse>as("ledger", "/tenants/x",
             (s, o) -> s.getAllTenants(Registrar.TenantsGetAllRequest.getDefaultInstance(), o)));
 
-        // /system: every tenant, each projected.
-        Registrar.TenantConfigsEntriesResponse sys = only("GetAll /system",
-            TenantPinnedReadTest.<Registrar.TenantConfigsEntriesResponse>as("ledger", "/system", (s, o) -> s.getAllTenantConfigs(getAll, o)));
-        if (sys != null) {
-            if (sys.getEntriesCount() != 2) {
-                fail("GetAll from /system: keys " + sys.getEntriesMap().keySet() + ", want [x, y]");
-            }
-            for (String t : List.of("x", "y")) {
-                wantProjected("GetAll /system", t, sys.getEntriesMap().get(t));
+        // /system: every tenant, each projected, under either key form.
+        for (List<String> keys : List.of(BARE_KEYS, NAMESPACE_KEYS)) {
+            held = keys;
+            Registrar.TenantConfigsEntriesResponse sys = only("GetAll /system",
+                TenantPinnedReadTest.<Registrar.TenantConfigsEntriesResponse>as("ledger", "/system", (s, o) -> s.getAllTenantConfigs(getAll, o)));
+            if (sys != null) {
+                if (sys.getEntriesCount() != 2) {
+                    fail("GetAll from /system: keys " + sys.getEntriesMap().keySet() + ", want " + keys);
+                }
+                for (String t : keys) {
+                    wantProjected("GetAll /system", t, sys.getEntriesMap().get(t));
+                }
             }
         }
+        held = BARE_KEYS;
 
         // Any other namespace: nothing.
         for (String ns : List.of("/tenants/x/workspaces/w")) {

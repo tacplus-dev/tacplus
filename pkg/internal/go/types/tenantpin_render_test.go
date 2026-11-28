@@ -110,6 +110,8 @@ func TestGoTenantPin_HelperFileStatesTheRuleAndFormats(t *testing.T) {
 		`slice, pinned := slices[path]`,
 		`if ns == "/system" || strings.HasPrefix(ns, "/system"+"/") {`,
 		`if t, ok := strings.CutPrefix(ns, "/tenants/"); ok && t != "" && !strings.Contains(t, "/") {`,
+		// #1009: the caller's own entry under either key form, <t> or /tenants/<t>.
+		`return p == nil || p.all || key == p.tenant || key == "/tenants/"+p.tenant`,
 		`return nil, status.Errorf(codes.PermissionDenied,`,
 		`map[string]string{"gateway": "gateway", "opa": "opa"}, "tenant_name", "config")`,
 		`keeperStateServiceTenantPinKeepOnly(r, p.keyField, p.configField)`,

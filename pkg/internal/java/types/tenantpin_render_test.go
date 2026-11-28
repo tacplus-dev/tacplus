@@ -102,6 +102,8 @@ func TestJavaTenantPin_HelperClassStatesTheRule(t *testing.T) {
 		`if (ns.equals("/system") || ns.startsWith("/system" + "/")) {`,
 		`if (ns.startsWith("/tenants/")) {`,
 		`if (!t.isEmpty() && t.indexOf('/') < 0) {`,
+		// #1009: the caller's own entry under either key form, <t> or /tenants/<t>.
+		`return p == null || p.all || p.tenant.equals(key) || ("/tenants/" + p.tenant).equals(key);`,
 		`keepOnly(b, p.keyField, p.configField);`,
 		`keepOnly(cb, p.sliceField);`,
 		`b.setUnknownFields(com.google.protobuf.UnknownFieldSet.getDefaultInstance());`,

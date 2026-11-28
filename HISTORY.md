@@ -222,3 +222,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-28 looper issue A new tenant config_slice's TenantConfig field number is assigned per build, never registered (#352)
 - 2026-11-28 looper release v2.6.16 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.6.16)
 - 2026-11-28 looper issue release/2.6 is red after the hub's backport sweep: protosrc's merge writes nothing (#619 + #891) and proto-statequeue's Python floor (#880); fix forward before v2.6.16 (#1006)
+- 2026-11-28 looper issue Generated Go server's BDP pings make a streaming Swift client drop its connection (swift-nio-http2 control-frame limit) (#958)

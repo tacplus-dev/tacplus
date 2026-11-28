@@ -43,6 +43,7 @@ use tstratum_model::s2sm::internal::grpc::servers::vservices::tquery::tenant_rec
     register_method_auth, Authorizer, TenantRecordMapHandler, ValidationWrapper,
 };
 use tstratum_model::types::services::tmessaging::TMessage;
+use tstratum_model::types::sys::configpush::configpush::TenantSliceRecord;
 use tstratum_model::types::vservices::tquery::tenant_record_map_server::TenantRecordMap;
 use tstratum_model::types::vservices::tquery::*;
 
@@ -109,6 +110,20 @@ impl TenantRecordMapHandler for StoreHandler {
     async fn subscribe_t_message_count(&self, _c: Option<&Caller>, _r: QueryHandle) -> Result<tonic::Response<std::pin::Pin<Box<dyn tokio_stream::Stream<Item = Result<RecordCount, Status>> + Send>>>, Status> { self.reached(); Err(unimpl()) }
     async fn insert_if_absent_t_message(&self, _c: Option<&Caller>, _r: InsertIfAbsentTMessageRequest) -> Result<RecordWriteResult, Status> { self.reached(); Err(unimpl()) }
     async fn replace_if_unchanged_t_message(&self, _c: Option<&Caller>, _r: ReplaceIfUnchangedTMessageRequest) -> Result<RecordWriteResult, Status> { self.reached(); Err(unimpl()) }
+
+    // configpush.TenantSliceRecord, the store's pushed slices ((spec.record_store).config_push, #927).
+    async fn watch_tenant_slice_record_changes(&self, _c: Option<&Caller>, _r: WatchTenantSliceRecordChangesRequest) -> Result<collection::WatchSource<TenantSliceRecord, TenantSliceRecordWatchChange>, Status> { self.reached(); Err(unimpl()) }
+    async fn create_tenant_slice_record_query(&self, _c: Option<&Caller>, _r: OpenTenantSliceRecordQueryRequest) -> Result<QueryHandle, Status> { self.reached(); Err(unimpl()) }
+    async fn get_tenant_slice_record_count(&self, _c: Option<&Caller>, _r: QueryHandle) -> Result<RecordCount, Status> { self.reached(); Err(unimpl()) }
+    async fn get_tenant_slice_record_sample(&self, _c: Option<&Caller>, _r: SampleTenantSliceRecordRequest) -> Result<SampleTenantSliceRecordResponse, Status> { self.reached(); Err(unimpl()) }
+    async fn list_tenant_slice_record(&self, _c: Option<&Caller>, _r: PullTenantSliceRecordRequest, _p: collection::PageParams) -> Result<collection::Page<TenantSliceRecord>, Status> { self.reached(); Err(unimpl()) }
+    async fn delete_tenant_slice_record_query(&self, _c: Option<&Caller>, _r: QueryHandle) -> Result<QueryStats, Status> { self.reached(); Err(unimpl()) }
+    async fn get_tenant_slice_record_rows(&self, _c: Option<&Caller>, _r: GetTenantSliceRecordRowsRequest) -> Result<GetTenantSliceRecordRowsResponse, Status> { self.reached(); Err(unimpl()) }
+    async fn get_tenant_slice_record(&self, _c: Option<&Caller>, _r: GetTenantSliceRecordRequest) -> Result<GetTenantSliceRecordResponse, Status> { self.reached(); Err(unimpl()) }
+    async fn put_tenant_slice_record(&self, _c: Option<&Caller>, _r: PutTenantSliceRecordRequest) -> Result<RecordWriteResult, Status> { self.reached(); Err(unimpl()) }
+    async fn insert_if_absent_tenant_slice_record(&self, _c: Option<&Caller>, _r: InsertIfAbsentTenantSliceRecordRequest) -> Result<RecordWriteResult, Status> { self.reached(); Err(unimpl()) }
+    async fn replace_if_unchanged_tenant_slice_record(&self, _c: Option<&Caller>, _r: ReplaceIfUnchangedTenantSliceRecordRequest) -> Result<RecordWriteResult, Status> { self.reached(); Err(unimpl()) }
+    async fn delete_tenant_slice_record(&self, _c: Option<&Caller>, _r: DeleteTenantSliceRecordRequest) -> Result<RecordWriteResult, Status> { self.reached(); Err(unimpl()) }
 }
 
 /// The ServiceManager's AuthorizerAdapter, verbatim in what it decides: the

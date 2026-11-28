@@ -76,6 +76,7 @@ type FileDescriptor struct {
 	TimeseriesStore     bool             // Whether this service is a timeseries data store from option (spec.timeseries_store)
 	RecordStore         bool             // Whether this service is an in-memory hot event store from option (spec.record_store)
 	RecordStoreNoIngest bool             // Whether that record store declares (spec.record_store).no_bus_ingest: it derives no EventBus subscription
+	RecordStorePush     bool             // Whether that record store declares (spec.record_store).config_push: it holds configpush.TenantSliceRecord and feeds its publisher from it
 	VServiceName        string           // File-level virtual-service identity name from option (spec.vservice).name or (spec.trait).name
 	VServiceID          int32            // File-level virtual-service field id from option (spec.vservice).id or (spec.trait).id
 	Trait               *TraitDescriptor // File-level trait declaration from option (spec.trait); nil when the file declares none
@@ -610,6 +611,7 @@ func (p *DescriptorParser) parseFileDescriptor(fd protoreflect.FileDescriptor) {
 	fileDesc.TimeseriesStore = p.parseTimeseriesStore(fd)
 	fileDesc.RecordStore = p.parseRecordStore(fd)
 	fileDesc.RecordStoreNoIngest = p.parseRecordStoreNoBusIngest(fd)
+	fileDesc.RecordStorePush = p.parseRecordStoreConfigPush(fd)
 	fileDesc.VServiceName, fileDesc.VServiceID = p.parseVService(fd)
 	fileDesc.Trait = p.parseTrait(fd)
 	if fileDesc.Trait != nil && fileDesc.Trait.Name != "" {
@@ -1793,6 +1795,16 @@ func (p *DescriptorParser) parseRecordStoreNoBusIngest(fd protoreflect.FileDescr
 	}
 	rs, _ := proto.GetExtension(opts, spec.E_RecordStore).(*spec.RecordStoreAnnotation)
 	return rs.GetNoBusIngest()
+}
+
+// parseRecordStoreConfigPush reports (spec.record_store).config_push.
+func (p *DescriptorParser) parseRecordStoreConfigPush(fd protoreflect.FileDescriptor) bool {
+	opts := fd.Options().(*descriptorpb.FileOptions)
+	if opts == nil || !proto.HasExtension(opts, spec.E_RecordStore) {
+		return false
+	}
+	rs, _ := proto.GetExtension(opts, spec.E_RecordStore).(*spec.RecordStoreAnnotation)
+	return rs.GetConfigPush()
 }
 
 // parseVService extracts the file-level (spec.vservice) virtual-service identity

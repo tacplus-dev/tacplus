@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tacplus-dev/tacplus/pkg/internal/proto"
 	"github.com/tacplus-dev/tacplus/pkg/internal/tactype"
 	"github.com/tacplus-dev/tacplus/templates"
 )
@@ -78,6 +79,52 @@ func TestJavaServiceManagerServesConfigPush(t *testing.T) {
 			if !strings.Contains(string(src), want) {
 				t.Fatalf("%s is missing %q", file, want)
 			}
+		}
+	}
+}
+
+// A (spec.record_store).config_push store's ServiceManager feeds its publisher
+// from its own configpush.TenantSliceRecord entries, watched through the
+// Handler's watchTenantSliceRecordChanges on the plane it hosts (tacplus#927).
+func TestJavaRecordStoreConfigPushFeed(t *testing.T) {
+	plane := &proto.ConfigPushFeedPlane{Package: "tquery", S2SService: "TenantRecordMap", ProtoFile: "vservices/tquery.proto"}
+	entries := []javaGrpcServiceEntry{
+		{ServiceName: "TStratum", PackageName: "tstratum", HandlerType: "TStratumHandler"},
+		{ServiceName: "TenantRecordMap", PackageName: "tquery", HandlerType: "TenantRecordMapHandler",
+			GetterName: "getTenantRecordMapGrpcImpl", WrapperPackage: "com.example.model.s2sm.internal.grpc.servers.vservices.tquery"},
+	}
+	cfg := &tactype.Config{JavaPackageBase: "com.example.model"}
+	feed, err := javaConfigPushFeedFor(cfg, "", plane, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := javaConfigPushFeed{
+		Method:      "watchTenantSliceRecordChanges",
+		HandlerType: "com.example.model.s2sm.internal.grpc.servers.vservices.tquery.TenantRecordMap.TenantRecordMapHandler",
+		GetterName:  "getTenantRecordMapGrpcImpl",
+		RequestType: "com.example.model.types.vservices.tquery.Tquery.WatchTenantSliceRecordChangesRequest",
+		ChangeType:  "com.example.model.types.vservices.tquery.Tquery.TenantSliceRecordWatchChange",
+		ChangeEnum:  "com.example.model.types.vservices.tquery.Tquery.RecordChangeType",
+	}
+	if *feed != want {
+		t.Fatalf("feed = %+v\nwant %+v", *feed, want)
+	}
+	if _, err := javaConfigPushFeedFor(cfg, "", plane, entries[:1]); err == nil {
+		t.Fatal("a store that hosts no plane to watch must fail generation")
+	}
+	src, err := templates.FS.ReadFile("java/types/ServiceManager.java.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{
+		"configPushFeed = new ConfigPushFeed(configPushPublisher, () -> {",
+		"feedPlane.{{.Method}}(null, {{.RequestType}}.newBuilder().setTargetTenant(feedTid).build());",
+		"c.getType() == {{.ChangeEnum}}.RECORD_CHANGE_TYPE_DELETE",
+		"configPushFeed.start();",
+		"configPushFeed.close();",
+	} {
+		if !strings.Contains(string(src), w) {
+			t.Fatalf("ServiceManager.java.tmpl is missing %q", w)
 		}
 	}
 }

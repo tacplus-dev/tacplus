@@ -24,6 +24,9 @@ import {{.ChassisBase}}.configpush.ConfigPushReceiver;
 {{- end}}
 {{- if .ConfigPushOwners}}
 import {{.ChassisBase}}.configpush.ConfigPushPublisher;
+{{- if .ConfigPushFeed}}
+import {{.ChassisBase}}.configpush.ConfigPushFeed;
+{{- end}}
 {{- end}}
 {{- if .HasTenantDeletion}}
 import {{.ChassisBase}}.tenantdeletion.TenantDeletionRunner;
@@ -178,6 +181,11 @@ public class ServiceManager implements AutoCloseable {
     private final ConfigPushPublisher configPushPublisher;
     /** A connection to each owner's label, its endpoints from service health. */
     private final java.util.Map<String, ServiceConnection> configPushConns;
+{{- if .ConfigPushFeed}}
+    // Feeds the publisher from this store's own configpush.TenantSliceRecord
+    // entries ((spec.record_store).config_push); started by run.
+    private volatile ConfigPushFeed configPushFeed;
+{{- end}}
     private final java.util.concurrent.ScheduledExecutorService configPushClock =
             java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "configpush-reconnect");
@@ -941,6 +949,11 @@ public class ServiceManager implements AutoCloseable {
 	        smbAuthorityConn.close();
 	{{- end}}
 {{- if .ConfigPushOwners}}
+{{- if .ConfigPushFeed}}
+        if (configPushFeed != null) {
+            configPushFeed.close();
+        }
+{{- end}}
         configPushPublisher.close();
         configPushClock.shutdownNow();
         configPushConns.values().forEach(ServiceConnection::close);
@@ -1270,6 +1283,35 @@ public class ServiceManager implements AutoCloseable {
         if (identity.hasAuth()) {
             authorizer.setHostNamespaceFromToken(identity.getToken());
         }
+{{- with .ConfigPushFeed}}
+        // The publisher is fed from the store's own configpush.TenantSliceRecord
+        // entries (tacplus#927), watched through the Handler's {{.Method}} as the
+        // store's own feed, with no caller, routed to the instance's own tenant.
+        {
+            final String feedTid = identity.hasAuth()
+                    ? {{$.ChassisBase}}.serviceconnection.RouteTenant.tenantOfInstance({{$.ChassisBase}}.token.TokenWrapper.parse(identity.getToken()).getSubject())
+                    : "";
+            final {{.HandlerType}} feedPlane = handler.{{.GetterName}}();
+            configPushFeed = new ConfigPushFeed(configPushPublisher, () -> {
+                {{$.ChassisBase}}.collection.CollectionRuntime.WatchSource<{{$.TypesBase}}.sys.configpush.Configpush.TenantSliceRecord, {{.ChangeType}}> src =
+                        feedPlane.{{.Method}}(null, {{.RequestType}}.newBuilder().setTargetTenant(feedTid).build());
+                java.util.Iterator<{{.ChangeType}}> changes = src.changes == null ? null : src.changes.get();
+                return new ConfigPushFeed.Source(src.snapshot, src.revision, changes == null ? null : new java.util.Iterator<ConfigPushFeed.Change>() {
+                    @Override
+                    public boolean hasNext() {
+                        return changes.hasNext();
+                    }
+
+                    @Override
+                    public ConfigPushFeed.Change next() {
+                        {{.ChangeType}} c = changes.next();
+                        return new ConfigPushFeed.Change(c.getItem(), c.getRevision(), c.getType() == {{.ChangeEnum}}.RECORD_CHANGE_TYPE_DELETE);
+                    }
+                });
+            }, {{$.ChassisBase}}.backoff.Backoff.THREAD_SLEEPER);
+            configPushFeed.start();
+        }
+{{- end}}
         // Register per-method auth_services patterns from proto annotations.
 {{- range .GrpcServices}}
 {{- if and .HasMethodAuth (not .IsC2D)}}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/template"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/header"
@@ -92,4 +93,36 @@ func writeConfigPushModule(config *tactype.Config, data smTemplateData, name str
 	}
 	zap.L().Info("Generated Rust config push module", zap.String("path", outputPath))
 	return nil
+}
+
+// rustConfigPushFeed names the Watch<T>Changes of configpush.TenantSliceRecord
+// on the record plane's S2S service a (spec.record_store).config_push store
+// hosts (tacplus#927), which the ServiceManager feeds its publisher from.
+type rustConfigPushFeed struct {
+	Method     string // "watch_tenant_slice_record_changes"
+	GetterName string // the Handler's getter of the plane's handler
+	ModPath    string // the plane's types module
+	Request    string // "WatchTenantSliceRecordChangesRequest"
+}
+
+// rustConfigPushFeedFor finds the plane's S2S service among the services the
+// build hosts; a config_push store whose plane it does not host has nothing
+// to watch, which is a generator error.
+func rustConfigPushFeedFor(plane *stateproto.ConfigPushFeedPlane, entries []grpcServiceEntry) (*rustConfigPushFeed, error) {
+	if plane == nil {
+		return nil, nil
+	}
+	for _, e := range entries {
+		if e.GrpcServiceName != plane.Package+"."+plane.S2SService &&
+			e.GrpcServiceName != strings.SplitN(plane.Package, ".", 2)[0]+"."+plane.S2SService {
+			continue
+		}
+		return &rustConfigPushFeed{
+			Method:     "watch_" + strutil.ToSnakeCase(stateproto.TenantSliceRecordName) + "_changes",
+			GetterName: e.GetterName,
+			ModPath:    e.ModPath,
+			Request:    "Watch" + stateproto.TenantSliceRecordName + "ChangesRequest",
+		}, nil
+	}
+	return nil, fmt.Errorf("config push feed: the build hosts no %s.%s, the record plane configpush.TenantSliceRecord is watched on", plane.Package, plane.S2SService)
 }

@@ -24,7 +24,7 @@
 //! label. The publisher holds nothing durable: the store is the slices'
 //! source, and it feeds every slice it holds again after its own restart.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -40,7 +40,7 @@ use tracing::{debug, info, warn};
 
 use {{.CrateBasePathUnderscore}}_types::sys::configpush::configpush::{
     config_push_frame, ConfigPushAck, ConfigPushFrame, ConfigPushOutcome, ConfigPushSlice, ConfigPushSnapshot,
-    ConfigPushVersion,
+    ConfigPushVersion, TenantSliceRecord,
 };
 
 /// A boxed future, as an [`Opener`] and the reconnect clock return.
@@ -163,6 +163,134 @@ impl Publisher {
             let _ = t.await;
         }
     }
+}
+
+/// A stream of a store's watch.
+pub type FeedStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send>>;
+
+/// One acked write of a configpush.TenantSliceRecord entry: its record (its
+/// key alone when deleted) at the revision the store gave it.
+pub struct FeedChange {
+    pub record: TenantSliceRecord,
+    pub revision: i64,
+    pub deleted: bool,
+}
+
+/// One watch of the store's configpush.TenantSliceRecord entries, as its
+/// Watch<T>Changes from revision 0 answers it: every entry, the revision the
+/// snapshot is at, then every acked write after it.
+pub struct FeedSource {
+    pub snapshot: FeedStream<TenantSliceRecord>,
+    pub revision: i64,
+    pub changes: Option<FeedStream<FeedChange>>,
+}
+
+/// Opens one watch of the store's entries.
+pub type FeedWatcher = Arc<dyn Fn() -> BoxFuture<Result<FeedSource, Status>> + Send + Sync>;
+
+impl Publisher {
+    /// Feeds the publisher from a (spec.record_store).config_push store's own
+    /// configpush.TenantSliceRecord entries (tacplus#927), until it is closed:
+    ///
+    /// - each entry of the snapshot is put at the snapshot's revision, which
+    ///   is at least the entry's own, and a slice fed before that the snapshot
+    ///   no longer holds is removed at it;
+    /// - then each acked write is put, or removed for a delete, at its
+    ///   revision;
+    /// - after any end of the watch (an error, the end of its feed, a resume
+    ///   point the store no longer holds) it watches again from 0 on the
+    ///   reconnect schedule, jittered: the snapshot again tells it every slice.
+    ///
+    /// The publisher sends each owner only a version newer than the one it
+    /// holds, so feeding a slice again changes nothing at its owner.
+    pub fn feed(&self, watch: FeedWatcher) {
+        let mut streams = self.inner.streams.lock().unwrap_or_else(|e| e.into_inner());
+        if streams.closed {
+            return;
+        }
+        streams.tasks.push(tokio::spawn(feed(self.clone(), watch)));
+    }
+}
+
+/// Watches until the publisher is closed.
+async fn feed(p: Publisher, watch: FeedWatcher) {
+    let mut closed = p.inner.closed.subscribe();
+    let mut delay = RECONNECT_INITIAL_BACKOFF;
+    // Every slice the feed holds present at the publisher.
+    let mut fed: HashSet<i32> = HashSet::new();
+    loop {
+        let fresh = tokio::select! {
+            fresh = feed_once(&p, &watch, &mut fed) => fresh,
+            _ = until_closed(&mut closed) => return,
+        };
+        if *closed.borrow() {
+            return;
+        }
+        if fresh {
+            delay = RECONNECT_INITIAL_BACKOFF;
+        }
+        tokio::select! {
+            _ = (p.inner.sleep)(jitter_reconnect_backoff(delay)) => {}
+            _ = until_closed(&mut closed) => return,
+        }
+        delay = next_reconnect_backoff(delay);
+    }
+}
+
+/// Runs one watch until it ends. Whether its snapshot was complete, which
+/// starts the reconnect schedule over.
+async fn feed_once(p: &Publisher, watch: &FeedWatcher, fed: &mut HashSet<i32>) -> bool {
+    let src = match watch().await {
+        Ok(src) => src,
+        Err(status) => {
+            warn!(code = ?status.code(), "configpush: watching the store's slices failed: {}", status.message());
+            return false;
+        }
+    };
+    let mut snapshot = HashSet::new();
+    let mut entries = src.snapshot;
+    while let Some(entry) = entries.next().await {
+        match entry {
+            Ok(r) => {
+                if p.put(r.slice_field, src.revision, r.value) {
+                    snapshot.insert(r.slice_field);
+                }
+            }
+            Err(status) => {
+                warn!(code = ?status.code(), "configpush: the store's slice feed failed: {}", status.message());
+                return false;
+            }
+        }
+    }
+    fed.retain(|f| {
+        if snapshot.contains(f) {
+            return true;
+        }
+        p.remove(*f, src.revision);
+        false
+    });
+    fed.extend(snapshot);
+    if let Some(mut changes) = src.changes {
+        while let Some(change) = changes.next().await {
+            match change {
+                Ok(c) if c.deleted => {
+                    p.remove(c.record.slice_field, c.revision);
+                    fed.remove(&c.record.slice_field);
+                }
+                Ok(c) => {
+                    if p.put(c.record.slice_field, c.revision, c.record.value) {
+                        fed.insert(c.record.slice_field);
+                    }
+                }
+                Err(status) => {
+                    warn!(code = ?status.code(), "configpush: the store's slice feed failed: {}", status.message());
+                    return true;
+                }
+            }
+        }
+    }
+    warn!("configpush: the store's slice feed ended");
+    true
 }
 
 /// Resolves once the publisher is closed.
@@ -532,5 +660,129 @@ mod tests {
         let (again, _) = clock.next().await;
         assert!(again <= Duration::from_millis(625), "an answered stream resets the schedule: {again:?}");
         p.close().await;
+    }
+
+    /// The store's entries as its watch answers them: each watch a snapshot,
+    /// then the writes sent on its changes until the store ends it.
+    #[derive(Clone, Default)]
+    struct Store {
+        state: Arc<Mutex<StoreState>>,
+        watches: Arc<AtomicUsize>,
+    }
+
+    #[derive(Default)]
+    struct StoreState {
+        entries: BTreeMap<i32, String>,
+        revision: i64,
+        changes: Option<mpsc::UnboundedSender<Result<FeedChange, Status>>>,
+        refuse: bool,
+    }
+
+    impl Store {
+        fn watcher(&self) -> FeedWatcher {
+            let s = self.clone();
+            Arc::new(move || {
+                let s = s.clone();
+                Box::pin(async move {
+                    s.watches.fetch_add(1, Ordering::SeqCst);
+                    let mut st = s.state.lock().unwrap();
+                    if st.refuse {
+                        return Err(Status::unavailable("replaying"));
+                    }
+                    let snap: Vec<Result<TenantSliceRecord, Status>> = st
+                        .entries
+                        .iter()
+                        .map(|(f, v)| Ok(TenantSliceRecord { slice_field: *f, value: value(v), ..Default::default() }))
+                        .collect();
+                    let (tx, rx) = mpsc::unbounded_channel();
+                    st.changes = Some(tx);
+                    let changes: FeedStream<FeedChange> = Box::pin(UnboundedReceiverStream::new(rx));
+                    Ok(FeedSource { snapshot: Box::pin(tokio_stream::iter(snap)), revision: st.revision, changes: Some(changes) })
+                })
+            })
+        }
+
+        /// Writes field's entry, or deletes it for None; quiet leaves the open watch without it.
+        fn write(&self, field: i32, v: Option<&str>, quiet: bool) {
+            let mut st = self.state.lock().unwrap();
+            st.revision += 1;
+            let mut record = TenantSliceRecord { slice_field: field, ..Default::default() };
+            match v {
+                Some(v) => {
+                    st.entries.insert(field, v.to_string());
+                    record.value = value(v);
+                }
+                None => {
+                    st.entries.remove(&field);
+                }
+            }
+            let c = FeedChange { record, revision: st.revision, deleted: v.is_none() };
+            if let (Some(tx), false) = (&st.changes, quiet) {
+                let _ = tx.send(Ok(c));
+            }
+        }
+
+        /// Ends the open watch with status.
+        fn end(&self, status: Status) {
+            if let Some(tx) = self.state.lock().unwrap().changes.take() {
+                let _ = tx.send(Err(status));
+            }
+        }
+    }
+
+    /// The snapshot of the store's entries at its revision, then each acked
+    /// write at its own, a delete as absent; after any end of the watch, a
+    /// watch again on the reconnect schedule, whose snapshot removes a slice
+    /// deleted meanwhile.
+    #[tokio::test]
+    async fn feed_snapshot_then_writes_and_again_after_an_end() {
+        let f = Fleet::new();
+        let kernel = f.start("kernel", KERNEL);
+        let audit = f.start("audit", AUDIT);
+        let (clock, sleep) = Clock::new();
+        let p = publisher(&f, sleep);
+        let s = Store::default();
+        s.write(KERNEL, Some("a"), false);
+        s.write(99, Some("unregistered"), false);
+        s.write(KERNEL, Some("b"), false);
+
+        p.feed(s.watcher());
+        eventually(&kernel, KERNEL, Some("b@3"), "the snapshot, at the store's revision").await;
+        s.write(AUDIT, Some("x"), false);
+        eventually(&audit, AUDIT, Some("x@4"), "a put, at its revision").await;
+        s.write(KERNEL, None, false);
+        eventually(&kernel, KERNEL, None, "a delete is pushed as absent").await;
+        clock.none("the watch never ended").await;
+
+        // The watch ends; meanwhile audit's entry is deleted and kernel's written.
+        s.end(Status::out_of_range("resume point no longer held"));
+        let (first, release) = clock.next().await;
+        assert!(first <= Duration::from_millis(625), "a complete snapshot starts the schedule over: {first:?}");
+        s.write(AUDIT, None, true);
+        s.write(KERNEL, Some("c"), true);
+        let _ = release.send(());
+        eventually(&kernel, KERNEL, Some("c@7"), "the snapshot again").await;
+        eventually(&audit, AUDIT, None, "a slice the snapshot again no longer holds is removed").await;
+
+        // A refused watch is retried on a growing schedule.
+        s.state.lock().unwrap().refuse = true;
+        s.end(Status::unavailable("restarting"));
+        clock.run().await;
+        let (grown, release) = clock.next().await;
+        assert!(grown >= Duration::from_millis(1000), "a refused watch grows the schedule: {grown:?}");
+        s.state.lock().unwrap().refuse = false;
+        let _ = release.send(());
+        for _ in 0..500 {
+            if s.watches.load(Ordering::SeqCst) == 4 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(s.watches.load(Ordering::SeqCst), 4, "a watch again after each end");
+        s.write(KERNEL, Some("d"), false);
+        eventually(&kernel, KERNEL, Some("d@8"), "writes after the watch is admitted again").await;
+
+        p.close().await;
+        clock.none("a closed publisher").await;
     }
 }

@@ -336,7 +336,22 @@ record store runs:
   `sm.config_push_publisher()`). Its owners are every service the registry gives
   a `tenant_slice_field`; each stream goes on a connection to the owner's label
   with a token for that owner. The ServiceManager closes it with itself. The
-  store's code feeds it.
+  store's code feeds it, unless the store declares
+  `(spec.record_store).config_push`.
+- A store declaring `config_push` holds its pushed slices as the sys record
+  `configpush.TenantSliceRecord {slice_field, value}`, keyed by `slice_field`,
+  on its record plane's S2S half (its write surface and its
+  `WatchTenantSliceRecordChanges`, the trait's audience). Its ServiceManager
+  feeds the publisher from it: it calls the Handler's
+  `WatchTenantSliceRecordChanges` (Java: `watchTenantSliceRecordChanges`; Rust:
+  `watch_tenant_slice_record_changes`) with no caller (Go `nil`, Java `null`,
+  Rust `None`), the store's own feed, routed to its own tid. Each snapshot entry
+  is put at the snapshot's revision, then each acked write at its own, a delete
+  as `remove`; a slice fed before that a later snapshot no longer holds is
+  removed at it. Any end of the watch (an error, the end of its changes,
+  `OUT_OF_RANGE`) watches again from 0 on the reconnect schedule. The feed's
+  engine is `Publisher.Feed(Watcher)` (Go), `ConfigPushFeed` (Java) and
+  `Publisher::feed(FeedWatcher)` (Rust), in `chassis/configpush`.
 
 ## Handler And Wrappers
 

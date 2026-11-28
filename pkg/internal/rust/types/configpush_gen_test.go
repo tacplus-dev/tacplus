@@ -192,3 +192,40 @@ func TestRecordStoreConfigPushPublisherModule(t *testing.T) {
 		}
 	}
 }
+
+// A (spec.record_store).config_push store's ServiceManager feeds its publisher
+// from its own configpush.TenantSliceRecord entries, watched through the
+// Handler's watch_tenant_slice_record_changes on the plane it hosts
+// (tacplus#927).
+func TestRustRecordStoreConfigPushFeed(t *testing.T) {
+	plane := &stateproto.ConfigPushFeedPlane{Package: "tquery", S2SService: "TenantRecordMap"}
+	entries := []grpcServiceEntry{
+		{GrpcServiceName: "tstratum.TStratum", GetterName: "t_stratum_grpc_impl"},
+		{GrpcServiceName: "tquery.TenantRecordMap", GetterName: "tenant_record_map_grpc_impl", ModPath: "crate::types::vservices::tquery::tquery"},
+	}
+	feed, err := rustConfigPushFeedFor(plane, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := rustConfigPushFeed{Method: "watch_tenant_slice_record_changes", GetterName: "tenant_record_map_grpc_impl",
+		ModPath: "crate::types::vservices::tquery::tquery", Request: "WatchTenantSliceRecordChangesRequest"}
+	if *feed != want {
+		t.Fatalf("feed = %+v\nwant %+v", *feed, want)
+	}
+	if _, err := rustConfigPushFeedFor(plane, entries[:1]); err == nil {
+		t.Fatal("a store that hosts no plane to watch must fail generation")
+	}
+	src, err := templates.FS.ReadFile("rust/types/service_manager.rs.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{
+		".{{.Method}}(None, {{.ModPath}}::{{.Request}} { target_tenant: tid, ..Default::default() })",
+		"deleted: c.r#type == {{.ModPath}}::RecordChangeType::Delete as i32,",
+		"self.config_push_publisher.feed(watch);",
+	} {
+		if !strings.Contains(string(src), w) {
+			t.Fatalf("service_manager.rs.tmpl is missing %q", w)
+		}
+	}
+}

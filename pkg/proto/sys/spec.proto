@@ -2841,6 +2841,17 @@ message RecordStoreAnnotation {
   //
   // Example: option (spec.record_store) = {no_bus_ingest: true};
   bool no_bus_ingest = 1;
+
+  // config_push declares that this store, a tenant's record store (a
+  // tenant-owned service), holds the tenant's pushed config slices
+  // (tacplus#927) as the sys record configpush.TenantSliceRecord, keyed by
+  // the slice's registered tenant_slice_field. Its record plane carries the
+  // record on its S2S half, and the generated ServiceManager watches it and
+  // feeds every acked write to the store's config push publisher, at the
+  // revision the store gave it. Unset adds nothing, so it is additive.
+  //
+  // Example: option (spec.record_store) = {no_bus_ingest: true, config_push: true};
+  bool config_push = 2;
 }
 
 // ServiceHealthAnnotation declares a typed health message for a service.

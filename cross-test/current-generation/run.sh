@@ -831,7 +831,7 @@ run_java_generated_self_tests() {
 
   : >"$test_log"
   local pattern source_file package_name class_name
-  for pattern in '*/chassis/spiffe/SpiffeVectorsTest.java' '*/chassis/x509/ImmutableCertChainTest.java' '*/chassis/grpcserver/AuthorizerBehaviorTest.java' '*/chassis/collection/CollectionRuntimeTest.java' '*/chassis/approval/ApprovalCanonicalTest.java' '*/chassis/grpcconfig/ConfigDefaultsTest.java' '*/chassis/grpcconfig/RedactionInstalledTest.java' '*/chassis/logger/LogbackConfiguratorSecurityTest.java' '*/chassis/diskstore/DiskStoreTest.java' '*/chassis/diskstore/AppendLogTest.java' '*/chassis/backoff/BackoffTest.java' '*/chassis/service_im/IdentityManagerRejectionTest.java' '*/chassis/token/TokenProductTest.java' '*/chassis/configpush/ConfigPushReceiverTest.java' '*/chassis/configpush/ConfigPushPublisherTest.java' '*/chassis/tenantdeletion/TenantDeletionRunnerTest.java'; do
+  for pattern in '*/chassis/spiffe/SpiffeVectorsTest.java' '*/chassis/x509/ImmutableCertChainTest.java' '*/chassis/grpcserver/AuthorizerBehaviorTest.java' '*/chassis/collection/CollectionRuntimeTest.java' '*/chassis/approval/ApprovalCanonicalTest.java' '*/chassis/grpcconfig/ConfigDefaultsTest.java' '*/chassis/grpcconfig/RedactionInstalledTest.java' '*/chassis/logger/LogbackConfiguratorSecurityTest.java' '*/chassis/diskstore/DiskStoreTest.java' '*/chassis/diskstore/AppendLogTest.java' '*/chassis/backoff/BackoffTest.java' '*/chassis/service_im/IdentityManagerRejectionTest.java' '*/chassis/token/TokenProductTest.java' '*/chassis/configpush/ConfigPushReceiverTest.java' '*/chassis/configpush/ConfigPushPublisherTest.java' '*/chassis/configpush/ConfigPushFeedTest.java' '*/chassis/tenantdeletion/TenantDeletionRunnerTest.java'; do
     source_file="$(find "$output/src/main/java" -type f -path "$pattern" -print -quit)"
     [[ -n "$source_file" ]] || die "missing generated Java self-test source: $pattern"
     package_name="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$source_file")"
@@ -2632,33 +2632,42 @@ install_tenant_record_c2s_selftest() {
 # assert_tenantrecord_config_push checks that the tenant-record fixture's
 # tenant-owned record store (tstratum) holds a config push publisher of every
 # owner its registry gives a tenant_slice_field (tmessaging, field 1; #927),
-# and that the writer, no record store, holds none.
+# fed from its own configpush.TenantSliceRecord entries ((spec.record_store)
+# .config_push), and that the writer, no record store, holds none.
 assert_tenantrecord_config_push() {
   local output="$1"
   local language="$2"
   local self="$3"
-  local file="" want owner
+  local file="" want owner feed feedfile
   case "$language" in
     java)
       file="$(find "$output" -type f -path '*/s2sm/ServiceManager.java' -print -quit)"
       want='new ConfigPushPublisher(configPushOwners,'
       owner='configPushOwners.put(1, "tmessaging");'
+      feed='configPushFeed = new ConfigPushFeed(configPushPublisher, () -> {'
+      feedfile="$file"
       ;;
     go)
       file="$(find "$output" -type f -path '*/s2sm/configpush_publisher.go' -print -quit)"
       want='func (sm *ServiceManager) ConfigPushPublisher() *configpush.Publisher'
       owner='1: "tmessaging",'
+      feed='plane.WatchTenantSliceRecordChanges(nil,'
+      feedfile="$file"
       ;;
     rust)
       file="$(find "$output" -type f -path '*/s2sm/config_push_publisher.rs' -print -quit)"
       want='configpush::Publisher::new(owners(), opener)'
       owner='(1, "tmessaging".to_string()),'
+      feed='self.config_push_publisher.feed(watch);'
+      feedfile="$(dirname "$file")/mod.rs"
       ;;
     *) return 0 ;;
   esac
   if [[ "$self" == "tstratum" ]]; then
     [[ -n "$file" ]] && grep -qF "$want" "$file" && grep -qF "$owner" "$file" \
       || die "tenant-record fixture ($language): the record store holds no config push publisher of tmessaging's slice 1"
+    grep -qF "$feed" "$feedfile" \
+      || die "tenant-record fixture ($language): the record store does not feed its publisher from configpush.TenantSliceRecord"
     # A store implemented outside tacplus reads its owners from codegen-config.json.
     if [[ "$language" == "java" ]]; then
       python3 -I -c 'import json, sys; sys.exit(json.load(open(sys.argv[1])).get("configPushOwners") != [{"sliceField": 1, "owner": "tmessaging"}])' \

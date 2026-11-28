@@ -196,6 +196,9 @@ type javaSmTemplateData struct {
 	// ConfigPushOwners are the owners a tenant's record store pushes slices
 	// to (tacplus#927): the ServiceManager holds a ConfigPushPublisher of them.
 	ConfigPushOwners []stateproto.ConfigPushOwner
+	// ConfigPushFeed is the record plane a (spec.record_store).config_push
+	// store feeds its publisher from (tacplus#927), nil for any other build.
+	ConfigPushFeed *javaConfigPushFeed
 	// HasTenantDeletion is a product custodian's (#475): its Handler has
 	// onTenantDeleted, and the ServiceManager runs it for each tid of the
 	// fleet's TenantDeletions root (sys/tenantdeletion.proto), read-only.
@@ -472,6 +475,16 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 	configPushOwners, err := stateproto.RecordStorePushOwners(config.InputDir, config.FlatProtoDir, config.SelfPackage, config.ServiceLabel())
 	if err != nil {
 		return javaSmTemplateData{}, err
+	}
+	var configPushFeed *javaConfigPushFeed
+	if len(configPushOwners) > 0 && hasTlsGrpc {
+		plane, err := stateproto.RecordStoreConfigPushFeed(config.FlatProtoDir, config.SelfPackage, config.ServiceLabel())
+		if err != nil {
+			return javaSmTemplateData{}, err
+		}
+		if configPushFeed, err = javaConfigPushFeedFor(config, protoDir, plane, grpcSvcs); err != nil {
+			return javaSmTemplateData{}, err
+		}
 	}
 	hasMemberPort := false
 	smbAuthorityServiceID := ""
@@ -765,6 +778,7 @@ func buildJavaSmTemplateData(config *tactype.Config, svcs []ServiceInfo, clientS
 		HasMemberPort:               hasMemberPort,
 		ConfigPushSlices:            configPushSlices,
 		ConfigPushOwners:            configPushOwners,
+		ConfigPushFeed:              configPushFeed,
 		HasTenantDeletion:           hasTenantDeletion,
 		TenantDeletionGroupAccessor: tenantDeletionGroupAccessor,
 		TenantDeletionStateAccessor: tenantDeletionStateAccessor,

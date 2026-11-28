@@ -1,0 +1,188 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+
+package configpush
+
+import (
+	"context"
+	"iter"
+	"sync"
+	"testing"
+
+	configpush_pb "{{.ModuleBasePath}}/types/sys/configpush"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// feedStore is a store's configpush.TenantSliceRecord entries as its watch
+// answers them: each watch a snapshot of the entries, then the writes sent
+// on its changes until the store ends it.
+type feedStore struct {
+	mu       sync.Mutex
+	entries  map[int32]string
+	revision int64
+	watches  int
+	changes  chan FeedChange
+	ended    chan error
+	refuse   error
+}
+
+func newFeedStore() *feedStore {
+	return &feedStore{entries: map[int32]string{}}
+}
+
+func (s *feedStore) watch(ctx context.Context) (*FeedSource, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.watches++
+	if s.refuse != nil {
+		return nil, s.refuse
+	}
+	var snap []*configpush_pb.TenantSliceRecord
+	for f, v := range s.entries {
+		snap = append(snap, &configpush_pb.TenantSliceRecord{SliceField: f, Value: pushValue(v)})
+	}
+	changes, ended := make(chan FeedChange), make(chan error, 1)
+	s.changes, s.ended = changes, ended
+	return &FeedSource{
+		Snapshot: func(yield func(*configpush_pb.TenantSliceRecord, error) bool) {
+			for _, r := range snap {
+				if !yield(r, nil) {
+					return
+				}
+			}
+		},
+		Revision: s.revision,
+		Changes: iter.Seq2[FeedChange, error](func(yield func(FeedChange, error) bool) {
+			for {
+				select {
+				case c := <-changes:
+					if !yield(c, nil) {
+						return
+					}
+				case err := <-ended:
+					yield(FeedChange{}, err)
+					return
+				case <-ctx.Done():
+					return
+				}
+			}
+		}),
+	}, nil
+}
+
+// put writes field's entry, as an acked Put, and sends it on the open watch.
+func (s *feedStore) put(field int32, v string) {
+	s.mu.Lock()
+	s.revision++
+	s.entries[field] = v
+	c := FeedChange{Record: &configpush_pb.TenantSliceRecord{SliceField: field, Value: pushValue(v)}, Revision: s.revision}
+	changes := s.changes
+	s.mu.Unlock()
+	if changes != nil {
+		changes <- c
+	}
+}
+
+// remove deletes field's entry; quiet leaves the open watch without it.
+func (s *feedStore) remove(field int32, quiet bool) {
+	s.mu.Lock()
+	s.revision++
+	delete(s.entries, field)
+	c := FeedChange{Record: &configpush_pb.TenantSliceRecord{SliceField: field}, Revision: s.revision, Deleted: true}
+	changes := s.changes
+	s.mu.Unlock()
+	if changes != nil && !quiet {
+		changes <- c
+	}
+}
+
+// end ends the open watch with err, as a resume point the store no longer holds does.
+func (s *feedStore) end(err error) {
+	s.mu.Lock()
+	ended := s.ended
+	s.changes, s.ended = nil, nil
+	s.mu.Unlock()
+	ended <- err
+}
+
+func (s *feedStore) watchCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.watches
+}
+
+// The snapshot of the store's entries at its revision, then each acked write
+// at its own, a delete as absent.
+func TestFeedSnapshotThenWrites(t *testing.T) {
+	f := newPushFleet(t)
+	kernel := f.start("kernel", kernelField)
+	audit := f.start("audit", auditField)
+	c := newPushClock()
+	p := newTestPublisher(f, c)
+	defer p.Close()
+	s := newFeedStore()
+	s.put(kernelField, "a")
+	s.put(99, "unregistered")
+	s.put(kernelField, "b")
+
+	p.Feed(s.watch)
+	eventually(t, kernel, kernelField, "b@3", "the snapshot, at the store's revision")
+
+	s.put(auditField, "x")
+	eventually(t, audit, auditField, "x@4", "a put, at its revision")
+	s.put(kernelField, "c")
+	eventually(t, kernel, kernelField, "c@5", "a put, at its revision")
+	s.remove(kernelField, false)
+	eventually(t, kernel, kernelField, "", "a delete is pushed as absent")
+	c.none(t, "the watch never ended")
+	if s.watchCount() != 1 {
+		t.Fatalf("one watch while it holds: %d", s.watchCount())
+	}
+}
+
+// After any end of the watch, it watches again from 0 on the reconnect
+// schedule, and the new snapshot removes a slice deleted meanwhile.
+func TestFeedWatchesAgainAfterItEnds(t *testing.T) {
+	f := newPushFleet(t)
+	kernel := f.start("kernel", kernelField)
+	audit := f.start("audit", auditField)
+	c := newPushClock()
+	p := newTestPublisher(f, c)
+	s := newFeedStore()
+	s.put(kernelField, "a")
+	s.put(auditField, "x")
+	p.Feed(s.watch)
+	eventually(t, kernel, kernelField, "a@2", "the snapshot")
+	eventually(t, audit, auditField, "x@2", "the snapshot")
+
+	// The watch ends; meanwhile audit's entry is deleted and kernel's written.
+	s.end(status.Error(codes.OutOfRange, "resume point no longer held"))
+	c.next(t)
+	s.remove(auditField, true)
+	s.put(kernelField, "b")
+	c.release <- struct{}{}
+	eventually(t, kernel, kernelField, "b@4", "the snapshot again")
+	eventually(t, audit, auditField, "", "a slice the snapshot again no longer holds is removed")
+	if s.watchCount() != 2 {
+		t.Fatalf("a watch again after it ends: %d", s.watchCount())
+	}
+
+	// A refused watch is retried the same way.
+	s.mu.Lock()
+	s.refuse = status.Error(codes.Unavailable, "replaying")
+	s.mu.Unlock()
+	s.end(status.Error(codes.Unavailable, "restarting"))
+	c.run(t)
+	c.next(t)
+	s.mu.Lock()
+	s.refuse = nil
+	s.mu.Unlock()
+	c.release <- struct{}{}
+	s.put(kernelField, "c")
+	eventually(t, kernel, kernelField, "c@5", "writes after the watch is admitted again")
+
+	// A closed publisher watches no more, though the store's iterator blocks.
+	p.Close()
+	c.none(t, "a closed publisher")
+}

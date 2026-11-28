@@ -109,6 +109,21 @@ enum ConfigPushOutcome {
   CONFIG_PUSH_OUTCOME_STALE = 2;
 }
 
+// TenantSliceRecord is one pushed slice as a tenant's record store holds it,
+// when the store declares (spec.record_store).config_push: the record plane's
+// write surface writes it (Put, Delete), and the store's generated
+// ServiceManager watches it and feeds each acked write to its publisher, the
+// entry's revision as the slice's version. A deleted entry is pushed as
+// absent. It is no (spec.record) of its own: the injector adds it to that
+// store's record plane alone, on its S2S half, so no other store and no
+// event bus carries it.
+message TenantSliceRecord {
+  // slice_field is the slice's registered tenant_slice_field: the entry's key.
+  int32 slice_field = 1 [(spec.assert_gt) = 0];
+  // value is the slice message, protobuf binary encoded.
+  bytes value = 2 [(spec.assert_max_size) = 4000000];
+}
+
 // ConfigPushAck answers one slice of a frame, in the order the stream sent them.
 message ConfigPushAck {
   int32 slice_field = 1;

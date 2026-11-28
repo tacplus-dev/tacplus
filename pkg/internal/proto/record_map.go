@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -95,6 +96,10 @@ type recordType struct {
 	// (a routing-only subscriber is granted the routing envelope, never the full
 	// row the change feed carries). nil = no s2s_subscribe, the trait-wide list.
 	subscribeAuth []string
+	// s2sOnly is true for a record the plane carries on its S2S half alone:
+	// the sys record configpush.TenantSliceRecord (tacplus#927), which only
+	// the tenant's services write and only its store's publisher reads.
+	s2sOnly bool
 	// noWatch is true when the record's s2s_subscribe names only routing-only
 	// subscribers: nobody may read its full rows as a stream, so no
 	// Watch<T>Changes is emitted.
@@ -143,6 +148,10 @@ type traitPlane struct {
 	// rpc declares it as its (spec.rpc).route_field (#207), exactly as any
 	// other surface of a tenant-owned service must.
 	tenantOwned bool
+	// configPush is true when the host declares (spec.record_store).config_push
+	// (tacplus#927): the plane's S2S half also carries the sys record
+	// configpush.TenantSliceRecord, which the host's publisher is fed from.
+	configPush bool
 }
 
 // AppendRecordMapServiceToProtos scans all proto files for spec.record messages
@@ -361,9 +370,6 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 			})
 		}
 	}
-	if len(records) == 0 {
-		return nil
-	}
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].pkg != records[j].pkg {
 			return records[i].pkg < records[j].pkg
@@ -378,9 +384,19 @@ func AppendRecordMapServiceToProtos(tempProtoDir, inputDir, selfPackage string) 
 	if err != nil {
 		return err
 	}
+	if err := validateRecordStoreConfigPush(dp, planes); err != nil {
+		return err
+	}
 
 	for _, plane := range planes {
-		if err := appendRecordPlaneToTraitProto(tempProtoDir, plane, records); err != nil {
+		planeRecords := records
+		if plane.configPush {
+			planeRecords = append(append([]recordType(nil), records...), tenantSliceRecordType)
+		}
+		if len(planeRecords) == 0 {
+			continue
+		}
+		if err := appendRecordPlaneToTraitProto(tempProtoDir, plane, planeRecords); err != nil {
 			return err
 		}
 	}
@@ -399,9 +415,11 @@ func collectRecordQueryPlanes(dp *parser.DescriptorParser) ([]traitPlane, error)
 	served := parser.PhysicalServingLabels(dp)
 	tenantOwned := parser.TenantOwnedServices(dp)
 	recordStores := make(map[string]bool)
+	configPush := make(map[string]bool)
 	for _, fd := range dp.GetAllFiles() {
 		if fd.RecordStore && fd.ServiceName != "" {
 			recordStores[fd.ServiceName] = true
+			configPush[fd.ServiceName] = configPush[fd.ServiceName] || fd.RecordStorePush
 		}
 	}
 
@@ -455,6 +473,7 @@ func collectRecordQueryPlanes(dp *parser.DescriptorParser) ([]traitPlane, error)
 			c2sService:   t.C2SService,
 			authServices: t.AuthServices,
 			tenantOwned:  tenantOwned[t.Host],
+			configPush:   configPush[t.Host],
 		})
 	}
 	return planes, nil
@@ -718,7 +737,7 @@ message %[1]sWatchEvent {
 	// Emitted only when the trait declares c2s_service. An s2s-only trait keeps
 	// the peer plane and contributes nothing to the c2s grant catalog.
 	c2s := ""
-	if plane.c2sService != "" {
+	if plane.c2sService != "" && slices.ContainsFunc(records, func(r recordType) bool { return !r.s2sOnly }) {
 		c2s = recordQueryC2SService(plane, records)
 	}
 	// (spec.record).mutability generation end, on the surface the generator
@@ -1012,6 +1031,9 @@ func recordQueryC2SService(plane traitPlane, records []recordType) string {
 	sb.WriteString("\n// tacplus:generated-service " + parser.SynthesizedKindRecordMap + "\nservice " + plane.c2sService + " {\n")
 	sb.WriteString(fmt.Sprintf("  option (spec.service_c2s) = {auth_entitled_users: true, label: %q};\n", plane.host))
 	for _, r := range records {
+		if r.s2sOnly {
+			continue
+		}
 		plain, sized := plane.c2sBody(""), plane.c2sBody(minGroupSizeOption(r))
 		sb.WriteString(fmt.Sprintf(`
   rpc Create%[1]sQuery(Open%[1]sQueryRequest) returns (QueryHandle)%[4]s

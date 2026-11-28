@@ -7,7 +7,9 @@
 // target tenant's tid, every rpc declares it as its route field, the generated
 // S2S clients pool the store per tenant, and its server wrapper refuses a call
 // routed to another tenant, and an entry of another tenant, whoever the caller
-// is.
+// is. It declares config_push (#927): its plane also carries the sys record
+// configpush.TenantSliceRecord, and its ServiceManager feeds its config push
+// publisher from that record's change feed.
 
 syntax = "proto3";
 
@@ -16,7 +18,7 @@ package tstratum;
 import "sys/spec.proto";
 
 option (spec.service) = {name: "tstratum", tenant_owned: true};
-option (spec.record_store) = {no_bus_ingest: true};
+option (spec.record_store) = {no_bus_ingest: true, config_push: true};
 
 message StratumPing {
   string target_tenant = 1;

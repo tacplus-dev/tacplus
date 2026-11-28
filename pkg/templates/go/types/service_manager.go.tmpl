@@ -1571,6 +1571,11 @@ mw.additionalRegistrar = asr
 sm.configPush.SetTenantRegistry(h)
 mw.impls = append(mw.impls, sm.configPush)
 {{- end}}
+{{- if .ConfigPushFeed}}
+// The publisher is fed from the store's own configpush.TenantSliceRecord
+// entries (tacplus#927).
+sm.feedConfigPushPublisher(h.{{.ConfigPushFeed.GetterName}}())
+{{- end}}
 srv, err := grpcserver.New(sm.ctx, sm.cfg, sm.sc.Conn(),
 sm.sc.TLSCertChain(), sm.sc.TLSPrivateKey(),
 mw, sm.healthServer)

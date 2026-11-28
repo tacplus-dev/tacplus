@@ -4,6 +4,7 @@
 package types
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/proto"
@@ -45,4 +46,42 @@ func javaConfigPushSlices(config *tactype.Config, protoDir string) ([]javaConfig
 		})
 	}
 	return out, nil
+}
+
+// javaConfigPushFeed names the Watch<T>Changes of configpush.TenantSliceRecord
+// on the record plane's S2S service a (spec.record_store).config_push store
+// hosts (tacplus#927), which the ServiceManager feeds its publisher from.
+type javaConfigPushFeed struct {
+	Method      string // "watchTenantSliceRecordChanges"
+	HandlerType string // the plane's handler interface, fully qualified
+	GetterName  string // the Handler's getter of it
+	RequestType string // Watch<T>ChangesRequest, fully qualified
+	ChangeType  string // <T>WatchChange, fully qualified
+	ChangeEnum  string // RecordChangeType, fully qualified
+}
+
+// javaConfigPushFeedFor finds the plane's S2S service among the services the
+// build hosts; a config_push store whose plane it does not host has nothing
+// to watch, which is a generator error.
+func javaConfigPushFeedFor(config *tactype.Config, protoDir string, plane *proto.ConfigPushFeedPlane, entries []javaGrpcServiceEntry) (*javaConfigPushFeed, error) {
+	if plane == nil {
+		return nil, nil
+	}
+	for _, e := range entries {
+		if e.ServiceName != plane.S2SService ||
+			(e.PackageName != plane.Package && e.PackageName != strings.SplitN(plane.Package, ".", 2)[0]) {
+			continue
+		}
+		outer := javaOuterClassForProto(protoDir, "", plane.ProtoFile, plane.Package)
+		types := javaTypesPackageForProto(config.JavaPackageBase, plane.ProtoFile, plane.Package, false) + "." + outer
+		return &javaConfigPushFeed{
+			Method:      "watch" + proto.TenantSliceRecordName + "Changes",
+			HandlerType: e.WrapperPackage + "." + e.ServiceName + "." + e.HandlerType,
+			GetterName:  e.GetterName,
+			RequestType: types + ".Watch" + proto.TenantSliceRecordName + "ChangesRequest",
+			ChangeType:  types + "." + proto.TenantSliceRecordName + "WatchChange",
+			ChangeEnum:  types + ".RecordChangeType",
+		}, nil
+	}
+	return nil, fmt.Errorf("config push feed: the build hosts no %s.%s, the record plane configpush.TenantSliceRecord is watched on", plane.Package, plane.S2SService)
 }

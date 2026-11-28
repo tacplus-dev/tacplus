@@ -1196,7 +1196,22 @@ service health, with a token for that owner. The store's own code feeds it each 
 a slice, `Put(field, revision, value)` or `Remove(field, revision)`, and every slice it holds
 again after a restart. A store implemented outside tacplus reads the same owners from its
 `codegen-config.json` (`configPushOwners[]`, `{sliceField, owner}`): each stream's token is for
-its owner. A generated feed from a sys record the store hosts is still to come.
+its owner.
+
+A store that declares `(spec.record_store) = {config_push: true}` feeds it itself. Its record
+plane then carries the sys record `configpush.TenantSliceRecord {slice_field, value}`, keyed by
+the slice's registered field, on its S2S half only, with the trait's audience. The tenant's
+services write a slice there (`PutTenantSliceRecord`, `DeleteTenantSliceRecord`, `Apply`), and
+the store's ServiceManager watches it through its own `WatchTenantSliceRecordChanges` (the
+Handler is called with no caller) and pushes each acked write at its revision, a delete as
+absent. After any end of that watch it watches again from the snapshot. Generation refuses
+`config_push` on a store that is not tenant-owned, or that no `(spec.trait)` hosts a record
+plane on:
+
+```protobuf
+option (spec.service) = {name: "stratum", tenant_owned: true};
+option (spec.record_store) = {no_bus_ingest: true, config_push: true};
+```
 
 ### Views Across Boundaries
 
@@ -2394,7 +2409,7 @@ message Prospect {
 
 | Annotation | Service |
 |------------|---------|
-| `(spec.record_store) = {no_bus_ingest?}` | the full-record store; `no_bus_ingest: true` = it takes rows only through its generated write surface and derives no EventBus subscription |
+| `(spec.record_store) = {no_bus_ingest?, config_push?}` | the full-record store; `no_bus_ingest: true` = it takes rows only through its generated write surface and derives no EventBus subscription; `config_push: true` = a tenant's store holds its pushed config slices as `configpush.TenantSliceRecord` and feeds its config push publisher from it (see Per-Tenant Config Pushed to Its Owner) |
 
 Example — a stored, projectable record:
 
@@ -3330,7 +3345,7 @@ in the run. The fleet build loads the real implementors. Today:
 |-------------|------|-----------|
 | `sys/minter.proto` (`minter.Minter`) | The minting contract every generated ServiceManager calls: `MintServiceToken`, `MintExternalServiceToken`, `MintToken`, `MintX509Cert`. It is the one authoritative `(spec.token_minter)` in every run; a consumer must not declare another. | The token authority, at routing label `kernel`. It implements `minter.Minter` and keeps its own policy RPCs in a service of its own; that service carries `(spec.approval_broker)` when the fleet has `(spec.rpc).requires_device` rpcs (see below). |
 | `sys/redo.proto` (`redolog.Redo`) | The record store's durability: the contract between the record store and the redo service (the log is the database). `Append` (bidi: the store sends each operation, a single write or a whole `Apply`, at the next `seq` of the tenant's log; the redo service acks it per durability level, `DURABILITY_LOCAL` on local disk, `DURABILITY_REMOTE` once the second site has it) and `Replay` (the tenant's compacted snapshot, then the tail, then the end). Neither is tenant-routed nor `RPC_FLAG_ANY_TENANT`: a tenant's store calls redo in `/system` (#258); the tenant a write belongs to is the caller's tid, from its token, never a field. Callers: `stratum`. Field numbers are frozen (field 1 of `RedoAppend` and `RedoReplayRequest`, the old route tenant, is reserved). | The redo service, at routing label `redo`: a `/system` service, the custodian of every tenant's log, kept apart by the caller's tid. Its own proto is package `redo` (its identity, hence the contract's package `redolog`) and declares only `option (spec.service) = {name: "redo"};`; it serves `redolog.Redo` by the label. |
-| `sys/configpush.proto` (`configpush.ConfigPush`) | A pushed tenant config slice, from a tenant's record store to the slice's owner (tacplus#927; see Per-Tenant Config Pushed to Its Owner). `Push` is bidi, one stream for each tenant and owner. The first frame is a snapshot, then each new version of one slice follows. A slice is its owner's registered `tenant_slice_field` plus the slice message's bytes, because the record store's run never holds the owner's proto. The tenant is the caller's identity, never a field. Each slice gets an ack, `ACCEPTED`, or `STALE` for a version that is not newer, which leaves the stream open. A first frame that is not a snapshot ends the stream with `FAILED_PRECONDITION`; an unknown slice or invalid value ends it with `INVALID_ARGUMENT`. Field numbers are frozen. | Every owner of a pushed slice, at its own routing label. The service carries no `(spec.service_s2s)`: the generated receiver admits only `spiffe://<td>/tenants/<tid>/services/stratum` for a tenant its tenant registry holds. The receiver and the publisher are generated in Go, Java and Rust; a tenant's record store's ServiceManager holds the publisher, which the store's own code feeds. |
+| `sys/configpush.proto` (`configpush.ConfigPush`) | A pushed tenant config slice, from a tenant's record store to the slice's owner (tacplus#927; see Per-Tenant Config Pushed to Its Owner). `Push` is bidi, one stream for each tenant and owner. The first frame is a snapshot, then each new version of one slice follows. A slice is its owner's registered `tenant_slice_field` plus the slice message's bytes, because the record store's run never holds the owner's proto. The tenant is the caller's identity, never a field. Each slice gets an ack, `ACCEPTED`, or `STALE` for a version that is not newer, which leaves the stream open. A first frame that is not a snapshot ends the stream with `FAILED_PRECONDITION`; an unknown slice or invalid value ends it with `INVALID_ARGUMENT`. Field numbers are frozen. | Every owner of a pushed slice, at its own routing label. The service carries no `(spec.service_s2s)`: the generated receiver admits only `spiffe://<td>/tenants/<tid>/services/stratum` for a tenant its tenant registry holds. The receiver and the publisher are generated in Go, Java and Rust; a tenant's record store's ServiceManager holds the publisher, which the store's own code feeds, or, with `(spec.record_store).config_push`, the store's own `configpush.TenantSliceRecord` entries (a sys record of the same file, carried on that store's record plane alone). |
 | `sys/servicehealth.proto` (`servicehealth.ServiceHealth`) | The service-instance health root every service reports into. Field numbers are frozen. | The state host (`kernel`), which imports it rather than declaring a copy. |
 | `sys/tenantdeletion.proto` (`tenantdeletion.TenantDeletions`) | The fleet's deleted tenants: one row per tombstoned tid, keyed by tid, never removed (#475). A product service binding `(spec.caller_tid)` reads it, read-only, and its generated runner calls `OnTenantDeleted` for each tid; the host's generated state service authorizes every such service of the merged tree. It names tids only. Field numbers are frozen. | The state host (`kernel`, tacplus-dev/kernel#75), which imports it, writes a row when it tombstones a tid and every tombstoned tid again when it starts. |
 | routing label `kernel` | The state host. Counts as served in every run (see Well-Known Names); config state routes there when no store is loaded. | The fleet's state host. |

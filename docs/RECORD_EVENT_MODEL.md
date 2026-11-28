@@ -84,7 +84,7 @@ Service-level (once per service):
 
 | Annotation | Service |
 |---|---|
-| `record_store { no_bus_ingest? }` | the full-record store; `no_bus_ingest: true` = rows arrive only through its write surface, no EventBus subscription is derived |
+| `record_store { no_bus_ingest?, config_push? }` | the full-record store; `no_bus_ingest: true` = rows arrive only through its write surface, no EventBus subscription is derived; `config_push: true` = a tenant-owned store's plane also carries the sys record `configpush.TenantSliceRecord` on its S2S half, and its ServiceManager feeds its config push publisher from that record's change feed (tacplus#927; USER.md, Per-Tenant Config Pushed to Its Owner) |
 
 On a stored event you write only `record` (it implies `event`). You never write the
 derived output types or their markers.

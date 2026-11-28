@@ -2116,6 +2116,34 @@ impl ServiceManager {
 {{- if .ConfigPushSlices}}
         self.config_push.set_tenant_registry(Arc::new(config_push::HandlerRegistry(handler.clone())));
 {{- end}}
+{{- with .ConfigPushFeed}}
+        // The publisher is fed from the store's own configpush.TenantSliceRecord
+        // entries (tacplus#927), watched through the Handler's {{.Method}} as the
+        // store's own feed, with no caller, routed to the instance's own tenant.
+        {
+            let plane = handler.{{.GetterName}}();
+            let tid = self.authorizer.host_identity().tid;
+            let watch: configpush::publisher::FeedWatcher = Arc::new(move || {
+                let plane = plane.clone();
+                let tid = tid.clone();
+                Box::pin(async move {
+                    let src = plane
+                        .{{.Method}}(None, {{.ModPath}}::{{.Request}} { target_tenant: tid, ..Default::default() })
+                        .await?;
+                    let changes: configpush::publisher::FeedStream<configpush::publisher::FeedChange> =
+                        Box::pin(tokio_stream::StreamExt::map((src.changes)(), |c| {
+                            c.map(|c| configpush::publisher::FeedChange {
+                                deleted: c.r#type == {{.ModPath}}::RecordChangeType::Delete as i32,
+                                record: c.item.unwrap_or_default(),
+                                revision: c.revision,
+                            })
+                        }));
+                    Ok(configpush::publisher::FeedSource { snapshot: src.snapshot, revision: src.revision, changes: Some(changes) })
+                })
+            });
+            self.config_push_publisher.feed(watch);
+        }
+{{- end}}
         let mut server = server.layer(stream_credential_expiry_layer(
             additional_routes.is_some(),
             handler.additional_streaming_paths(),

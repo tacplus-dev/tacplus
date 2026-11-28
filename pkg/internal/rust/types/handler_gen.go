@@ -190,6 +190,9 @@ type smTemplateData struct {
 	// to (tacplus#927): the ServiceManager holds a configpush::Publisher of
 	// them.
 	ConfigPushOwners []stateproto.ConfigPushOwner
+	// ConfigPushFeed is the record plane a (spec.record_store).config_push
+	// store feeds its publisher from (tacplus#927), nil for any other build.
+	ConfigPushFeed *rustConfigPushFeed
 	// HasTenantDeletion is a product custodian's (#475): its Handler has
 	// on_tenant_deleted, and the ServiceManager runs it, through
 	// chassis/tenantdeletion's Runner, for each tid of the fleet's
@@ -462,6 +465,16 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 	configPushOwners, err := stateproto.RecordStorePushOwners(config.InputDir, config.FlatProtoDir, config.SelfPackage, config.ServiceLabel())
 	if err != nil {
 		return smTemplateData{}, err
+	}
+	var configPushFeed *rustConfigPushFeed
+	if len(configPushOwners) > 0 && hasTlsGrpc {
+		plane, err := stateproto.RecordStoreConfigPushFeed(config.FlatProtoDir, config.SelfPackage, config.ServiceLabel())
+		if err != nil {
+			return smTemplateData{}, err
+		}
+		if configPushFeed, err = rustConfigPushFeedFor(plane, grpcSvcs); err != nil {
+			return smTemplateData{}, err
+		}
 	}
 
 	hasServiceHealthState := false
@@ -785,6 +798,7 @@ func buildSMTemplateData(config *tactype.Config, svcs []service.ServiceInfo, cli
 		HasMemberPort:                hasMemberPort,
 		ConfigPushSlices:             configPushSlices,
 		ConfigPushOwners:             configPushOwners,
+		ConfigPushFeed:               configPushFeed,
 		HasTenantDeletion:            hasTenantDeletion,
 		TenantDeletionGroupAccessor:  tenantDeletionGroupAccessor,
 		TenantDeletionClientAccessor: tenantDeletionClientAccessor,

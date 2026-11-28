@@ -174,3 +174,58 @@ func TestRecordStoreConfigPushPublisherFile(t *testing.T) {
 		}
 	}
 }
+
+// A (spec.record_store).config_push store feeds its publisher from its own
+// configpush.TenantSliceRecord entries, watched through the Handler's
+// Watch<T>Changes on the record plane it hosts (tacplus#927).
+func TestRecordStoreConfigPushFeed(t *testing.T) {
+	plane := &stateproto.ConfigPushFeedPlane{Package: "tquery", S2SService: "TenantRecordMap"}
+	svcs := []ServiceInfo{{PackageName: "tstratum", ServiceName: "TStratum"}, {PackageName: "tquery", ServiceName: "TenantRecordMap"}}
+	entries := []GrpcServiceEntry{
+		{HandlerType: "TStratumHandler", GetterName: "GetTStratumGrpcImpl"},
+		{HandlerType: "TenantRecordMapHandler", GetterName: "GetTenantRecordMapGrpcImpl", WrapperAlias: "tquery_fe",
+			WrapperImportPath: "example.com/m/model/s2sm/grpc/servers/vservices/tquery", TypeAlias: "tquery_pb",
+			TypeImportPath: "example.com/m/model/types/vservices/tquery"},
+	}
+	feed, err := goConfigPushFeedFor(plane, svcs, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := goConfigPushFeedFor(plane, svcs[:1], entries[:1]); err == nil {
+		t.Fatal("a store that hosts no plane to watch must fail generation")
+	}
+	if none, err := goConfigPushFeedFor(nil, svcs, entries); none != nil || err != nil {
+		t.Fatalf("no config_push, no feed: %v, %v", none, err)
+	}
+
+	out := t.TempDir()
+	data := serviceManagerTemplateData{ModuleBasePath: "example.com/m/model",
+		ConfigPushOwners: []stateproto.ConfigPushOwner{{SliceField: 1, Owner: "kernel"}}, ConfigPushFeed: feed}
+	if err := generateConfigPushFile(out, data, "configpush_publisher"); err != nil {
+		t.Fatalf("generateConfigPushFile: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(out, "configpush_publisher.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "configpush_publisher.go", src, 0); err != nil {
+		t.Fatalf("sm/configpush_publisher.go does not parse: %v\n%s", err, src)
+	}
+	for _, want := range []string{
+		"func (sm *ServiceManager) feedConfigPushPublisher(plane tquery_fe.TenantRecordMapHandler)",
+		"plane.WatchTenantSliceRecordChanges(nil, &tquery_pb.WatchTenantSliceRecordChangesRequest{TargetTenant: tid})",
+		"c.GetType() == tquery_pb.RecordChangeType_RECORD_CHANGE_TYPE_DELETE",
+		"sm.configPushPublisher.Feed(",
+	} {
+		if !strings.Contains(string(src), want) {
+			t.Fatalf("sm/configpush_publisher.go is missing %q:\n%s", want, src)
+		}
+	}
+	tmpl, err := templates.FS.ReadFile("go/types/service_manager.go.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(tmpl), "sm.feedConfigPushPublisher(h.{{.ConfigPushFeed.GetterName}}())") {
+		t.Fatal("the ServiceManager does not start the feed")
+	}
+}

@@ -1118,11 +1118,11 @@ the looper then marks it `promoted` or `declined` here with the date.
   Rust, and each language's self-test runs it against that language's generated receiver in process. A tenant-owned
   record store's ServiceManager holds the publisher, its owners every registered `tenant_slice_field` (the registry
   records no delivery, so the store cannot tell a pushed slice from a `TenantConfig` one: what it is fed it pushes),
-  each on a connection to the owner's label with a token for it; the store's own code feeds it. Left: a generated
-  feed (a sys record, `configpush.TenantSliceRecord {slice_field, value}`, that the store hosts and watches, with
-  the record revision as the version; note a record type added to every store adds handler methods every store
-  must implement, so it likely wants an opt-in on `(spec.record_store)`), and a cross-test of a
-  store's publisher against an owner over the wire.
+  each on a connection to the owner's label with a token for it. Its feed is generated when the store opts in,
+  `(spec.record_store).config_push`: the store's plane carries the sys record `configpush.TenantSliceRecord
+  {slice_field, value}` on its S2S half, and its ServiceManager watches it and pushes each acked write at its
+  revision (an opt-in, because a record type on a plane adds handler methods every store must implement). Left: a
+  cross-test of a store's publisher against an owner over the wire (two generated services, one fleet).
 - **Rebuild the build images when an upstream stage image moves** (2026-11-20, #901): `docker:29-cli` moved to
   29.10.0 (go1.27.4, fixing CVE-2026-97054) on 2026-11-16 22:07Z. Every `build:*` had been built that morning, so the
   nightly sweep failed for days on a fix that was already published. `build:latest` is rebuilt only when its files

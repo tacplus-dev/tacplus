@@ -386,12 +386,53 @@ type serviceManagerTemplateData struct {
 	// to (tacplus#927): the ServiceManager holds a configpush.Publisher of
 	// them.
 	ConfigPushOwners []stateproto.ConfigPushOwner
+	// ConfigPushFeed is the record plane a (spec.record_store).config_push
+	// store feeds its publisher from (tacplus#927), nil for any other build.
+	ConfigPushFeed *goConfigPushFeed
 	// HasTenantDeletion is a product custodian's (#475): its Handler has
 	// OnTenantDeleted, and the ServiceManager runs it for each tid of the
 	// fleet's TenantDeletions root (sys/tenantdeletion.proto), read-only.
 	HasTenantDeletion           bool
 	TenantDeletionProtoDir      string // generated types dir of sys/tenantdeletion.proto
 	TenantDeletionGroupAccessor string // root state-client group accessor containing TenantDeletions
+}
+
+// goConfigPushFeed names the Watch<T>Changes of configpush.TenantSliceRecord
+// on the record plane's S2S service the store hosts, and its packages.
+type goConfigPushFeed struct {
+	Method            string // "WatchTenantSliceRecordChanges"
+	HandlerType       string // "TenantRecordMapHandler"
+	GetterName        string // "GetTenantRecordMapGrpcImpl"
+	WrapperAlias      string
+	WrapperImportPath string
+	TypeAlias         string
+	TypeImportPath    string
+}
+
+// goConfigPushFeedFor finds the plane's S2S service among the services the
+// build hosts; a config_push store whose plane it does not host has nothing
+// to watch, which is a generator error.
+func goConfigPushFeedFor(plane *stateproto.ConfigPushFeedPlane, svcs []ServiceInfo, entries []GrpcServiceEntry) (*goConfigPushFeed, error) {
+	if plane == nil {
+		return nil, nil
+	}
+	for i, svc := range svcs {
+		if svc.ServiceName != plane.S2SService ||
+			(svc.PackageName != plane.Package && svc.PackageName != strings.SplitN(plane.Package, ".", 2)[0]) {
+			continue
+		}
+		e := entries[i]
+		return &goConfigPushFeed{
+			Method:            "Watch" + stateproto.TenantSliceRecordName + "Changes",
+			HandlerType:       e.HandlerType,
+			GetterName:        e.GetterName,
+			WrapperAlias:      e.WrapperAlias,
+			WrapperImportPath: e.WrapperImportPath,
+			TypeAlias:         e.TypeAlias,
+			TypeImportPath:    e.TypeImportPath,
+		}, nil
+	}
+	return nil, fmt.Errorf("config push feed: the build hosts no %s.%s, the record plane configpush.TenantSliceRecord is watched on", plane.Package, plane.S2SService)
 }
 
 // ApprovalBrokerTemplateEntry names the approval-broker RPC the generated
@@ -539,6 +580,16 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 	configPushOwners, err := stateproto.RecordStorePushOwners(config.InputDir, config.FlatProtoDir, config.SelfPackage, config.ServiceLabel())
 	if err != nil {
 		return serviceManagerTemplateData{}, err
+	}
+	var configPushFeed *goConfigPushFeed
+	if len(configPushOwners) > 0 && hasTlsGrpc {
+		plane, err := stateproto.RecordStoreConfigPushFeed(config.FlatProtoDir, config.SelfPackage, config.ServiceLabel())
+		if err != nil {
+			return serviceManagerTemplateData{}, err
+		}
+		if configPushFeed, err = goConfigPushFeedFor(plane, svcs, grpcSvcs); err != nil {
+			return serviceManagerTemplateData{}, err
+		}
 	}
 
 	hasServiceHealthState := false
@@ -1022,6 +1073,7 @@ func buildServiceManagerData(config *tactype.Config, svcs []ServiceInfo, allFile
 		TenantDeletionProtoDir:      tenantDeletionProtoDir,
 		TenantDeletionGroupAccessor: tenantDeletionGroupAccessor,
 		ConfigPushOwners:            configPushOwners,
+		ConfigPushFeed:              configPushFeed,
 		HostsC2DStandalone: service.HostsC2DStandalone(service.C2DHostShape{
 			HostsC2D:       len(c2dSockets) > 0,
 			HostsNonC2D:    hasTlsGrpc,

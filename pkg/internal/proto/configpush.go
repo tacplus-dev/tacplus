@@ -5,6 +5,7 @@ package proto
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/tacplus-dev/tacplus/pkg/internal/common/parser"
 )
@@ -154,4 +155,102 @@ func RecordStorePushOwners(inputDir, flatProtoDir, selfPackage, self string) ([]
 		return nil, nil
 	}
 	return ConfigPushOwners(inputDir, self)
+}
+
+// TenantSliceRecordPackage, TenantSliceRecordName and TenantSliceRecordProto
+// name the sys record a (spec.record_store).config_push store holds its
+// tenant's pushed slices in (tacplus#927), keyed by TenantSliceRecordKey.
+const (
+	TenantSliceRecordPackage = "configpush"
+	TenantSliceRecordName    = "TenantSliceRecord"
+	TenantSliceRecordProto   = "sys/configpush.proto"
+	TenantSliceRecordKey     = "slice_field"
+)
+
+// tenantSliceRecordType is the sys record configpush.TenantSliceRecord as the
+// record plane of a config_push store carries it: on the S2S half alone, its
+// audience the trait's, acked at the LOCAL floor. It is no (spec.record), so
+// no other store, no event bus and no C2S reader carries it.
+var tenantSliceRecordType = recordType{
+	typeName:   TenantSliceRecordName,
+	pkg:        TenantSliceRecordPackage,
+	relPath:    TenantSliceRecordProto,
+	key:        TenantSliceRecordKey,
+	durability: "DURABILITY_LOCAL",
+	keyType:    "int32",
+	s2sOnly:    true,
+}
+
+// validateRecordStoreConfigPush refuses a (spec.record_store).config_push
+// the generated feed cannot serve: on a store that is no tenant's (only a
+// tenant-owned store's instance is one tenant's, the publisher a receiver
+// admits), or on a store no (spec.trait) hosts a record plane on (the record
+// would have no write surface and no change feed to watch).
+func validateRecordStoreConfigPush(dp *parser.DescriptorParser, planes []traitPlane) error {
+	tenantOwned := parser.TenantOwnedServices(dp)
+	files := dp.GetAllFiles()
+	for _, relPath := range sortedFilePaths(files) {
+		fd := files[relPath]
+		if !fd.RecordStore || !fd.RecordStorePush || fd.ServiceName == "" {
+			continue
+		}
+		if !tenantOwned[fd.ServiceName] {
+			return fmt.Errorf("%s: %q declares (spec.record_store).config_push but is not tenant-owned: only a tenant's record store ((spec.service).tenant_owned) publishes its tenant's pushed config slices", relPath, fd.ServiceName)
+		}
+		hosted := slices.ContainsFunc(planes, func(p traitPlane) bool { return p.host == fd.ServiceName })
+		if !hosted {
+			return fmt.Errorf("%s: %q declares (spec.record_store).config_push but no (spec.trait) hosts its record plane: configpush.TenantSliceRecord would have no write surface and no change feed", relPath, fd.ServiceName)
+		}
+	}
+	return nil
+}
+
+// ConfigPushFeedPlane is the record plane a config_push store's generated
+// feed watches configpush.TenantSliceRecord on: the S2S service the trait
+// emits (S2SService) in the trait's proto package (Package), declared in
+// ProtoFile.
+type ConfigPushFeedPlane struct {
+	Package    string
+	S2SService string
+	ProtoFile  string
+}
+
+// RecordStoreConfigPushFeed returns the plane a build of the service self
+// (its label; selfPackage its package) feeds its publisher from, or nil when
+// self declares no (spec.record_store).config_push. A store that hosts more
+// than one plane carries the record on each; the feed watches the first, in
+// file order. flatProtoDir is read before the plane is injected, so it holds
+// the trait declarations alone.
+func RecordStoreConfigPushFeed(flatProtoDir, selfPackage, self string) (*ConfigPushFeedPlane, error) {
+	if flatProtoDir == "" || selfPackage == "" || self == "" {
+		return nil, nil
+	}
+	dp, err := parser.NewDescriptorParser(flatProtoDir)
+	if err != nil {
+		return nil, fmt.Errorf("config push feed: %w", err)
+	}
+	push := false
+	for _, fd := range dp.GetAllFiles() {
+		if fd.Package == selfPackage && fd.RecordStore && fd.RecordStorePush {
+			push = true
+		}
+	}
+	if !push {
+		return nil, nil
+	}
+	planes, err := collectRecordQueryPlanes(dp)
+	if err != nil {
+		return nil, fmt.Errorf("config push feed: %w", err)
+	}
+	for _, p := range planes {
+		if p.host != self {
+			continue
+		}
+		fd, err := dp.GetFileDescriptor(p.relPath)
+		if err != nil {
+			return nil, fmt.Errorf("config push feed: %w", err)
+		}
+		return &ConfigPushFeedPlane{Package: fd.Package, S2SService: p.s2sService, ProtoFile: p.relPath}, nil
+	}
+	return nil, fmt.Errorf("%q declares (spec.record_store).config_push but no (spec.trait) hosts its record plane", self)
 }

@@ -16,6 +16,11 @@ import (
 
 	"{{.ModuleBasePath}}/chassis/configpush"
 	"{{.ModuleBasePath}}/chassis/serviceconnection"
+{{- if .ConfigPushFeed}}
+	tokenlib "{{.ModuleBasePath}}/chassis/token"
+	{{.ConfigPushFeed.WrapperAlias}} "{{.ConfigPushFeed.WrapperImportPath}}"
+	{{.ConfigPushFeed.TypeAlias}} "{{.ConfigPushFeed.TypeImportPath}}"
+{{- end}}
 	configpush_pb "{{.ModuleBasePath}}/types/sys/configpush"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -70,3 +75,49 @@ func newConfigPushPublisher(sm *ServiceManager) *configpush.Publisher {
 func (sm *ServiceManager) ConfigPushPublisher() *configpush.Publisher {
 	return sm.configPushPublisher
 }
+{{- if .ConfigPushFeed}}
+
+// feedConfigPushPublisher feeds the publisher from this store's own
+// configpush.TenantSliceRecord entries ((spec.record_store).config_push,
+// tacplus#927): it watches them through the Handler's
+// {{.ConfigPushFeed.Method}}, as the store's own feed, with no caller, and
+// pushes every acked write at the revision the store gave it. It watches
+// again after any end of the watch.
+func (sm *ServiceManager) feedConfigPushPublisher(plane {{.ConfigPushFeed.WrapperAlias}}.{{.ConfigPushFeed.HandlerType}}) {
+	// The instance's own tenant, the one its entries are routed to.
+	var tid string
+	if token, err := sm.identity.GetToken(); err == nil {
+		if tw, err := tokenlib.ParseToken(token); err == nil {
+			tid, _ = serviceconnection.InstanceTenant(tw.GetSubject())
+		}
+	}
+	sm.configPushPublisher.Feed(func(ctx context.Context) (*configpush.FeedSource, error) {
+		src, err := plane.{{.ConfigPushFeed.Method}}(nil, &{{.ConfigPushFeed.TypeAlias}}.{{.ConfigPushFeed.Method}}Request{TargetTenant: tid})
+		if err != nil {
+			return nil, err
+		}
+		return &configpush.FeedSource{
+			Snapshot: src.Snapshot,
+			Revision: src.Revision,
+			Changes: func(yield func(configpush.FeedChange, error) bool) {
+				if src.Changes == nil {
+					return
+				}
+				for c, err := range src.Changes() {
+					if err != nil {
+						yield(configpush.FeedChange{}, err)
+						return
+					}
+					if !yield(configpush.FeedChange{
+						Record:   c.GetItem(),
+						Revision: c.GetRevision(),
+						Deleted:  c.GetType() == {{.ConfigPushFeed.TypeAlias}}.RecordChangeType_RECORD_CHANGE_TYPE_DELETE,
+					}, nil) {
+						return
+					}
+				}
+			},
+		}, nil
+	})
+}
+{{- end}}

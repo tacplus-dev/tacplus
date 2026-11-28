@@ -163,9 +163,9 @@ import (
 // %[4]sTenantPin is how one pinned caller reads a tenant-pinned collection
 // (spec.per_service_config held by an exported state root): every tenant's
 // entry when its namespace is /system or below, only the entry keyed by <t>
-// when it is exactly /tenants/<t>, and in both cases each entry projected to
-// the key and the caller's own config slice. A nil pin is a caller that is
-// not pinned, and every method below is the identity for it.
+// or by /tenants/<t> when it is exactly /tenants/<t>, and in both cases each
+// entry projected to the key and the caller's own config slice. A nil pin is
+// a caller that is not pinned, and every method below is the identity for it.
 type %[4]sTenantPin struct {
 	all         bool
 	tenant      string
@@ -207,9 +207,10 @@ func resolve%[4]sTenantPin(caller *servicemanager.Caller, slices map[string]stri
 	return nil, status.Errorf(codes.PermissionDenied, "a tenant-pinned read is served to %[5]s and %[6]s<t> callers only, not namespace %%q", ns)
 }
 
-// admits reports whether the entry keyed by key is the pinned caller's.
+// admits reports whether the entry keyed by key is the pinned caller's: its
+// tenant <t> keyed either by the bare name or by its namespace %[6]s<t>.
 func (p *%[4]sTenantPin) admits(key string) bool {
-	return p == nil || p.all || key == p.tenant
+	return p == nil || p.all || key == p.tenant || key == %[6]q+p.tenant
 }
 
 // keyOf is an entry's indexed key.

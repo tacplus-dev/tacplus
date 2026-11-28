@@ -35,7 +35,9 @@ import (
 // the SERVING side, never by the subscriber:
 //
 //   - a caller whose namespace is exactly /tenants/<t> sees only the entry whose
-//     indexed key is <t>; a Get/ContainsKey of any other key is PERMISSION_DENIED,
+//     indexed key is <t> or /tenants/<t> (a holder keys a tenant by its bare
+//     name or by its namespace, as kernel does: #1009); a Get/ContainsKey of
+//     any other key is PERMISSION_DENIED,
 //     and GetAll/KeySet/Size/Watch/Query/WatchQuery carry only its own entry;
 //   - a caller whose namespace is /system or below sees every tenant's entry;
 //   - a caller in any other namespace gets PERMISSION_DENIED on every pinned RPC;

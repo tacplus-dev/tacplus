@@ -136,8 +136,8 @@ func javaTenantPinClass(pins []proto.TenantPinnedRPC) string {
     /**
      * How one pinned caller reads a tenant-pinned collection (spec.per_service_config
      * held by an exported state root): every tenant's entry when its namespace is
-     * /system or below, only the entry keyed by &lt;t&gt; when it is exactly
-     * /tenants/&lt;t&gt;, and in both cases each entry projected to the key and the
+     * /system or below, only the entry keyed by &lt;t&gt; or by /tenants/&lt;t&gt;
+     * when it is exactly /tenants/&lt;t&gt;, and in both cases each entry projected to the key and the
      * caller's own config slice. A null pin is a caller that is not pinned, and
      * every helper below is the identity for it.
      */
@@ -190,9 +190,9 @@ func javaTenantPinClass(pins []proto.TenantPinnedRPC) string {
                 "a tenant-pinned read is served to %[2]s and %[3]s<t> callers only, not namespace %%s", ns);
         }
 
-        /** Whether the entry keyed by key is the pinned caller's. */
+        /** Whether the entry keyed by key is the pinned caller's: its tenant &lt;t&gt; keyed either by the bare name or by its namespace %[3]s&lt;t&gt;. */
         static boolean admits(TenantPin p, String key) {
-            return p == null || p.all || p.tenant.equals(key);
+            return p == null || p.all || p.tenant.equals(key) || (%[3]q + p.tenant).equals(key);
         }
 
         private static void keepOnly(com.google.protobuf.Message.Builder b, String... keep) {

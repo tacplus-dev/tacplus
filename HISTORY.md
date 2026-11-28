@@ -225,3 +225,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-28 looper issue Generated Go server's BDP pings make a streaming Swift client drop its connection (swift-nio-http2 control-frame limit) (#958)
 - 2026-11-28 looper issue Generated tenant-to-owner config push: a tenant config_slice with push delivery, the Stratum-side publisher and the owner's receiver (#927)
 - 2026-11-28 looper issue Generated tenant pin admits only the entry keyed by the bare tenant name; a holder keyed by /tenants/<t> (kernel) serves its caller nothing (#1009)
+- 2026-11-28 looper issue Pinned images behind their lines: relock (build.lock: ghcr.io/tacplus-dev/tacplus/build:20261126-57a6521 → ghcr.io/tacplus-dev/tacplus/build:20261128-7319ce5) (#1017)

@@ -53,6 +53,8 @@ do {
 }
 
 let sameConnectionCalls = 300
+// On stderr, unbuffered: the log shows which part a run past its deadline hung in.
+FileHandle.standardError.write(Data("swift default C2D dial: first calls passed; \(sameConnectionCalls) calls on one connection\n".utf8))
 do {
     try await client.withLocalDaemon { daemon in
         for call in 1...sameConnectionCalls {

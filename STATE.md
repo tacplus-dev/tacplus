@@ -74,10 +74,11 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-28 by lo
   field and refusing another tid (`PERMISSION_DENIED`) before sending.
   The product layer (#475, roadmap/PRODUCTS_LAYER.md), steps 1 and 2's grammar: `(spec.service).product` and
   `(spec.caller_tid)` are declared and checked in a service's build and the fleet build (the name rule, the S2S edge
-  table over every declared edge, caller_tid's shape and its use on a product's tenant-naming fields); the registry
-  entry's `product` (`tacplus registry register --product`) must agree with the proto, and `fleet.lock` lists the
-  fleet's products. `spiffe://<td>/products/<name>/services/<svc>` parses in all five generated languages, by the
-  shared vectors. The layer door (step 2's first part): Go, Java and Rust read a caller's layer through one
+  table over every declared edge, caller_tid's shape and its use on a product's tenant-naming fields, no config
+  slice owned by a product); the registry entry's `product` (`tacplus registry register --product`) must agree with
+  the proto, and `fleet.lock` lists the fleet's products.
+  `spiffe://<td>/products/<name>/services/<svc>` parses in all five generated languages, by the shared vectors.
+  The layer door (step 2's first part): Go, Java and Rust read a caller's layer through one
   `caller_layer` helper (shared vectors); a product's instance admits only tenants' and its own product's services,
   a tenant-owned one refuses a product's caller on every rpc, and an instance whose own identity is in another layer
   than its proto declares does not start. The Go, Java and Rust S2S client of a tenant's or a product's service refuses

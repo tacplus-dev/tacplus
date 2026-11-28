@@ -218,3 +218,4 @@ Append-only: add entries at the end, never edit or remove one (CI enforces it). 
 - 2026-11-27 looper issue Pinned images behind their lines: relock (build.lock: ghcr.io/tacplus-dev/tacplus/build:20261123-57a6521 → ghcr.io/tacplus-dev/tacplus/build:20261126-57a6521, and 1 more) (#1002)
 - 2026-11-28 looper release v2.6.15 (https://github.com/tacplus-dev/tacplus/releases/tag/v2.6.15)
 - 2026-11-28 looper issue State export allow-list: an exported service_state root names the services allowed to import it, enforced at build time (#928)
+- 2026-11-28 looper issue A pinned build image digest was deleted from ghcr: build:20261123-57a6521@sha256:72fcd044… is NotFound four days after repositories pinned it (#1003)

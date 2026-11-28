@@ -615,6 +615,15 @@ cleanup. Java uses `ServerCallStreamObserver` readiness hooks. TypeScript uses
 `write()` backpressure and `drain`. Go, Rust, and Python rely on their native
 stream/cancellation semantics.
 
+HTTP/2 windows are static in the generated Go servers (the TLS gRPC server and
+the C2D socket server): 1 MiB per stream, 16 MiB per connection. grpc-go's
+default, dynamic windows send a BDP PING each time data arrives with none
+outstanding, hundreds a second under a stream of small messages, and
+swift-nio-http2, the Swift clients' transport, closes a connection past 200
+inbound PINGs in 30 s. The cost is no window growth past these on a
+high-latency link. grpc-java pings only after half a window of data, and
+Rust's adaptive window is off by default.
+
 Idle-timeout backstop — scope. The generated idle-timeout backstop applies to
 **long-lived WATCH streams**: the replay Ring waits for the next delta and, if
 none arrives within the caller's trust-tier `STREAM_IDLE_TIMEOUT`, ends the

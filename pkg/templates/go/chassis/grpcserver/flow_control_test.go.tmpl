@@ -1,0 +1,314 @@
+// Copyright (c) 2026 Jody Scott
+// SPDX-License-Identifier: Apache-2.0
+// CODE GENERATED - DO NOT EDIT
+
+// Flow-control regression (issue #958): a client streaming small messages to a
+// generated server must not draw a PING per message. With grpc-go's dynamic
+// windows the server's BDP estimator PINGs each time data arrives with none of
+// its PINGs outstanding, and swift-nio-http2, the generated Swift clients'
+// transport, closes the connection past 200 inbound PINGs and SETTINGS in
+// 30 s: a Swift client lost every stream after a few hundred messages.
+//
+// The test streams to the TLS server and to the C2D socket server over raw
+// HTTP/2, acking each PING as a client does, so that a dynamic-window server
+// would PING again on the next message, and counts the PINGs it is sent.
+
+package grpcserver
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/binary"
+	"errors"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	pb "{{.ModuleBasePath}}/types/sys/grpcconfig"
+	hostpb "{{.ModuleBasePath}}/types/sys/host"
+)
+
+// flowTestMessages is more than swift-nio-http2's 200 control frames, so a
+// server PINGing once per message would have the Swift client drop it.
+const flowTestMessages = 400
+
+// flowTestInterval spaces the messages, as a client's ticks: an acked PING is
+// back at the server before the next message, which a dynamic-window server
+// answers with a PING of its own.
+const flowTestInterval = 2 * time.Millisecond
+
+// flowTestMaxPings bounds the PINGs the server may send over the stream, about
+// a second long: swift-nio-http2's 200 in 30 s is under 7 a second.
+const flowTestMaxPings = 6
+
+// HTTP/2 frame types and flags the raw client uses (RFC 9113, section 6).
+const (
+	http2FrameData       = 0x0
+	http2FrameHeaders    = 0x1
+	http2FrameSettings   = 0x4
+	http2FramePing       = 0x6
+	http2FrameGoAway     = 0x7
+	http2FlagAck         = 0x1
+	http2FlagEndStream   = 0x1
+	http2FlagEndHeaders  = 0x4
+	flowTestStreamID     = 1
+	flowTestService      = "tacplus.test.FlowControl"
+	flowTestMethod       = "Upload"
+	flowTestMessageBytes = 4
+)
+
+// flowTestImpl serves one client-streaming method that counts the messages it
+// receives and reports the count when the client half-closes.
+type flowTestImpl struct {
+	received chan int
+}
+
+func (f flowTestImpl) RegisterServices(s *grpc.Server) error {
+	upload := grpc.StreamDesc{
+		StreamName:    flowTestMethod,
+		ClientStreams: true,
+		Handler: func(_ any, ss grpc.ServerStream) error {
+			n := 0
+			for {
+				if err := ss.RecvMsg(new(wrapperspb.BytesValue)); err != nil {
+					if !errors.Is(err, io.EOF) {
+						return err
+					}
+					break
+				}
+				n++
+			}
+			f.received <- n
+			return ss.SendMsg(&wrapperspb.BytesValue{})
+		},
+	}
+	s.RegisterService(&grpc.ServiceDesc{
+		ServiceName: flowTestService,
+		HandlerType: (*any)(nil),
+		Streams:     []grpc.StreamDesc{upload},
+	}, struct{}{})
+	return nil
+}
+
+// hpackLiteral encodes a header field as an HPACK literal without indexing,
+// with a new name and no Huffman coding (RFC 7541, section 6.2.2).
+func hpackLiteral(name, value string) []byte {
+	out := []byte{0x00, byte(len(name))}
+	out = append(out, name...)
+	out = append(out, byte(len(value)))
+	return append(out, value...)
+}
+
+// flowTestPinger is the client's side of the connection: it reads every frame
+// the server sends, acks its SETTINGS and PINGs and counts the PINGs.
+type flowTestPinger struct {
+	conn    net.Conn
+	writeMu sync.Mutex
+	pings   atomic.Int64
+	goaway  []byte
+	done    chan error
+}
+
+func (p *flowTestPinger) write(typ, flags byte, streamID uint32, payload []byte) error {
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	hdr := make([]byte, 9, 9+len(payload))
+	hdr[0], hdr[1], hdr[2] = byte(len(payload)>>16), byte(len(payload)>>8), byte(len(payload))
+	hdr[3], hdr[4] = typ, flags
+	binary.BigEndian.PutUint32(hdr[5:], streamID)
+	_, err := p.conn.Write(append(hdr, payload...))
+	return err
+}
+
+// read runs until the server ends the stream (nil), sends GOAWAY or drops the
+// connection (an error).
+func (p *flowTestPinger) read() {
+	for {
+		hdr := make([]byte, 9)
+		if _, err := io.ReadFull(p.conn, hdr); err != nil {
+			p.done <- err
+			return
+		}
+		payload := make([]byte, int(hdr[0])<<16|int(hdr[1])<<8|int(hdr[2]))
+		if _, err := io.ReadFull(p.conn, payload); err != nil {
+			p.done <- err
+			return
+		}
+		typ, flags := hdr[3], hdr[4]
+		streamID := binary.BigEndian.Uint32(hdr[5:]) & 0x7fffffff
+		switch {
+		case typ == http2FrameSettings && flags&http2FlagAck == 0:
+			if err := p.write(http2FrameSettings, http2FlagAck, 0, nil); err != nil {
+				p.done <- err
+				return
+			}
+		case typ == http2FramePing && flags&http2FlagAck == 0:
+			p.pings.Add(1)
+			if err := p.write(http2FramePing, http2FlagAck, 0, payload); err != nil {
+				p.done <- err
+				return
+			}
+		case typ == http2FrameGoAway:
+			p.goaway = payload
+			p.done <- errors.New("server sent GOAWAY")
+			return
+		case streamID == flowTestStreamID && flags&http2FlagEndStream != 0:
+			p.done <- nil
+			return
+		}
+	}
+}
+
+// streamToServer opens the client-streaming call on conn, sends
+// flowTestMessages messages flowTestInterval apart and half-closes, then
+// checks the server received them all with fewer than flowTestMaxPings PINGs.
+func streamToServer(t *testing.T, conn net.Conn, scheme string, received <-chan int) {
+	t.Helper()
+	if err := conn.SetDeadline(time.Now().Add(60 * time.Second)); err != nil {
+		t.Fatalf("SetDeadline: %v", err)
+	}
+	if _, err := io.WriteString(conn, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"); err != nil {
+		t.Fatalf("write preface: %v", err)
+	}
+	p := &flowTestPinger{conn: conn, done: make(chan error, 1)}
+	if err := p.write(http2FrameSettings, 0, 0, nil); err != nil {
+		t.Fatalf("write SETTINGS: %v", err)
+	}
+	go p.read()
+
+	var block []byte
+	for _, h := range [][2]string{
+		{":method", "POST"},
+		{":scheme", scheme},
+		{":path", "/" + flowTestService + "/" + flowTestMethod},
+		{":authority", "localhost"},
+		{"content-type", "application/grpc"},
+		{"te", "trailers"},
+	} {
+		block = append(block, hpackLiteral(h[0], h[1])...)
+	}
+	if err := p.write(http2FrameHeaders, http2FlagEndHeaders, flowTestStreamID, block); err != nil {
+		t.Fatalf("write HEADERS: %v", err)
+	}
+
+	msg, err := proto.Marshal(&wrapperspb.BytesValue{Value: make([]byte, flowTestMessageBytes)})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	// The gRPC length-prefixed message: uncompressed, its length, its bytes.
+	framed := append([]byte{0, 0, 0, 0, 0}, msg...)
+	binary.BigEndian.PutUint32(framed[1:], uint32(len(msg)))
+	for i := 0; i < flowTestMessages; i++ {
+		if i > 0 {
+			time.Sleep(flowTestInterval)
+		}
+		if err := p.write(http2FrameData, 0, flowTestStreamID, framed); err != nil {
+			t.Fatalf("message %d: write: %v (the server sent %d PINGs)", i+1, err, p.pings.Load())
+		}
+	}
+	if err := p.write(http2FrameData, http2FlagEndStream, flowTestStreamID, nil); err != nil {
+		t.Fatalf("half-close: %v", err)
+	}
+
+	if err := <-p.done; err != nil {
+		t.Fatalf("the call did not complete: %v %q (the server sent %d PINGs)", err, p.goaway, p.pings.Load())
+	}
+	select {
+	case n := <-received:
+		if n != flowTestMessages {
+			t.Fatalf("the server received %d messages, want %d", n, flowTestMessages)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the handler never reported the messages it received")
+	}
+	if pings := p.pings.Load(); pings > flowTestMaxPings {
+		t.Fatalf("the server sent %d PINGs over a stream of %d messages, want at most %d: "+
+			"BDP PINGs from dynamic HTTP/2 windows, past which swift-nio-http2 closes the connection",
+			pings, flowTestMessages, flowTestMaxPings)
+	}
+}
+
+// TestStreamingClientDrawsNoBDPPings streams to the real GrpcServer over TLS.
+func TestStreamingClientDrawsNoBDPPings(t *testing.T) {
+	cert, key := keepaliveTestCert(t)
+	port := keepaliveTestPort(t)
+	impl := flowTestImpl{received: make(chan int, 1)}
+	cfg := &pb.Config{ListenAddress: &hostpb.Host{Host: "127.0.0.1", Port: int32(port)}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ps, err := New(ctx, cfg, nil, cert, key, impl, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- ps.Listen(ctx) }()
+
+	// The certificate identity is not under test; flow control is.
+	var conn *tls.Conn
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		conn, err = tls.DialWithDialer(dialer, "tcp", "127.0.0.1:"+strconv.Itoa(port),
+			&tls.Config{InsecureSkipVerify: true, NextProtos: []string{"h2"}})
+		if err == nil {
+			break
+		}
+		select {
+		case serr := <-served:
+			t.Fatalf("Listen returned before serving: %v", serr)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Dial: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	defer conn.Close()
+	streamToServer(t, conn, "https", impl.received)
+}
+
+// TestC2DStreamingClientDrawsNoBDPPings streams to the real C2DServer over its
+// Unix socket, in plaintext HTTP/2 as a C2D client does.
+func TestC2DStreamingClientDrawsNoBDPPings(t *testing.T) {
+	// Under the system temp dir, as a Unix socket path is short.
+	dir, err := os.MkdirTemp("", "c2dflow")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(dir)
+	socket := filepath.Join(dir, "c2d.sock")
+	impl := flowTestImpl{received: make(chan int, 1)}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	served := make(chan error, 1)
+	go func() { served <- NewC2DServer(socket, impl).Serve(ctx) }()
+
+	var conn net.Conn
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		if conn, err = net.Dial("unix", socket); err == nil {
+			break
+		}
+		select {
+		case serr := <-served:
+			t.Fatalf("C2DServer.Serve returned before serving: %v", serr)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Dial %s: %v", socket, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	defer conn.Close()
+	streamToServer(t, conn, "http", impl.received)
+}

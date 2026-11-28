@@ -21,7 +21,9 @@
 #
 # The swift leg is the client side (issue #494): the generated Swift lite
 # package's C2DClient(), with no argument, dials the generated Go daemon served
-# on its declared socket_path, a unary call and a server stream.
+# on its declared socket_path, a unary call and a server stream, then 300 unary
+# calls on one connection: a server PINGing per request has swift-nio-http2
+# drop the connection past 200 (issue #958).
 #
 # Usage: run.sh [--language go|java|rust|swift]   (default: all four)
 set -euo pipefail
@@ -201,6 +203,8 @@ run_swift() {
     || die "Swift C2DClient's default socket is not the declared socket_path"
   cp -R "$TESTDATA/swift-default-dial" "$WORK/swift/consumer"
   echo "==> Building the Swift consumer of the generated package"
+  # A deadline, as the Java self-tests' (#778): a call that never completes
+  # fails this leg with its log instead of holding the gate (124 or 137).
   (cd "$WORK/swift/consumer" && swift build) >"$WORK/swift/build.log" 2>&1 \
     || { tail -60 "$WORK/swift/build.log"; die "Swift consumer of the generated package does not build"; }
 
@@ -217,7 +221,7 @@ run_swift() {
 
   echo "==> Dialing the Go daemon with the Swift C2DClient's default socket"
   local rc=0
-  (cd "$WORK/swift/consumer" && swift run --skip-build C2DDefaultDial) >"$WORK/swift/dial.log" 2>&1 || rc=$?
+  (cd "$WORK/swift/consumer" && timeout --kill-after=20 "${C2D_SWIFT_DIAL_TIMEOUT:-600}" swift run --skip-build C2DDefaultDial) >"$WORK/swift/dial.log" 2>&1 || rc=$?
   kill "$daemon_pid"
   wait "$daemon_pid" || true
   cat "$WORK/swift/dial.log"

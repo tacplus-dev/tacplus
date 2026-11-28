@@ -21,7 +21,9 @@
 #
 # The swift leg is the client side (issue #494): the generated Swift lite
 # package's C2DClient(), with no argument, dials the generated Go daemon served
-# on its declared socket_path, a unary call and a server stream.
+# on its declared socket_path, a unary call and a server stream, then 300 unary
+# calls on one connection: a server PINGing per request has swift-nio-http2
+# drop the connection past 200 (issue #958).
 #
 # Usage: run.sh [--language go|java|rust|swift]   (default: all four)
 set -euo pipefail
@@ -227,7 +229,9 @@ run_swift() {
   # a fatalError). The runtime's own aborts, #803's among them, print their
   # one line and nothing more, so a failure also shows the daemon's log and
   # the grpc-swift versions the consumer resolved, which Package.swift floats.
-  (cd "$WORK/swift/consumer" && SWIFT_BACKTRACE=enable=yes,interactive=no swift run --skip-build C2DDefaultDial "$iterations") >"$WORK/swift/dial.log" 2>&1 || rc=$?
+  # A deadline, as the Java self-tests' (#778): a call that never completes
+  # fails this leg with its log instead of holding the gate (124 or 137).
+  (cd "$WORK/swift/consumer" && SWIFT_BACKTRACE=enable=yes,interactive=no timeout --kill-after=20 "${C2D_SWIFT_DIAL_TIMEOUT:-600}" swift run --skip-build C2DDefaultDial "$iterations") >"$WORK/swift/dial.log" 2>&1 || rc=$?
   kill "$daemon_pid"
   wait "$daemon_pid" || true
   cat "$WORK/swift/dial.log"

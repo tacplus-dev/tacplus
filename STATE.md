@@ -1,6 +1,6 @@
 # State: tacplus
 
-Overwritten to stay current (loopers and agents). Last updated: 2026-11-28 by looper (#352).
+Overwritten to stay current (loopers and agents). Last updated: 2026-11-28 by looper (#475).
 
 - **Version / line:** v2.7.0 (latest release, 2026-11-26, at 715ecaa9, where `release/2.7` was cut; latest 2.6 patch v2.6.15); main is the 2.8 line in progress (this repository is the compiler; it declares no tacplus floor)
 - **Works:** in 2.4 — the global registry and the version floor (#161). In 2.5 — the record store's
@@ -86,7 +86,12 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-28 by lo
   plane is closed to a product: its S2S half (reads, watches, the record write surface) refuses a product's caller on
   every rpc in Go, Java and Rust, and a product's `(spec.record_read)` or client of it fails generation; a product's
   members meet over the member port in its own namespace only. `all_grpc_s2s_clients` generates no client for a
-  refused edge, and the MCP tool surface binds `(spec.caller_tid)` like the gRPC wrapper (Go, Java, Rust).
+  refused edge, and the MCP tool surface binds `(spec.caller_tid)` like the gRPC wrapper (Go, Java, Rust). A server of
+  a product service, or of one binding `caller_tid`, generates in Go, Java and Rust (Python and TypeScript refuse
+  it), and `cross-test/proto-productlayer` builds a product server and drives the edge table at the generated
+  clients in all three. A product service binding `caller_tid` is its tenants' custodian: its generated Go, Java
+  and Rust server requires `OnTenantDeleted` and runs it, retrying until OK, for each tid of the fleet's sys
+  `tenantdeletion.TenantDeletions` root, which it reads without declaring it.
   Deterministic builds (#193): a repository pins the exact release and the build image digest in `tacplus.lock`
   (`tacplus pin` writes it; moving it is a commit); there is no tacplus image (the old tags stay, deprecated, and
   2.6 gets none); `build:X.Y` per line, rebuilt on every release as an immutable `build:X.Y.Z`, carries Kani and
@@ -381,9 +386,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-28 by lo
   The config push (#927) has its annotation, wire, receivers and publishers in Go, Java and Rust, and a tenant's
   record store holds the publisher, but nothing generated feeds it yet (a sys record the store hosts), nor is a
   store's publisher cross-tested against an owner over the wire; kernel#70 waits on them.
-  The product layer's remaining generated doors (`OnTenantDeleted`) and its cross-tests are not done (#475 steps 2-4),
-  so a server of a product service, or of an rpc binding `caller_tid`, is refused at generation; the kernel mints no
-  product token yet (tacplus-dev/kernel#63), nor does the operator deploy one (tacplus-dev/operator#33).
+  The product layer's `OnTenantDeleted` waits on the kernel to hold `sys/tenantdeletion.proto`'s record that drives
+  it (tacplus-dev/kernel#75); the kernel mints no product token yet (tacplus-dev/kernel#63), nor does the operator
+  deploy one (tacplus-dev/operator#33).
 - **Blocked on:** #195's end-to-end gateway build (`tacplus fleet gateway`: the merged webapp, the clients, the image
   and the lock's `gateway:` section) waits on a gateway release after v0.2.0: serving `/-/` (04d76ad4) is on gateway
   main, unreleased (v0.2.0, the latest, predates it). The example module is done (tenantecho v0.2.0).

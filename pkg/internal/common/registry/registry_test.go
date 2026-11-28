@@ -2,6 +2,7 @@ package registry
 
 import (
 	"bytes"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1690,5 +1691,30 @@ service DocService {
 		if !want.MatchString(registryJSON) {
 			t.Fatalf("registry.json missing %s:\n%s", want, registryJSON)
 		}
+	}
+}
+
+// Enum numbers are int32 in protobuf and are carried as int32 from the parser
+// up, so the registry's FieldInfo receives them unnarrowed, bounds included.
+func TestBuildFieldInfoProtoCarriesEnumNumbersAtInt32Bounds(t *testing.T) {
+	got := buildFieldInfoProto(llmdesc.FieldDescriptor{
+		Name: "level",
+		Type: "enum",
+		EnumValues: []llmdesc.EnumValue{
+			{Name: "LEVEL_MIN", Number: math.MinInt32},
+			{Name: "LEVEL_MAX", Number: math.MaxInt32},
+		},
+	})
+	if len(got.GetEnumValues()) != 2 ||
+		got.GetEnumValues()[0].GetNumber() != math.MinInt32 || got.GetEnumValues()[1].GetNumber() != math.MaxInt32 {
+		t.Fatalf("enum values = %v, want LEVEL_MIN=%d and LEVEL_MAX=%d", got.GetEnumValues(), math.MinInt32, math.MaxInt32)
+	}
+}
+
+// The order key is carried as int32 from llmdesc, its bound checked there.
+func TestBuildFieldInfoProtoCarriesTimeseriesOrderKey(t *testing.T) {
+	got := buildFieldInfoProto(llmdesc.FieldDescriptor{Name: "ts", Type: "int64", TimeseriesOrderKey: math.MaxInt32})
+	if got.GetTimeseriesOrderKey() != math.MaxInt32 {
+		t.Fatalf("timeseries_order_key = %d, want %d", got.GetTimeseriesOrderKey(), math.MaxInt32)
 	}
 }

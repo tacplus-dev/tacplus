@@ -96,6 +96,23 @@ func New{{.ClientName}}(conn grpc.ClientConnInterface, tokenProvider func() (str
 {{- end}}
 	}
 }
+{{- if .HasRoute}}
+
+// ownToken returns the token this client calls with, for
+// serviceconnection.CallerRouteTenant: a tenant's own service routes to its
+// own tid only. No provider, or one that fails, is no token: the request then
+// names its tenant, and an authenticated call fails on the missing token.
+func (c *{{.ClientName}}) ownToken() string {
+	if c.tokenProvider == nil {
+		return ""
+	}
+	token, err := c.tokenProvider()
+	if err != nil {
+		return ""
+	}
+	return token
+}
+{{- end}}
 
 {{- if .HasNonBidi}}
 

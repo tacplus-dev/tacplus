@@ -103,6 +103,10 @@ cut after `2.3.1` moves `2.0` and leaves `2` and `latest` alone.
 release image is built with its line (`TACPLUS_LINE=X.Y`), and its `tacplus`
 refuses a repository pinned to another line. A release job runs in
 `build:X.Y` of its own line, never in `build:latest`.
+The GitHub release is marked Latest by the same rule: only the newest
+release of the newest line (`scripts/release-latest.sh`); a patch on an older
+line is published with `--latest=false`, never taking Latest from the newest
+line by being published last (#337).
 
 A line's images are rebuilt every week from its own branch (#283), so they
 take every Debian security fix (`apt-get upgrade`) without waiting for a
@@ -119,6 +123,30 @@ layer depends on the run's id (`APT_REFRESH`), so the build cache cannot hand
 back an older run's layer, and a run whose index lacks linux/amd64 or
 linux/arm64, or holds an image created before the run started, fails before
 any `X.Y.Z` or floating tag moves (`scripts/images-check-index.sh`).
+
+A Debian package advisory (a DSA) is fixed in `base`, not in `build` alone
+(#757). Both images run `apt-get upgrade`, so rebuilding `build` alone clears
+the build images but leaves `base:latest` and every `base:X.Y` on the old
+package until the weekly run. The Nightly security sweep scans `base:latest`
+and fails `main` until then. The fix is:
+
+1. Dispatch `images.yml` on `main` with `rebuild: base`. This moves
+   `base:latest` and `build:latest`.
+2. Dispatch it on each supported `release/X.Y`. This is a line rebuild: it
+   moves `base:X.Y` and `build:X.Y`.
+3. If a release's pin must take the fix, tag a patch on that line afterwards.
+   Its `build:X.Y.Z` starts from the fresh `base:X.Y`.
+
+A patch tag alone does not do this: it rebuilds only `build` (#711 left
+`base` behind this way). The fix is done when `trivy image --severity
+HIGH,CRITICAL --ignore-unfixed` reports nothing on `base:latest`, each
+`base:X.Y`, `build:latest` and each `build:X.Y`. A dispatch needs `actions:
+write` on the repository. Without it, a change to `images/base.Dockerfile`
+landed on `main` rebuilds `base:latest`. On a line, the same change backported
+to `release/X.Y` rebuilds `base:X.Y` with the line's next patch tag: a tag
+rebuilds `base` when its definition changed since the line's previous tag. A
+push to a release branch runs no image build. Otherwise the lines wait for the
+weekly run.
 
 The definitions are `images/base.Dockerfile` and `images/build.Dockerfile`.
 Their Debian packages are `images/base.packages` and `images/build.packages`

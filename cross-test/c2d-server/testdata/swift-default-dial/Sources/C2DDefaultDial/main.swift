@@ -5,6 +5,13 @@
 // argument, a unary call and a server stream: the default socket must be the
 // socket_path the daemon binds (issue #494). The old default,
 // ~/.<package>/daemon.sock, reached no daemon.
+//
+// The pair of calls runs `iterations` times (the first argument, default 500).
+// Each call creates its GRPCClient and tears it down, and the teardown is where
+// issue #803 hid: run through grpc-swift's withGRPCClient, a discarding task
+// group, it aborted the process with "freed pointer was not the last
+// allocation" on the Swift 6.1 toolchain, in one run of 100 iterations out of
+// three and two of 1000 out of three. One dial, as before, passed by luck.
 
 import C2dserverModel
 import Foundation
@@ -12,6 +19,11 @@ import Foundation
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data("swift default C2D dial FAILED: \(message)\n".utf8))
     exit(1)
+}
+
+let iterations = Int(CommandLine.arguments.dropFirst().first ?? "") ?? 500
+guard iterations > 0 else {
+    fail("iterations must be positive, got \(CommandLine.arguments.dropFirst().first ?? "")")
 }
 
 let client = C2DClient()
@@ -23,26 +35,28 @@ var request = C2dserver_LocalRequest()
 request.itemID = "swift-default"
 request.count = 3
 
-do {
-    let response = try await client.withLocalDaemon { daemon in
-        try await daemon.getLocal(request)
-    }
-    guard response.resultID == "result-swift-default" else {
-        fail("result_id = \(response.resultID), want result-swift-default")
-    }
-    let seqs = try await client.withLocalDaemon { daemon in
-        try await daemon.generateLocalEvents(request) { stream in
-            var seqs: [Int32] = []
-            for try await event in stream.messages {
-                seqs.append(event.seq)
-            }
-            return seqs
+for iteration in 1...iterations {
+    do {
+        let response = try await client.withLocalDaemon { daemon in
+            try await daemon.getLocal(request)
         }
+        guard response.resultID == "result-swift-default" else {
+            fail("iteration \(iteration): result_id = \(response.resultID), want result-swift-default")
+        }
+        let seqs = try await client.withLocalDaemon { daemon in
+            try await daemon.generateLocalEvents(request) { stream in
+                var seqs: [Int32] = []
+                for try await event in stream.messages {
+                    seqs.append(event.seq)
+                }
+                return seqs
+            }
+        }
+        guard seqs == [0, 1, 2] else {
+            fail("iteration \(iteration): streamed seqs = \(seqs), want [0, 1, 2]")
+        }
+    } catch {
+        fail("iteration \(iteration): call over the default socket: \(error)")
     }
-    guard seqs == [0, 1, 2] else {
-        fail("streamed seqs = \(seqs), want [0, 1, 2]")
-    }
-} catch {
-    fail("call over the default socket: \(error)")
 }
-print("swift default C2D dial passed")
+print("swift default C2D dial passed (\(iterations) iterations)")

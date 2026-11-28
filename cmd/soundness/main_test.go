@@ -180,6 +180,34 @@ func TestStoreVendorSoundnessSeededViolations(t *testing.T) {
 	}
 }
 
+// Pins the store-vendor gate to its root: a symlink in the tree pointing
+// outside it (a file or a directory) is not followed, so nothing outside the
+// tree is read or flagged.
+func TestStoreVendorSoundnessDoesNotFollowSymlinkOutOfTree(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "leak.go"), []byte("var x = \"dgraph\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "leak.go"), filepath.Join(root, "pkg", "leak.go")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "pkg", "outside")); err != nil {
+		t.Fatal(err)
+	}
+
+	violations, err := storeVendorViolations(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("violations = %+v, want none: a symlink out of the tree was followed", violations)
+	}
+}
+
 // Pins token matching: a prefix-named constraint must not false-pass when only
 // a longer sibling is referenced.
 func TestConstraintReferenced_WordBoundary(t *testing.T) {

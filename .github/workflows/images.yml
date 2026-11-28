@@ -76,7 +76,7 @@ jobs:
           # Every image this run pushes must be created after this (#369,
           # scripts/images-check-index.sh).
           started="$(date -u +%s)"
-          plan="$(scripts/images-plan.sh "${{ github.event_name }}" "$GITHUB_REF_TYPE" "${{ github.event.inputs.rebuild }}" "$GITHUB_REF_NAME")"
+          plan="$(scripts/images-plan.sh "$EVENT_NAME" "$GITHUB_REF_TYPE" "$REBUILD_INPUT" "$GITHUB_REF_NAME")"
           read -r base build <<<"$plan"
           # First publish: build everything when the build image does not exist yet.
           if ! docker manifest inspect "$NS/build:latest" >/dev/null 2>&1; then base=true; build=true; fi
@@ -97,6 +97,10 @@ jobs:
           echo "base=$base build=$build line=$line base_image=$base_image"
         env:
           DOCKER_CONFIG: /tmp/docker-anon
+          # Through the environment, never pasted into the script: the input
+          # is whatever the dispatcher typed (#584).
+          EVENT_NAME: ${{ github.event_name }}
+          REBUILD_INPUT: ${{ github.event.inputs.rebuild }}
 
   base:
     name: base

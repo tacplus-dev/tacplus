@@ -77,6 +77,7 @@ _PAYLOAD_SUB_TYPE = "sub_type"
 _PAYLOAD_PRINCIPAL = "principal"
 _PAYLOAD_AZP = "azp"
 _PAYLOAD_ACT = "act"
+_PAYLOAD_TID = "tid"
 _PAYLOAD_PROFILES = "profiles"
 _PAYLOAD_ENTITLEMENTS = "entitlements"
 _PAYLOAD_SERVICE_NAME = "service_name"
@@ -486,6 +487,18 @@ class TokenWrapper:
         """Set the act (actor) claim. Returns self for chaining."""
         self._check_mutable()
         self._payload[_PAYLOAD_ACT] = act
+        return self
+
+    def get_tid(self) -> str:
+        """Return the tid claim: the tid of the tenant the token's namespace is
+        in, stamped by kernel at mint. Empty when the token is in no tenant.
+        The namespace claim names the tenant, never its tid."""
+        return str(self._payload.get(_PAYLOAD_TID, ""))
+
+    def set_tid(self, tid: str) -> "TokenWrapper":
+        """Set the tid claim. Returns self for chaining."""
+        self._check_mutable()
+        self._payload[_PAYLOAD_TID] = tid
         return self
 
     def get_service_name(self) -> str:

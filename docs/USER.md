@@ -147,7 +147,7 @@ Proto package names must be globally unique; choose last segments that are
 unique across the system to avoid collisions in these languages.
 | `src` | string | No | Primary proto source — local path or git URL. No default — must be supplied via `--src` or `tacplus.yaml`. In a GitLab CI job an `https://` URL on `CI_SERVER_HOST` is fetched with `CI_JOB_TOKEN`; an `https://github.com/` URL is fetched with `GH_TOKEN` (else `GITHUB_TOKEN`, as GitHub Actions sets it), which is how `depends` reach a private registry or contract on GitHub; no other host, and nothing over `http://`, receives a credential. |
 | `layer` | string | No | Layer name of `src` (e.g. `app`). Carried as `source` on every `registry.json` service and entitlement grant whose package comes from that tree. Not derived from the path, so a local checkout and a git URL label the same tree the same way. |
-| `sources` | list | No | Additional proto sources merged with `src` into one generation (e.g. a shared base plus a reusable service's protos). Each entry is a path/URL string, or a `{src: <path/URL>, layer: <name>}` mapping to name its layer. All sources form one proto tree; a file at the same path in two sources must be byte-identical (deduplicated; the first source listed keeps the file's layer) or it is a hard error, and `dependencies.yaml` is merged across sources (conflicting pins error). Repeatable `--src` on the CLI overrides `src`+`sources` and its sources carry no layer. |
+| `sources` | list | No | Additional proto sources merged with `src` into one generation (e.g. a shared base plus a reusable service's protos). Each entry is a path/URL string, or a `{src: <path/URL>, layer: <name>}` mapping to name its layer. All sources form one proto tree; a file at the same path in two sources must be byte-identical (deduplicated; the first source listed keeps the file's layer) or it is a hard error, and `dependencies.yaml` is merged across sources (conflicting pins error). A source is read only inside itself: a symlink in it that resolves outside the source (or is absolute) fails the merge with an error naming it; a relative symlink to a file inside the same source merges. Repeatable `--src` on the CLI overrides `src`+`sources` and its sources carry no layer. |
 | `import` | string | No | Path to base config to import (resolved relative to this file) |
 
 ### Client Transport Surfaces
@@ -332,6 +332,18 @@ records them. Three shapes exist:
   tacplus registry register NAME --kind service --contract <proto repo URL> --visibility public --proto-dir .
   ```
 
+  A service that declares a tenant- or project-scope `(spec.config_slice)` also
+  registers its field in the generated `TenantConfig` / `ProjectConfig`: those are
+  wire numbers too, read by every kernel that holds tenant configs, so the authority
+  decides them once like ids (global from 1, private from 1024):
+
+  ```bash
+  tacplus registry register NAME --tenant-slice --proto-dir .    # --project-slice likewise
+  ```
+
+  Given with `--contract` for a new service, the id and the field are registered
+  together.
+
 - **A lock** is a per-proto-repo `registry.yaml` that names its authorities in order:
 
   ```yaml
@@ -346,8 +358,9 @@ records them. Three shapes exist:
   `tacplus registry --proto-dir .` unions the authorities (a name or an id in two of
   them is an error, never a precedence call), syncs the lock for every service
   declared in the tree, and refuses to allocate or renumber. A declared service in
-  no authority is an error naming the registration step. Builds read only the lock,
-  so generation is reproducible offline.
+  no authority is an error naming the registration step, and so is, at build time,
+  a declared config slice whose field no authority has registered (a build never
+  assigns one). Builds read only the lock, so generation is reproducible offline.
 
 - **A legacy per-repo registry** has neither `scope:` nor `registries:` and keeps the
   original allocation (1-99 with an optional `id_min` floor), unchanged.
@@ -941,6 +954,16 @@ Fields within a state root can be:
 | **Topic** | `(spec.topic) = true` | Pub/sub. Every subscriber gets every message. |
 | **View** | `(spec.view_sources)` or `(spec.view_member)` | Read-only union of multiple collections. |
 
+A topic's state service declares two bidi-streaming RPCs, `PublishTo<Field>`
+(the topic message in, `eventbus_support.PublishResponse` acks out) and
+`SubscribeTo<Field>` (`eventbus_support.SubscribeRequest` in,
+`<Root><Field>SubscribeRecord` records out: EventBus metadata and the payload).
+The generated state client wraps them. In Go, `<Field>().Publish(ctx, msg)`
+publishes one message and returns the broker's ack, and
+`<Field>().Subscribe(ctx, req)` sends `req` (nil for the defaults) and returns
+the stream: `Recv` the records, `Send` later flow control, and cancel `ctx` to
+end the subscription. A read-only client has no `Publish`.
+
 ### Cross-Service State Access
 
 **1. The owning service exports its state:**
@@ -1287,8 +1310,30 @@ namespace claim stays `/tenants/<name>`, like its tenant's users'. A shared serv
 instance, running in `/system`, is unchanged. An instance that cannot read its
 own identity at startup fails to start rather than serve unpinned. That door is
 the default policy, "members of the target tenant only"; an rpc that declares
-`RPC_FLAG_ANY_TENANT` opens it, so "any authenticated user of any tenant may
-call this" is expressible (see the next section).
+`RPC_FLAG_ANY_TENANT` opens it to other tenants' **users**, so "any
+authenticated user of any tenant may call this" is expressible (see the next
+section).
+
+**S2S never crosses tenants** (tacplus-dev/roadmap
+[`decisions/s2s-never-crosses-tenants-2026-10-31.md`](https://github.com/tacplus-dev/roadmap/blob/main/decisions/s2s-never-crosses-tenants-2026-10-31.md)).
+A service calling another service is an edge fixed at build time, and the
+allowed edges are tenant → `/system`, `/system` → `/system` and, technically,
+`/system` → tenant. A tenant's service never calls another tenant's service:
+cross-tenant traffic is C2S only, a user (or a delegate acting for one)
+authorized by the target's policy. So a tenant-owned instance refuses another
+tenant's **service** token (`sub_type` `service` or `workload`) at the door on
+every rpc, an `RPC_FLAG_ANY_TENANT` one included (`PERMISSION_DENIED`, before
+any handler runs, in every generated server language); the flag never admits
+another tenant's service. The generated S2S client (Go, Java, Rust) holds the
+same line before sending: a tenant's own service (its token's `sub_type` is
+`service` or `workload` and its namespace is in `/tenants`) routes every call
+to a tenant-owned service to its own tid, its token's `tid` claim. A call whose
+route field is empty goes there, the field stamped with that tid; a call naming
+another tid, or made with a token in a tenant that carries no `tid` claim, is
+refused `PERMISSION_DENIED` before anything is dialled. A `/system` service, and
+a user's token, still name the target tenant. Black-box member traffic stays inside the service's
+own pods: a `(spec.member_port)` service's `grpcconfig.member_port.target_address`
+must be loopback, and startup refuses any other.
 
 ### Tenant-owned services are routed by a declared field
 
@@ -1325,6 +1370,19 @@ service Crew {
   the platform (`people` is `00000001`). A tenant's instances carry it in their
   subject, `spiffe://<td>/tenants/<tid>/services/<svc>` (kernel#23); their
   namespace claim names the tenant by name, `/tenants/<name>`.
+- **A caller's tid is its `tid` claim** (`JWT_PAYLOAD_TYPE_TID`, `sys/token.proto`).
+  The namespace claim of a user, session or service token names its tenant,
+  `/tenants/<name>`, never the tid, so kernel stamps the tenant's tid at mint as
+  a claim of its own, on every token whose namespace is in a tenant, and none on
+  a root or `/system` one (tacplus-dev/kernel#32). Where generated code needs
+  the caller's own tenant (the MCP session and the client-facing record reader,
+  below) it reads that claim only, through `TokenWrapper.GetTid`/`getTid`/`tid`
+  and `serviceconnection.CallerTenant` (Go), `RouteTenant.callerTenant` (Java)
+  or `tenant_route::caller_tenant` (Rust). It never derives a tid from the
+  namespace, whatever the namespace spells, so a tenant whose name looks like
+  another tenant's tid is still in its own tenant. A token with no `tid` claim,
+  or one that is not a tid, is in no tenant there: the call is refused,
+  `PERMISSION_DENIED` (#284).
 - **Required.** Generation fails for an rpc of a tenant-owned service that does
   not declare `route_field` (`ValidateTenantRouting`, also run by the fleet
   build). This covers the service's own `service_s2s`/`service_c2s` services and
@@ -1332,15 +1390,15 @@ service Crew {
   singular, plain (not `optional`) `string` of the request.
 - **A contract generated without its host.** A hosted surface is known to be
   tenant-routed from its host's proto, when that is in the run. A contract whose
-  callers generate without it, a sys contract above all (`sys/redo.proto`),
-  declares it itself: `option (spec.service_s2s) = {label: "redo",
-  host_tenant_owned: true};`. Its rpcs then declare `route_field` like the host's
-  own, in every run. `host_tenant_owned` requires a `label`, and when the host's
+  callers generate without it declares it itself: `option (spec.service_s2s) =
+  {label: "ledger", host_tenant_owned: true};`. Its rpcs then declare
+  `route_field` like the host's own, in every run. `host_tenant_owned` requires a `label`, and when the host's
   proto is in the run it must declare `tenant_owned` (`ValidateHostTenantOwned`).
 - **Refused at run time, never defaulted.** A call whose route field is empty or
   not a tid is refused with `INVALID_ARGUMENT` (HTTP `400` at the gateway's REST
   surface) before it is routed. It is never filled in from the caller's token,
-  and a tenant with no healthy instance is `UNAVAILABLE`, never another tenant's
+  except by a tenant's own service's S2S client, which may only call its own
+  tenant and stamps its own tid (above). A tenant with no healthy instance is `UNAVAILABLE`, never another tenant's
   instance. A tenant-owned instance also refuses, before the handler, a request
   routed to a tenant other than its own, the tid of its own subject, never read
   from its namespace claim (`PERMISSION_DENIED`; an instance whose subject
@@ -1359,9 +1417,9 @@ service Crew {
   takes the tid, and every message on the stream must name it.
 - **MCP: the model never sets the tenant.** The MCP session carrier of a
   tenant-owned service declares `mcp.McpRequest.tenant` as its route field.
-  A session is opened in the caller's own tenant, the tenant of its token's
-  namespace claim (`/tenants/<tid>` or below; a caller of no tenant, such as
-  `/system`, has no MCP session there, `PERMISSION_DENIED`). The carrier stamps
+  A session is opened in the caller's own tenant, its token's `tid` claim
+  (a caller with none, such as a `/system` one, has no MCP session there,
+  `PERMISSION_DENIED`). The carrier stamps
   each inbound frame's `tenant` from the token and refuses a frame that names
   another tenant (`PERMISSION_DENIED`); the MCP proxy stamps it from the token
   too, and never passes a client's value through. A tool's own route field is
@@ -1374,8 +1432,8 @@ service Crew {
   `string target_tenant = 15`, and every rpc declares it as its route field.
   The generated clients pool the store per tenant. The typed record readers
   take the tenant as their first argument. The client-facing reader
-  (`(spec.record_read).c2s`) reads from its caller's own tenant, the tid of the
-  namespace claim. The store's instance refuses, whoever the caller is
+  (`(spec.record_read).c2s`) reads from its caller's own tenant, its token's
+  `tid` claim, and refuses a caller with none (`PERMISSION_DENIED`). The store's instance refuses, whoever the caller is
   (`/system` included), a call routed to another tenant and an entry whose
   `(spec.store_namespace)` value is not in that tenant's namespace or below:
   the instance's own namespace claim, `/tenants/<name>`, since `target_tenant`
@@ -1389,8 +1447,8 @@ service Crew {
 - **Authorization is separate from routing.** Routing never implies
   `target_namespace_field`; that stays an authorization rule only. Who may call
   is the token, `auth_services`, entitlements, `target_namespace_field` and the
-  tenant door: members of the target tenant (and `/system`) by default, any
-  tenant with `RPC_FLAG_ANY_TENANT`.
+  tenant door: members of the target tenant (and `/system`) by default, users
+  of any tenant with `RPC_FLAG_ANY_TENANT`, never another tenant's service.
 
 `registry.json` carries `route_field`, `route_field_number` and `any_tenant` on
 every rpc.
@@ -2063,6 +2121,17 @@ Client-only targets do not have a supported service runtime library surface.
 Accepted builds should use only the generated C2D/C2S/W2S client helpers, the
 `client_im` identity manager, and any client-side primitives they import.
 
+**The generated Python package needs Python 3.10 or later.** Its runtime
+libraries import `cryptography`, `httpx`, `requests` and `urllib3`, so the
+generated `pyproject.toml` declares them as root dependencies at the floors
+`dependencies.yaml` sets, and `requires-python = ">=3.10"`. Set
+`cryptography: '>=50.0.0'`, `requests: '>=2.33.0'` and `urllib3: '>=2.8.0'`
+or higher, as `example/proto/dependencies.yaml` does: older floors admit
+releases with known advisories, which a lockfile or another constraint holding
+the package back would install. Those releases do not install on 3.8 or 3.9
+(#264). A regeneration over an existing `pyproject.toml` raises
+`requires-python` and these floors in place.
+
 ---
 
 ## Service Lifecycle
@@ -2416,7 +2485,7 @@ in the run. The fleet build loads the real implementors. Today:
 | Declared in | What | Hosted by |
 |-------------|------|-----------|
 | `sys/minter.proto` (`minter.Minter`) | The minting contract every generated ServiceManager calls: `MintServiceToken`, `MintExternalServiceToken`, `MintToken`, `MintX509Cert`. It is the one authoritative `(spec.token_minter)` in every run; a consumer must not declare another. | The token authority, at routing label `kernel`. It implements `minter.Minter` and keeps its own policy RPCs in a service of its own; that service carries `(spec.approval_broker)` when the fleet has `(spec.rpc).requires_device` rpcs (see below). |
-| `sys/redo.proto` (`redolog.Redo`) | The record store's durability: the contract between the record store and the redo service (the log is the database). `Append` (bidi: the store sends each operation, a single write or a whole `Apply`, at the next `seq` of the tenant's log; the redo service acks it per durability level, `DURABILITY_LOCAL` on local disk, `DURABILITY_REMOTE` once the second site has it) and `Replay` (the tenant's compacted snapshot, then the tail, then the end). Both route by `tenant`, the redo instance's tid, with `RPC_FLAG_ANY_TENANT`; the tenant a write belongs to is the caller's identity, never a field. Callers: `stratum`. Field numbers are frozen. | The redo service, at routing label `redo`: tenant-owned (`host_tenant_owned`), pinned to the reserved `restore` tenant. Its own proto is package `redo` (its identity, hence the contract's package `redolog`) and declares only `option (spec.service) = {name: "redo", tenant_owned: true, pinned_tenant: "restore"};`; it serves `redolog.Redo` by the label. |
+| `sys/redo.proto` (`redolog.Redo`) | The record store's durability: the contract between the record store and the redo service (the log is the database). `Append` (bidi: the store sends each operation, a single write or a whole `Apply`, at the next `seq` of the tenant's log; the redo service acks it per durability level, `DURABILITY_LOCAL` on local disk, `DURABILITY_REMOTE` once the second site has it) and `Replay` (the tenant's compacted snapshot, then the tail, then the end). Neither is tenant-routed nor `RPC_FLAG_ANY_TENANT`: a tenant's store calls redo in `/system` (#258); the tenant a write belongs to is the caller's tid, from its token, never a field. Callers: `stratum`. Field numbers are frozen (field 1, `tenant`, of `RedoAppend` and `RedoReplayRequest`, the old route tenant, stays declared on the 2.6 line but is deprecated and ignored: it routes nothing). | The redo service, at routing label `redo`: a `/system` service, the custodian of every tenant's log, kept apart by the caller's tid. Its own proto is package `redo` (its identity, hence the contract's package `redolog`) and declares only `option (spec.service) = {name: "redo"};`; it serves `redolog.Redo` by the label. |
 | `sys/servicehealth.proto` (`servicehealth.ServiceHealth`) | The service-instance health root every service reports into. Field numbers are frozen. | The state host (`kernel`), which imports it rather than declaring a copy. |
 | routing label `kernel` | The state host. Counts as served in every run (see Well-Known Names); config state routes there when no store is loaded. | The fleet's state host. |
 

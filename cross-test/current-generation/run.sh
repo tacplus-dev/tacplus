@@ -16,6 +16,7 @@ HEALTHONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-healthonly"
 ZERORPC_PROTO_SRC="$ROOT_DIR/cross-test/proto-zerorpc"
 C2SONLY_PROTO_SRC="$ROOT_DIR/cross-test/proto-c2sonly"
 REQUIRESDEVICE_PROTO_SRC="$ROOT_DIR/cross-test/proto-requiresdevice"
+STATEQUEUE_PROTO_SRC="$ROOT_DIR/cross-test/proto-statequeue"
 # testdata/, not a plain directory: the go tool ignores directories named
 # testdata, and this tree is Go source written against the GENERATED module
 # (gitlab.com/example/dummy/vault/...), which `go vet ./...` in this repo cannot
@@ -186,6 +187,19 @@ write_requiresdevice_config() {
 language: "$language"
 pkg: "com.gitlab.example.dummy.vault"
 src: "$REQUIRESDEVICE_PROTO_SRC"
+output-dir: "tacplus"
+EOF
+}
+
+write_statequeue_config() {
+  local dir="$1"
+  local language="$2"
+
+  mkdir -p "$dir"
+  cat > "$dir/tacplus.yaml" <<EOF
+language: "$language"
+pkg: "com.gitlab.example.dummy.helper"
+src: "$STATEQUEUE_PROTO_SRC"
 output-dir: "tacplus"
 EOF
 }
@@ -607,6 +621,46 @@ run_java_generated_self_tests() {
     grep -q '^TenantRecordRouteTest: all checks passed$' "$test_log" \
       || die "tenant-record host fixture (java): TenantRecordRouteTest did not report its checks passed"
   fi
+  # The tenant-record WRITER fixture's c2s reader self-test (#284), copied in by
+  # install_tenant_record_c2s_selftest, so it is present exactly in that build.
+  local trc_test trc_class
+  trc_test="$(find "$output/src/main/java" -type f -path '*/s2sm/TenantRecordC2STest.java' -print -quit)"
+  if [[ -n "$trc_test" ]]; then
+    trc_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$trc_test").$(basename "$trc_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$trc_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q '^TenantRecordC2STest: all checks passed$' "$test_log" \
+      || die "tenant-record writer fixture (java): TenantRecordC2STest did not report its checks passed"
+  fi
+  # The tenant-route fixture's harbor client self-test (#258), copied in by
+  # install_tenantroute_client_selftest, so it is present exactly in that build.
+  local trcl_test trcl_class
+  trcl_test="$(find "$output/src/main/java" -type f -path '*/s2sm/internal/grpc/clients/services/crew/TenantRouteClientTest.java' -print -quit)"
+  if [[ -n "$trcl_test" ]]; then
+    trcl_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$trcl_test").$(basename "$trcl_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$trcl_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q '^TenantRouteClientTest: all checks passed$' "$test_log" \
+      || die "tenant-route harbor fixture (java): TenantRouteClientTest did not report its checks passed"
+  fi
+  # The generated MCP gate of a tenant-routed service (#170, #284): its session
+  # tenant is the caller's tid claim, never a tid read off its namespace. Run
+  # for the services whose carrier is routed (the tenant-route fixture's crew).
+  local mcp_test mcp_class
+  while IFS= read -r mcp_test; do
+    grep -qF 'sessionTenant(' "$mcp_test" || continue
+    mcp_class="$(awk '/^package /{gsub(";","",$2); print $2; exit}' "$mcp_test").$(basename "$mcp_test" .java)"
+    "$java_cmd" --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED -cp "$cp" "$mcp_class" >>"$test_log" 2>&1 || {
+      dump_step_log "$test_log"
+      return 1
+    }
+    grep -q "^PASS $(basename "$mcp_test" .java)" "$test_log" \
+      || die "java: the tenant-routed MCP gate $(basename "$mcp_test" .java) did not report PASS"
+  done < <(find "$output/src/main/java" -type f -name '*McpTest.java' | sort)
   # The record-egress fixture's user-and-listed-service self-test, copied in by
   # install_user_and_listed_service_selftest (which dies if it cannot), so it is
   # present exactly in that fixture's build.
@@ -851,6 +905,16 @@ run_rust_spiffe_self_tests() {
     assert_clean_log "$log_dir/rust-model-lib-test.log"
     grep -qF 'identity_error_tests::missing_token_minter_is_permanent ... ok' "$log_dir/rust-model-lib-test.log" \
       || die "NEW-21: the generated ServiceManager's identity_error_tests did not run (log: $log_dir/rust-model-lib-test.log)"
+    # #284: a routed c2s reader's and a routed MCP session's tenant self-tests
+    # are generated beside them; when they are, they must have run.
+    if grep -rqF --include='record_c2s.rs' 'mod record_c2s_tenant_tests' "$output/s2sm"; then
+      grep -qF 'record_c2s_tenant_tests::a_tid_shaped_namespace_never_names_the_tenant ... ok' "$log_dir/rust-model-lib-test.log" \
+        || die "#284: the generated c2s reader's tenant self-tests did not run (log: $log_dir/rust-model-lib-test.log)"
+    fi
+    if grep -rqF --include='*.rs' 'fn the_mcp_session_tenant_is_the_tid_claim_not_a_tid_shaped_namespace' "$output/s2sm"; then
+      grep -qF '_mcp_tests::the_mcp_session_tenant_is_the_tid_claim_not_a_tid_shaped_namespace ... ok' "$log_dir/rust-model-lib-test.log" \
+        || die "#284: the generated MCP session tenant self-tests did not run (log: $log_dir/rust-model-lib-test.log)"
+    fi
   fi
 
   # The main fixture's JSON-key self-test, copied in by
@@ -881,6 +945,16 @@ run_rust_spiffe_self_tests() {
         return 1
       }
     assert_clean_log "$log_dir/rust-tenant-record-route-test.log"
+  fi
+
+  # The tenant-route fixture's harbor client self-test (#258), copied in by
+  # install_tenantroute_client_selftest.
+  if [[ -f "$output/tests/tenant_route_client_test.rs" ]]; then
+    (cd "$output" && cargo test --test tenant_route_client_test) >"$log_dir/rust-tenant-route-client-test.log" 2>&1 || {
+        dump_step_log "$log_dir/rust-tenant-route-client-test.log"
+        return 1
+      }
+    assert_clean_log "$log_dir/rust-tenant-route-client-test.log"
   fi
 
   # The quorum-write fixture's hosted store service + roll scheduler self-test,
@@ -1467,13 +1541,21 @@ install_json_key_selftest() {
   cp "$SELFTESTS_SRC/rust/json_key_test.rs" "$output/tests/"
 }
 
-# install_backpressure_selftests copies the two Java backpressure self-tests into
-# the generated packages they drive: the subscribe test beside the AgentState
+# install_backpressure_selftests copies the fixture's self-tests into the
+# generated packages they drive. Java: the subscribe test beside the AgentState
 # StateClient (its topic iterator), the W2S test beside the AgentUploadApi W2S
-# client (its WebSocket listener).
+# client (its WebSocket listener). Go: the state topic test (#454) beside the
+# AgentState state client (its Publish and Subscribe).
 install_backpressure_selftests() {
   local output="$1"
+  local language="${2:-java}"
   local state_client w2s_client
+  if [[ "$language" == go ]]; then
+    state_client="$(find "$output" -type f -path '*/s2sm/state/services/agent_state/state.go' -print -quit)"
+    [[ -n "$state_client" ]] || die "event-bus backpressure fixture (go): AgentState state client not generated under $output"
+    cp "$SELFTESTS_SRC/go/state_topic_test.go" "$(dirname "$state_client")/"
+    return 0
+  fi
   state_client="$(find "$output/src/main/java" -type f -path '*/s2sm/internal/state/services/agentsensor/agentstate/StateClient.java' -print -quit)"
   [[ -n "$state_client" ]] || die "event-bus backpressure fixture (java): AgentState StateClient not generated under $output"
   cp "$SELFTESTS_SRC/java/SubscribeBackpressureTest.java" "$(dirname "$state_client")/"
@@ -1783,6 +1865,51 @@ install_ownerdefault_selftest() {
   cp "$SELFTESTS_SRC/java/OwnerDefaultTest.java" "$dest/"
 }
 
+# assert_statequeue_output checks the state-queue fixture (#456): the state
+# client of a state root with a (spec.queue) and a (spec.priority_queue)
+# boundary has the queue accessors (offer, consume, peek, size) in Go and Java,
+# and the Java one none of a singleton's Get/Watch, whose RPCs the state service
+# does not declare. Compiling catches a call to a missing RPC; this catches the
+# accessors going missing, which compiles. Rust's state client has no queue
+# accessors yet (PROPOSALS.md); its leg only compiles.
+assert_statequeue_output() {
+  local output="$1"
+  local language="$2"
+  local client="" want=()
+
+  case "$language" in
+    go)
+      client="$(find "$output" -type f -path '*/s2sm/state/services/helper_state/state.go' -print -quit)"
+      want=(
+        "stateStub.OfferToTasks(" "stateStub.ConsumeFromTasks(" "stateStub.PeekTasks(" "stateStub.SizeTasks("
+        "stateStub.OfferToAlerts(" "stateStub.ConsumeFromAlerts(" "stateStub.PeekAlerts(" "stateStub.SizeAlerts("
+      )
+      ;;
+    java)
+      client="$(find "$output" -type f -path '*/internal/state/services/helper/helperstate/StateClient.java' -print -quit)"
+      want=(
+        "stateStub.offerToTasks(" "stateStub.consumeFromTasks(" "stateStub.peekTasks(" "stateStub.sizeTasks("
+        "stateStub.offerToAlerts(" "stateStub.consumeFromAlerts(" "stateStub.peekAlerts(" "stateStub.sizeAlerts("
+      )
+      ;;
+    rust)
+      return 0
+      ;;
+    *)
+      die "state-queue fixture: unsupported language: $language"
+      ;;
+  esac
+
+  [[ -n "$client" ]] || die "state-queue fixture ($language): generated HelperState state client not found under $output"
+  local needle
+  for needle in "${want[@]}"; do
+    grep -qF "$needle" "$client" || die "state-queue fixture ($language): $client does not call $needle"
+  done
+  if [[ "$language" == "java" ]] && grep -qE '(get|watch)(Tasks|Alerts)\(' "$client"; then
+    die "state-queue fixture (java): $client treats a queue as a singleton (get/watch of Tasks or Alerts)"
+  fi
+}
+
 # assert_requiresdevice_output checks that the (spec.rpc).requires_device gate was
 # actually GENERATED, not merely that a tree with the annotation in it compiled.
 # Every one of these has failed at least once during development in at least one
@@ -2038,6 +2165,96 @@ install_tenant_record_route_selftest() {
     rust)
       mkdir -p "$output/tests"
       cp "$SELFTESTS_SRC/rust/tenant_record_route_test.rs" "$output/tests/"
+      ;;
+  esac
+}
+
+# install_tenantroute_client_selftest drops the tenant-route fixture's (#170)
+# client self-test (#258) into harbor's generated output, next to the generated
+# typed CrewPeerService client it drives: S2S never crosses tenants, so a
+# tenant's service calling with its own token is refused PERMISSION_DENIED,
+# before anything is sent, when the call names another tenant, and a call
+# naming none goes to its own tid; a /system service names the tenant it calls.
+install_tenantroute_client_selftest() {
+  local output="$1"
+  local language="$2"
+  local client="" routes_by_caller=""
+
+  case "$language" in
+    go)
+      client="$(find "$output" -type f -path '*/s2sm/grpc/clients/services/crew/peer_service.go' -print -quit)"
+      routes_by_caller="serviceconnection.CallerRouteTenant("
+      ;;
+    java)
+      client="$(find "$output/src/main/java" -type f -path '*/s2sm/internal/grpc/clients/services/crew/CrewPeerServiceGrpcClient.java' -print -quit)"
+      routes_by_caller="RouteTenant.forCaller("
+      ;;
+    rust)
+      client="$(find "$output" -type f -path '*/s2sm/internal/grpc/clients/services/crew/peer_service.rs' -print -quit)"
+      routes_by_caller="tenant_route::caller_route_tenant("
+      ;;
+    *) return 0 ;;
+  esac
+  [[ -n "$client" ]] || die "tenant-route fixture ($language): generated CrewPeerService client not found under $output"
+  grep -qF "$routes_by_caller" "$client" \
+    || die "tenant-route fixture ($language): the generated CrewPeerService client does not route by the caller's own tenant"
+
+  case "$language" in
+    go)
+      cp "$SELFTESTS_SRC/go/tenant_route_client_test.go" "$(dirname "$client")/"
+      ;;
+    java)
+      cp "$SELFTESTS_SRC/java/TenantRouteClientTest.java" "$(dirname "$client")/"
+      ;;
+    rust)
+      mkdir -p "$output/tests"
+      cp "$SELFTESTS_SRC/rust/tenant_route_client_test.rs" "$output/tests/"
+      ;;
+  esac
+}
+
+# install_tenant_record_c2s_selftest drops the tenant-record fixture's c2s
+# reader self-test (#284) into the generated WRITER output, next to the
+# generated client-facing record reader it drives in-process: a read goes to the
+# caller's tid claim, never to a tid read off its namespace (which names the
+# tenant), and a caller without the claim is refused. It first asserts the
+# reader takes the tenant from the claim at all.
+install_tenant_record_c2s_selftest() {
+  local output="$1"
+  local language="$2"
+  local c2s=""
+
+  local claim=""
+  case "$language" in
+    go)
+      c2s="$(find "$output" -type f -path '*/s2sm/record_c2s.go' -print -quit)"
+      claim='serviceconnection.CallerTenant(caller.Token().GetTid())'
+      ;;
+    java)
+      c2s="$(find "$output/src/main/java" -type f -path '*/s2sm/TmessagingRecordsGeneratedHandler.java' -print -quit)"
+      claim='RouteTenant.callerTenant(caller.getTid())'
+      ;;
+    rust)
+      c2s="$(find "$output" -type f -path '*/s2sm/record_c2s.rs' -print -quit)"
+      claim='tenant_route::caller_tenant(caller.tid())'
+      ;;
+  esac
+  [[ -n "$c2s" ]] || die "tenant-record fixture ($language): the generated c2s record reader of tmessaging was not found under $output"
+  grep -qF "$claim" "$c2s" \
+    || die "tenant-record fixture ($language): the generated c2s record reader does not take the caller's tenant from its tid claim"
+
+  case "$language" in
+    go)
+      cp "$SELFTESTS_SRC/go/tenant_record_c2s_test.go" "$(dirname "$c2s")/"
+      ;;
+    java)
+      cp "$SELFTESTS_SRC/java/TenantRecordC2STest.java" "$(dirname "$c2s")/"
+      ;;
+    rust)
+      # Generated beside the reader (#[cfg(test)] record_c2s_tenant_tests),
+      # run by compile_current_output's `cargo test --lib`, which checks they ran.
+      grep -qF 'mod record_c2s_tenant_tests' "$c2s" \
+        || die "tenant-record fixture (rust): the generated c2s record reader carries no tenant self-test"
       ;;
   esac
 }
@@ -2741,6 +2958,32 @@ if [[ -d "$REQUIRESDEVICE_PROTO_SRC" ]]; then
   done
 fi
 
+# state-queue fixture (#456): the only standing gate that generates a state
+# root with a (spec.queue) and a (spec.priority_queue) boundary, and compiles
+# it. The Java StateClient took both for singletons and called Get/Watch RPCs
+# the state service does not declare, so the model did not compile.
+if [[ -d "$STATEQUEUE_PROTO_SRC" ]]; then
+  for language in "${languages[@]}"; do
+    dir="$WORK_ROOT/statequeue-$language"
+    log="$WORK_ROOT/statequeue-$language.log"
+    rm -rf "$dir"
+    write_statequeue_config "$dir" "$language"
+
+    echo "==> Generating $language state-queue fixture"
+    if ! (cd "$dir" && TACPLUS_PYTHON="$PYTHON_BIN" "$TACPLUS_BIN" build --config tacplus.yaml --src "$STATEQUEUE_PROTO_SRC" >"$log" 2>&1); then
+      tail -120 "$log" >&2 || true
+      die "$language state-queue generation failed; log: $log"
+    fi
+    output_root="$(resolve_output_root "$dir/tacplus")"
+    assert_spiffe_soundness "$dir/tacplus"
+    assert_statequeue_output "$output_root" "$language"
+    echo "==> Compiling $language state-queue fixture"
+    compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/helper"
+    echo "    PASS $language state-queue"
+    prune_fixture "$dir" "$output_root"
+  done
+fi
+
 
 # record-egress fixture: the ONLY place the (spec.store_namespace) /
 # (spec.store_principal) / (spec.record).private egress ROW FILTERS are generated
@@ -2812,13 +3055,13 @@ if [[ -d "$RECORDEGRESS_PROTO_SRC" ]]; then
 fi
 
 # event-bus backpressure fixture: the ONLY place a store-hosted state's topic
-# iterator (the generated AgentState StateClient) and a client-streaming W2S
-# WebSocket listener are compiled and driven by a standing gate. Java only: both
-# self-tests pin Java runtime code, and no other language emits these surfaces
-# with the same defect.
+# (the generated AgentState state client) and a client-streaming W2S WebSocket
+# listener are compiled and driven by a standing gate. Java drives the topic
+# iterator's and the W2S listener's backpressure; Go drives the state topic's
+# Publish and Subscribe (#454: its state client did not compile).
 if [[ -d "$EVENTBUS_BACKPRESSURE_PROTO_SRC" ]]; then
   for language in "${languages[@]}"; do
-    [[ "$language" == java ]] || continue
+    [[ "$language" == java || "$language" == go ]] || continue
     dir="$WORK_ROOT/eventbus-backpressure-$language"
     log="$WORK_ROOT/eventbus-backpressure-$language.log"
     rm -rf "$dir"
@@ -2831,7 +3074,7 @@ if [[ -d "$EVENTBUS_BACKPRESSURE_PROTO_SRC" ]]; then
     fi
     output_root="$(resolve_output_root "$dir/tacplus")"
     assert_spiffe_soundness "$dir/tacplus"
-    install_backpressure_selftests "$output_root"
+    install_backpressure_selftests "$output_root" "$language"
     echo "==> Compiling $language event-bus backpressure fixture"
     compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/agentsensor"
     echo "    PASS $language event-bus backpressure"
@@ -2966,6 +3209,9 @@ if [[ -d "$TENANTROUTE_PROTO_SRC" ]]; then
       assert_spiffe_soundness "$dir/tacplus"
       grep -Eq '"route_field": *"target_tenant"' "$output_root/registry.json" \
         || die "tenant-route fixture ($language, $self): registry.json does not carry crew's route_field"
+      if [[ "$self" == "harbor" ]]; then
+        install_tenantroute_client_selftest "$output_root" "$language"
+      fi
       echo "==> Compiling $language tenant-route fixture ($self)"
       compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"
       echo "    PASS $language tenant-route ($self)"
@@ -2975,10 +3221,10 @@ if [[ -d "$TENANTROUTE_PROTO_SRC" ]]; then
 fi
 
 # redo-contract fixture (issue #163 D5): the sys contract redolog.Redo is
-# tenant-routed by its host_tenant_owned, so stratum, generated without the
-# host's proto, carries its route field in registry.json and the routed client;
-# redo, which hosts it by label, gets its server wrapper (a sys contract's
-# wrapper was never written in Go) with the route check and the any-tenant door.
+# hosted by the /system service redo (#258: stratum -> redo is tenant ->
+# /system), so neither side's registry.json routes it by tenant nor opens it to
+# any tenant; redo, which hosts it by label, gets its server wrapper (a sys
+# contract's wrapper was never written in Go).
 if [[ -d "$REDO_PROTO_SRC" ]]; then
   for language in "${languages[@]}"; do
     for self in stratum redo; do
@@ -2996,14 +3242,14 @@ if [[ -d "$REDO_PROTO_SRC" ]]; then
       fi
       output_root="$(resolve_output_root "$dir/tacplus")"
       assert_spiffe_soundness "$dir/tacplus"
-      python3 - "$output_root/registry.json" <<'REDO_PY' || die "redo-contract fixture ($language, $self): registry.json does not route redolog.Redo by tenant"
+      python3 - "$output_root/registry.json" <<'REDO_PY' || die "redo-contract fixture ($language, $self): registry.json routes redolog.Redo by tenant or opens it to any tenant"
 import json, sys
 want = {"/redolog.Redo/Append", "/redolog.Redo/Replay"}
 seen = set()
 def walk(o):
     if isinstance(o, dict):
         if o.get("grpc_path") in want and "rpc_verb" in o:  # an rpc entry, not one of its surfaces
-            if o.get("route_field") != "tenant" or o.get("any_tenant") is not True:
+            if o.get("route_field") or o.get("any_tenant"):
                 sys.exit("%s: route_field=%r any_tenant=%r" % (o["grpc_path"], o.get("route_field"), o.get("any_tenant")))
             seen.add(o["grpc_path"])
         for v in o.values():
@@ -3075,6 +3321,7 @@ TENANTRECORD_PY
         install_tenant_record_route_selftest "$output_root" "$language"
       else
         assert_tenantrecord_client_routed "$output_root" "$language"
+        install_tenant_record_c2s_selftest "$output_root" "$language"
       fi
       echo "==> Compiling $language tenant-record fixture ($self)"
       compile_current_output "$output_root" "$language" "$dir/tacplus" "gitlab.com/example/dummy/$self"

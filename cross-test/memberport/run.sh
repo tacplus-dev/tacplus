@@ -4,8 +4,10 @@
 # java: generate a (spec.member_port) service, assert the ServiceManager owns
 # its member port, and run the memberport-peer tests (peer <-> member port <->
 # member port <-> peer: correctness, backpressure, faults, failure modes, the
-# sender's checks of the receiver) and the Hazelcast integration test (two
-# tenants' members through the port; Hazelcast 5.7.0, Stratum's version).
+# sender's checks of the receiver), the config check (a non-loopback
+# target_address is refused before startup, #258) and the Hazelcast
+# integration test (two tenants' members through the port; Hazelcast 5.7.0,
+# Stratum's version).
 # MEMBERPORT_SOAK=1 adds the opt-in soak, which prints the overhead against a
 # direct connection.
 #
@@ -280,10 +282,10 @@ case "$LANGUAGE" in
     cp "$ROOT_DIR"/cross-test/memberport/testdata/*.java "$TEST_DIR/"
     write_java_memberport_pom "$OUT/pom.xml" "$OUT"
 
-    echo "==> Running the member port behaviour and Hazelcast tests"
+    echo "==> Running the member port behaviour, config and Hazelcast tests"
     java_env="$(java_home_env)"
     (cd "$OUT" && env ${java_env:+"$java_env"} MEMBERPORT_SOAK="${MEMBERPORT_SOAK:-}" \
-      mvn -q -Dtest='MemberPortBehaviorTest,HazelcastMemberPortTest' test) \
+      mvn -q -Dtest='MemberPortBehaviorTest,MemberPortConfigTest,HazelcastMemberPortTest' test) \
       || die "member port tests failed"
     ;;
 esac

@@ -4,7 +4,9 @@
 package main
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,6 +19,17 @@ import (
 )
 
 const repoRoot = "../.."
+
+// openRoot opens dir as an os.Root, closed when the test ends.
+func openRoot(t *testing.T, dir string) *os.Root {
+	t.Helper()
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	return r
+}
 
 func requireProtoc(t *testing.T) {
 	t.Helper()
@@ -94,9 +107,53 @@ func TestReferenceCoversEveryType(t *testing.T) {
 	checkEnums(fd.Enums())
 }
 
+// PROTOC_BINARY is run only once it names an absolute path to an existing,
+// executable regular file; any other value is refused before anything runs.
+func TestProtocBinary(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "protoc")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plain := filepath.Join(dir, "plain")
+	if err := os.WriteFile(plain, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{
+		"protoc",                   // relative: resolved against the cwd
+		"./protoc",                 // relative
+		filepath.Join(dir, "nope"), // does not exist
+		dir,                        // a directory
+		plain,                      // not executable
+		exe + "; touch /tmp/x",     // shell text is a file name, not a command
+	} {
+		t.Run(bad, func(t *testing.T) {
+			t.Setenv("PROTOC_BINARY", bad)
+			if got, err := protocBinary(); err == nil {
+				t.Errorf("PROTOC_BINARY=%q: got %q, want an error", bad, got)
+			}
+		})
+	}
+	t.Run("absolute executable", func(t *testing.T) {
+		t.Setenv("PROTOC_BINARY", exe)
+		got, err := protocBinary()
+		if err != nil || got != exe {
+			t.Errorf("got %q, %v; want %q", got, err, exe)
+		}
+	})
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv("PATH", dir)
+		t.Setenv("PROTOC_BINARY", "")
+		got, err := protocBinary()
+		if err != nil || got != exe {
+			t.Errorf("got %q, %v; want %q", got, err, exe)
+		}
+	})
+}
+
 // The published documents stage without a broken relative link.
 func TestStageDocs(t *testing.T) {
-	if err := stageDocs(repoRoot, t.TempDir()); err != nil {
+	if err := stageDocs(openRoot(t, repoRoot), openRoot(t, t.TempDir())); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -137,6 +194,31 @@ func TestRewriteLinks(t *testing.T) {
 	}
 	if _, err := rewriteLinks("[x](MISSING.md)", "docs/USER.md", "guide/user-guide.md", pages, exists); err == nil {
 		t.Error("a link to a missing file must be an error")
+	}
+}
+
+// A link to a file reached through ".." or a symbolic link that leaves the
+// repository does not exist: the file outside is not stat'ed.
+func TestExistsInStaysInRoot(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "repo")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "outside.md"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("..", filepath.Join(root, "up")); err != nil {
+		t.Fatal(err)
+	}
+	exists := existsIn(openRoot(t, root))
+	for _, p := range []string{"../outside.md", "up/outside.md"} {
+		if ok, _ := exists(p); ok {
+			t.Errorf("%s leaves the repository and must not exist", p)
+		}
+	}
+	if ok, isDir := exists("."); !ok || !isDir {
+		t.Error("the repository root must exist as a directory")
 	}
 }
 

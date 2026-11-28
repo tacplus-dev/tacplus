@@ -26,9 +26,11 @@
 //! the store, or this generator is broken.
 //!
 //! On a plane hosted by a tenant-owned record store the reads go to the
-//! caller's own tenant's instance: the tid of its namespace claim, the same
-//! tenant the namespace pin holds the rows to (#207). A caller of no tenant has
-//! no instance to read from and is refused.
+//! caller's own tenant's instance: its token's `tid` claim, stamped by kernel
+//! for the tenant its namespace is in (#207). The namespace names the tenant
+//! (`/tenants/<name>`), never its tid, so no tid is derived from it (#284). A
+//! caller whose token carries no tid claim has no instance to read from and is
+//! refused.
 //!
 //! The data path is the ALREADY-GENERATED typed reader
 //! (`s2sm/record_readers.rs`), not a second client. Its Create/List/Delete
@@ -70,16 +72,72 @@ impl {{.StructName}} {
 }
 {{- if .Routed}}
 
-/// The tenant whose record store instance a read goes to: the tid of the
-/// caller's namespace claim (`/tenants/<tid>` or below), never a
-/// client-supplied value.
-fn record_c2s_tenant(method: &str, namespace: &str) -> Result<String, tonic::Status> {
-    servicemanager::tenant_route::tenant_of_caller_namespace(namespace).ok_or_else(|| {
+/// The tenant whose record store instance a read goes to: the caller's tid
+/// claim, never a client-supplied value and never derived from the caller's
+/// namespace, which names the tenant, not its tid. PERMISSION_DENIED for a
+/// caller whose token carries no tid claim, or a malformed one.
+fn record_c2s_tenant(method: &str, caller: &Caller) -> Result<String, tonic::Status> {
+    servicemanager::tenant_route::caller_tenant(caller.tid()).ok_or_else(|| {
         tonic::Status::permission_denied(format!(
-            "{}: the caller's namespace belongs to no tenant, and the record store is one instance per tenant",
+            "{}: the caller's token carries no tid claim, and the record store is one instance per tenant",
             method
         ))
     })
+}
+
+#[cfg(test)]
+mod record_c2s_tenant_tests {
+    use super::*;
+
+    /// A caller at `namespace` whose token carries `tid` as its tid claim, or
+    /// none.
+    fn caller_in(namespace: &str, tid: Option<&str>) -> Caller {
+        let mut token = token::Token::new();
+        token
+            .set_subject("spiffe://example.com/tenants/beta/users/alice")
+            .expect("a freshly built token is mutable");
+        token.set_namespace(namespace).expect("a freshly built token is mutable");
+        if let Some(tid) = tid {
+            token.set_tid(tid).expect("a freshly built token is mutable");
+        }
+        Caller::new(token, "record-c2s-test".to_string())
+    }
+
+    /// The read goes to the tenant of the caller's tid claim; its namespace
+    /// names that tenant by name.
+    #[test]
+    fn the_tenant_is_the_tid_claim() {
+        assert_eq!(record_c2s_tenant("Read", &caller_in("/tenants/beta", Some("bbbbbbbb"))).unwrap(), "bbbbbbbb");
+    }
+
+    /// A tenant whose name looks like another tenant's tid never sends the
+    /// read to that other tenant's instance.
+    #[test]
+    fn a_tid_shaped_namespace_never_names_the_tenant() {
+        let tenant = record_c2s_tenant("Read", &caller_in("/tenants/aaaaaaaa", Some("bbbbbbbb"))).unwrap();
+        assert_eq!(tenant, "bbbbbbbb");
+        assert_ne!(tenant, "aaaaaaaa", "the read tenant was derived from the namespace");
+    }
+
+    /// No tid is derived from a namespace: without a tid claim the read is
+    /// refused, however tid-shaped the namespace.
+    #[test]
+    fn a_tid_shaped_namespace_with_no_tid_claim_is_refused() {
+        let err = record_c2s_tenant("Read", &caller_in("/tenants/bbbbbbbb", None)).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(err.message().contains("Read: the caller's token carries no tid claim"), "{}", err.message());
+        for tid in ["", "BBBBBBBB", "beta", "/tenants/bbbbbbbb"] {
+            let err = record_c2s_tenant("Read", &caller_in("/tenants/beta", Some(tid))).unwrap_err();
+            assert_eq!(err.code(), tonic::Code::PermissionDenied, "malformed tid claim {tid:?}");
+        }
+    }
+
+    /// A caller in no tenant has no instance to read from.
+    #[test]
+    fn a_system_caller_is_refused() {
+        let err = record_c2s_tenant("Read", &caller_in("/system", None)).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    }
 }
 {{- end}}
 
@@ -114,7 +172,8 @@ impl {{.TraitPath}}::{{.TraitName}} for {{.StructName}} {
             .map(|s| s.to_string())
             .ok_or_else(|| tonic::Status::unauthenticated("{{.GetMethodName}} requires an authenticated caller"))?;
 {{- if $.Routed}}
-        let __tenant = record_c2s_tenant("{{.GetMethodName}}", &__namespace)?;
+        let __caller = caller.ok_or_else(|| tonic::Status::unauthenticated("{{.GetMethodName}} requires an authenticated caller"))?;
+        let __tenant = record_c2s_tenant("{{.GetMethodName}}", __caller)?;
 {{- end}}
 
         let filter = {{.FilterType}} {
@@ -159,7 +218,8 @@ impl {{.TraitPath}}::{{.TraitName}} for {{.StructName}} {
             .map(|s| s.to_string())
             .ok_or_else(|| tonic::Status::unauthenticated("{{.ListMethodNam}} requires an authenticated caller"))?;
 {{- if $.Routed}}
-        let __tenant = record_c2s_tenant("{{.ListMethodNam}}", &__namespace)?;
+        let __caller = caller.ok_or_else(|| tonic::Status::unauthenticated("{{.ListMethodNam}} requires an authenticated caller"))?;
+        let __tenant = record_c2s_tenant("{{.ListMethodNam}}", __caller)?;
 {{- end}}
 
         let supplied = req.filter.unwrap_or_default();

@@ -1773,6 +1773,10 @@ fleet's merged protos:
   request. On a product service every request field named `tenant`,
   `tenant_id` or `tid` must carry it: a product keeps a tenant's data only as
   its custodian, keyed by the caller's token's tid.
+- **No config slice.** A product owns no `(spec.config_slice)` of the tenant
+  (or project) config in this release: its per-tenant settings are its own
+  rows, set and read through `caller_tid` rpcs. A tenant-pinned config read by
+  a product's caller is refused at run time too.
 - **The registry** entry of a product service names its product
   (`tacplus registry register NAME --product <name>`), and the fleet build
   refuses a registry that disagrees with the proto. `fleet.lock` lists the
@@ -1860,6 +1864,17 @@ restart the method is called again for each. Its rules:
 Python and TypeScript do not generate it, so a product service binding
 `(spec.caller_tid)` is refused at generation there. Clients of a product
 service generate as before, with the check above.
+
+**Implementer rule: no reads across tenants.** A product service's own code
+holds every tenant's rows; no rpc of it returns data of a tenant other than the
+caller's `caller_tid` (decision 5, 2026-11-09). A product owner's view across
+tenants (a billing view, say) is not in this release (PROPOSALS.md).
+
+**Not running yet.** The generated code is complete; a fleet cannot yet run a
+product service: the kernel mints no `/products/<name>` token
+(tacplus-dev/kernel#63) and holds no `tenantdeletion.TenantDeletions`
+(tacplus-dev/kernel#75), and the operator deploys no product namespace
+(tacplus-dev/operator#33).
 
 ### Every user RPC is also an MCP tool
 

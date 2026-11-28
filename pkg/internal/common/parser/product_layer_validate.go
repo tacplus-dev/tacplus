@@ -236,7 +236,8 @@ func (ix *layerIndex) recordStore(label string) bool {
 
 // ValidateProductLayer enforces the product layer at generation time:
 // (spec.service).product's name and exclusivity, no product in a sys contract,
-// every S2S edge a loaded service declares against the edge table, and
+// every S2S edge a loaded service declares against the edge table, no config
+// slice owned by a product, and
 // (spec.caller_tid)'s shape and its use on a product service. The fleet build
 // runs it over the merged protos, where every edge's far end is loaded.
 func ValidateProductLayer(dp *DescriptorParser) error {
@@ -281,6 +282,17 @@ func ValidateProductLayer(dp *DescriptorParser) error {
 			if strings.HasPrefix(path, "sys/") {
 				errs = append(errs, fmt.Sprintf("%s: a sys contract declares (spec.service).product %q; a tacplus release ships no product code",
 					path, p))
+			}
+		}
+
+		// Decision 4 (2026-11-09): a product owns no slice of the tenant (or a
+		// tenant's project) config in this release.
+		for mi := range fd.Messages {
+			msg := &fd.Messages[mi]
+			owner := msg.Annotations["config_slice_service"].StringValue
+			if l, ok := ix.labels[owner]; ok && owner != "" && l.Product != "" {
+				errs = append(errs, fmt.Sprintf("%s: %s.%s: (spec.config_slice) owned by %q (%s): a product owns no slice of the tenant config; its per-tenant settings go through (spec.caller_tid) rpcs (%s)",
+					path, fd.Package, msg.Name, owner, l, ProductLayerRule))
 			}
 		}
 

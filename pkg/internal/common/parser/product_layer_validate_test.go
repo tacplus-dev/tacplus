@@ -473,3 +473,23 @@ func TestRefusedS2SClients(t *testing.T) {
 		t.Fatalf("a product's refused clients = %+v, want the record plane's S2S half", got)
 	}
 }
+
+// Decision 4 (2026-11-09): a product owns no slice of the tenant config in
+// this release; its per-tenant settings go through caller_tid rpcs.
+func TestValidateProductLayer_RefusesAProductConfigSlice(t *testing.T) {
+	slice := func(scope, owner string) string {
+		return `message LedgerSettings {
+  option (spec.config_slice) = {scope: ` + scope + `, service_name: "` + owner + `"};
+  string plan = 1;
+}`
+	}
+	for _, scope := range []string{"CONFIG_SLICE_SCOPE_TENANT", "CONFIG_SLICE_SCOPE_PROJECT"} {
+		t.Run(scope, func(t *testing.T) {
+			err := validateLayerFleet(t, layerFleet("", slice(scope, "billing"), "", "", ""))
+			wantLayerRefusal(t, err, `"billing" (product "ledger")`, "billing.LedgerSettings", "caller_tid", ProductLayerRule)
+			if err := validateLayerFleet(t, layerFleet(slice(scope, "core"), "", "", "", "")); err != nil {
+				t.Fatalf("a /system service's slice was refused: %v", err)
+			}
+		})
+	}
+}

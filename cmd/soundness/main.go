@@ -15,6 +15,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1943,11 +1944,18 @@ var storeVendorGuardSelf = map[string]bool{
 }
 
 func storeVendorViolations(root string) ([]storeVendorViolation, error) {
+	// Every read goes through an os.Root on -root, so no path (a symlink, or
+	// one swapped in mid-walk) can resolve outside the tree.
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	fsys := r.FS()
 
 	var out []storeVendorViolation
-	for _, rel := range storeVendorScanRoots {
-		base := filepath.Join(root, rel)
-		info, err := os.Stat(base)
+	for _, base := range storeVendorScanRoots {
+		info, err := r.Stat(base)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -1957,26 +1965,25 @@ func storeVendorViolations(root string) ([]storeVendorViolation, error) {
 		if !info.IsDir() {
 			continue
 		}
-		if err := filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
+		if err := fs.WalkDir(fsys, base, func(rel string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			rel, rerr := filepath.Rel(root, path)
-			if rerr != nil {
-				return rerr
-			}
-			rel = filepath.ToSlash(rel)
 			if d.IsDir() {
 				if skipStoreVendorDir(rel) {
-					return filepath.SkipDir
+					return fs.SkipDir
 				}
+				return nil
+			}
+			// Only regular files are scanned: a symlink is not followed.
+			if !d.Type().IsRegular() {
 				return nil
 			}
 			// The gate's own source necessarily contains the forbidden list.
 			if storeVendorGuardSelf[rel] {
 				return nil
 			}
-			b, rerr := os.ReadFile(path)
+			b, rerr := r.ReadFile(rel)
 			if rerr != nil {
 				return rerr
 			}

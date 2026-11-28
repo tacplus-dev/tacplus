@@ -660,6 +660,23 @@ func (token *TokenWrapper) SetAct(act string) *TokenWrapper {
 	return token
 }
 
+// GetTid returns the tid claim from the JWT payload: the tid of the tenant
+// the token's namespace is in, stamped by kernel at mint. Empty when the
+// token is in no tenant. The namespace claim names the tenant (/tenants/<name>),
+// never its tid, so this claim is the only source of a caller's tid.
+func (token *TokenWrapper) GetTid() string {
+	token.initToken()
+	return token.token.Payload[tokenProto.JwtPayloadTypeToString(tokenProto.JwtPayloadType_JWT_PAYLOAD_TYPE_TID)]
+}
+
+// SetTid sets the tid claim in the JWT payload.
+func (token *TokenWrapper) SetTid(tid string) *TokenWrapper {
+	token.checkMutable()
+	token.initToken()
+	token.token.Payload[tokenProto.JwtPayloadTypeToString(tokenProto.JwtPayloadType_JWT_PAYLOAD_TYPE_TID)] = tid
+	return token
+}
+
 // GetServiceName returns the service_name claim from the JWT payload.
 func (token *TokenWrapper) GetServiceName() string {
 	token.initToken()

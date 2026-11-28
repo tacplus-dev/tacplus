@@ -352,12 +352,13 @@ the entry's new `revision` and the `durability` level the write was acked at.
   defined by tacplus, hosted by the redo service at label `redo`, called by the store
   (`auth_services: ["stratum"]`) through its generated client, so neither side
   hand-writes it.
-  - **Routing.** The redo service is tenant-owned, in the reserved `restore` tenant, and
-    the store generates without its proto, so the contract declares `host_tenant_owned`
-    and both rpcs route by `tenant` (#170): the redo instance's tid, a tenant-to-tenant
-    call, with `RPC_FLAG_ANY_TENANT`. The tenant a write **belongs to** is never a request
-    field: it is the caller's identity (`/tenants/<id>`), and the redo service keys every
-    log by trust domain and that tenant.
+  - **Routing.** The redo service is a `/system` service (tacplus-dev/roadmap
+    `decisions/s2s-never-crosses-tenants-2026-10-31.md`, addendum 2026-11-07; #258): a
+    store's call to it is tenant → `/system`, a build-time edge, so neither rpc is
+    tenant-routed nor `RPC_FLAG_ANY_TENANT` (S2S never crosses tenants). The tenant a
+    write **belongs to** is never a request field: it is the caller's tid, from its
+    token, and the redo service, the custodian of every tenant's log, keys each log by
+    trust domain and that tid.
   - **`Append`** (bidi). Each message is one store operation, a single write or a whole
     `Apply`, which the log keeps all or nothing: its `changes` (record type full name,
     typed key, `PUT`/`DELETE`, the record's protobuf bytes, the revision the store

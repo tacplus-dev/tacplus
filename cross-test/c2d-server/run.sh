@@ -217,13 +217,31 @@ run_swift() {
     sleep 0.04
   done
 
-  echo "==> Dialing the Go daemon with the Swift C2DClient's default socket"
+  # The consumer cycles the client (create, call, tear down) this many times
+  # for each of its two calls: issue #803's abort, "freed pointer was not the
+  # last allocation" in the teardown, struck one run in three at 100
+  # iterations and two in three at 1000 on Swift 6.1.3, so one dial would
+  # pass by luck. 2000 take some twenty seconds.
+  local iterations=2000
+  echo "==> Dialing the Go daemon with the Swift C2DClient's default socket ($iterations times)"
   local rc=0
-  (cd "$WORK/swift/consumer" && swift run --skip-build C2DDefaultDial) >"$WORK/swift/dial.log" 2>&1 || rc=$?
+  # SWIFT_BACKTRACE gets a stack out of a Swift-level trap (a precondition,
+  # a fatalError). The runtime's own aborts, #803's among them, print their
+  # one line and nothing more, so a failure also shows the daemon's log and
+  # the grpc-swift versions the consumer resolved, which Package.swift floats.
+  # A deadline, as the Java self-tests' (#778): a call that never completes
+  # fails this leg with its log instead of holding the gate (124 or 137).
+  (cd "$WORK/swift/consumer" && SWIFT_BACKTRACE=enable=yes,interactive=no timeout --kill-after=20 "${C2D_SWIFT_DIAL_TIMEOUT:-600}" swift run --skip-build C2DDefaultDial "$iterations") >"$WORK/swift/dial.log" 2>&1 || rc=$?
   kill "$daemon_pid"
   wait "$daemon_pid" || true
   cat "$WORK/swift/dial.log"
-  [[ $rc -eq 0 ]] || die "Swift C2DClient() did not reach the daemon"
+  if [[ $rc -ne 0 ]]; then
+    echo "--- Swift consumer exit status $rc; daemon log:"
+    cat "$DAEMON/daemon.log"
+    echo "--- grpc-swift versions the consumer resolved:"
+    grep -A6 '"identity" : "grpc-swift' "$WORK/swift/consumer/Package.resolved" | grep -E '"identity"|"version"' || true
+    die "Swift C2DClient() did not reach the daemon"
+  fi
   grep -q "swift default C2D dial passed" "$WORK/swift/dial.log" || die "Swift dial exited 0 without its pass line"
 
   echo "==> c2d-server check PASSED (swift)"

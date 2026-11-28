@@ -345,6 +345,7 @@ export class TokenWrapper {
   static readonly CLAIM_PRINCIPAL = 'principal';
   static readonly CLAIM_AZP = 'azp';
   static readonly CLAIM_ACT = 'act';
+  static readonly CLAIM_TID = 'tid';
   static readonly CLAIM_PROFILES = 'profiles';
   static readonly CLAIM_ENTITLEMENTS = 'entitlements';
   static readonly CLAIM_SERVICE_NAME = 'service_name';
@@ -413,6 +414,20 @@ export class TokenWrapper {
     this.checkMutable();
     this.initPayload();
     this.token.payload!['act'] = act;
+    return this;
+  }
+
+  /** The tid claim: the tid of the tenant the token's namespace is in,
+   *  stamped by kernel at mint; empty when the token is in no tenant. The
+   *  namespace claim names the tenant, never its tid. */
+  getTid(): string {
+    return this.token.payload?.['tid'] ?? '';
+  }
+
+  setTid(tid: string): TokenWrapper {
+    this.checkMutable();
+    this.initPayload();
+    this.token.payload!['tid'] = tid;
     return this;
   }
 

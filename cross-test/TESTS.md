@@ -80,7 +80,10 @@ W2S against java/rust hosts, and `Watch`/client-streaming/bidi legs.
   and on stop the socket is removed and the handler's shutdown runs once.
   Its swift leg builds a consumer of the generated Swift package whose
   `C2DClient()`, with no argument, calls the generated Go daemon over its
-  declared socket (#494). Does not run `Run()` itself (`docs/KNOWN_TEST_GAPS.md` C2D-1). Local
+  declared socket (#494), 2000 times over so that the client's teardown runs
+  thousands of times: through grpc-swift's `withGRPCClient` it aborted the
+  process on Swift toolchains before 6.3.1, once in a few hundred teardowns
+  (#803). Does not run `Run()` itself (`docs/KNOWN_TEST_GAPS.md` C2D-1). Local
   (`just c2d-server`, part of `just gates`); not yet in CI.
 - `zero-rpc-s2s` (`cross-test/zero-rpc-s2s/run.sh`): behavioral gate for a
   zero-rpc (client-only) Rust host (#94). Generates `cross-test/proto-zerorpc`
@@ -226,7 +229,11 @@ the Inventory and Analytics service shapes. It asserts that generated output
 contains the current `sys/spec.proto` model and no legacy checked-in
 `special` fixture outputs. It then compiles the generated output with Go
 `go test`, Java Maven, and Rust `cargo check`, with warning/error output
-treated as a failure. Python and TypeScript are full-client targets; their
+treated as a failure. The same run generates and compiles the smaller fixture
+sets beside it (`cross-test/proto-*`), each for the one shape it is the only
+gate of: `cross-test/proto-statequeue`, for instance, is a state root with a
+queue and a priority queue boundary (#456), whose Go and Java state clients
+must carry the offer/consume/peek/size accessors. Python and TypeScript are full-client targets; their
 positive client-surface (C2D/C2S/W2S/REST) and service-side rejection coverage
 lives in `consumer-build`.
 

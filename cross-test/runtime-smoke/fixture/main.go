@@ -768,7 +768,9 @@ func main() {
 	s := newStats()
 
 	// Main C2S gRPC server: real generated wrappers, auth wired.
-	grpcSrv := grpc.NewServer()
+	// Plaintext on purpose (#581): a loopback-only test fixture, never shipped;
+	// TLS is the chassis', tested by cert-stream.
+	grpcSrv := grpc.NewServer() // nosemgrep: go.grpc.security.grpc-server-insecure-connection.grpc-server-insecure-connection
 	apiWrapper := server.NewContractApi(apiHandler{s: s})
 	wireAuth(apiWrapper, s)
 	if err := apiWrapper.RegisterServices(grpcSrv); err != nil {
@@ -795,7 +797,7 @@ func main() {
 	// Unwired C2S gRPC server: mandatory-auth wrapper with NO auth funcs.
 	// Clients assert the fail-closed rejection ("authorizer not configured")
 	// over the wire and that the handler is never reached.
-	unwiredSrv := grpc.NewServer()
+	unwiredSrv := grpc.NewServer() // nosemgrep: go.grpc.security.grpc-server-insecure-connection.grpc-server-insecure-connection -- loopback-only runtime-smoke fixture, never shipped; TLS is the chassis', tested by cert-stream (#582)
 	unwiredWrapper := server.NewContractApi(unwiredHandler{apiHandler: apiHandler{s: s}, s: s})
 	if unwiredWrapper.HasAuthorizer() {
 		fatal("unwired wrapper unexpectedly reports an authorizer")

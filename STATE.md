@@ -351,7 +351,9 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-28 by lo
   `(spec.record_store).config_push` (a tenant-owned store only) puts the sys record `configpush.TenantSliceRecord
   {slice_field, value}` on that store's record plane, S2S half only, and its ServiceManager feeds the publisher from
   the record's change feed (snapshot at its revision, then each acked write; again after any end of the watch), in
-  Go, Java and Rust, each engine self-tested; `cross-test/proto-tenantrecord`'s tstratum opts in.
+  Go, Java and Rust, each engine self-tested; `cross-test/proto-tenantrecord`'s tstratum opts in. Part eight: the
+  gate `config-push` runs a `config_push` store's generated publisher and feed against an owner's generated receiver
+  over TCP. The two are generated apart, from one fleet (`cross-test/proto-configpush`), and run in Go.
 - **Released / deployed:** v2.6.0 is the newest release: the binaries and `checksums.txt`, and
   `ghcr.io/tacplus-dev/tacplus/build:2.6.0@sha256:8e9a18bd7ad51df00c16ebe6a3d8af534dee4271f9758719ced8c30a664da54c`
   (also `build:2.6`); no tacplus image (the first release without one, #193). Not deployed.
@@ -388,8 +390,8 @@ Overwritten to stay current (loopers and agents). Last updated: 2026-11-28 by lo
   namespace is `/tenants/<tid>`; kernel#23's `/tenants/<name>` namespaces need #202 first (PROPOSALS.md).
   The record write surface stamps no `(spec.identity_spiffe_subject)` (PROPOSALS.md). A fleet's service images must be on ghcr.io from a
   github.com repo (PROPOSALS.md).
-  The config push (#927) is generated end to end in Go, Java and Rust (a `config_push` store feeds its publisher from
-  `configpush.TenantSliceRecord`), but a store's publisher is not yet cross-tested against an owner over the wire.
+  The config push (#927) is generated end to end in Go, Java and Rust, and tested over the wire in Go only. No
+  cross-language pair and no whole ServiceManager runs it yet (PROPOSALS.md).
   The product layer's `OnTenantDeleted` waits on the kernel to hold `sys/tenantdeletion.proto`'s record that drives
   it (tacplus-dev/kernel#75); the kernel mints no product token yet (tacplus-dev/kernel#63), nor does the operator
   deploy one (tacplus-dev/operator#33).
